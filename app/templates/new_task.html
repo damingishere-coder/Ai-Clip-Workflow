@@ -6,47 +6,60 @@
   <div>
     <p class="eyebrow">New Task</p>
     <h1>新建任务</h1>
-    <p>先登记直播视频与切片偏好，后续接入真实上传、转写和切割链路。</p>
+    <p>上传本机视频后，系统会为它创建独立任务目录，并保存到 E 盘工作流存储目录。</p>
   </div>
 </section>
 
 <section class="split-layout">
   <form id="new-task-form" class="panel form-panel">
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">Basic Info</p>
+        <h2>基本信息</h2>
+      </div>
+    </div>
     <label>
       <span>任务名称</span>
-      <input name="title" type="text" placeholder="例如：5 月新品直播切片" required>
+      <input name="task_name" type="text" placeholder="例如：5 月新品直播切片" required>
     </label>
 
     <fieldset>
       <legend>视频来源</legend>
-      <div class="segmented">
-        <label><input type="radio" name="source_type" value="upload" checked> 上传视频</label>
-        <label><input type="radio" name="source_type" value="nas"> 选择 NAS 文件</label>
+      <input name="source_type" type="hidden" value="upload">
+      <div class="upload-card">
+        <div>
+          <strong>上传本机视频</strong>
+          <span>选择视频后，会复制到该任务的 source 目录。</span>
+        </div>
+        <label class="file-upload-button" for="video-file-input">
+          <span class="file-upload-icon" aria-hidden="true"></span>
+          <span>选择视频</span>
+        </label>
+        <input class="visually-hidden-file" id="video-file-input" name="video_file" type="file" accept="video/*">
       </div>
-      <input name="source_path" type="text" placeholder="本地或 NAS 文件路径，后续会接文件选择器">
+      <p class="form-hint" id="video-file-name">尚未选择视频文件。</p>
     </fieldset>
 
     <label>
       <span>平台类型</span>
       <select name="platform">
-        <option>通用</option>
-        <option>抖音</option>
-        <option>B站</option>
+        <option value="general">通用</option>
+        <option value="douyin">抖音</option>
+        <option value="bilibili">B站</option>
       </select>
     </label>
 
     <div class="form-row">
       <label>
         <span>单条切片最长</span>
-        <select name="max_clip_minutes">
-          {% for option in clip_length_options %}
-          <option value="{{ option }}">{{ option }} 分钟</option>
-          {% endfor %}
-        </select>
+        <span class="unit-input">
+          <input name="max_clip_duration" type="number" min="1" max="60" step="1" value="2" required>
+          <small>分钟</small>
+        </span>
       </label>
       <label>
         <span>候选片段数量</span>
-        <select name="target_clip_count">
+        <select name="candidate_clip_count">
           {% for option in candidate_count_options %}
           <option value="{{ option }}">{{ option }} 条</option>
           {% endfor %}
@@ -54,20 +67,19 @@
       </label>
     </div>
 
-    <label>
-      <span>AI 偏好风格</span>
-      <textarea name="ai_preference" rows="4" placeholder="例如：优先选择观点强、开头有冲突、适合知识类传播的片段"></textarea>
-    </label>
-
-    <button class="primary-button" type="submit">开始处理</button>
+    <div class="button-row align-end">
+      <a class="secondary-button" href="/tasks">取消</a>
+      <button class="primary-button" type="submit">开始处理</button>
+    </div>
     <p class="form-hint" id="new-task-result"></p>
   </form>
 
-  <aside class="panel">
+  <aside class="stacked-side">
+  <section class="panel">
     <div class="panel-header">
       <div>
         <p class="eyebrow">Pipeline</p>
-        <h2>处理流程</h2>
+        <h2>智能 MVP 流程</h2>
       </div>
     </div>
     <ol class="timeline-list">
@@ -78,6 +90,11 @@
       </li>
       {% endfor %}
     </ol>
+  </section>
+  <section class="panel soft-tip">
+    <p class="eyebrow">小贴士</p>
+    <p>AI 偏好不在新建任务时填写。进入任务详情后，在“AI 分析”板块填写它；它只影响 AI 优先推荐哪些候选片段和推荐理由，不会直接改变原视频，最终成片仍以人工审核启用的片段为准。</p>
+  </section>
   </aside>
 </section>
 {% endblock %}

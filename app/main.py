@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.db.database import init_db
-from app.routers import pages, tasks
+from app.routers import files, pages, settings as settings_router, tasks
 
 
 @asynccontextmanager
@@ -24,6 +24,8 @@ app = FastAPI(
 app.mount("/static", StaticFiles(directory=settings.project_root / "app" / "static"), name="static")
 app.include_router(pages.router)
 app.include_router(tasks.router)
+app.include_router(files.router)
+app.include_router(settings_router.router)
 
 
 @app.get("/health")

@@ -1,7 +1,11 @@
 .venv/
 __pycache__/
 *.pyc
+
+# 本地真实配置与密钥：不要提交 API Key
 .env
+.env.*
+!.env.example
 
 data/*
 !data/.gitkeep
@@ -9,6 +13,18 @@ data/*
 tasks/*
 !tasks/.gitkeep
 
+# 本地生成物与大文件
 *.log
+*.sqlite
+*.sqlite3
+*.db
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+*.mp3
+*.wav
+
 .DS_Store
 Thumbs.db

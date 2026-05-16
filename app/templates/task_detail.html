@@ -5,14 +5,24 @@
 <section class="page-heading">
   <div>
     <p class="eyebrow">Task Detail</p>
-    <h1>{{ task.title }}</h1>
-    <p>任务 ID：{{ task.id }}</p>
+    <h1>任务详情 · {{ task.title }}</h1>
+    <p class="detail-locator">
+      <span>任务 ID：{{ task.id }}</span>
+      <span>写入时间：{{ task.created_at }}</span>
+      <span>主题：{{ task.title }}</span>
+      <span>当前状态：{{ task.status_label }}</span>
+    </p>
   </div>
-  <a class="secondary-button" href="/tasks/{{ task.id }}/clips">进入片段审核</a>
+    <div class="button-row">
+    <button class="secondary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/audio">提取音频</button>
+    <button class="secondary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript">生成转写 MD</button>
+    <button class="secondary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/cuts">生成切片</button>
+    <a class="primary-button" href="/tasks/{{ task.id }}/clips/review">进入片段审核</a>
+  </div>
 </section>
 
 <section class="detail-grid">
-  <article class="panel">
+  <article class="panel summary-card">
     <div class="panel-header">
       <div>
         <p class="eyebrow">Basic</p>
@@ -20,45 +30,71 @@
       </div>
     </div>
     <dl class="meta-grid">
-      <div><dt>平台</dt><dd>{{ task.platform }}</dd></div>
+      <div><dt>平台</dt><dd>{{ task.platform_label }}</dd></div>
+      <div><dt>视频来源</dt><dd>{{ task.source_type_label }}</dd></div>
       <div><dt>视频时长</dt><dd>{{ task.duration }}</dd></div>
+      <div><dt>视频大小</dt><dd>{{ task.video_size }}</dd></div>
       <div><dt>候选片段</dt><dd>{{ task.candidate_count }} 条</dd></div>
+      <div><dt>最长切片</dt><dd>{{ task.max_clip_duration }} 分钟</dd></div>
       <div><dt>创建时间</dt><dd>{{ task.created_at }}</dd></div>
+      <div><dt>更新时间</dt><dd>{{ task.updated_at }}</dd></div>
+      <div><dt>源文件状态</dt><dd>{{ "可访问" if task.source_exists else "不可访问 / 未选择" }}</dd></div>
+      <div><dt>切片输出</dt><dd>{{ task.output_clip_count }} 条</dd></div>
+      <div><dt>任务目录</dt><dd class="path-text">{{ task.task_dir }}</dd></div>
     </dl>
   </article>
 
-  <article class="panel">
+  <article class="panel status-overview-card">
     <div class="panel-header">
       <div>
         <p class="eyebrow">Status</p>
         <h2>状态概览</h2>
       </div>
-      <span class="status-pill">{{ task.status }}</span>
+      <span class="status-pill">{{ task.status_label }}</span>
     </div>
     <div class="large-progress">
       <span style="width: {{ task.progress }}%"></span>
     </div>
     <strong class="progress-number">{{ task.progress }}%</strong>
-  </article>
-
-  <article class="panel wide-panel">
-    <div class="panel-header">
-      <div>
-        <p class="eyebrow">Timeline</p>
-        <h2>处理进度时间线</h2>
-      </div>
-    </div>
-    <ol class="timeline-list horizontal">
+    <ol class="metro-timeline" aria-label="处理进度时间线">
       {% for step in workflow_steps %}
-      <li>
-        <span>{{ loop.index }}</span>
-        <strong>{{ step }}</strong>
+      <li class="metro-step {{ step.state }}">
+        <span>{{ step.index }}</span>
+        <strong>{{ step.name }}</strong>
       </li>
       {% endfor %}
     </ol>
+    <div class="metro-legend">
+      <span><i class="done"></i>已通过</span>
+      <span><i class="current"></i>当前阶段</span>
+      <span><i class="warning"></i>异常 / 待处理</span>
+    </div>
   </article>
 
-  <article class="panel wide-panel">
+  <article class="panel transcript-panel ai-analysis-panel">
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">AI Analysis</p>
+        <h2>AI 分析</h2>
+      </div>
+      <span class="status-pill">{{ task.candidate_count }} 条候选</span>
+    </div>
+    <form id="ai-analysis-form" class="settings-form" data-task-id="{{ task.id }}">
+      <label>
+        <span>AI 偏好</span>
+        <textarea name="ai_preference" rows="4" placeholder="例如：优先选择观点强、开头有冲突、适合知识类传播的片段">{{ task.ai_preference or "" }}</textarea>
+      </label>
+      <p class="empty-note">这段偏好会进入 AI 片段分析 Prompt，用来影响候选片段的选择方向、推荐理由和排序参考；它不会直接改变原视频，也不会跳过人工审核。</p>
+      <div class="button-row align-end">
+        <button class="secondary-button" id="save-ai-preference-button" type="button">保存偏好</button>
+        <button class="secondary-button js-ai-process-action" type="button" data-provider="remote">远程 AI 分析</button>
+        <button class="secondary-button js-ai-process-action" type="button" data-provider="local">本地 AI 分析</button>
+      </div>
+      <p class="form-hint" id="ai-process-result"></p>
+    </form>
+  </article>
+
+  <article class="panel transcript-panel">
     <div class="panel-header">
       <div>
         <p class="eyebrow">Transcript</p>
@@ -66,10 +102,44 @@
       </div>
     </div>
     <div class="transcript-box">
+      {% if transcript_lines %}
       {% for line in transcript_lines %}
       <p><time>{{ line.time }}</time>{{ line.text }}</p>
       {% endfor %}
+      {% else %}
+      {% if task.transcript_exists %}
+      <p class="empty-note">已生成转写文件，但当前文件里还没有真实语音转写内容。下一步需要接入真实转写服务，或把带时间戳的转写文本写入 transcript.md。</p>
+      {% else %}
+      <p class="empty-note">尚未生成转写文件。请先点击“提取音频”，再点击“生成转写 MD”。</p>
+      {% endif %}
+      {% endif %}
     </div>
+  </article>
+
+  <article class="panel transcript-panel">
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">Output</p>
+        <h2>已生成视频</h2>
+      </div>
+      <span class="status-pill">{{ output_clips|length }} 条</span>
+    </div>
+    {% if output_clips %}
+    <div class="output-table">
+      {% for output in output_clips %}
+      <div class="output-row">
+        <strong>{{ output.output_file_name or "未生成文件" }}</strong>
+        <span class="status-pill">{{ output.status_label }}</span>
+        <p class="path-text">{{ output.output_file_path or "无输出路径" }}</p>
+        {% if output.error_message %}
+        <p class="error-text">{{ output.error_message }}</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-note">暂无切片输出。请先进入片段审核页，确认启用片段后点击“生成切片”。</p>
+    {% endif %}
   </article>
 
   <aside class="panel">
@@ -80,11 +150,20 @@
       </div>
     </div>
     <ul class="compact-list">
-      <li>源视频路径：待接入</li>
-      <li>音频文件：待生成</li>
-      <li>转写服务：预留接口</li>
-      <li>AI 分析：预留接口</li>
+      <li>源视频路径：{{ task.source }}</li>
+      <li>E 盘存储根目录：{{ task.storage_root }}</li>
+      <li>任务目录：{{ task.task_dir }}</li>
+      <li>AI 偏好：{{ task.ai_preference or "未填写" }}</li>
+      <li>音频文件：{{ task.audio_path }}（{{ "已生成" if task.audio_exists else "待生成" }}）</li>
+      <li>转写 MD：{{ task.transcript_path }}（{{ "已生成" if task.transcript_exists else "待生成" }}）</li>
+      <li>AI 分析文件：{{ task.analysis_path }}（{{ "已生成" if task.analysis_exists else "待生成" }}）</li>
+      <li>切片目录：{{ task.clips_dir }}</li>
+      <li>处理日志：{{ task.log_path }}</li>
+      {% if task.error_message %}
+      <li>异常信息：{{ task.error_message }}</li>
+      {% endif %}
     </ul>
+    <p class="form-hint" id="process-result"></p>
   </aside>
 </section>
 {% endblock %}

@@ -6,7 +6,7 @@
   <div>
     <p class="eyebrow">Dashboard</p>
     <h1>工作台</h1>
-    <p>从直播录像到候选切片的本地处理链路。</p>
+    <p>从直播录像到候选切片的本地处理链路，当前任务数据来自 SQLite。</p>
   </div>
   <a class="secondary-button" href="/tasks">查看全部任务</a>
 </section>
@@ -14,8 +14,10 @@
 <section class="stat-grid" aria-label="任务状态统计">
   {% for item in stats %}
   <article class="stat-card tone-{{ item.tone }}">
+    <div class="stat-icon"></div>
     <span>{{ item.label }}</span>
     <strong>{{ item.value }}</strong>
+    <small>{{ item.note }}</small>
   </article>
   {% endfor %}
 </section>
@@ -25,10 +27,10 @@
     <div class="panel-header">
       <div>
         <p class="eyebrow">Workflow</p>
-        <h2>当前 MVP 流程</h2>
+        <h2>工作流程</h2>
       </div>
     </div>
-    <div class="workflow-line">
+    <div class="workflow-line active-2">
       {% for step in workflow_steps %}
       <div class="workflow-step">
         <span>{{ loop.index }}</span>
@@ -38,18 +40,17 @@
     </div>
   </article>
 
-  <article class="panel">
+  <article class="panel insight-panel">
     <div class="panel-header">
       <div>
-        <p class="eyebrow">Scope</p>
-        <h2>首版聚焦</h2>
+        <p class="eyebrow">Today</p>
+        <h2>今日处理焦点</h2>
       </div>
     </div>
     <ul class="compact-list">
-      <li>Windows 本地后台处理</li>
-      <li>SQLite 任务状态记录</li>
-      <li>FFmpeg 视频处理接口</li>
-      <li>可替换 AI 与转写服务接口</li>
+      <li><strong>{{ stats[2].value }}</strong><span>条任务等待人工审核</span></li>
+      <li><strong>{{ stats[1].value }}</strong><span>条任务等待进入处理流程</span></li>
+      <li><strong>{{ stats[4].value }}</strong><span>条任务需要排查异常</span></li>
     </ul>
   </article>
 </section>
@@ -68,16 +69,21 @@
           <th>任务名称</th>
           <th>平台</th>
           <th>状态</th>
+          <th>候选片段</th>
+          <th>创建时间</th>
           <th>进度</th>
           <th>操作</th>
         </tr>
       </thead>
       <tbody>
+        {% if recent_tasks %}
         {% for task in recent_tasks %}
         <tr>
           <td>{{ task.title }}</td>
-          <td>{{ task.platform }}</td>
-          <td><span class="status-pill">{{ task.status }}</span></td>
+          <td><span class="platform-badge {{ task.platform_key }}">{{ task.platform_label }}</span></td>
+          <td><span class="status-pill">{{ task.status_label }}</span></td>
+          <td>{{ task.candidate_count }}</td>
+          <td>{{ task.created_at }}</td>
           <td>
             <div class="progress">
               <span style="width: {{ task.progress }}%"></span>
@@ -86,6 +92,13 @@
           <td><a href="/tasks/{{ task.id }}">详情</a></td>
         </tr>
         {% endfor %}
+        {% else %}
+        <tr>
+          <td colspan="7" class="empty-table-cell">
+            还没有任务。点击右上角“新建任务”创建第一条直播切片任务。
+          </td>
+        </tr>
+        {% endif %}
       </tbody>
     </table>
   </div>

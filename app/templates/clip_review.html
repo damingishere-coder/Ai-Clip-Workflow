@@ -5,53 +5,105 @@
 <section class="page-heading">
   <div>
     <p class="eyebrow">Clip Review</p>
-    <h1>片段审核</h1>
-    <p>{{ task.title }} 的候选短视频片段。</p>
+    <h1>片段审核 · {{ task.title }}</h1>
+    <p>任务 ID：{{ task.id }} · 候选片段 {{ clip_count }} 条 · 已启用 {{ enabled_clip_count }} 条 · 单条最长 {{ task.max_clip_duration }} 分钟</p>
   </div>
-  <button class="primary-button js-review-action" type="button">生成切片</button>
+  <form class="toolbar compact-toolbar" method="get" id="clip-filter-form">
+    <select class="control" name="clip_filter" aria-label="筛选">
+      <option value="all" {{ "selected" if clip_filter == "all" else "" }}>全部片段</option>
+      <option value="enabled" {{ "selected" if clip_filter == "enabled" else "" }}>仅启用</option>
+      <option value="high" {{ "selected" if clip_filter == "high" else "" }}>高传播价值</option>
+    </select>
+    <select class="control" name="sort_by" aria-label="排序">
+      <option value="confidence" {{ "selected" if sort_by == "confidence" else "" }}>推荐分 / 置信度</option>
+      <option value="time" {{ "selected" if sort_by == "time" else "" }}>时间顺序</option>
+    </select>
+  </form>
 </section>
 
+<div class="page-alert" id="clip-review-message" hidden></div>
+
 <section class="review-layout">
-  <div class="clip-list">
+  <form class="clip-list" id="clip-review-form" data-task-id="{{ task.id }}">
+    {% if clips %}
     {% for clip in clips %}
-    <article class="panel clip-card">
+    <article
+      class="panel clip-card"
+      data-clip-card
+      data-clip-id="{{ clip.id }}"
+      data-confidence="{{ clip.confidence_score }}"
+      data-start-seconds="{{ clip.start_seconds }}"
+    >
       <div class="clip-card-header">
         <label class="toggle-line">
-          <input type="checkbox" checked>
+          <input type="checkbox" name="enabled" {{ "checked" if clip.enabled else "" }}>
           <span>启用</span>
         </label>
+        <span class="clip-index">{{ "%02d"|format(loop.index) }}</span>
         <span class="status-pill">{{ clip.duration_seconds }} 秒</span>
       </div>
+
+      <div class="clip-media-row">
+        <div class="thumb-placeholder">预览</div>
+        <div>
+          <strong>{{ clip.title }}</strong>
+          <p>{{ clip.summary or "暂无摘要" }}</p>
+        </div>
+      </div>
+
       <label>
-        <span>片段标题</span>
-        <input type="text" value="{{ clip.title }}">
+        <span>标题 title</span>
+        <input type="text" name="title" value="{{ clip.title }}" required>
       </label>
+
       <div class="form-row">
         <label>
-          <span>开始时间</span>
-          <input type="text" value="{{ clip.start_time }}">
+          <span>开始时间 start_time</span>
+          <input type="text" name="start_time" value="{{ clip.start_time }}" placeholder="00:01:23" required>
         </label>
         <label>
-          <span>结束时间</span>
-          <input type="text" value="{{ clip.end_time }}">
+          <span>结束时间 end_time</span>
+          <input type="text" name="end_time" value="{{ clip.end_time }}" placeholder="00:02:10" required>
         </label>
       </div>
-      <div class="clip-timeline">
-        <span style="left: 18%; width: 34%"></span>
-      </div>
+
+      <label>
+        <span>内容摘要 summary</span>
+        <textarea name="summary" rows="3">{{ clip.summary }}</textarea>
+      </label>
+
       <dl class="clip-copy">
-        <div><dt>内容摘要</dt><dd>{{ clip.summary }}</dd></div>
-        <div><dt>推荐理由</dt><dd>{{ clip.reason }}</dd></div>
-        <div><dt>传播价值</dt><dd>{{ clip.spread_value }}</dd></div>
+        <div><dt>推荐理由 highlight_reason</dt><dd>{{ clip.highlight_reason or "暂无" }}</dd></div>
+        <div><dt>传播价值 spread_value</dt><dd>{{ clip.spread_value or "暂无" }}</dd></div>
+        <div><dt>剪辑建议 suggested_editing</dt><dd>{{ clip.suggested_editing or "暂无" }}</dd></div>
+        <div><dt>AI 置信度 confidence_score</dt><dd>{{ "%.2f"|format(clip.confidence_score) }} · {{ clip.confidence_percent }}%</dd></div>
       </dl>
     </article>
     {% endfor %}
-  </div>
+    {% else %}
+    <article class="panel empty-state">
+      <p class="eyebrow">Empty</p>
+      <h2>暂无候选片段</h2>
+      <p>请先完成转写和 AI 片段分析。AI 写入 `clip_candidates` 表后，这里会显示真实候选片段，不会使用模拟数据。</p>
+      <div class="button-row empty-actions">
+        <a class="secondary-button" href="/tasks/{{ task.id }}">返回任务详情</a>
+        <button class="secondary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript" {{ "disabled" if not task.audio_exists else "" }}>先生成转写</button>
+        <button class="primary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/ai?provider=remote" {{ "disabled" if not task.transcript_exists else "" }}>运行远程 AI 分析</button>
+      </div>
+    </article>
+    {% endif %}
+  </form>
 
   <aside class="panel preview-panel">
     <div class="video-placeholder">
+      <button class="play-button" type="button" aria-label="播放"></button>
       <strong>视频预览</strong>
-      <span>后续接入本地视频播放器与时间轴定位</span>
+      <span>当前先保留预览占位，后续接入本地视频流播放</span>
+    </div>
+    <div class="preview-timeline">
+      {% for clip in clips[:3] %}
+      <span style="left: {{ 8 + loop.index0 * 28 }}%; width: 12%"></span>
+      {% endfor %}
     </div>
     <div class="panel-header compact">
       <div>
@@ -59,9 +111,39 @@
         <h2>审核操作</h2>
       </div>
     </div>
-    <div class="button-row">
-      <button class="secondary-button js-review-action" type="button">保存修改</button>
-      <button class="primary-button js-review-action" type="button">生成切片</button>
+    <ul class="compact-list">
+      <li>保存后任务仍保持：{{ task.status_label }}</li>
+      <li>生成切片按钮当前接入预留接口，提示“待视频切割模块接入”。</li>
+    </ul>
+    <div class="button-row review-actions">
+      <button class="secondary-button" id="save-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/clips/batch-update" {{ "disabled" if not clips else "" }}>保存修改</button>
+      <button class="primary-button" id="generate-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/clips/generate" {{ "disabled" if not clips else "" }}>生成切片</button>
+    </div>
+    <p class="form-hint" id="process-result"></p>
+
+    <div class="output-list">
+      <div class="panel-header compact">
+        <div>
+          <p class="eyebrow">Outputs</p>
+          <h2>切片结果</h2>
+        </div>
+      </div>
+      {% if output_clips %}
+      <ul class="compact-list">
+        {% for output in output_clips %}
+        <li>
+          <strong>{{ output.output_file_name or "未生成文件" }}</strong>
+          <span class="status-pill">{{ output.status_label }}</span>
+          <span class="path-text">{{ output.output_file_path or "无输出路径" }}</span>
+          {% if output.error_message %}
+          <span class="error-text">{{ output.error_message }}</span>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty-note">还没有生成切片。确认启用片段后，点击“生成切片”。</p>
+      {% endif %}
     </div>
   </aside>
 </section>

@@ -28,6 +28,7 @@
       <option>失败</option>
     </select>
     <button class="secondary-button" type="button">按创建时间排序</button>
+    <button class="icon-button" type="button" aria-label="筛选">⌁</button>
   </div>
 
   <div class="table-wrap">
@@ -44,28 +45,40 @@
         </tr>
       </thead>
       <tbody>
+        {% if tasks %}
         {% for task in tasks %}
         <tr>
           <td>{{ task.title }}</td>
-          <td>{{ task.platform }}</td>
+          <td><span class="platform-badge {{ task.platform_key }}">{{ task.platform_label }}</span></td>
           <td>{{ task.duration }}</td>
-          <td><span class="status-pill">{{ task.status }}</span></td>
+          <td><span class="status-pill">{{ task.status_label }}</span></td>
           <td>{{ task.candidate_count }}</td>
           <td>{{ task.created_at }}</td>
           <td class="action-links">
             <a href="/tasks/{{ task.id }}">详情</a>
-            <a href="/tasks/{{ task.id }}/clips">审核</a>
+            <a href="/tasks/{{ task.id }}/clips/review">审核</a>
+            <button class="link-button danger js-hide-task" type="button" data-task-id="{{ task.id }}" data-task-title="{{ task.title }}">隐藏</button>
           </td>
         </tr>
         {% endfor %}
+        {% else %}
+        <tr>
+          <td colspan="7" class="empty-table-cell">
+            暂无任务。请先进入“新建任务”页面创建一条任务。
+          </td>
+        </tr>
+        {% endif %}
       </tbody>
     </table>
   </div>
 
+  {% if tasks %}
   <div class="pagination">
     <button type="button">上一页</button>
     <span>1</span>
     <button type="button">下一页</button>
+    <small>共 {{ tasks|length }} 条</small>
   </div>
+  {% endif %}
 </section>
 {% endblock %}

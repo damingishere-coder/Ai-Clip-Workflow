@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}片段审核 - {{ settings.app_name }}{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Clip Review</p>
+    <h1>片段审核工作台</h1>
+    <p>按工作流查看每个任务是否已经进入 AI 分析、人工审核、切片生成或异常排查阶段。</p>
+  </div>
+  <a class="primary-button" href="/tasks/new">新建任务</a>
+</section>
+
+<section class="stat-grid review-stat-grid" aria-label="片段审核统计">
+  {% for item in stats %}
+  <article class="stat-card tone-{{ item.tone }}">
+    <div class="stat-icon"></div>
+    <span>{{ item.label }}</span>
+    <strong>{{ item.value }}</strong>
+    <small>来自当前任务库</small>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <div>
+      <p class="eyebrow">Review Queue</p>
+      <h2>审核队列</h2>
+    </div>
+  </div>
+
+  {% if tasks %}
+  <div class="review-board">
+    {% for task in tasks %}
+    <article class="review-task-row">
+      <div class="review-task-main">
+        <span class="status-pill tone-{{ task.review_tone }}">{{ task.review_stage }}</span>
+        <h3>{{ task.title }}</h3>
+        <p>当前状态：{{ task.status_label }} · 平台：{{ task.platform_label }} · 任务 ID：{{ task.id }}</p>
+      </div>
+      <dl class="review-metrics">
+        <div><dt>候选片段</dt><dd>{{ task.real_clip_count }} 条</dd></div>
+        <div><dt>已启用</dt><dd>{{ task.enabled_clip_count }} 条</dd></div>
+        <div><dt>输出切片</dt><dd>{{ task.output_clip_count }} 条</dd></div>
+        <div><dt>源视频</dt><dd>{{ "可访问" if task.source_exists else "未确认" }}</dd></div>
+      </dl>
+      <div class="review-row-actions">
+        <a class="secondary-button" href="/tasks/{{ task.id }}">详情</a>
+        <a class="primary-button" href="/tasks/{{ task.id }}/clips/review">进入审核</a>
+      </div>
+      {% if task.error_message %}
+      <p class="error-text review-error">异常信息：{{ task.error_message }}</p>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <article class="empty-state">
+    <p class="eyebrow">Empty</p>
+    <h2>还没有可审核任务</h2>
+    <p>先创建一个视频任务，完成音频提取、转写和 AI 分析后，这里会显示候选片段审核入口。</p>
+    <a class="primary-button" href="/tasks/new">新建任务</a>
+  </article>
+  {% endif %}
+</section>
+{% endblock %}

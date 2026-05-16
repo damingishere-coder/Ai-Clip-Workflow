@@ -1,15 +1,20 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
 from app.core.config import settings
 from app.services.task_service import (
+    get_clips_overview_context,
     get_dashboard_context,
-    get_mock_task,
+    get_system_status_context,
+    get_task,
+    get_task_workflow_steps,
+    get_transcript_preview,
     get_workflow_steps,
-    list_mock_clips,
-    list_mock_tasks,
+    list_clip_candidates,
+    list_output_clips,
+    list_tasks,
 )
 
 
@@ -41,7 +46,7 @@ async def tasks_page(request: Request):
             "request": request,
             "active_page": "tasks",
             "settings": settings,
-            "tasks": list_mock_tasks(),
+            "tasks": list_tasks(),
         },
     )
 
@@ -55,7 +60,6 @@ async def new_task_page(request: Request):
             "request": request,
             "active_page": "new_task",
             "settings": settings,
-            "clip_length_options": [2, 5, 10],
             "candidate_count_options": [5, 8, 12, 20],
             "workflow_steps": get_workflow_steps(),
         },
@@ -64,6 +68,10 @@ async def new_task_page(request: Request):
 
 @router.get("/tasks/{task_id}")
 async def task_detail_page(request: Request, task_id: str):
+    task = get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
     return templates.TemplateResponse(
         name="task_detail.html",
         request=request,
@@ -71,19 +79,41 @@ async def task_detail_page(request: Request, task_id: str):
             "request": request,
             "active_page": "tasks",
             "settings": settings,
-            "task": get_mock_task(task_id),
-            "workflow_steps": get_workflow_steps(),
-            "transcript_lines": [
-                {"time": "00:12:08", "text": "这里是转写文本预览，后续会显示真实时间戳内容。"},
-                {"time": "00:13:20", "text": "系统会把长视频拆成分钟级或分段级时间线。"},
-                {"time": "00:14:05", "text": "AI 将基于这些文本推荐适合传播的短视频片段。"},
-            ],
+            "task": task,
+            "workflow_steps": get_task_workflow_steps(task),
+            "transcript_lines": get_transcript_preview(task_id),
+            "output_clips": list_output_clips(task_id),
         },
     )
 
 
-@router.get("/tasks/{task_id}/clips")
-async def clip_review_page(request: Request, task_id: str):
+def _filter_and_sort_clips(clips: list[dict], clip_filter: str, sort_by: str) -> list[dict]:
+    if clip_filter == "enabled":
+        clips = [clip for clip in clips if clip["enabled"]]
+    elif clip_filter == "high":
+        clips = [
+            clip
+            for clip in clips
+            if "高" in clip.get("spread_value", "") or clip.get("spread_value", "").lower() == "high"
+        ]
+
+    if sort_by == "time":
+        return sorted(clips, key=lambda clip: clip.get("start_seconds", 0))
+    return sorted(clips, key=lambda clip: clip.get("confidence_score", 0), reverse=True)
+
+
+async def _render_clip_review_page(
+    request: Request,
+    task_id: str,
+    clip_filter: str = "all",
+    sort_by: str = "confidence",
+):
+    task = get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    all_clips = list_clip_candidates(task_id)
+    visible_clips = _filter_and_sort_clips(all_clips, clip_filter, sort_by)
+
     return templates.TemplateResponse(
         name="clip_review.html",
         request=request,
@@ -91,7 +121,61 @@ async def clip_review_page(request: Request, task_id: str):
             "request": request,
             "active_page": "clips",
             "settings": settings,
-            "task": get_mock_task(task_id),
-            "clips": list_mock_clips(task_id),
+            "task": task,
+            "clips": visible_clips,
+            "clip_count": len(all_clips),
+            "enabled_clip_count": sum(1 for clip in all_clips if clip["enabled"]),
+            "clip_filter": clip_filter,
+            "sort_by": sort_by,
+            "output_clips": list_output_clips(task_id),
+        },
+    )
+
+
+@router.get("/tasks/{task_id}/clips")
+async def clip_review_page(
+    request: Request,
+    task_id: str,
+    clip_filter: str = "all",
+    sort_by: str = "confidence",
+):
+    return await _render_clip_review_page(request, task_id, clip_filter, sort_by)
+
+
+@router.get("/tasks/{task_id}/clips/review")
+async def clip_review_page_v2(
+    request: Request,
+    task_id: str,
+    clip_filter: str = "all",
+    sort_by: str = "confidence",
+):
+    return await _render_clip_review_page(request, task_id, clip_filter, sort_by)
+
+
+@router.get("/clips")
+async def clips_overview_page(request: Request):
+    context = get_clips_overview_context()
+    return templates.TemplateResponse(
+        name="clips_overview.html",
+        request=request,
+        context={
+            "request": request,
+            "active_page": "clips",
+            "settings": settings,
+            **context,
+        },
+    )
+
+
+@router.get("/system")
+async def system_status_page(request: Request):
+    return templates.TemplateResponse(
+        name="system_status.html",
+        request=request,
+        context={
+            "request": request,
+            "active_page": "system",
+            "settings": settings,
+            **get_system_status_context(),
         },
     )

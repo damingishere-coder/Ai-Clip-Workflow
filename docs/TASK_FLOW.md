@@ -54,6 +54,42 @@
 
 ## 5. 后续需要补充
 
-- 每个阶段的重试策略。
+- 每个阶段的完整重试策略。
 - 每个阶段的日志文件格式。
 - 候选片段审核后的状态保存方式。
+
+## 6. AI 分析阶段
+
+AI 分析阶段当前已接入真实接口入口：
+
+```text
+pending_ai
+→ 用户点击远程 AI 分析 / 本地 AI 分析
+→ ai_analyzing
+→ 解析 AI 严格 JSON
+→ 写入 clip_candidates
+→ pending_review
+```
+
+如果 AI 返回非法 JSON，程序会自动安全重试一次。重试后仍失败，或片段时间超过用户设置、超出转写时间范围时，任务进入 `failed` 并记录错误信息。
+
+## 7. 转写阶段
+
+转写阶段当前使用本地 `faster-whisper`：
+
+```text
+audio/source.wav
+→ faster-whisper 本地识别
+→ 按分钟拼接真实原文
+→ 写入 transcripts/transcript.md
+→ pending_ai
+```
+
+`transcript.md` 包含“分钟级转写”和“逐句时间戳原文”。这一阶段不调用 AI、不做内容总结；候选切片分析仍在后续 AI 分析阶段完成。
+
+## 自动切割补充说明
+
+- 用户在片段审核页点击“生成切片”后，任务会进入 `cutting`。
+- 所有启用片段都切割成功时，任务进入 `completed`。
+- 至少一个片段成功、同时存在失败片段时，任务进入 `completed_with_errors`。这样可以保留已经成功生成的视频，不会因为单条坏时间码而把整批结果都视为不可用。
+- 所有片段都失败时，任务进入 `failed`。

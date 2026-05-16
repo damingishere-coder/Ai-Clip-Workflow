@@ -1,0 +1,23 @@
+from pydantic import BaseModel, Field
+
+
+class AIConfigUpdate(BaseModel):
+    ai_default_provider: str = Field(default="remote", pattern="^(remote|local)$")
+    ai_request_timeout_seconds: int = Field(default=120, ge=10, le=600)
+    ai_remote_base_url: str = Field(default="")
+    ai_remote_api_key: str = Field(default="")
+    ai_remote_model: str = Field(default="")
+    ai_remote_review_model: str = Field(default="gpt-5.5")
+    ai_remote_protocol: str = Field(default="responses")
+    ai_remote_reasoning_effort: str = Field(default="")
+    ai_remote_responses_path: str = Field(default="/v1/responses")
+    ai_remote_disable_response_storage: bool = Field(default=True)
+    ai_local_base_url: str = Field(default="")
+    ai_local_api_key: str = Field(default="")
+    ai_local_model: str = Field(default="")
+    ai_local_protocol: str = Field(default="chat_completions")
+    ai_local_fallback_protocol: str = Field(default="")
+    ai_network_access: str = Field(default="enabled")
+    ai_windows_wsl_setup_acknowledged: bool = Field(default=True)
+    ai_model_context_window: int = Field(default=1000000, ge=1)
+    ai_model_auto_compact_token_limit: int = Field(default=900000, ge=1)
