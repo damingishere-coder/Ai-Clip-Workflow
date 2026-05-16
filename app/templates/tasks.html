@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}任务列表 - {{ settings.app_name }}{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Tasks</p>
+    <h1>任务列表</h1>
+    <p>查看每条直播视频的处理状态、候选片段数量与异常信息。</p>
+  </div>
+  <a class="primary-button" href="/tasks/new">新建任务</a>
+</section>
+
+<section class="panel">
+  <div class="toolbar">
+    <input class="control" type="search" placeholder="搜索任务名称">
+    <select class="control" aria-label="平台筛选">
+      <option>全部平台</option>
+      <option>抖音</option>
+      <option>B站</option>
+      <option>通用</option>
+    </select>
+    <select class="control" aria-label="状态筛选">
+      <option>全部状态</option>
+      <option>待处理</option>
+      <option>待人工审核</option>
+      <option>已完成</option>
+      <option>失败</option>
+    </select>
+    <button class="secondary-button" type="button">按创建时间排序</button>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>任务名称</th>
+          <th>平台</th>
+          <th>视频时长</th>
+          <th>当前状态</th>
+          <th>候选片段数</th>
+          <th>创建时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for task in tasks %}
+        <tr>
+          <td>{{ task.title }}</td>
+          <td>{{ task.platform }}</td>
+          <td>{{ task.duration }}</td>
+          <td><span class="status-pill">{{ task.status }}</span></td>
+          <td>{{ task.candidate_count }}</td>
+          <td>{{ task.created_at }}</td>
+          <td class="action-links">
+            <a href="/tasks/{{ task.id }}">详情</a>
+            <a href="/tasks/{{ task.id }}/clips">审核</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="pagination">
+    <button type="button">上一页</button>
+    <span>1</span>
+    <button type="button">下一页</button>
+  </div>
+</section>
+{% endblock %}

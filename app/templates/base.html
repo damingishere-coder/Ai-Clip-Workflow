@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand" href="/">
+          <span class="brand-mark">LS</span>
+          <span>
+            <strong>Live Slicing</strong>
+            <small>直播切片工作流</small>
+          </span>
+        </a>
+        <nav class="side-nav" aria-label="主导航">
+          <a class="{{ 'active' if active_page == 'dashboard' else '' }}" href="/">工作台</a>
+          <a class="{{ 'active' if active_page == 'tasks' else '' }}" href="/tasks">任务列表</a>
+          <a class="{{ 'active' if active_page == 'new_task' else '' }}" href="/tasks/new">新建任务</a>
+          <a class="{{ 'active' if active_page == 'clips' else '' }}" href="/tasks/demo-001/clips">片段审核</a>
+        </nav>
+        <div class="sidebar-note">
+          <strong>MVP 阶段</strong>
+          <span>本地视频上传、转写、AI 片段分析与自动切割。</span>
+        </div>
+      </aside>
+
+      <main class="main-panel">
+        <header class="topbar">
+          <div class="search-box">
+            <span>搜索</span>
+            <input type="search" placeholder="任务名称、平台、状态">
+          </div>
+          <a class="primary-button" href="/tasks/new">新建任务</a>
+        </header>
+
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+
+    <script src="{{ url_for('static', path='js/app.js') }}"></script>
+  </body>
+</html>

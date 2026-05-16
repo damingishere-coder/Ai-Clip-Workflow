@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}任务详情 - {{ settings.app_name }}{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Task Detail</p>
+    <h1>{{ task.title }}</h1>
+    <p>任务 ID：{{ task.id }}</p>
+  </div>
+  <a class="secondary-button" href="/tasks/{{ task.id }}/clips">进入片段审核</a>
+</section>
+
+<section class="detail-grid">
+  <article class="panel">
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">Basic</p>
+        <h2>基础信息</h2>
+      </div>
+    </div>
+    <dl class="meta-grid">
+      <div><dt>平台</dt><dd>{{ task.platform }}</dd></div>
+      <div><dt>视频时长</dt><dd>{{ task.duration }}</dd></div>
+      <div><dt>候选片段</dt><dd>{{ task.candidate_count }} 条</dd></div>
+      <div><dt>创建时间</dt><dd>{{ task.created_at }}</dd></div>
+    </dl>
+  </article>
+
+  <article class="panel">
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">Status</p>
+        <h2>状态概览</h2>
+      </div>
+      <span class="status-pill">{{ task.status }}</span>
+    </div>
+    <div class="large-progress">
+      <span style="width: {{ task.progress }}%"></span>
+    </div>
+    <strong class="progress-number">{{ task.progress }}%</strong>
+  </article>
+
+  <article class="panel wide-panel">
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">Timeline</p>
+        <h2>处理进度时间线</h2>
+      </div>
+    </div>
+    <ol class="timeline-list horizontal">
+      {% for step in workflow_steps %}
+      <li>
+        <span>{{ loop.index }}</span>
+        <strong>{{ step }}</strong>
+      </li>
+      {% endfor %}
+    </ol>
+  </article>
+
+  <article class="panel wide-panel">
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">Transcript</p>
+        <h2>转写预览</h2>
+      </div>
+    </div>
+    <div class="transcript-box">
+      {% for line in transcript_lines %}
+      <p><time>{{ line.time }}</time>{{ line.text }}</p>
+      {% endfor %}
+    </div>
+  </article>
+
+  <aside class="panel">
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">Logs</p>
+        <h2>日志 / 元信息</h2>
+      </div>
+    </div>
+    <ul class="compact-list">
+      <li>源视频路径：待接入</li>
+      <li>音频文件：待生成</li>
+      <li>转写服务：预留接口</li>
+      <li>AI 分析：预留接口</li>
+    </ul>
+  </aside>
+</section>
+{% endblock %}

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}新建任务 - {{ settings.app_name }}{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">New Task</p>
+    <h1>新建任务</h1>
+    <p>先登记直播视频与切片偏好，后续接入真实上传、转写和切割链路。</p>
+  </div>
+</section>
+
+<section class="split-layout">
+  <form id="new-task-form" class="panel form-panel">
+    <label>
+      <span>任务名称</span>
+      <input name="title" type="text" placeholder="例如：5 月新品直播切片" required>
+    </label>
+
+    <fieldset>
+      <legend>视频来源</legend>
+      <div class="segmented">
+        <label><input type="radio" name="source_type" value="upload" checked> 上传视频</label>
+        <label><input type="radio" name="source_type" value="nas"> 选择 NAS 文件</label>
+      </div>
+      <input name="source_path" type="text" placeholder="本地或 NAS 文件路径，后续会接文件选择器">
+    </fieldset>
+
+    <label>
+      <span>平台类型</span>
+      <select name="platform">
+        <option>通用</option>
+        <option>抖音</option>
+        <option>B站</option>
+      </select>
+    </label>
+
+    <div class="form-row">
+      <label>
+        <span>单条切片最长</span>
+        <select name="max_clip_minutes">
+          {% for option in clip_length_options %}
+          <option value="{{ option }}">{{ option }} 分钟</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>候选片段数量</span>
+        <select name="target_clip_count">
+          {% for option in candidate_count_options %}
+          <option value="{{ option }}">{{ option }} 条</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+
+    <label>
+      <span>AI 偏好风格</span>
+      <textarea name="ai_preference" rows="4" placeholder="例如：优先选择观点强、开头有冲突、适合知识类传播的片段"></textarea>
+    </label>
+
+    <button class="primary-button" type="submit">开始处理</button>
+    <p class="form-hint" id="new-task-result"></p>
+  </form>
+
+  <aside class="panel">
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">Pipeline</p>
+        <h2>处理流程</h2>
+      </div>
+    </div>
+    <ol class="timeline-list">
+      {% for step in workflow_steps %}
+      <li>
+        <span>{{ loop.index }}</span>
+        <strong>{{ step }}</strong>
+      </li>
+      {% endfor %}
+    </ol>
+  </aside>
+</section>
+{% endblock %}

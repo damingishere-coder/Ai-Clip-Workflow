@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}片段审核 - {{ settings.app_name }}{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Clip Review</p>
+    <h1>片段审核</h1>
+    <p>{{ task.title }} 的候选短视频片段。</p>
+  </div>
+  <button class="primary-button js-review-action" type="button">生成切片</button>
+</section>
+
+<section class="review-layout">
+  <div class="clip-list">
+    {% for clip in clips %}
+    <article class="panel clip-card">
+      <div class="clip-card-header">
+        <label class="toggle-line">
+          <input type="checkbox" checked>
+          <span>启用</span>
+        </label>
+        <span class="status-pill">{{ clip.duration_seconds }} 秒</span>
+      </div>
+      <label>
+        <span>片段标题</span>
+        <input type="text" value="{{ clip.title }}">
+      </label>
+      <div class="form-row">
+        <label>
+          <span>开始时间</span>
+          <input type="text" value="{{ clip.start_time }}">
+        </label>
+        <label>
+          <span>结束时间</span>
+          <input type="text" value="{{ clip.end_time }}">
+        </label>
+      </div>
+      <div class="clip-timeline">
+        <span style="left: 18%; width: 34%"></span>
+      </div>
+      <dl class="clip-copy">
+        <div><dt>内容摘要</dt><dd>{{ clip.summary }}</dd></div>
+        <div><dt>推荐理由</dt><dd>{{ clip.reason }}</dd></div>
+        <div><dt>传播价值</dt><dd>{{ clip.spread_value }}</dd></div>
+      </dl>
+    </article>
+    {% endfor %}
+  </div>
+
+  <aside class="panel preview-panel">
+    <div class="video-placeholder">
+      <strong>视频预览</strong>
+      <span>后续接入本地视频播放器与时间轴定位</span>
+    </div>
+    <div class="panel-header compact">
+      <div>
+        <p class="eyebrow">Actions</p>
+        <h2>审核操作</h2>
+      </div>
+    </div>
+    <div class="button-row">
+      <button class="secondary-button js-review-action" type="button">保存修改</button>
+      <button class="primary-button js-review-action" type="button">生成切片</button>
+    </div>
+  </aside>
+</section>
+{% endblock %}
