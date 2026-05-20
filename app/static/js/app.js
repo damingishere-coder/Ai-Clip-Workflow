@@ -54,6 +54,9 @@ if (videoFileInput && videoFileName) {
 
 document.querySelectorAll(".js-process-action").forEach((button) => {
   button.addEventListener("click", async () => {
+    if (button.dataset.confirm && !window.confirm(button.dataset.confirm)) {
+      return;
+    }
     const result = document.querySelector("#process-result");
     const originalText = button.textContent;
     button.disabled = true;
@@ -67,6 +70,13 @@ document.querySelectorAll(".js-process-action").forEach((button) => {
         throw new Error(data.detail || "处理失败");
       }
       if (result) result.textContent = data.message || "处理完成，正在刷新页面...";
+      if (button.dataset.endpoint.includes("/process/transcript")) {
+        startTranscriptPolling(true);
+        if (data.status === "completed") {
+          window.setTimeout(() => window.location.reload(), 600);
+        }
+        return;
+      }
       window.location.reload();
     } catch (error) {
       if (result) result.textContent = `处理失败：${error.message}`;
@@ -76,6 +86,114 @@ document.querySelectorAll(".js-process-action").forEach((button) => {
     }
   });
 });
+
+const transcriptPanel = document.querySelector("#transcript-panel");
+const transcriptProgress = document.querySelector("#transcript-progress");
+const transcriptProgressMessage = document.querySelector("#transcript-progress-message");
+const transcriptProgressPercent = document.querySelector("#transcript-progress-percent");
+const transcriptProgressBar = document.querySelector("#transcript-progress-bar");
+const transcriptProgressDetail = document.querySelector("#transcript-progress-detail");
+const transcriptProgressRuntime = document.querySelector("#transcript-progress-runtime");
+const transcriptPreviewBox = document.querySelector("#transcript-preview-box");
+let transcriptPollingTimer = null;
+
+function renderTranscriptPreview(preview, transcriptExists) {
+  if (!transcriptPreviewBox) return;
+  transcriptPreviewBox.replaceChildren();
+  if (preview.length) {
+    preview.forEach((line) => {
+      const paragraph = document.createElement("p");
+      const time = document.createElement("time");
+      time.textContent = line.time;
+      paragraph.append(time, document.createTextNode(line.text));
+      transcriptPreviewBox.append(paragraph);
+    });
+    return;
+  }
+
+  const empty = document.createElement("p");
+  empty.className = "empty-note";
+  empty.textContent = transcriptExists
+    ? "已生成转写文件，但当前文件里还没有真实语音转写内容。请查看上方进度或日志。"
+    : "尚未生成转写文件。请先点击“提取音频”，再点击“生成转写 MD”。";
+  transcriptPreviewBox.append(empty);
+}
+
+function renderTranscriptStatus(data) {
+  if (!transcriptProgress || !data.progress || !Object.keys(data.progress).length) return;
+  const progress = data.progress;
+  const percent = Number(progress.percent || 0);
+  transcriptProgress.hidden = false;
+  transcriptProgress.dataset.status = progress.status || "running";
+  transcriptProgressMessage.textContent = progress.message || "转写进度";
+  transcriptProgressPercent.textContent = `${percent}%`;
+  transcriptProgressBar.style.width = `${percent}%`;
+
+  if (progress.total_chunks) {
+    transcriptProgressDetail.textContent = `转写进度：${progress.current_chunk || 0}/${progress.total_chunks}，约 ${percent}%`;
+  } else {
+    transcriptProgressDetail.textContent = "转写进度：正在准备分段";
+  }
+
+  const runtimeParts = [progress.model, progress.device, progress.compute_type].filter(Boolean);
+  transcriptProgressRuntime.textContent = runtimeParts.length
+    ? `当前转写配置：${runtimeParts.join(" / ")}`
+    : "";
+
+  renderTranscriptPreview(data.preview || [], data.transcript_exists);
+  updateWorkflowButtons(data);
+}
+
+async function pollTranscriptStatus() {
+  if (!transcriptPanel) return;
+  const taskId = transcriptPanel.dataset.taskId;
+  const response = await fetch(`/api/tasks/${taskId}/transcript-status`);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "读取转写进度失败");
+  }
+  renderTranscriptStatus(data);
+  const status = data.progress?.status;
+  if (status === "running") {
+    transcriptPollingTimer = window.setTimeout(pollTranscriptStatus, 5000);
+  } else if (status === "completed") {
+    transcriptPollingTimer = null;
+    window.setTimeout(() => window.location.reload(), 900);
+  } else {
+    transcriptPollingTimer = null;
+  }
+}
+
+function startTranscriptPolling(runImmediately = false) {
+  if (!transcriptPanel) return;
+  if (transcriptPollingTimer) {
+    window.clearTimeout(transcriptPollingTimer);
+    transcriptPollingTimer = null;
+  }
+  if (runImmediately) {
+    pollTranscriptStatus().catch(() => {});
+    return;
+  }
+  transcriptPollingTimer = window.setTimeout(pollTranscriptStatus, 5000);
+}
+
+if (transcriptPanel) {
+  pollTranscriptStatus().catch(() => {});
+}
+
+function updateWorkflowButtons(data) {
+  const startButton = document.querySelector("#start-workflow-button");
+  if (!startButton) return;
+  if (data.transcript_exists) {
+    startButton.textContent = "转写已完成";
+    startButton.disabled = true;
+    return;
+  }
+  if (data.progress?.status === "running" || data.task_status === "transcribing") {
+    startButton.textContent = "转写处理中";
+    startButton.disabled = true;
+  }
+}
 
 const aiAnalysisForm = document.querySelector("#ai-analysis-form");
 const saveAiPreferenceButton = document.querySelector("#save-ai-preference-button");
@@ -305,6 +423,7 @@ if (aiConfigForm) {
     const formData = new FormData(aiConfigForm);
     const payload = Object.fromEntries(formData.entries());
     payload.ai_request_timeout_seconds = Number(payload.ai_request_timeout_seconds || 120);
+    payload.ai_local_health_timeout_seconds = Number(payload.ai_local_health_timeout_seconds || 30);
 
     submitButton.disabled = true;
     if (aiConfigResult) aiConfigResult.textContent = "正在保存 AI 配置...";

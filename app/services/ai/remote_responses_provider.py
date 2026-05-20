@@ -18,7 +18,7 @@ class RemoteResponsesProvider:
 
     def generate_json(self, prompt: str, retry_instruction: str | None = None) -> str:
         if not self.config.api_key:
-            raise AIProviderError("缺少 AI_REMOTE_API_KEY，请先在 .env 中填写远程中转站密钥")
+            raise AIProviderError("缺少 AI_REMOTE_API_KEY 或 OPENAI_API_KEY，请先在 .env 中填写远程中转站密钥")
         if self.config.protocol == "responses":
             return self._responses(prompt, retry_instruction)
         if self.config.protocol == "chat_completions":

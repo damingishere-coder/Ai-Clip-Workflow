@@ -17,6 +17,7 @@ class AIConfigUpdate(BaseModel):
     ai_local_model: str = Field(default="")
     ai_local_protocol: str = Field(default="chat_completions")
     ai_local_fallback_protocol: str = Field(default="")
+    ai_local_health_timeout_seconds: int = Field(default=30, ge=3, le=120)
     ai_network_access: str = Field(default="enabled")
     ai_windows_wsl_setup_acknowledged: bool = Field(default=True)
     ai_model_context_window: int = Field(default=1000000, ge=1)

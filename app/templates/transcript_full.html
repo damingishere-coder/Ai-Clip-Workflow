@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}完整转写原文 - {{ settings.app_name }}{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Transcript</p>
+    <h1>完整转写原文 · {{ task.title }}</h1>
+    <p class="detail-locator">
+      <span>任务 ID：{{ task.id }}</span>
+      <span>转写文件：{{ transcript_path }}</span>
+    </p>
+  </div>
+  <div class="button-row">
+    <a class="secondary-button" href="/tasks/{{ task.id }}">返回任务详情</a>
+    <a class="primary-button" href="/tasks/{{ task.id }}/clips/review">进入片段审核</a>
+  </div>
+</section>
+
+<article class="panel transcript-full-panel">
+  {% if transcript_exists and transcript_text %}
+  <pre class="transcript-full-text">{{ transcript_text }}</pre>
+  {% else %}
+  <p class="empty-note">还没有生成完整转写原文。请先回到任务详情，点击“开始处理”。</p>
+  {% endif %}
+</article>
+{% endblock %}

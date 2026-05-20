@@ -26,6 +26,14 @@ def _env(name: str, default: str = "") -> str:
     return os.getenv(name, default)
 
 
+def _env_first(names: tuple[str, ...], default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return default
+
+
 _load_env_file()
 
 
@@ -51,7 +59,7 @@ class Settings:
     ai_default_provider: str = _env("AI_DEFAULT_PROVIDER", "remote")
     ai_request_timeout_seconds: int = int(_env("AI_REQUEST_TIMEOUT_SECONDS", "120"))
     ai_remote_base_url: str = _env("AI_REMOTE_BASE_URL", "https://ai.oneinfinityai.com")
-    ai_remote_api_key: str = _env("AI_REMOTE_API_KEY", "")
+    ai_remote_api_key: str = _env_first(("AI_REMOTE_API_KEY", "OPENAI_API_KEY"), "")
     ai_remote_model: str = _env("AI_REMOTE_MODEL", "gpt-5.5")
     ai_remote_review_model: str = _env("AI_REMOTE_REVIEW_MODEL", "gpt-5.5")
     ai_remote_protocol: str = _env("AI_REMOTE_PROTOCOL", "responses")
@@ -63,14 +71,18 @@ class Settings:
     ai_local_model: str = _env("AI_LOCAL_MODEL", "qwen3:8b")
     ai_local_protocol: str = _env("AI_LOCAL_PROTOCOL", "chat_completions")
     ai_local_fallback_protocol: str = _env("AI_LOCAL_FALLBACK_PROTOCOL", "")
+    ai_local_health_timeout_seconds: int = int(_env("AI_LOCAL_HEALTH_TIMEOUT_SECONDS", "30"))
     ai_network_access: str = _env("AI_NETWORK_ACCESS", "enabled")
     ai_windows_wsl_setup_acknowledged: str = _env("AI_WINDOWS_WSL_SETUP_ACKNOWLEDGED", "true")
     ai_model_context_window: int = int(_env("AI_MODEL_CONTEXT_WINDOW", "1000000"))
     ai_model_auto_compact_token_limit: int = int(_env("AI_MODEL_AUTO_COMPACT_TOKEN_LIMIT", "900000"))
-    transcription_model: str = _env("TRANSCRIPTION_MODEL", "large-v3")
+    transcription_model: str = _env("TRANSCRIPTION_MODEL", "medium")
     transcription_language: str = _env("TRANSCRIPTION_LANGUAGE", "zh")
-    transcription_device: str = _env("TRANSCRIPTION_DEVICE", "cuda")
-    transcription_compute_type: str = _env("TRANSCRIPTION_COMPUTE_TYPE", "float16")
+    transcription_device: str = _env("TRANSCRIPTION_DEVICE", "cpu")
+    transcription_compute_type: str = _env("TRANSCRIPTION_COMPUTE_TYPE", "int8")
+    transcription_cpu_fallback_model: str = _env("TRANSCRIPTION_CPU_FALLBACK_MODEL", "medium")
+    transcription_chunk_seconds: int = int(_env("TRANSCRIPTION_CHUNK_SECONDS", "120"))
+    transcription_chunk_overlap_seconds: int = int(_env("TRANSCRIPTION_CHUNK_OVERLAP_SECONDS", "5"))
 
 
 settings = Settings()

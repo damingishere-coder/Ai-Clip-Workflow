@@ -78,14 +78,30 @@ pending_ai
 转写阶段当前使用本地 `faster-whisper`：
 
 ```text
+用户点击“开始处理 / 继续处理”
+→ 如果没有 audio/source.wav，先自动提取音频
+→ 如果已有 transcripts/transcript.md，直接提示转写已完成，不重复转写
 audio/source.wav
-→ faster-whisper 本地识别
+→ FFprobe 读取音频时长
+→ 默认按 2 分钟切分音频，段与段之间重叠 5 秒
+→ faster-whisper 逐段本地识别
+→ 将每段时间戳加回原始音频位置
 → 按分钟拼接真实原文
 → 写入 transcripts/transcript.md
 → pending_ai
 ```
 
-`transcript.md` 包含“分钟级转写”和“逐句时间戳原文”。这一阶段不调用 AI、不做内容总结；候选切片分析仍在后续 AI 分析阶段完成。
+点击“开始处理 / 继续处理”后，接口会自动衔接音频提取和后台转写，任务保持 `transcribing`。后台进度写入 `transcripts/transcript_progress.json`，任务详情页通过 `/api/tasks/{task_id}/transcript-status` 自动刷新当前第几段、总段数、百分比、模型、设备和计算类型。完成后写入 `transcripts/transcript.md` 并进入 `pending_ai`；失败时进入 `failed` 并记录错误。如果进度长时间没有更新，页面会提示可能卡住。用户只有点击“重新生成转写”并确认后，才会重新转写。
+
+`transcript.md` 包含“分钟级转写”和“逐句时间戳原文”。这一阶段不调用 AI、不做内容总结；候选切片分析仍在后续 AI 分析阶段完成。任务详情只显示预览，完整内容可通过“查看完整原文”打开。
+
+## 8. AI 分析阶段
+
+默认先调用远程 AI。远程 AI 如果返回 403、网络、超时、权限或余额类错误，系统会自动降级尝试本地 AI，并在任务日志中记录远程失败原因和本地降级结果。
+
+远程 AI 使用完整转写上下文。本地 Ollama 不再一次性处理完整长转写，而是先从 `transcript.md` 提取带时间戳正文，按约 3 分钟小段拆分，每段生成局部候选片段，再合并、去重、按置信度筛选到任务需要的候选数量。这样可以避开本地模型上下文过小导致的超时或连接断开。
+
+远程和本地都失败时，任务进入 `failed` 并显示两边错误；本地分段分析时，如果部分小段失败但已经生成可用候选片段，会跳过失败小段并继续进入 `pending_review`。
 
 ## 自动切割补充说明
 

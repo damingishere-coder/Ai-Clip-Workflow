@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, UploadFile
 
 from app.models.task import (
     ClipCandidateBatchUpdate,
@@ -63,6 +63,14 @@ async def get_task_detail(task_id: str) -> dict:
     return task
 
 
+@router.get("/{task_id}/transcript-status")
+async def get_transcript_status(task_id: str) -> dict:
+    try:
+        return task_service.get_task_transcript_status(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.delete("/{task_id}")
 async def delete_task(task_id: str) -> dict:
     try:
@@ -98,9 +106,27 @@ async def process_audio(task_id: str) -> dict:
 
 
 @router.post("/{task_id}/process/transcript")
-async def process_transcript(task_id: str) -> dict:
+async def process_transcript(task_id: str, background_tasks: BackgroundTasks) -> dict:
     try:
-        return task_service.process_task_transcript(task_id)
+        return task_service.process_task_transcript(task_id, background_tasks=background_tasks)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/process/transcript-workflow")
+async def process_transcript_workflow(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    force: bool = Query(default=False),
+) -> dict:
+    try:
+        return task_service.process_task_transcript_workflow(
+            task_id,
+            background_tasks=background_tasks,
+            force=force,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

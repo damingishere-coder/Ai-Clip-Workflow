@@ -1,5 +1,52 @@
 # Development Log
 
+## 2026-05-20 第二十一轮：AI 调用配置诊断与本地降级修复
+
+- 远程 AI Key 读取改为兼容 `AI_REMOTE_API_KEY` 和 `OPENAI_API_KEY`；系统状态页会提示 Key 是否看起来有效，避免把 1 位或空密钥误认为已配置。
+- AI URL 拼接增加防呆：`https://ai.oneinfinityai.com/v1` + `/v1/responses` 不会再拼成重复 `/v1/v1/responses`，本地完整 endpoint 也不会重复拼接 `/chat/completions`。
+- 片段审核远程分析明确使用 `AI_REMOTE_REVIEW_MODEL`，默认仍为 `gpt-5.5`、Responses 协议、`xhigh` 推理强度和不保存响应内容。
+- 本地 AI 默认模型改为 `qwen3:8b`，并新增 `AI_LOCAL_HEALTH_TIMEOUT_SECONDS`；远程失败自动降级本地前会先检查 Ollama 是否在线、目标模型是否已安装。
+- 新增 `scripts/diagnose_ai_environment.py`，用于一次性检查远程 Key、远程 JSON 调用、本地 Ollama 模型和本地 JSON 调用。
+- 已清空本机 `.env` 里明显无效的 `AI_REMOTE_API_KEY=1`，避免它覆盖后续 `OPENAI_API_KEY` 兜底；没有把聊天中暴露过的真实 Key 写入文件。
+- 本地 AI 片段审核改为分段分析：先从 `transcript.md` 提取时间戳正文，再按约 3 分钟小段分别请求 Ollama，最后合并、去重、按置信度筛选候选片段，避免完整 19 分钟转写一次性塞进 4096 context。
+- 诊断脚本支持传入任务 ID，例如 `scripts\diagnose_ai_environment.py 37601f8548fd`，会显示真实任务转写长度、分段数量和最大 prompt 字数。
+- 新增 `scripts/test_local_ai_chunked_analysis.py`，用模拟本地 Provider 验证长转写会被拆段、逐段分析并合并候选。
+- 已用真实任务 `37601f8548fd` 跑通本地分段 AI 分析，生成 5 条候选片段，任务状态进入 `pending_review`。
+
+## 2026-05-20 第二十轮：任务详情一键处理与 AI 自动降级
+
+- 任务详情顶部操作改为“一键处理”：没有音频时自动提取音频，随后启动后台转写；已有 `transcript.md` 时不会重复转写。
+- 保留“重新生成转写”作为明确的二级操作，点击前需要确认，避免误触后覆盖已有转写。
+- 新增完整转写原文页面 `/tasks/{task_id}/transcript`，转写预览卡片可直接打开完整 `transcript.md`。
+- 从任务详情顶部移除“生成切片”，切片生成只保留在片段审核页，并改为调用真实切割接口。
+- 远程 AI 分析遇到 403、网络、超时、权限或余额类错误时，会自动降级尝试本地 AI，并在页面和日志中记录远程 / 本地结果。
+- 调整任务详情布局和长路径换行，右侧日志 / 元信息栏更宽，不再轻易截断。
+
+## 2026-05-20 第十九轮：转写 0% 卡住排查与稳定优先修复
+
+- 将本地转写默认配置从 `large-v3 / cuda / float16` 改为 `medium / cpu / int8`，先保证 Windows 本地 MVP 可以稳定跑通；CUDA 加速仍可通过 `.env` 手动开启。
+- 默认分段从 10 分钟缩短为 2 分钟，并在进度文件中写入模型、设备、计算类型、分段时长和更细的阶段说明，避免第 1 段长时间显示 0%。
+- 新增 `/api/tasks/{task_id}/transcript-status`，任务详情页会自动轮询转写进度和预览内容；失败、完成或进度长时间不更新时会显示更明确的状态。
+- 点击“生成转写 MD”前会清理旧的转写临时分段目录；如果发现过期的后台转写状态，会允许重新开始。
+- 新增 `scripts/diagnose_transcription_environment.py` 和 `scripts/test_real_transcription_smoke.py`，用于检查 FFmpeg / FFprobe / faster-whisper / Python 环境，并用真实短音频验证转写是否真的可用。
+
+## 2026-05-19 第十八轮：长音频后台分段转写
+
+- 将本地 faster-whisper 转写从“一次性整段识别”改为“10 分钟分段 + 5 秒重叠 + 时间戳回填 + 自动拼接 Markdown”，降低 1 小时以上音频的失败风险。
+- `/api/tasks/{task_id}/process/transcript` 现在会立即返回后台启动结果，不再让网页一直等待长时间转写完成。
+- 新增 `transcripts/transcript_progress.json`，记录转写状态、当前分段、总分段数、百分比、进度说明和更新时间；任务详情页会显示转写进度条。
+- CUDA / cuBLAS 失败后仍会自动 CPU 兜底，CPU 兜底模型改为 `medium / int8`，比 `large-v3` 在 CPU 上更适合长音频。
+- 新增 `TRANSCRIPTION_CPU_FALLBACK_MODEL`、`TRANSCRIPTION_CHUNK_SECONDS`、`TRANSCRIPTION_CHUNK_OVERLAP_SECONDS` 配置示例。
+- 新增 `scripts/test_transcript_chunking.py` 和 `scripts/test_transcript_background_start.py`，覆盖 65 分钟分段、时间戳偏移、Markdown 拼接、后台启动和重复点击保护。
+
+## 2026-05-17 第十七轮：修复本地转写 CUDA 依赖缺失兜底
+
+- 定位异常 `Library cublas64_12.dll is not found or cannot be loaded` 的原因：当前本地 faster-whisper 默认使用 `TRANSCRIPTION_DEVICE=cuda` 和 `TRANSCRIPTION_COMPUTE_TYPE=float16`，但 Windows 环境缺少 CUDA 12 运行库 DLL，导致 GPU 转写无法启动。
+- 修改 `app/services/transcript_service.py`：当 GPU/CUDA/cuBLAS/cuDNN/NVIDIA 相关加载或转写异常出现时，自动切换到 `cpu / int8` 再执行一次转写，避免任务直接失败。
+- `transcript.md` 的任务信息中，转写设备现在记录实际运行配置，例如 `cuda / float16` 或自动兜底后的 `cpu / int8`。
+- 新增 `scripts/test_transcript_cpu_fallback.py`，用模拟的 `cublas64_12.dll` 缺失错误验证 GPU 失败后会自动请求 CPU 兜底模型。
+- 已通过 `python -m compileall app` 和 `python scripts/test_transcript_cpu_fallback.py` 验证。
+
 ## 2026-05-17 第十六轮：项目文档整理、Git 安全提交准备
 
 - 重写 `README.md`，改为清晰的项目入口、文档索引、启动方式和敏感信息说明。

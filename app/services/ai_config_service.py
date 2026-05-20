@@ -3,6 +3,7 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.models.settings import AIConfigUpdate
+from app.services.ai.diagnostics import fetch_ollama_models
 
 
 AI_ENV_KEYS = [
@@ -21,6 +22,7 @@ AI_ENV_KEYS = [
     "AI_LOCAL_MODEL",
     "AI_LOCAL_PROTOCOL",
     "AI_LOCAL_FALLBACK_PROTOCOL",
+    "AI_LOCAL_HEALTH_TIMEOUT_SECONDS",
     "AI_NETWORK_ACCESS",
     "AI_WINDOWS_WSL_SETUP_ACKNOWLEDGED",
     "AI_MODEL_CONTEXT_WINDOW",
@@ -43,6 +45,7 @@ SETTING_ATTRS = {
     "AI_LOCAL_MODEL": "ai_local_model",
     "AI_LOCAL_PROTOCOL": "ai_local_protocol",
     "AI_LOCAL_FALLBACK_PROTOCOL": "ai_local_fallback_protocol",
+    "AI_LOCAL_HEALTH_TIMEOUT_SECONDS": "ai_local_health_timeout_seconds",
     "AI_NETWORK_ACCESS": "ai_network_access",
     "AI_WINDOWS_WSL_SETUP_ACKNOWLEDGED": "ai_windows_wsl_setup_acknowledged",
     "AI_MODEL_CONTEXT_WINDOW": "ai_model_context_window",
@@ -85,6 +88,8 @@ def _current_config_values() -> dict[str, str]:
     values: dict[str, str] = {}
     for env_key, attr_name in SETTING_ATTRS.items():
         current = env_values.get(env_key)
+        if env_key == "AI_REMOTE_API_KEY" and not current:
+            current = env_values.get("OPENAI_API_KEY")
         if current is None:
             current = str(getattr(settings, attr_name))
         values[env_key] = current
@@ -97,6 +102,7 @@ def _apply_runtime_values(values: dict[str, str]) -> None:
         os.environ[env_key] = value
         if attr_name in {
             "ai_request_timeout_seconds",
+            "ai_local_health_timeout_seconds",
             "ai_model_context_window",
             "ai_model_auto_compact_token_limit",
         }:
@@ -132,6 +138,7 @@ def _write_env_values(values: dict[str, str]) -> None:
                 f"AI_LOCAL_MODEL={values['AI_LOCAL_MODEL']}",
                 f"AI_LOCAL_PROTOCOL={values['AI_LOCAL_PROTOCOL']}",
                 f"AI_LOCAL_FALLBACK_PROTOCOL={values['AI_LOCAL_FALLBACK_PROTOCOL']}",
+                f"AI_LOCAL_HEALTH_TIMEOUT_SECONDS={values['AI_LOCAL_HEALTH_TIMEOUT_SECONDS']}",
                 "",
                 "# Extra AI runtime defaults",
                 f"AI_NETWORK_ACCESS={values['AI_NETWORK_ACCESS']}",
@@ -151,14 +158,29 @@ def get_ai_config_context() -> dict:
         key: (_mask_secret(value) if key in SECRET_KEYS else value)
         for key, value in values.items()
     }
-    remote_ready = bool(values["AI_REMOTE_BASE_URL"] and values["AI_REMOTE_MODEL"] and values["AI_REMOTE_API_KEY"])
+    remote_key_length = len(values["AI_REMOTE_API_KEY"] or "")
+    remote_key_valid = remote_key_length >= 20
+    remote_ready = bool(values["AI_REMOTE_BASE_URL"] and values["AI_REMOTE_MODEL"] and remote_key_valid)
     local_ready = bool(values["AI_LOCAL_BASE_URL"] and values["AI_LOCAL_MODEL"])
+    try:
+        local_models = fetch_ollama_models(timeout_seconds=2)
+        local_ollama_online = True
+        local_ollama_error = ""
+    except Exception as exc:
+        local_models = []
+        local_ollama_online = False
+        local_ollama_error = str(exc)
     return {
         "env_path": str(_env_path()),
         "env_exists": _env_path().exists(),
         "values": display_values,
         "remote_ready": remote_ready,
+        "remote_key_valid": remote_key_valid,
+        "remote_key_warning": "" if remote_key_valid else "Remote AI key looks invalid or missing.",
         "local_ready": local_ready,
+        "local_ollama_online": local_ollama_online,
+        "local_ollama_models": local_models,
+        "local_ollama_error": local_ollama_error,
         "default_provider": values["AI_DEFAULT_PROVIDER"],
         "configured_count": int(remote_ready) + int(local_ready),
         "local_model_options": LOCAL_MODEL_OPTIONS,
@@ -183,6 +205,7 @@ def save_ai_config(payload: AIConfigUpdate) -> dict:
         "AI_LOCAL_MODEL": payload.ai_local_model.strip() or "qwen3:8b",
         "AI_LOCAL_PROTOCOL": payload.ai_local_protocol.strip() or "chat_completions",
         "AI_LOCAL_FALLBACK_PROTOCOL": payload.ai_local_fallback_protocol.strip(),
+        "AI_LOCAL_HEALTH_TIMEOUT_SECONDS": str(payload.ai_local_health_timeout_seconds),
         "AI_NETWORK_ACCESS": payload.ai_network_access.strip() or "enabled",
         "AI_WINDOWS_WSL_SETUP_ACKNOWLEDGED": str(payload.ai_windows_wsl_setup_acknowledged).lower(),
         "AI_MODEL_CONTEXT_WINDOW": str(payload.ai_model_context_window),

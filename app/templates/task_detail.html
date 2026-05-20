@@ -13,10 +13,15 @@
       <span>当前状态：{{ task.status_label }}</span>
     </p>
   </div>
-    <div class="button-row">
-    <button class="secondary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/audio">提取音频</button>
-    <button class="secondary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript">生成转写 MD</button>
-    <button class="secondary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/cuts">生成切片</button>
+  <div class="button-row">
+    {% if task.transcript_exists %}
+    <button class="secondary-button" id="start-workflow-button" type="button" disabled>转写已完成</button>
+    <button class="secondary-button js-process-action" type="button" data-confirm="重新生成会覆盖当前转写文件，并且需要重新等待转写完成。确认重新生成吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?force=true">重新生成转写</button>
+    {% elif task.status == "transcribing" %}
+    <button class="secondary-button" id="start-workflow-button" type="button" disabled>转写处理中</button>
+    {% else %}
+    <button class="secondary-button js-process-action" id="start-workflow-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow">{{ "继续处理" if task.audio_exists else "开始处理" }}</button>
+    {% endif %}
     <a class="primary-button" href="/tasks/{{ task.id }}/clips/review">进入片段审核</a>
   </div>
 </section>
@@ -94,14 +99,37 @@
     </form>
   </article>
 
-  <article class="panel transcript-panel">
+  <article class="panel transcript-panel" id="transcript-panel" data-task-id="{{ task.id }}">
     <div class="panel-header">
       <div>
         <p class="eyebrow">Transcript</p>
         <h2>转写预览</h2>
       </div>
+      <a class="secondary-button" href="/tasks/{{ task.id }}/transcript">查看完整原文</a>
     </div>
-    <div class="transcript-box">
+    {% set transcript_progress = task.transcript_progress or {} %}
+    <div class="transcript-progress" id="transcript-progress" {% if not transcript_progress %}hidden{% endif %}>
+      <div class="transcript-progress-heading">
+        <strong id="transcript-progress-message">{{ transcript_progress.message or "转写进度" }}</strong>
+        <span id="transcript-progress-percent">{{ transcript_progress.percent or 0 }}%</span>
+      </div>
+      <div class="progress">
+        <span id="transcript-progress-bar" style="width: {{ transcript_progress.percent or 0 }}%"></span>
+      </div>
+      <p id="transcript-progress-detail">
+        {% if transcript_progress.total_chunks %}
+        转写进度：{{ transcript_progress.current_chunk or 0 }}/{{ transcript_progress.total_chunks }}，约 {{ transcript_progress.percent or 0 }}%
+        {% else %}
+        转写进度：正在准备分段
+        {% endif %}
+      </p>
+      <p id="transcript-progress-runtime">
+        {% if transcript_progress.model %}
+        当前转写配置：{{ transcript_progress.model }} / {{ transcript_progress.device }} / {{ transcript_progress.compute_type }}
+        {% endif %}
+      </p>
+    </div>
+    <div class="transcript-box" id="transcript-preview-box">
       {% if transcript_lines %}
       {% for line in transcript_lines %}
       <p><time>{{ line.time }}</time>{{ line.text }}</p>

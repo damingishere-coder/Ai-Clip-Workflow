@@ -1,9 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import shutil
 import subprocess
 from sqlite3 import Row
+from typing import Any
 from uuid import uuid4
 
 from app.core.config import settings
@@ -14,8 +15,10 @@ from app.services.ai.ai_clip_analyzer import (
     AIAnalysisError,
     AnalysisRequest,
     analyze_task_transcript,
+    inspect_local_analysis_plan,
     result_to_jsonable,
 )
+from app.services.ai.diagnostics import ensure_local_ai_ready
 from app.services.storage_service import (
     create_task_directory,
     get_artifact_paths,
@@ -24,8 +27,11 @@ from app.services.storage_service import (
     validate_source_video_path,
 )
 from app.services.transcript_service import (
+    cleanup_transcript_chunk_dirs,
+    read_transcript_progress,
     read_transcript_preview,
     run_ffmpeg_audio_extract,
+    write_transcript_progress,
     write_transcript_markdown,
 )
 from app.services.video_cut_service import CutResult, cut_clips
@@ -86,6 +92,9 @@ OUTPUT_STATUS_LABELS = {
     "completed": "已完成",
     "failed": "失败",
 }
+
+_RUNNING_TRANSCRIPT_TASKS: set[str] = set()
+_TRANSCRIPT_STALE_AFTER = timedelta(minutes=10)
 
 
 def get_workflow_steps() -> list[str]:
@@ -148,6 +157,35 @@ def get_task_workflow_steps(task: dict) -> list[dict[str, str]]:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _parse_progress_updated_at(progress: dict) -> datetime | None:
+    value = progress.get("updated_at")
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.astimezone()
+    return parsed.astimezone()
+
+
+def _transcript_progress_age_seconds(progress: dict) -> int | None:
+    updated_at = _parse_progress_updated_at(progress)
+    if not updated_at:
+        return None
+    return max(0, int((datetime.now().astimezone() - updated_at).total_seconds()))
+
+
+def _is_transcript_progress_stale(progress: dict) -> bool:
+    if progress.get("status") != "running":
+        return False
+    updated_at = _parse_progress_updated_at(progress)
+    if not updated_at:
+        return False
+    return datetime.now().astimezone() - updated_at > _TRANSCRIPT_STALE_AFTER
 
 
 def _format_datetime(value: str | None) -> str:
@@ -305,6 +343,7 @@ def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
         "audio_exists": paths["audio_path"].exists(),
         "transcript_path": str(paths["transcript_path"]),
         "transcript_exists": paths["transcript_path"].exists(),
+        "transcript_progress": read_transcript_progress(paths["transcript_path"]),
         "analysis_path": str(paths["analysis_path"]),
         "analysis_exists": paths["analysis_path"].exists(),
         "clips_dir": str(paths["clips_dir"]),
@@ -587,6 +626,36 @@ def list_output_clips(task_id: str) -> list[dict]:
 def get_transcript_preview(task_id: str) -> list[dict[str, str]]:
     paths = get_artifact_paths(task_id)
     return read_transcript_preview(paths["transcript_path"])
+
+
+def get_task_transcript_status(task_id: str) -> dict:
+    task = get_task(task_id)
+    if not task:
+        raise ValueError("任务不存在")
+
+    paths = get_artifact_paths(task_id)
+    progress = read_transcript_progress(paths["transcript_path"])
+    age_seconds = _transcript_progress_age_seconds(progress)
+    is_stale = _is_transcript_progress_stale(progress)
+    if is_stale and progress.get("status") == "running":
+        progress = {
+            **progress,
+            "status": "stale",
+            "message": "转写进度长时间没有更新，可能已经卡住。请重新点击“生成转写 MD”。",
+        }
+
+    return {
+        "task_id": task_id,
+        "task_status": task.get("status"),
+        "task_status_label": task.get("status_label"),
+        "task_progress": task.get("progress"),
+        "transcript_exists": paths["transcript_path"].exists(),
+        "progress": progress,
+        "progress_age_seconds": age_seconds,
+        "is_stale": is_stale,
+        "preview": read_transcript_preview(paths["transcript_path"]),
+        "error_message": task.get("error_message") or "",
+    }
 
 
 def get_dashboard_context() -> dict:
@@ -881,7 +950,7 @@ def process_task_audio(task_id: str) -> dict:
     return {**result, "task": get_task(task_id)}
 
 
-def process_task_transcript(task_id: str) -> dict:
+def process_task_transcript(task_id: str, background_tasks: Any | None = None) -> dict:
     task = get_task(task_id)
     if not task:
         raise ValueError("任务不存在")
@@ -892,19 +961,112 @@ def process_task_transcript(task_id: str) -> dict:
         _append_task_log(task_id, f"转写失败：{error}")
         raise ValueError(error)
 
+    last_progress = read_transcript_progress(paths["transcript_path"])
+    if task_id in _RUNNING_TRANSCRIPT_TASKS and not _is_transcript_progress_stale(last_progress):
+        return {
+            "status": "running",
+            "message": "分段转写已经在后台运行，请稍后刷新查看进度。",
+            "task": get_task(task_id),
+        }
+    if task_id in _RUNNING_TRANSCRIPT_TASKS:
+        _RUNNING_TRANSCRIPT_TASKS.discard(task_id)
+        _append_task_log(task_id, "发现过期的后台转写状态，准备重新开始转写")
+
+    removed_dirs = cleanup_transcript_chunk_dirs(paths["transcript_path"])
+    if removed_dirs:
+        _append_task_log(task_id, f"已清理旧的转写临时目录：{removed_dirs} 个")
     update_task_status(task_id, TaskStatus.transcribing)
-    _append_task_log(task_id, "开始本地语音转写并生成 Markdown")
+    write_transcript_progress(
+        paths["transcript_path"],
+        status="running",
+        current_chunk=0,
+        total_chunks=0,
+        percent=1,
+        message="后台分段转写已启动，正在准备环境",
+    )
+    _append_task_log(task_id, "开始后台分段语音转写")
+    _RUNNING_TRANSCRIPT_TASKS.add(task_id)
+    if background_tasks is not None:
+        background_tasks.add_task(_run_task_transcript_background, task_id)
+    else:
+        _run_task_transcript_background(task_id)
+    return {
+        "status": "started",
+        "message": "已开始后台分段转写，请稍后刷新查看进度。",
+        "task": get_task(task_id),
+    }
+
+
+def process_task_transcript_workflow(
+    task_id: str,
+    background_tasks: Any | None = None,
+    force: bool = False,
+) -> dict:
+    task = get_task(task_id)
+    if not task:
+        raise ValueError("任务不存在")
+    paths = get_artifact_paths(task_id)
+
+    if paths["transcript_path"].exists() and not force:
+        return {
+            "status": "completed",
+            "message": "转写 Markdown 已经生成，无需重复处理。如需重做，请点击“重新生成转写”。",
+            "task": get_task(task_id),
+        }
+
+    if not paths["audio_path"].exists():
+        _append_task_log(task_id, "一键处理：未发现音频文件，先自动提取音频")
+        process_task_audio(task_id)
+
+    if force:
+        _append_task_log(task_id, "用户明确要求重新生成转写 Markdown")
+
+    return process_task_transcript(task_id, background_tasks=background_tasks)
+
+
+def _run_task_transcript_background(task_id: str) -> None:
+    task = get_task(task_id)
+    if not task:
+        _RUNNING_TRANSCRIPT_TASKS.discard(task_id)
+        return
+    paths = get_artifact_paths(task_id)
+
+    def progress_callback(progress: dict) -> None:
+        message = progress.get("message") or "转写进度已更新"
+        current_chunk = int(progress.get("current_chunk") or 0)
+        total_chunks = int(progress.get("total_chunks") or 0)
+        percent = int(progress.get("percent") or 0)
+        if total_chunks:
+            _append_task_log(task_id, f"{message}（{current_chunk}/{total_chunks}，{percent}%）")
+        else:
+            _append_task_log(task_id, message)
+
     try:
-        result = write_transcript_markdown(task, paths["audio_path"], paths["transcript_path"])
+        write_transcript_markdown(
+            task,
+            paths["audio_path"],
+            paths["transcript_path"],
+            progress_callback=progress_callback,
+        )
     except Exception as exc:
         error = str(exc)
+        last_progress = read_transcript_progress(paths["transcript_path"])
+        write_transcript_progress(
+            paths["transcript_path"],
+            status="failed",
+            current_chunk=int(last_progress.get("current_chunk") or 0),
+            total_chunks=int(last_progress.get("total_chunks") or 0),
+            percent=int(last_progress.get("percent") or 0),
+            message=f"分段转写失败：{error}",
+        )
         update_task_status(task_id, TaskStatus.failed, error)
         _append_task_log(task_id, f"转写失败：{error}")
-        raise
+        return
+    finally:
+        _RUNNING_TRANSCRIPT_TASKS.discard(task_id)
 
     update_task_status(task_id, TaskStatus.pending_ai)
     _append_task_log(task_id, f"真实转写 Markdown 已生成：{paths['transcript_path']}")
-    return {**result, "task": get_task(task_id)}
 
 
 def _clear_clip_candidates(task_id: str) -> None:
@@ -952,6 +1114,53 @@ def _insert_clip_candidates(task_id: str, clips: list[dict]) -> None:
         connection.commit()
 
 
+def _analyze_with_provider(task_id: str, task: dict, paths: dict[str, Path], provider_name: str):
+    request = AnalysisRequest(
+        task_id=task_id,
+        transcript_path=paths["transcript_path"],
+        max_clip_duration_minutes=int(task["max_clip_duration"]),
+        target_clip_count=int(task["candidate_clip_count"]),
+        ai_preference=task.get("ai_preference") or "",
+        provider_name=provider_name,
+    )
+    if provider_name == "local":
+        ensure_local_ai_ready()
+        plan = inspect_local_analysis_plan(request)
+        _append_task_log(
+            task_id,
+            "本地 AI 将使用分段分析："
+            f"{plan['chunk_count']} 段，单段约 {plan['chunk_seconds']} 秒，"
+            f"最大 prompt 约 {plan['max_prompt_chars']} 字",
+        )
+    return analyze_task_transcript(request)
+
+
+def _should_fallback_to_local_ai(error: str) -> bool:
+    lowered = error.lower()
+    markers = (
+        "http 403",
+        "error code: 1010",
+        "unauthorized",
+        "forbidden",
+        "api key",
+        "openai_api_key",
+        "ai_remote_api_key",
+        "key 看起来无效",
+        "密钥",
+        "quota",
+        "balance",
+        "timeout",
+        "timed out",
+        "无法连接",
+        "连接超时",
+        "权限",
+        "余额",
+        "费用",
+        "网络",
+    )
+    return any(marker in lowered for marker in markers)
+
+
 def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
     task = get_task(task_id, include_video_probe=False)
     if not task:
@@ -968,17 +1177,25 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
     update_task_status(task_id, TaskStatus.ai_analyzing)
     _append_task_log(task_id, f"开始 AI 片段分析，Provider：{provider_name}")
 
+    used_provider = provider_name
+    fallback_notice = ""
     try:
-        analysis = analyze_task_transcript(
-            AnalysisRequest(
-                task_id=task_id,
-                transcript_path=paths["transcript_path"],
-                max_clip_duration_minutes=int(task["max_clip_duration"]),
-                target_clip_count=int(task["candidate_clip_count"]),
-                ai_preference=task.get("ai_preference") or "",
-                provider_name=provider_name,
-            )
-        )
+        try:
+            analysis = _analyze_with_provider(task_id, task, paths, provider_name)
+        except Exception as remote_exc:
+            remote_error = str(remote_exc)
+            if provider_name == "remote" and _should_fallback_to_local_ai(remote_error):
+                _append_task_log(task_id, f"远程 AI 不可用，准备自动降级到本地 AI：{remote_error}")
+                try:
+                    analysis = _analyze_with_provider(task_id, task, paths, "local")
+                    used_provider = "local"
+                    fallback_notice = f"远程 AI 不可用，已自动改用本地 AI。远程错误：{remote_error}"
+                except Exception as local_exc:
+                    raise AIAnalysisError(
+                        f"远程 AI 和本地 AI 都失败。远程错误：{remote_error}；本地错误：{local_exc}"
+                    ) from local_exc
+            else:
+                raise
         analysis_payload = result_to_jsonable(analysis)
         paths["analysis_path"].parent.mkdir(parents=True, exist_ok=True)
         paths["analysis_path"].write_text(
@@ -994,11 +1211,15 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
         raise ValueError(error) from exc
 
     update_task_status(task_id, TaskStatus.pending_review)
-    _append_task_log(task_id, f"AI 分析完成，生成候选片段：{len(analysis_payload['clips'])} 条")
+    _append_task_log(task_id, f"AI 分析完成，Provider：{used_provider}，生成候选片段：{len(analysis_payload['clips'])} 条")
+    message = f"AI 分析完成，生成 {len(analysis_payload['clips'])} 条候选片段。"
+    if fallback_notice:
+        message = f"{fallback_notice} {message}"
     return {
         "status": "ok",
-        "message": f"AI 分析完成，生成 {len(analysis_payload['clips'])} 条候选片段。",
-        "provider": provider_name,
+        "message": message,
+        "provider": used_provider,
+        "fallback_notice": fallback_notice,
         "analysis_path": str(paths["analysis_path"]),
         "review_url": f"/tasks/{task_id}/clips",
         "task": get_task(task_id, include_video_probe=False),

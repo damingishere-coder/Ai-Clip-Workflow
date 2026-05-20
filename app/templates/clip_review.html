@@ -84,10 +84,10 @@
     <article class="panel empty-state">
       <p class="eyebrow">Empty</p>
       <h2>暂无候选片段</h2>
-      <p>请先完成转写和 AI 片段分析。AI 写入 `clip_candidates` 表后，这里会显示真实候选片段，不会使用模拟数据。</p>
+      <p>请先完成转写和 AI 片段分析。远程 AI 会使用完整转写；如果远程不可用，系统会自动切到本地分段分析，避免 Ollama 一次性处理过长文本。</p>
       <div class="button-row empty-actions">
         <a class="secondary-button" href="/tasks/{{ task.id }}">返回任务详情</a>
-        <button class="secondary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript" {{ "disabled" if not task.audio_exists else "" }}>先生成转写</button>
+        <button class="secondary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow" {{ "disabled" if task.transcript_exists else "" }}>先生成转写</button>
         <button class="primary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/ai?provider=remote" {{ "disabled" if not task.transcript_exists else "" }}>运行远程 AI 分析</button>
       </div>
     </article>
@@ -113,11 +113,12 @@
     </div>
     <ul class="compact-list">
       <li>保存后任务仍保持：{{ task.status_label }}</li>
-      <li>生成切片按钮当前接入预留接口，提示“待视频切割模块接入”。</li>
+      <li>生成切片会使用当前启用的候选片段，并写入切片输出目录。</li>
+      <li>AI 分析策略：远程使用完整转写；本地使用 3 分钟左右的小段分析后合并候选。</li>
     </ul>
     <div class="button-row review-actions">
       <button class="secondary-button" id="save-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/clips/batch-update" {{ "disabled" if not clips else "" }}>保存修改</button>
-      <button class="primary-button" id="generate-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/clips/generate" {{ "disabled" if not clips else "" }}>生成切片</button>
+      <button class="primary-button" id="generate-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/cuts" {{ "disabled" if not clips else "" }}>生成切片</button>
     </div>
     <p class="form-hint" id="process-result"></p>
 

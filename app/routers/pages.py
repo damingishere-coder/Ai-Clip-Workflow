@@ -5,6 +5,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.core.config import settings
 from app.services.task_service import (
+    get_artifact_paths,
     get_clips_overview_context,
     get_dashboard_context,
     get_system_status_context,
@@ -83,6 +84,32 @@ async def task_detail_page(request: Request, task_id: str):
             "workflow_steps": get_task_workflow_steps(task),
             "transcript_lines": get_transcript_preview(task_id),
             "output_clips": list_output_clips(task_id),
+        },
+    )
+
+
+@router.get("/tasks/{task_id}/transcript")
+async def task_transcript_page(request: Request, task_id: str):
+    task = get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    paths = get_artifact_paths(task_id)
+    transcript_path = paths["transcript_path"]
+    transcript_text = ""
+    if transcript_path.exists():
+        transcript_text = transcript_path.read_text(encoding="utf-8", errors="replace")
+
+    return templates.TemplateResponse(
+        name="transcript_full.html",
+        request=request,
+        context={
+            "request": request,
+            "active_page": "tasks",
+            "settings": settings,
+            "task": task,
+            "transcript_path": str(transcript_path),
+            "transcript_text": transcript_text,
+            "transcript_exists": transcript_path.exists(),
         },
     )
 

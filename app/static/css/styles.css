@@ -291,6 +291,15 @@ button {
   transition: 0.18s ease;
 }
 
+.primary-button:disabled,
+.secondary-button:disabled,
+.pagination button:disabled,
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  transform: none;
+}
+
 .primary-button {
   background: linear-gradient(135deg, #4b8dff, var(--blue));
   color: #fff;
@@ -467,6 +476,12 @@ button {
   color: var(--muted);
   line-height: 1.65;
   list-style: none;
+}
+
+.compact-list li,
+.path-text {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .table-wrap {
@@ -1114,7 +1129,7 @@ fieldset input.visually-hidden-file {
 
 .detail-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(340px, 0.72fr);
   gap: 16px;
 }
 
@@ -1152,6 +1167,45 @@ fieldset input.visually-hidden-file {
   margin-top: 16px;
 }
 
+.transcript-progress {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.transcript-progress[data-status="failed"],
+.transcript-progress[data-status="stale"] {
+  border-color: rgba(220, 38, 38, 0.24);
+  background: rgba(254, 242, 242, 0.78);
+}
+
+.transcript-progress[data-status="completed"] {
+  border-color: rgba(22, 163, 74, 0.22);
+  background: rgba(240, 253, 244, 0.78);
+}
+
+.transcript-progress-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.transcript-progress-heading strong {
+  color: var(--text);
+}
+
+.transcript-progress-heading span,
+.transcript-progress p {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .transcript-box p {
   margin: 0;
   padding: 13px 14px;
@@ -1166,6 +1220,25 @@ fieldset input.visually-hidden-file {
   margin-right: 12px;
   color: var(--blue);
   font-weight: 800;
+}
+
+.transcript-full-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.transcript-full-text {
+  max-height: calc(100vh - 220px);
+  margin: 0;
+  padding: 22px;
+  overflow: auto;
+  background: var(--surface-solid);
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, "Microsoft YaHei UI", monospace;
+  font-size: 14px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .review-layout {

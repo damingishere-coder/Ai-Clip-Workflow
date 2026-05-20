@@ -43,7 +43,7 @@
     <div class="stat-icon"></div>
     <span>AI 配置</span>
     <strong>{{ ai_config.configured_count }}</strong>
-    <small>默认 {{ ai_config.default_provider }} · {{ "已保存 .env" if ai_config.env_exists else "尚未保存 .env" }}</small>
+    <small>默认 {{ ai_config.default_provider }} · 远程 Key {{ "有效" if ai_config.remote_key_valid else "异常" }} · Ollama {{ "在线" if ai_config.local_ollama_online else "离线" }}</small>
   </article>
 </section>
 
@@ -92,6 +92,13 @@
       <li>任务资料根目录：{{ storage_root }}</li>
       <li>数据库文件：{{ database_path }}（{{ "已存在" if database_exists else "尚未创建" }}）</li>
       <li>AI 配置文件：{{ ai_config.env_path }}（{{ "已存在" if ai_config.env_exists else "尚未创建" }}）</li>
+      <li>远程 AI：{{ ai_config['values']['AI_REMOTE_BASE_URL'] }} · {{ ai_config['values']['AI_REMOTE_PROTOCOL'] }} · {{ ai_config['values']['AI_REMOTE_REVIEW_MODEL'] or ai_config['values']['AI_REMOTE_MODEL'] }} · Key {{ "有效" if ai_config.remote_key_valid else "异常" }}</li>
+      <li>本地 AI：{{ ai_config['values']['AI_LOCAL_BASE_URL'] }} · {{ ai_config['values']['AI_LOCAL_MODEL'] }} · Ollama {{ "在线" if ai_config.local_ollama_online else "离线" }}</li>
+      {% if ai_config.local_ollama_models %}
+      <li>本地已安装模型：{{ ai_config.local_ollama_models | join(", ") }}</li>
+      {% elif ai_config.local_ollama_error %}
+      <li>本地 AI 检查异常：{{ ai_config.local_ollama_error }}</li>
+      {% endif %}
       <li>健康检查接口：/health</li>
     </ul>
   </article>
@@ -130,6 +137,7 @@
       <input name="ai_local_base_url" type="hidden" value="http://127.0.0.1:11434/v1">
       <input name="ai_local_protocol" type="hidden" value="chat_completions">
       <input name="ai_local_fallback_protocol" type="hidden" value="">
+      <input name="ai_local_health_timeout_seconds" type="hidden" value="{{ ai_config['values']['AI_LOCAL_HEALTH_TIMEOUT_SECONDS'] }}">
       <input name="ai_network_access" type="hidden" value="{{ ai_config['values']['AI_NETWORK_ACCESS'] }}">
       <input name="ai_windows_wsl_setup_acknowledged" type="hidden" value="{{ ai_config['values']['AI_WINDOWS_WSL_SETUP_ACKNOWLEDGED'] }}">
       <input name="ai_model_context_window" type="hidden" value="{{ ai_config['values']['AI_MODEL_CONTEXT_WINDOW'] }}">
@@ -152,7 +160,7 @@
         <h3>远程 AI</h3>
         <div class="form-row">
           <label><span>Base URL</span><input name="ai_remote_base_url" value="{{ ai_config['values']['AI_REMOTE_BASE_URL'] }}"></label>
-          <label><span>API Key</span><input name="ai_remote_api_key" type="password" placeholder="{{ ai_config['values']['AI_REMOTE_API_KEY'] or '留空则保留旧密钥' }}"></label>
+          <label><span>API Key</span><input name="ai_remote_api_key" type="password" placeholder="{{ ai_config['values']['AI_REMOTE_API_KEY'] or '留空则保留旧密钥，也兼容 OPENAI_API_KEY' }}"></label>
         </div>
         <div class="form-row">
           <label><span>模型</span><input name="ai_remote_model" value="{{ ai_config['values']['AI_REMOTE_MODEL'] }}"></label>
@@ -160,7 +168,7 @@
         </div>
         <input name="ai_remote_protocol" type="hidden" value="responses">
         <input name="ai_remote_responses_path" type="hidden" value="/v1/responses">
-        <p class="form-hint">默认使用 OpenAI / Responses 协议，模型 gpt-5.5，且不保存响应内容。API Key 留空会保留旧值。</p>
+        <p class="form-hint">默认使用 OpenAI / Responses 协议，片段审核使用 Review Model，且不保存响应内容。API Key 留空会保留旧值，也兼容 OPENAI_API_KEY。</p>
       </div>
 
       <div class="settings-section">
@@ -176,7 +184,7 @@
             {% endfor %}
           </select>
         </label>
-        <p class="form-hint">本地模式会直接连接 Ollama：127.0.0.1:11434，只需要选模型。</p>
+        <p class="form-hint">本地模式会直接连接 Ollama：127.0.0.1:11434。默认推荐 qwen3:8b，qwen3:14b 在当前机器上容易超时。</p>
       </div>
 
       <div class="modal-actions">
