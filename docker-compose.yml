@@ -1,0 +1,21 @@
+services:
+  workflow:
+    build: .
+    container_name: live-streaming-slicing-workflow
+    ports:
+      - "8001:8001"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /app/data
+      DATABASE_PATH: /app/data/workflow.sqlite3
+      STORAGE_ROOT: /workspace/tasks
+      TASKS_DIR: /workspace/tasks
+      AI_LOCAL_BASE_URL: http://host.docker.internal:11434/v1
+      TRANSCRIPTION_DEVICE: cpu
+      TRANSCRIPTION_COMPUTE_TYPE: int8
+    volumes:
+      - ./data:/app/data
+      - E:/直播间切片工作流存储:/workspace/tasks
+    restart: unless-stopped

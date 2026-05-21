@@ -28,7 +28,55 @@ C:\Users\10578\Documents\New project 2
 
 以后所有命令都默认在这个目录里执行。
 
-## 3. 第一次准备环境
+## 3. 推荐方式：Docker 一键启动
+
+Docker 的好处是：不用每次手动激活 `.venv`，端口映射清楚，关闭也方便。
+
+第一次启动前，先确认 Docker Desktop 已经打开。
+
+然后打开 PowerShell，进入项目目录：
+
+```powershell
+cd "C:\Users\10578\Documents\New project 2"
+```
+
+启动项目：
+
+```powershell
+docker compose up --build
+```
+
+看到服务启动后，在浏览器打开：
+
+```text
+http://127.0.0.1:8001
+```
+
+健康检查地址：
+
+```text
+http://127.0.0.1:8001/health
+```
+
+查看端口和容器状态：
+
+```powershell
+docker compose ps
+```
+
+停止项目：
+
+```powershell
+docker compose down
+```
+
+Docker 版会继续使用：
+
+- 项目里的 `data/workflow.sqlite3` 保存数据库。
+- E 盘 `E:\直播间切片工作流存储` 保存上传视频、音频、转写、AI 分析和切片结果。
+- 项目根目录 `.env` 保存真实 API Key，Docker 启动时会自动读取。
+
+## 4. 备用方式：本地虚拟环境启动
 
 打开 PowerShell 后，先进入项目目录：
 
@@ -63,7 +111,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 然后重新执行激活命令。
 
-## 4. 配置 API Key
+## 5. 配置 API Key
 
 真实 API Key 不要写进代码，也不要写进文档。
 
@@ -77,7 +125,7 @@ Copy-Item .env.example .env
 
 也可以启动项目后，在系统状态页里打开 AI 配置弹窗填写。页面保存时会写入 `.env`。
 
-## 5. 启动项目
+## 6. 本地虚拟环境启动项目
 
 每次启动项目，一般执行这两行：
 
@@ -98,7 +146,7 @@ http://127.0.0.1:8001
 http://127.0.0.1:8001/health
 ```
 
-## 6. 页面怎么测试
+## 7. 页面怎么测试
 
 启动项目后，按这个顺序检查：
 
@@ -110,7 +158,7 @@ http://127.0.0.1:8001/health
 6. 打开片段审核页，勾选或修改候选片段。
 7. 触发切割，确认输出片段记录能展示。
 
-## 7. 命令行测试
+## 8. 命令行测试
 
 不需要真实 API Key 的基础测试：
 
@@ -133,7 +181,7 @@ python scripts/test_remote_ai_connection.py
 python scripts/test_local_ai_connection.py
 ```
 
-## 8. 哪些文件不要上传
+## 9. 哪些文件不要上传
 
 不要上传这些内容：
 
@@ -145,7 +193,7 @@ python scripts/test_local_ai_connection.py
 
 Git 当前只保留代码、文档、模板和必要的 `.gitkeep` 占位文件。
 
-## 9. 常见问题
+## 10. 常见问题
 
 如果打开 `http://127.0.0.1:8000` 页面不对，优先使用：
 
@@ -156,3 +204,7 @@ http://127.0.0.1:8001
 如果 AI 提示缺少 Key，检查 `.env` 里是否已经填写远程 API Key，或者在系统状态页重新保存 AI 配置。
 
 如果转写速度很慢，可能是没有使用 NVIDIA 显卡。可以在 `.env` 中把转写配置改成 CPU 模式，但速度会慢一些。
+
+如果 Docker 启动后本地 Ollama 不通，确认 Ollama 已经在 Windows 里启动。Docker 容器内会通过 `host.docker.internal:11434` 访问 Windows 本机的 Ollama。
+
+如果 Docker Desktop 里看到端口 `8001:8001`，说明浏览器应该打开 `http://127.0.0.1:8001`。

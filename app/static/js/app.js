@@ -96,6 +96,7 @@ const transcriptProgressDetail = document.querySelector("#transcript-progress-de
 const transcriptProgressRuntime = document.querySelector("#transcript-progress-runtime");
 const transcriptPreviewBox = document.querySelector("#transcript-preview-box");
 let transcriptPollingTimer = null;
+let transcriptPollingStartedFromRunning = false;
 
 function renderTranscriptPreview(preview, transcriptExists) {
   if (!transcriptPreviewBox) return;
@@ -155,10 +156,11 @@ async function pollTranscriptStatus() {
   renderTranscriptStatus(data);
   const status = data.progress?.status;
   if (status === "running") {
+    transcriptPollingStartedFromRunning = true;
     transcriptPollingTimer = window.setTimeout(pollTranscriptStatus, 5000);
   } else if (status === "completed") {
     transcriptPollingTimer = null;
-    window.setTimeout(() => window.location.reload(), 900);
+    transcriptPollingStartedFromRunning = false;
   } else {
     transcriptPollingTimer = null;
   }
@@ -170,6 +172,7 @@ function startTranscriptPolling(runImmediately = false) {
     window.clearTimeout(transcriptPollingTimer);
     transcriptPollingTimer = null;
   }
+  transcriptPollingStartedFromRunning = true;
   if (runImmediately) {
     pollTranscriptStatus().catch(() => {});
     return;

@@ -1,5 +1,16 @@
 # Development Log
 
+## 2026-05-21 第二十二轮：Docker 一键启动接入
+
+- 新增 `Dockerfile`，使用可从微软镜像源拉取的 Python 3.12 Bookworm 镜像构建后端运行环境，并在容器内安装 `ffmpeg`，让 `ffmpeg/ffprobe` 可在 Docker 里直接使用。
+- 构建时会移除基础镜像里本项目不需要的 Yarn apt 源，避免 Yarn 签名问题阻断 FFmpeg 安装。
+- 新增 `docker-compose.yml`，固定映射 `8001:8001`，容器名为 `live-streaming-slicing-workflow`，并读取本地 `.env`。
+- Docker 版数据库继续挂载到项目 `data/`，任务产物继续挂载到 E 盘 `E:\直播间切片工作流存储`，容器内路径为 `/workspace/tasks`。
+- `app/core/config.py` 新增 `DATA_DIR`、`DATABASE_PATH`、`STORAGE_ROOT`、`TASKS_DIR` 环境变量读取能力，本地运行默认值保持不变。
+- 新增 `.dockerignore`，避免 `.venv`、真实 `.env`、数据库、任务产物、大视频和音频文件进入 Docker 镜像。
+- 更新 `.env.example`、`README.md`、`docs/PROJECT_GUIDE.md` 和 `NEXT_STEPS.md`，补充 Docker 启动、停止、查看端口和测试说明。
+- 修复任务详情页已完成转写后反复自动刷新的问题：转写轮询完成后只停止轮询，不再自动刷新整页，并给 `app.js` 增加版本参数避免浏览器继续使用旧缓存。
+
 ## 2026-05-20 第二十一轮：AI 调用配置诊断与本地降级修复
 
 - 远程 AI Key 读取改为兼容 `AI_REMOTE_API_KEY` 和 `OPENAI_API_KEY`；系统状态页会提示 Key 是否看起来有效，避免把 1 位或空密钥误认为已配置。

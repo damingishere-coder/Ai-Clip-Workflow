@@ -24,17 +24,29 @@ docs/PROJECT_GUIDE.md
 
 里面按“准备环境、启动项目、打开页面、测试功能”的顺序写好了。
 
-常用启动命令如下：
+推荐启动方式：Docker 一键启动。
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-uvicorn app.main:app --reload --port 8001
+docker compose up --build
 ```
 
 启动后在浏览器打开：
 
 ```text
 http://127.0.0.1:8001
+```
+
+停止项目：
+
+```powershell
+docker compose down
+```
+
+如果暂时不用 Docker，也可以继续使用本地虚拟环境启动：
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload --port 8001
 ```
 
 ## 文档入口
@@ -66,6 +78,8 @@ app/templates/       Jinja2 页面模板
 app/static/          CSS 与 JavaScript
 data/                本地数据库目录，真实数据不提交
 tasks/               任务产物目录，真实视频和切片不提交
+Dockerfile           Docker 镜像构建文件
+docker-compose.yml   Docker 一键启动配置
 docs/                项目文档
 prompts/             AI 分析 Prompt
 scripts/             本地测试脚本

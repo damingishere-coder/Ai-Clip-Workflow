@@ -34,6 +34,13 @@ def _env_first(names: tuple[str, ...], default: str = "") -> str:
     return default
 
 
+def _env_path(name: str, default: Path) -> Path:
+    value = os.getenv(name)
+    if not value:
+        return default
+    return Path(value).expanduser()
+
+
 _load_env_file()
 
 
@@ -43,10 +50,13 @@ class Settings:
     app_name_cn: str = "直播切片工作流"
     app_description: str = "Windows 本地直播长视频自动切片工作流系统"
     project_root: Path = PROJECT_ROOT
-    data_dir: Path = PROJECT_ROOT / "data"
-    storage_root: Path = EXTERNAL_STORAGE_ROOT
-    tasks_dir: Path = EXTERNAL_STORAGE_ROOT
-    database_path: Path = PROJECT_ROOT / "data" / "workflow.sqlite3"
+    data_dir: Path = _env_path("DATA_DIR", PROJECT_ROOT / "data")
+    storage_root: Path = _env_path("STORAGE_ROOT", EXTERNAL_STORAGE_ROOT)
+    tasks_dir: Path = _env_path("TASKS_DIR", _env_path("STORAGE_ROOT", EXTERNAL_STORAGE_ROOT))
+    database_path: Path = _env_path(
+        "DATABASE_PATH",
+        _env_path("DATA_DIR", PROJECT_ROOT / "data") / "workflow.sqlite3",
+    )
     ui_reference_image: Path = (
         PROJECT_ROOT
         / "docs"
