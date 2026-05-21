@@ -29,6 +29,7 @@
 body {
   margin: 0;
   min-height: 100vh;
+  overflow-x: hidden;
   background:
     radial-gradient(circle at 12% 0%, rgba(37, 111, 255, 0.08), transparent 32%),
     linear-gradient(180deg, #fbfdff 0%, var(--bg) 42%, #f7f9fc 100%);
@@ -1242,7 +1243,7 @@ fieldset input.visually-hidden-file {
 }
 
 .review-layout {
-  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
   align-items: start;
 }
 
@@ -1569,6 +1570,10 @@ button:disabled {
 .preview-panel {
   position: sticky;
   top: 18px;
+  min-width: 0;
+  width: 100%;
+  max-width: 340px;
+  overflow: hidden;
 }
 
 .video-placeholder {
@@ -1594,11 +1599,14 @@ button:disabled {
   display: grid;
   gap: 12px;
   margin-bottom: 16px;
+  min-width: 0;
 }
 
 .video-preview video {
+  display: block;
   width: 100%;
-  aspect-ratio: 16 / 9;
+  height: 360px;
+  max-height: 48vh;
   border: 1px solid #1d2738;
   border-radius: 8px;
   background: #111927;
