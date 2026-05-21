@@ -1,9 +1,9 @@
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from shutil import copyfileobj
 from typing import BinaryIO
 from uuid import uuid4
 
-from app.core.config import settings
+from app.core.config import EXTERNAL_STORAGE_ROOT, settings
 
 
 TASK_SUBDIRECTORIES = ("source", "audio", "transcripts", "analysis", "clips", "05_clips", "logs")
@@ -49,10 +49,36 @@ def is_video_file(path: Path) -> bool:
     return path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
 
 
+def resolve_video_file_path(path_value: str | None) -> Path | None:
+    if not path_value:
+        return None
+
+    path = Path(path_value)
+    if path.exists():
+        return path
+
+    windows_storage_root = str(settings.storage_root)
+    raw_value = path_value.replace("/", "\\")
+    known_windows_root = str(EXTERNAL_STORAGE_ROOT)
+    if raw_value.lower().startswith(known_windows_root.lower() + "\\"):
+        relative_value = raw_value[len(known_windows_root) + 1 :]
+        return settings.storage_root.joinpath(*PureWindowsPath(relative_value).parts)
+
+    if windows_storage_root:
+        normalized_root = windows_storage_root.replace("/", "\\")
+        if raw_value.lower().startswith(normalized_root.lower() + "\\"):
+            relative_value = raw_value[len(normalized_root) + 1 :]
+            return settings.storage_root.joinpath(*PureWindowsPath(relative_value).parts)
+
+    return path
+
+
 def validate_source_video_path(path_value: str | None) -> tuple[bool, str]:
     if not path_value:
         return False, "尚未选择视频文件"
-    path = Path(path_value)
+    path = resolve_video_file_path(path_value)
+    if path is None:
+        return False, "尚未选择视频文件"
     if not path.exists():
         return False, "视频文件不存在"
     if not path.is_file():
@@ -64,7 +90,7 @@ def validate_source_video_path(path_value: str | None) -> tuple[bool, str]:
 
 def get_source_video_path(task: dict) -> Path | None:
     source_path = task.get("nas_file_path") if task.get("source_type") == "nas" else task.get("original_video_path")
-    return Path(source_path) if source_path else None
+    return resolve_video_file_path(source_path)
 
 
 def save_uploaded_video(task_id: str, filename: str, file_object: BinaryIO) -> Path:

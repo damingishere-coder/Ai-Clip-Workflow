@@ -28,6 +28,7 @@ from app.services.storage_service import (
 )
 from app.services.transcript_service import (
     cleanup_transcript_chunk_dirs,
+    read_transcript_range,
     read_transcript_progress,
     read_transcript_preview,
     run_ffmpeg_audio_extract,
@@ -308,7 +309,7 @@ def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
         progress = STATUS_PROGRESS.get(status, 0)
 
     source = get_source_path(task)
-    source_path = Path(source) if source and not source.startswith("尚未") else None
+    source_path = get_source_video_path(task)
     paths = get_artifact_paths(task["id"])
     source_exists = bool(source_path and source_path.exists())
     video_meta = _probe_video(source_path) if include_video_probe else {"duration": "尚未读取", "video_size": "尚未读取"}
@@ -387,6 +388,7 @@ def get_task(task_id: str, include_video_probe: bool = True) -> dict | None:
 
 
 def list_clip_candidates(task_id: str) -> list[dict]:
+    ai_source_label = get_task_ai_source_label(task_id)
     with get_connection() as connection:
         rows = connection.execute(
             """
@@ -414,13 +416,86 @@ def list_clip_candidates(task_id: str) -> list[dict]:
                 "suggested_editing": clip.get("suggested_editing") or "",
                 "confidence_score": float(confidence_score),
                 "confidence_percent": int(round(float(confidence_score) * 100)),
+                "ai_source_label": ai_source_label,
                 "selected_by_default": bool(clip.get("selected_by_default")),
                 "enabled": bool(clip.get("enabled")),
                 "reviewed": bool(clip.get("reviewed")),
                 "start_seconds": _parse_time_to_seconds(clip["start_time"]),
+                "end_seconds": _parse_time_to_seconds(clip["end_time"]),
             }
         )
     return clips
+
+
+def _ai_model_name(provider_name: str) -> str:
+    if provider_name == "local":
+        return settings.ai_local_model
+    return settings.ai_remote_model
+
+
+def _ai_provider_label(provider_name: str) -> str:
+    if provider_name == "local":
+        return "本地 Ollama"
+    if provider_name == "remote":
+        return "远程 AI"
+    return provider_name or "AI"
+
+
+def _read_analysis_meta(task_id: str) -> dict:
+    paths = get_artifact_paths(task_id)
+    if not paths["analysis_path"].exists():
+        return {}
+    try:
+        payload = json.loads(paths["analysis_path"].read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload.get("analysis_meta") or {}
+
+
+def _read_latest_ai_provider_from_log(task_id: str) -> str:
+    paths = get_artifact_paths(task_id)
+    if not paths["log_path"].exists():
+        return ""
+    try:
+        lines = paths["log_path"].read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        if "AI 分析完成，Provider：" in line:
+            provider = line.split("Provider：", 1)[-1].split("，", 1)[0].strip().lower()
+            if provider:
+                return provider
+        if "开始 AI 片段分析，Provider：" in line:
+            provider = line.split("Provider：", 1)[-1].strip().lower()
+            if provider:
+                return provider
+    return ""
+
+
+def get_task_ai_source_label(task_id: str) -> str:
+    meta = _read_analysis_meta(task_id)
+    provider_name = str(meta.get("provider") or "").lower() or _read_latest_ai_provider_from_log(task_id)
+    provider_name = provider_name or settings.ai_default_provider.lower()
+    model_name = str(meta.get("model") or "") or _ai_model_name(provider_name)
+    return f"{_ai_provider_label(provider_name)} · 模型 {model_name}"
+
+
+def get_clip_transcript_excerpt(task_id: str, clip_id: str) -> dict:
+    clip = get_clip_candidate(task_id, clip_id)
+    paths = get_artifact_paths(task_id)
+    rows = read_transcript_range(
+        paths["transcript_path"],
+        int(clip["start_seconds"]),
+        int(clip["end_seconds"]),
+    )
+    return {
+        "task_id": task_id,
+        "clip_id": clip_id,
+        "title": clip["title"],
+        "start_time": clip["start_time"],
+        "end_time": clip["end_time"],
+        "rows": rows,
+    }
 
 
 def count_clip_candidates(task_id: str) -> int:
@@ -1197,6 +1272,12 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             else:
                 raise
         analysis_payload = result_to_jsonable(analysis)
+        analysis_payload["analysis_meta"] = {
+            "provider": used_provider,
+            "provider_label": _ai_provider_label(used_provider),
+            "model": _ai_model_name(used_provider),
+            "generated_at": _now_iso(),
+        }
         paths["analysis_path"].parent.mkdir(parents=True, exist_ok=True)
         paths["analysis_path"].write_text(
             json.dumps(analysis_payload, ensure_ascii=False, indent=2),

@@ -628,3 +628,52 @@ def read_transcript_preview(transcript_path: Path, max_lines: int = 8) -> list[d
         if len(preview) >= max_lines:
             break
     return preview
+
+
+def _time_text_to_seconds(value: str) -> int:
+    parts = [int(part) for part in value.split(":")]
+    if len(parts) == 2:
+        minutes, seconds = parts
+        return minutes * 60 + seconds
+    hours, minutes, seconds = parts
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def read_transcript_range(
+    transcript_path: Path,
+    start_seconds: int,
+    end_seconds: int,
+    max_rows: int = 80,
+) -> list[dict[str, str]]:
+    if not transcript_path.exists():
+        return []
+
+    rows = []
+    in_sentence_section = False
+    for line in transcript_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            in_sentence_section = "逐句时间戳原文" in stripped
+            continue
+        if not in_sentence_section:
+            continue
+
+        match = TIME_TABLE_PATTERN.match(stripped)
+        if not match:
+            continue
+
+        row_start = _time_text_to_seconds(match.group("start"))
+        row_end = _time_text_to_seconds(match.group("end"))
+        if row_start < end_seconds and row_end > start_seconds:
+            text = match.group("text").strip()
+            if text:
+                rows.append(
+                    {
+                        "start_time": match.group("start"),
+                        "end_time": match.group("end"),
+                        "text": text,
+                    }
+                )
+        if len(rows) >= max_rows:
+            break
+    return rows

@@ -279,6 +279,14 @@ const clipReviewForm = document.querySelector("#clip-review-form");
 const saveClipsButton = document.querySelector("#save-clips-button");
 const generateClipsButton = document.querySelector("#generate-clips-button");
 const clipReviewMessage = document.querySelector("#clip-review-message");
+const clipPreviewVideo = document.querySelector("#clip-preview-video");
+const clipPreviewCaption = document.querySelector("#clip-preview-caption");
+const clipTranscriptDrawer = document.querySelector("#clip-transcript-drawer");
+const clipTranscriptTitle = document.querySelector("#clip-transcript-title");
+const clipTranscriptTime = document.querySelector("#clip-transcript-time");
+const clipTranscriptBody = document.querySelector("#clip-transcript-body");
+const closeTranscriptDrawerButton = document.querySelector("#close-transcript-drawer");
+let activePreviewEndSeconds = null;
 
 function showClipReviewMessage(message, tone = "info") {
   if (!clipReviewMessage) return;
@@ -298,6 +306,30 @@ function collectClipReviewPayload() {
     summary: card.querySelector("[name='summary']").value.trim(),
   }));
 }
+
+function timeTextToSeconds(value) {
+  const parts = String(value || "")
+    .trim()
+    .split(":")
+    .map((part) => Number(part));
+  if (![2, 3].includes(parts.length) || parts.some((part) => !Number.isFinite(part))) {
+    return 0;
+  }
+  if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
+  }
+  return parts[0] * 3600 + parts[1] * 60 + parts[2];
+}
+
+function updateCardTimeDataset(card) {
+  if (!card) return;
+  card.dataset.startSeconds = String(timeTextToSeconds(card.querySelector("[name='start_time']")?.value));
+  card.dataset.endSeconds = String(timeTextToSeconds(card.querySelector("[name='end_time']")?.value));
+}
+
+document.querySelectorAll("[data-clip-card] input[name='start_time'], [data-clip-card] input[name='end_time']").forEach((input) => {
+  input.addEventListener("change", () => updateCardTimeDataset(input.closest("[data-clip-card]")));
+});
 
 if (saveClipsButton && clipReviewForm) {
   saveClipsButton.addEventListener("click", async () => {
@@ -323,6 +355,113 @@ if (saveClipsButton && clipReviewForm) {
     } finally {
       saveClipsButton.disabled = false;
       saveClipsButton.textContent = originalText;
+    }
+  });
+}
+
+function playClipPreview(card) {
+  if (!clipPreviewVideo || !card) return;
+  updateCardTimeDataset(card);
+  const startSeconds = Number(card.dataset.startSeconds || 0);
+  const endSeconds = Number(card.dataset.endSeconds || 0);
+  activePreviewEndSeconds = Number.isFinite(endSeconds) && endSeconds > startSeconds ? endSeconds : null;
+  clipPreviewVideo.currentTime = Math.max(0, startSeconds);
+  clipPreviewVideo.play().catch(() => {});
+  if (clipPreviewCaption) {
+    const title = card.dataset.title || "当前片段";
+    clipPreviewCaption.textContent = `${title}：从 ${card.querySelector("[name='start_time']")?.value || ""} 播放到 ${card.querySelector("[name='end_time']")?.value || ""}`;
+  }
+}
+
+function closeTranscriptDrawer() {
+  if (!clipTranscriptDrawer) return;
+  clipTranscriptDrawer.hidden = true;
+  document.body.classList.remove("transcript-drawer-open");
+}
+
+function renderTranscriptRows(rows) {
+  if (!clipTranscriptBody) return;
+  clipTranscriptBody.replaceChildren();
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-note";
+    empty.textContent = "这一段暂时没有匹配到逐句转写。可以先查看完整转写，或重新生成转写后再试。";
+    clipTranscriptBody.append(empty);
+    return;
+  }
+  rows.forEach((row) => {
+    const item = document.createElement("article");
+    item.className = "transcript-line";
+    const time = document.createElement("time");
+    time.textContent = `${row.start_time} - ${row.end_time}`;
+    const text = document.createElement("p");
+    text.textContent = row.text;
+    item.append(time, text);
+    clipTranscriptBody.append(item);
+  });
+}
+
+async function openTranscriptDrawer(card) {
+  if (!clipTranscriptDrawer || !clipReviewForm || !card) return;
+  updateCardTimeDataset(card);
+  const taskId = clipReviewForm.dataset.taskId;
+  const clipId = card.dataset.clipId;
+  clipTranscriptDrawer.hidden = false;
+  document.body.classList.add("transcript-drawer-open");
+  if (clipTranscriptTitle) clipTranscriptTitle.textContent = card.dataset.title || "片段转写";
+  if (clipTranscriptTime) {
+    const startTime = card.querySelector("[name='start_time']")?.value || "";
+    const endTime = card.querySelector("[name='end_time']")?.value || "";
+    clipTranscriptTime.textContent = `${startTime} - ${endTime}`;
+  }
+  if (clipTranscriptBody) {
+    clipTranscriptBody.replaceChildren();
+    const loading = document.createElement("p");
+    loading.className = "empty-note";
+    loading.textContent = "正在读取这一段转写...";
+    clipTranscriptBody.append(loading);
+  }
+  try {
+    const response = await fetch(`/api/tasks/${taskId}/clips/${clipId}/transcript-excerpt`);
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "读取转写失败");
+    }
+    if (clipTranscriptTitle) clipTranscriptTitle.textContent = data.title || "片段转写";
+    if (clipTranscriptTime) clipTranscriptTime.textContent = `${data.start_time} - ${data.end_time}`;
+    renderTranscriptRows(data.rows || []);
+  } catch (error) {
+    if (clipTranscriptBody) {
+      clipTranscriptBody.replaceChildren();
+      const failed = document.createElement("p");
+      failed.className = "empty-note";
+      failed.textContent = `读取失败：${error.message}`;
+      clipTranscriptBody.append(failed);
+    }
+  }
+}
+
+document.querySelectorAll("[data-preview-trigger]").forEach((button) => {
+  button.addEventListener("click", () => {
+    playClipPreview(button.closest("[data-clip-card]"));
+  });
+});
+
+document.querySelectorAll("[data-transcript-trigger]").forEach((button) => {
+  button.addEventListener("click", () => {
+    openTranscriptDrawer(button.closest("[data-clip-card]"));
+  });
+});
+
+if (closeTranscriptDrawerButton) {
+  closeTranscriptDrawerButton.addEventListener("click", closeTranscriptDrawer);
+}
+
+if (clipPreviewVideo) {
+  clipPreviewVideo.addEventListener("timeupdate", () => {
+    if (activePreviewEndSeconds !== null && clipPreviewVideo.currentTime >= activePreviewEndSeconds) {
+      clipPreviewVideo.pause();
+      activePreviewEndSeconds = null;
     }
   });
 }

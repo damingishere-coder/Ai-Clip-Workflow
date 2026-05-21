@@ -25,7 +25,7 @@
 - `highlight_reason`：推荐理由。
 - `spread_value`：传播价值。
 - `suggested_editing`：剪辑建议。
-- `confidence_score`：AI 置信度。
+- AI 来源 / 模型：页面不再展示不易解释的置信度，改为展示本次候选片段由哪个 AI Provider 和模型生成。
 
 ## 人工编辑能力
 
@@ -63,6 +63,18 @@ POST /api/tasks/{task_id}/clips/batch-update
 
 保存审核修改不会改变任务状态，任务会继续保持 `pending_review`，直到用户进入切割阶段。
 
+## 预览和转写抽屉
+
+- 左侧候选片段的“播放预览”按钮会控制右侧源视频播放器，自动跳到该片段开始时间，并在结束时间附近暂停。
+- “查看这一段转写”会打开右侧转写抽屉，按片段起止时间读取 `transcripts/transcript.md` 中的“逐句时间戳原文”。
+- 新增读取接口：
+
+```text
+GET /api/tasks/{task_id}/clips/{clip_id}/transcript-excerpt
+```
+
+任务里的“单条最长 N 分钟”表示候选片段允许的最长时长，不代表 AI 必须按 N 分钟固定切片。AI 可以选择 6 秒、60 秒或更短的内容，人工审核时也可以改起止时间；保存时仍会校验不能超过该任务设置的最长时长。
+
 ## 筛选和排序
 
 当前支持：
@@ -70,7 +82,7 @@ POST /api/tasks/{task_id}/clips/batch-update
 - 全部片段。
 - 仅启用。
 - 高传播价值。
-- 按推荐分 / 置信度排序。
+- 按推荐分排序。
 - 按时间顺序排序。
 
 ## 后续切割流程

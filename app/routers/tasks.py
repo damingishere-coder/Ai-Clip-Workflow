@@ -167,6 +167,14 @@ async def batch_update_clip_candidates(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/{task_id}/clips/{clip_id}/transcript-excerpt")
+async def get_clip_transcript_excerpt(task_id: str, clip_id: str) -> dict:
+    try:
+        return task_service.get_clip_transcript_excerpt(task_id, clip_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/{task_id}/clips/generate")
 async def generate_clips_placeholder(task_id: str) -> dict:
     try:
