@@ -1,5 +1,10 @@
 # Development Log
 
+## 2026-05-21 列表序列变更
+- 根据浏览器标注调整左侧导航菜单顺序：工作台、新建任务、任务列表、片段审核、系统状态。
+- 本次只调整全局基础模板 `app/templates/base.html` 的导航排列，不改变页面路由和功能逻辑。
+- 同步更新 `NEXT_STEPS.md` 和 `docs/UI_REFERENCE.md`，记录当前菜单顺序。
+
 ## 2026-05-21 第二十二轮：Docker 一键启动接入
 
 - 新增 `Dockerfile`，使用可从微软镜像源拉取的 Python 3.12 Bookworm 镜像构建后端运行环境，并在容器内安装 `ffmpeg`，让 `ffmpeg/ffprobe` 可在 Docker 里直接使用。
