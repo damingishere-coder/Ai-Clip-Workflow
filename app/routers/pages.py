@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
 from app.core.config import settings
+from app.services.ai_prompt_preset_service import list_ai_prompt_presets
 from app.services.task_service import (
     get_artifact_paths,
     get_clips_overview_context,
@@ -84,6 +85,7 @@ async def task_detail_page(request: Request, task_id: str):
             "workflow_steps": get_task_workflow_steps(task),
             "transcript_lines": get_transcript_preview(task_id),
             "output_clips": list_output_clips(task_id),
+            "ai_prompt_presets": list_ai_prompt_presets(),
         },
     )
 

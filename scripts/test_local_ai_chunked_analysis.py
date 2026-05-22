@@ -22,25 +22,25 @@ class FakeLocalProvider:
 
     def generate_json(self, prompt: str, retry_instruction: str | None = None) -> str:
         self.calls += 1
-        transcript = prompt.split("转写文本：", 1)[-1]
-        times = re.findall(r"\b\d{2}:\d{2}:\d{2}\b", transcript)
-        start = times[0]
-        end = times[1] if len(times) > 1 else times[0]
+        rows = re.findall(r"(\d{2}:\d{2}:\d{2})\s+-\s+(\d{2}:\d{2}:\d{2})", prompt)
+        if not rows:
+            rows = re.findall(r"\|\s*(\d{2}:\d{2}:\d{2})\s*\|\s*(\d{2}:\d{2}:\d{2})\s*\|", prompt)
+        start, end = rows[0]
+        duration_seconds = _time_to_seconds(end) - _time_to_seconds(start)
         return json.dumps(
             {
-                "task_id": "chunk-test",
                 "analysis_summary": "fake local chunk result",
                 "clips": [
                     {
                         "clip_id": f"clip_fake_{self.calls:03d}",
-                        "title": f"候选片段 {self.calls}",
+                        "title": f"Candidate clip {self.calls}",
                         "start_time": start,
                         "end_time": end,
-                        "duration_seconds": 60,
-                        "summary": "这一段适合作为短视频候选。",
-                        "highlight_reason": "观点集中，适合传播。",
+                        "duration_seconds": duration_seconds,
+                        "summary": "This segment is suitable as a short-video candidate.",
+                        "highlight_reason": "The topic is focused and suitable for sharing.",
                         "spread_value": "中",
-                        "suggested_editing": "保留核心对话并补字幕。",
+                        "suggested_editing": "Keep the core sentence and add keyword subtitles.",
                         "confidence_score": 0.8,
                         "selected_by_default": True,
                     }
@@ -50,20 +50,25 @@ class FakeLocalProvider:
         )
 
 
+def _time_to_seconds(value: str) -> int:
+    hours, minutes, seconds = [int(part) for part in value.split(":")]
+    return hours * 3600 + minutes * 60 + seconds
+
+
 def main() -> None:
     rows = []
     for minute in range(12):
         rows.append(
             f"| 00:{minute:02d}:00 | 00:{minute + 1:02d}:00 | "
-            f"这是第 {minute + 1} 分钟的测试转写内容，用来验证本地 AI 会被拆成小段处理。 |"
+            f"Minute {minute + 1} test transcript content for local AI chunking. |"
         )
     transcript = "\n".join(
         [
-            "# 测试转写",
+            "# Test transcript",
             "",
-            "## 分钟级转写",
+            "## Timed transcript",
             "",
-            "| 开始 | 结束 | 文本 |",
+            "| Start | End | Text |",
             "| --- | --- | --- |",
             *rows,
         ]
@@ -81,7 +86,7 @@ def main() -> None:
                 transcript_path=transcript_path,
                 max_clip_duration_minutes=5,
                 target_clip_count=5,
-                ai_preference="传播性强",
+                ai_preference="shareable",
                 provider_name="local",
             )
             plan = inspect_local_analysis_plan(request)
@@ -93,7 +98,7 @@ def main() -> None:
     assert provider.calls == plan["chunk_count"], (provider.calls, plan)
     assert result.clips, "expected merged clips"
     assert len(result.clips) <= 5, len(result.clips)
-    print("本地 AI 分段分析测试通过：", json.dumps(plan, ensure_ascii=False))
+    print("Local AI chunked analysis test passed:", json.dumps(plan, ensure_ascii=False))
 
 
 if __name__ == "__main__":

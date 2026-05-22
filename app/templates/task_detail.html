@@ -84,14 +84,29 @@
       </div>
       <span class="status-pill">{{ task.candidate_count }} 条候选</span>
     </div>
-    <form id="ai-analysis-form" class="settings-form" data-task-id="{{ task.id }}">
-      <label>
-        <span>AI 偏好</span>
-        <textarea name="ai_preference" rows="4" placeholder="例如：优先选择观点强、开头有冲突、适合知识类传播的片段">{{ task.ai_preference or "" }}</textarea>
-      </label>
-      <p class="empty-note">这段偏好会进入 AI 片段分析 Prompt，用来影响候选片段的选择方向、推荐理由和排序参考；它不会直接改变原视频，也不会跳过人工审核。</p>
+    <form id="ai-analysis-form" class="settings-form ai-prompt-form" data-task-id="{{ task.id }}">
+      <div class="prompt-preset-grid">
+        {% for preset in ai_prompt_presets %}
+        {% set is_selected = preset.id == (task.ai_prompt_preset_id or "preset_001") %}
+        <article class="prompt-preset-card {{ 'active' if is_selected else '' }}" data-prompt-preset-card data-preset-id="{{ preset.id }}" data-preset-slot="{{ preset.slot }}">
+          <label class="prompt-preset-choice">
+            <input type="radio" name="ai_prompt_preset_id" value="{{ preset.id }}" {{ "checked" if is_selected else "" }}>
+            <span>{{ preset.slot }} 号方案</span>
+          </label>
+          <label>
+            <span>方案名称</span>
+            <input type="text" name="preset_name_{{ preset.id }}" value="{{ preset.name }}" maxlength="80">
+          </label>
+          <label>
+            <span>AI 分析 Prompt</span>
+            <textarea name="preset_prompt_{{ preset.id }}" rows="12" placeholder="把完整 AI 分析 Prompt 写在这里。可使用 {{ '{{MAX_CLIP_DURATION}}' }}、{{ '{{TARGET_CLIP_COUNT}}' }}、{{ '{{AI_PREFERENCE}}' }}、{{ '{{TRANSCRIPT_TEXT}}' }} 变量。">{{ preset.prompt_text }}</textarea>
+          </label>
+        </article>
+        {% endfor %}
+      </div>
+      <p class="empty-note">选择的方案会直接作为本次 AI 片段分析 Prompt。系统会自动替换最大时长、候选数量、AI 偏好和转写文本变量；最终成片仍需要进入人工审核确认。</p>
       <div class="button-row align-end">
-        <button class="secondary-button" id="save-ai-preference-button" type="button">保存偏好</button>
+        <button class="secondary-button" id="save-ai-prompts-button" type="button">保存 Prompt 方案</button>
         <button class="secondary-button js-ai-process-action" type="button" data-provider="remote">远程 AI 分析</button>
         <button class="secondary-button js-ai-process-action" type="button" data-provider="local">本地 AI 分析</button>
       </div>
@@ -181,7 +196,7 @@
       <li>源视频路径：{{ task.source }}</li>
       <li>E 盘存储根目录：{{ task.storage_root }}</li>
       <li>任务目录：{{ task.task_dir }}</li>
-      <li>AI 偏好：{{ task.ai_preference or "未填写" }}</li>
+      <li>AI Prompt 方案：{{ task.ai_prompt_preset_id or "preset_001" }}</li>
       <li>音频文件：{{ task.audio_path }}（{{ "已生成" if task.audio_exists else "待生成" }}）</li>
       <li>转写 MD：{{ task.transcript_path }}（{{ "已生成" if task.transcript_exists else "待生成" }}）</li>
       <li>AI 分析文件：{{ task.analysis_path }}（{{ "已生成" if task.analysis_exists else "待生成" }}）</li>

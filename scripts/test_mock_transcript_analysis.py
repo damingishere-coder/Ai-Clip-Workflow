@@ -29,7 +29,6 @@ def main() -> None:
 
         raw_json = json.dumps(
             {
-                "task_id": "mock-task",
                 "analysis_summary": "模拟转写中 00:01:00 到 00:02:30 适合切片。",
                 "clips": [
                     {
@@ -49,7 +48,8 @@ def main() -> None:
             },
             ensure_ascii=False,
         )
-        result = _parse_and_validate(raw_json)
+        result = _parse_and_validate(raw_json, task_id="mock-task")
+        assert result.task_id == "mock-task"
         request = AnalysisRequest(
             task_id="mock-task",
             transcript_path=transcript_path,

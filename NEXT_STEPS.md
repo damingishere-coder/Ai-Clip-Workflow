@@ -1,5 +1,10 @@
 # Next Steps
 
+## 2026-05-23 本次小改动：AI Prompt 方案
+- 已把任务详情页的 AI 分析配置从“AI 偏好”升级为“AI Prompt 方案”，支持 1、2、3 号全局共用方案、方案命名、Prompt 编辑和当前任务选择。
+- 1 号方案已内置默认直播切片分析专家 Prompt；远程 AI 分析前会二次确认，避免误点后覆盖已有候选片段。
+- 下一步建议补充 2、3 号 Prompt 方案，例如强观点型、知识密度型或爆点型，并用真实长视频对比候选片段质量。
+
 ## 本次小改动
 - 已按要求将 DeepSeek 远程默认模型改为 `deepseek-v4-flash`，远程地址仍为 `https://api.deepseek.com`，协议仍为 `chat_completions`。
 

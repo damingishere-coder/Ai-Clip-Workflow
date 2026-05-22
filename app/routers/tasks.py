@@ -6,10 +6,12 @@ from app.models.task import (
     ClipCandidateBatchUpdate,
     ClipCandidateUpdate,
     TaskAIPreferenceUpdate,
+    TaskAIPromptPresetUpdate,
     TaskCreate,
     TaskStatusUpdate,
 )
 from app.services import task_service
+from app.services.ai_prompt_preset_service import update_task_ai_prompt_preset
 from app.services.storage_service import save_uploaded_video
 
 
@@ -91,6 +93,14 @@ async def patch_task_status(task_id: str, payload: TaskStatusUpdate) -> dict:
 async def patch_task_ai_preference(task_id: str, payload: TaskAIPreferenceUpdate) -> dict:
     try:
         return task_service.update_task_ai_preference(task_id, payload.ai_preference)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.patch("/{task_id}/ai-prompt-preset")
+async def patch_task_ai_prompt_preset(task_id: str, payload: TaskAIPromptPresetUpdate) -> dict:
+    try:
+        return update_task_ai_prompt_preset(task_id, payload.ai_prompt_preset_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

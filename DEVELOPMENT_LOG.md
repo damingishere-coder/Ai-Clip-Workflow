@@ -1,5 +1,13 @@
 # Development Log
 
+## 2026-05-23 Ai分析prompt制定
+- 任务详情页的“AI 偏好”升级为“AI Prompt 方案”：提供 1、2、3 号全局共用方案卡片，可编辑方案名称和完整 Prompt。
+- 新增全局 `ai_prompt_presets` 表，并为任务增加当前选中的 `ai_prompt_preset_id`；数据库初始化时自动写入 1 号默认直播切片分析专家 Prompt。
+- AI 分析时改为读取当前任务选择的 Prompt 方案，再注入 `{{MAX_CLIP_DURATION}}`、`{{TARGET_CLIP_COUNT}}`、`{{AI_PREFERENCE}}`、`{{TRANSCRIPT_TEXT}}`。
+- 远程 AI 分析前新增二次确认，提醒会使用当前 Prompt 方案重新生成候选片段并覆盖已有 AI 候选结果。
+- AI 返回 JSON 允许不包含 `task_id`，程序会自动补当前任务 ID，兼容新的默认 Prompt 输出格式。
+- 已运行 `python -m compileall app scripts`、`scripts/test_ai_json_validation.py`、`scripts/test_mock_transcript_analysis.py` 和 `scripts/test_local_ai_chunked_analysis.py`。
+
 ## 2026-05-21 列表序列变更
 - 根据浏览器标注调整左侧导航菜单顺序：工作台、新建任务、任务列表、片段审核、系统状态。
 - 本次只调整全局基础模板 `app/templates/base.html` 的导航排列，不改变页面路由和功能逻辑。

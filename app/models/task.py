@@ -50,6 +50,15 @@ class TaskAIPreferenceUpdate(BaseModel):
     ai_preference: Optional[str] = Field(default=None, max_length=1000)
 
 
+class AIPromptPresetUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    prompt_text: str = Field(default="", max_length=30000)
+
+
+class TaskAIPromptPresetUpdate(BaseModel):
+    ai_prompt_preset_id: str = Field(..., min_length=1, max_length=80)
+
+
 class ClipCandidate(BaseModel):
     id: str
     task_id: str
@@ -108,6 +117,6 @@ class AIClipItem(BaseModel):
 
 
 class AIClipAnalysisResult(BaseModel):
-    task_id: str | int
+    task_id: str | int = ""
     analysis_summary: str = ""
     clips: list[AIClipItem] = Field(default_factory=list)

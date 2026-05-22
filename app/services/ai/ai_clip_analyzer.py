@@ -33,6 +33,7 @@ class AnalysisRequest:
     target_clip_count: int
     ai_preference: str
     provider_name: str
+    prompt_template: str | None = None
 
 
 @dataclass(frozen=True)
@@ -65,12 +66,13 @@ def analyze_task_transcript(request: AnalysisRequest) -> AIClipAnalysisResult:
         target_clip_count=request.target_clip_count,
         ai_preference=request.ai_preference,
         transcript_text=transcript_text,
+        prompt_template=request.prompt_template,
     )
     provider = build_provider(request.provider_name)
 
     raw_text = provider.generate_json(prompt)
     try:
-        result = _parse_and_validate(raw_text)
+        result = _parse_and_validate(raw_text, task_id=request.task_id)
     except AIAnalysisError as first_error:
         retry_instruction = (
             "上一次输出无法被程序解析或校验。请重新输出严格 JSON，"
@@ -78,7 +80,7 @@ def analyze_task_transcript(request: AnalysisRequest) -> AIClipAnalysisResult:
         )
         raw_text = provider.generate_json(prompt, retry_instruction=retry_instruction)
         try:
-            result = _parse_and_validate(raw_text)
+            result = _parse_and_validate(raw_text, task_id=request.task_id)
         except AIAnalysisError as second_error:
             raise AIAnalysisError(f"AI 返回非法 JSON，安全重试后仍失败：{second_error}") from first_error
 
@@ -119,11 +121,12 @@ def _analyze_task_transcript_in_local_chunks(
             target_clip_count=per_chunk_target,
             ai_preference=request.ai_preference,
             transcript_text=chunk.text,
+            prompt_template=request.prompt_template,
         )
         try:
             raw_text = provider.generate_json(prompt)
             try:
-                chunk_result = _parse_and_validate(raw_text)
+                chunk_result = _parse_and_validate(raw_text, task_id=request.task_id)
             except AIAnalysisError as first_error:
                 retry_instruction = (
                     "上一次输出无法被程序解析或校验。请重新输出严格 JSON，"
@@ -131,7 +134,7 @@ def _analyze_task_transcript_in_local_chunks(
                 )
                 raw_text = provider.generate_json(prompt, retry_instruction=retry_instruction)
                 try:
-                    chunk_result = _parse_and_validate(raw_text)
+                    chunk_result = _parse_and_validate(raw_text, task_id=request.task_id)
                 except AIAnalysisError as second_error:
                     raise AIAnalysisError(f"AI 返回非法 JSON，安全重试后仍失败：{second_error}") from first_error
             _validate_clip_constraints(
@@ -211,8 +214,9 @@ def _render_prompt(
     target_clip_count: int,
     ai_preference: str,
     transcript_text: str,
+    prompt_template: str | None = None,
 ) -> str:
-    template = PROMPT_PATH.read_text(encoding="utf-8")
+    template = prompt_template or PROMPT_PATH.read_text(encoding="utf-8")
     replacements = {
         "{{MAX_CLIP_DURATION}}": str(max_clip_duration),
         "{{TARGET_CLIP_COUNT}}": str(target_clip_count),
@@ -244,6 +248,7 @@ def _build_local_analysis_chunks(request: AnalysisRequest, transcript_text: str)
             target_clip_count=1,
             ai_preference=request.ai_preference,
             transcript_text=candidate_text,
+            prompt_template=request.prompt_template,
         )
         exceeds_time = row.end_seconds - current_start > LOCAL_ANALYSIS_CHUNK_SECONDS
         exceeds_size = len(candidate_prompt) > LOCAL_ANALYSIS_MAX_CONTEXT_CHARS
@@ -266,6 +271,7 @@ def _build_local_analysis_chunks(request: AnalysisRequest, transcript_text: str)
             target_clip_count=1,
             ai_preference=request.ai_preference,
             transcript_text=text,
+            prompt_template=request.prompt_template,
         )
         chunks.append(
             TranscriptChunk(
@@ -352,18 +358,27 @@ def _dedupe_and_rank_clips(clips: list[Any], target_clip_count: int) -> list[Any
     return sorted(selected, key=lambda clip: _time_to_seconds(clip.start_time))
 
 
-def _parse_and_validate(raw_text: str) -> AIClipAnalysisResult:
+def _parse_and_validate(raw_text: str, task_id: str | None = None) -> AIClipAnalysisResult:
     try:
         payload = json.loads(raw_text)
     except json.JSONDecodeError as exc:
         raise AIAnalysisError(f"JSON 解析失败：{exc}") from exc
 
+    if task_id and isinstance(payload, dict) and not payload.get("task_id"):
+        payload["task_id"] = task_id
+
     try:
         if hasattr(AIClipAnalysisResult, "model_validate"):
-            return AIClipAnalysisResult.model_validate(payload)
-        return AIClipAnalysisResult.parse_obj(payload)
+            result = AIClipAnalysisResult.model_validate(payload)
+        else:
+            result = AIClipAnalysisResult.parse_obj(payload)
     except ValidationError as exc:
         raise AIAnalysisError(f"JSON 字段校验失败：{exc}") from exc
+
+
+    if task_id and not result.task_id:
+        result.task_id = task_id
+    return result
 
 
 _TIME_PATTERN = re.compile(r"\b(?:(\d{2}):)?(\d{2}):(\d{2})\b")

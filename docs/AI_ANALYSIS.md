@@ -1,5 +1,16 @@
 # AI 片段分析说明
 
+## 2026-05-23：AI Prompt 方案
+
+任务详情页现在使用“AI Prompt 方案”管理 AI 分析 Prompt：
+
+- 全局共用 1、2、3 号方案，保存在 SQLite `ai_prompt_presets` 表。
+- 1 号方案默认使用直播切片分析专家 Prompt。
+- 每个任务通过 `ai_prompt_preset_id` 记录当前选中的方案。
+- AI 分析时读取当前任务选中的 Prompt，再替换 `{{MAX_CLIP_DURATION}}`、`{{TARGET_CLIP_COUNT}}`、`{{AI_PREFERENCE}}`、`{{TRANSCRIPT_TEXT}}`。
+- AI 输出 JSON 可以不包含 `task_id`，程序会自动补当前任务 ID 后继续校验和写入片段审核数据。
+- 点击远程 AI 分析前会弹出二次确认，避免误操作覆盖已有候选片段。
+
 ## 1. 配置方式
 
 项目根目录新增 `.env.example`。第一次使用时，把它复制为 `.env`，再填写真实配置。

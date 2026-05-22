@@ -19,6 +19,7 @@ from app.services.ai.ai_clip_analyzer import (
     result_to_jsonable,
 )
 from app.services.ai.diagnostics import ensure_local_ai_ready
+from app.services.ai_prompt_preset_service import get_task_ai_prompt_preset
 from app.services.storage_service import (
     create_task_directory,
     get_artifact_paths,
@@ -361,7 +362,7 @@ def list_tasks(include_deleted: bool = False) -> list[dict]:
             f"""
             SELECT
                 id, task_name, source_type, platform, original_video_path, nas_file_path,
-                max_clip_duration, candidate_clip_count, ai_preference, status, progress,
+                max_clip_duration, candidate_clip_count, ai_preference, ai_prompt_preset_id, status, progress,
                 error_message, is_deleted, deleted_at, created_at, updated_at
             FROM tasks
             {where_clause}
@@ -377,7 +378,7 @@ def get_task(task_id: str, include_video_probe: bool = True) -> dict | None:
             """
             SELECT
                 id, task_name, source_type, platform, original_video_path, nas_file_path,
-                max_clip_duration, candidate_clip_count, ai_preference, status, progress,
+                max_clip_duration, candidate_clip_count, ai_preference, ai_prompt_preset_id, status, progress,
                 error_message, is_deleted, deleted_at, created_at, updated_at
             FROM tasks
             WHERE id = ?
@@ -879,6 +880,7 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None) -> dict:
             "max_clip_duration": payload.max_clip_duration,
             "candidate_clip_count": payload.candidate_clip_count,
             "ai_preference": payload.ai_preference,
+            "ai_prompt_preset_id": "preset_001",
             "status": initial_status,
             "progress": progress,
             "error_message": None,
@@ -1190,14 +1192,21 @@ def _insert_clip_candidates(task_id: str, clips: list[dict]) -> None:
 
 
 def _analyze_with_provider(task_id: str, task: dict, paths: dict[str, Path], provider_name: str):
+    prompt_preset = get_task_ai_prompt_preset(task_id)
+    prompt_template = (prompt_preset.get("prompt_text") or "").strip()
+    if not prompt_template:
+        raise AIAnalysisError(f"当前选择的 AI Prompt 方案“{prompt_preset.get('name')}”还没有填写 Prompt 内容")
+
     request = AnalysisRequest(
         task_id=task_id,
         transcript_path=paths["transcript_path"],
         max_clip_duration_minutes=int(task["max_clip_duration"]),
         target_clip_count=int(task["candidate_clip_count"]),
         ai_preference=task.get("ai_preference") or "",
+        prompt_template=prompt_template,
         provider_name=provider_name,
     )
+    _append_task_log(task_id, f"AI Prompt 方案：{prompt_preset.get('slot')}号 - {prompt_preset.get('name')}")
     if provider_name == "local":
         ensure_local_ai_ready()
         plan = inspect_local_analysis_plan(request)

@@ -1,8 +1,13 @@
 import sqlite3
+from datetime import datetime
 from collections.abc import Iterator
 from contextlib import contextmanager
 
 from app.core.config import settings
+
+
+DEFAULT_AI_PROMPT_PRESET_ID = "preset_001"
+DEFAULT_AI_PROMPT_PATH = settings.project_root / "prompts" / "default_ai_prompt_preset_001.txt"
 
 
 @contextmanager
@@ -33,6 +38,7 @@ def init_db() -> None:
                 max_clip_duration INTEGER NOT NULL DEFAULT 2,
                 candidate_clip_count INTEGER NOT NULL DEFAULT 8,
                 ai_preference TEXT,
+                ai_prompt_preset_id TEXT NOT NULL DEFAULT 'preset_001',
                 status TEXT NOT NULL DEFAULT 'pending_video',
                 progress INTEGER NOT NULL DEFAULT 0,
                 error_message TEXT,
@@ -77,11 +83,22 @@ def init_db() -> None:
                 FOREIGN KEY(task_id) REFERENCES tasks(id),
                 FOREIGN KEY(clip_candidate_id) REFERENCES clip_candidates(id)
             );
+
+            CREATE TABLE IF NOT EXISTS ai_prompt_presets (
+                id TEXT PRIMARY KEY,
+                slot INTEGER NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                prompt_text TEXT NOT NULL,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         _migrate_tasks_table(connection)
         _migrate_clip_candidates_table(connection)
         _migrate_output_clip_table(connection)
+        _seed_ai_prompt_presets(connection)
         connection.commit()
 
 
@@ -101,6 +118,7 @@ def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
         "max_clip_duration": "ALTER TABLE tasks ADD COLUMN max_clip_duration INTEGER NOT NULL DEFAULT 2",
         "candidate_clip_count": "ALTER TABLE tasks ADD COLUMN candidate_clip_count INTEGER NOT NULL DEFAULT 8",
         "ai_preference": "ALTER TABLE tasks ADD COLUMN ai_preference TEXT",
+        "ai_prompt_preset_id": "ALTER TABLE tasks ADD COLUMN ai_prompt_preset_id TEXT NOT NULL DEFAULT 'preset_001'",
         "status": "ALTER TABLE tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'pending_video'",
         "progress": "ALTER TABLE tasks ADD COLUMN progress INTEGER NOT NULL DEFAULT 0",
         "error_message": "ALTER TABLE tasks ADD COLUMN error_message TEXT",
@@ -164,6 +182,7 @@ def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
         """
         UPDATE tasks SET task_name = '未命名任务' WHERE task_name IS NULL OR task_name = '';
         UPDATE tasks SET is_deleted = 0 WHERE is_deleted IS NULL;
+        UPDATE tasks SET ai_prompt_preset_id = 'preset_001' WHERE ai_prompt_preset_id IS NULL OR ai_prompt_preset_id = '';
         UPDATE tasks SET source_type = 'upload' WHERE source_type NOT IN ('upload', 'nas') OR source_type IS NULL OR source_type = '';
 
         UPDATE tasks SET platform = 'douyin' WHERE platform IN ('抖音', 'douyin');
@@ -241,3 +260,41 @@ def _migrate_output_clip_table(connection: sqlite3.Connection) -> None:
     for column, statement in migrations.items():
         if column not in columns:
             connection.execute(statement)
+
+
+def _seed_ai_prompt_presets(connection: sqlite3.Connection) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    default_prompt = ""
+    if DEFAULT_AI_PROMPT_PATH.exists():
+        default_prompt = DEFAULT_AI_PROMPT_PATH.read_text(encoding="utf-8")
+
+    presets = [
+        (DEFAULT_AI_PROMPT_PRESET_ID, 1, "默认直播切片分析专家", default_prompt, 1),
+        ("preset_002", 2, "2号方案", "", 0),
+        ("preset_003", 3, "3号方案", "", 0),
+    ]
+    for preset_id, slot, name, prompt_text, is_default in presets:
+        existing = connection.execute(
+            "SELECT id, prompt_text FROM ai_prompt_presets WHERE id = ?",
+            (preset_id,),
+        ).fetchone()
+        if existing:
+            if preset_id == DEFAULT_AI_PROMPT_PRESET_ID and default_prompt and not (existing["prompt_text"] or "").strip():
+                connection.execute(
+                    """
+                    UPDATE ai_prompt_presets
+                    SET name = ?, prompt_text = ?, is_default = 1, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (name, default_prompt, now, preset_id),
+                )
+            continue
+        connection.execute(
+            """
+            INSERT INTO ai_prompt_presets (
+                id, slot, name, prompt_text, is_default, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (preset_id, slot, name, prompt_text, is_default, now, now),
+        )

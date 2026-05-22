@@ -199,57 +199,115 @@ function updateWorkflowButtons(data) {
 }
 
 const aiAnalysisForm = document.querySelector("#ai-analysis-form");
-const saveAiPreferenceButton = document.querySelector("#save-ai-preference-button");
+const saveAiPromptsButton = document.querySelector("#save-ai-prompts-button");
 const aiProcessResult = document.querySelector("#ai-process-result");
 
-async function saveTaskAiPreference() {
+function getSelectedPromptPresetCard() {
+  if (!aiAnalysisForm) return null;
+  const selected = aiAnalysisForm.querySelector("input[name='ai_prompt_preset_id']:checked");
+  return selected ? selected.closest("[data-prompt-preset-card]") : null;
+}
+
+function updatePromptPresetCards() {
+  document.querySelectorAll("[data-prompt-preset-card]").forEach((card) => {
+    const radio = card.querySelector("input[name='ai_prompt_preset_id']");
+    card.classList.toggle("active", Boolean(radio?.checked));
+  });
+}
+
+async function saveTaskAiPromptSettings() {
   if (!aiAnalysisForm) return null;
   const taskId = aiAnalysisForm.dataset.taskId;
-  const formData = new FormData(aiAnalysisForm);
-  const response = await fetch(`/api/tasks/${taskId}/ai-preference`, {
+  const selected = aiAnalysisForm.querySelector("input[name='ai_prompt_preset_id']:checked");
+  if (!selected) {
+    throw new Error("请选择一个 AI Prompt 方案");
+  }
+
+  const cards = Array.from(aiAnalysisForm.querySelectorAll("[data-prompt-preset-card]"));
+  await Promise.all(
+    cards.map(async (card) => {
+      const presetId = card.dataset.presetId;
+      const nameInput = card.querySelector(`[name='preset_name_${presetId}']`);
+      const promptInput = card.querySelector(`[name='preset_prompt_${presetId}']`);
+      const presetResponse = await fetch(`/api/ai-prompt-presets/${presetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: nameInput?.value || `${card.dataset.presetSlot || ""}号方案`,
+          prompt_text: promptInput?.value || "",
+        }),
+      });
+      const presetData = await presetResponse.json();
+      if (!presetResponse.ok) {
+        throw new Error(presetData.detail || "AI Prompt 方案保存失败");
+      }
+      return presetData;
+    })
+  );
+
+  const response = await fetch(`/api/tasks/${taskId}/ai-prompt-preset`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      ai_preference: formData.get("ai_preference") || "",
+      ai_prompt_preset_id: selected.value,
     }),
   });
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data.detail || "AI 偏好保存失败");
+    throw new Error(data.detail || "AI Prompt 方案选择保存失败");
   }
   return data;
 }
 
-if (saveAiPreferenceButton && aiAnalysisForm) {
-  saveAiPreferenceButton.addEventListener("click", async () => {
-    const originalText = saveAiPreferenceButton.textContent;
-    saveAiPreferenceButton.disabled = true;
-    saveAiPreferenceButton.textContent = "保存中...";
-    if (aiProcessResult) aiProcessResult.textContent = "正在保存 AI 偏好...";
+if (aiAnalysisForm) {
+  aiAnalysisForm.querySelectorAll("input[name='ai_prompt_preset_id']").forEach((radio) => {
+    radio.addEventListener("change", updatePromptPresetCards);
+  });
+  updatePromptPresetCards();
+}
+
+if (saveAiPromptsButton && aiAnalysisForm) {
+  saveAiPromptsButton.addEventListener("click", async () => {
+    const originalText = saveAiPromptsButton.textContent;
+    saveAiPromptsButton.disabled = true;
+    saveAiPromptsButton.textContent = "保存中...";
+    if (aiProcessResult) aiProcessResult.textContent = "正在保存 AI Prompt 方案...";
 
     try {
-      const data = await saveTaskAiPreference();
-      if (aiProcessResult) aiProcessResult.textContent = data.message || "AI 偏好已保存。";
+      const data = await saveTaskAiPromptSettings();
+      if (aiProcessResult) aiProcessResult.textContent = data.message || "AI Prompt 方案已保存。";
     } catch (error) {
       if (aiProcessResult) aiProcessResult.textContent = `保存失败：${error.message}`;
     } finally {
-      saveAiPreferenceButton.disabled = false;
-      saveAiPreferenceButton.textContent = originalText;
+      saveAiPromptsButton.disabled = false;
+      saveAiPromptsButton.textContent = originalText;
     }
   });
 }
 
 document.querySelectorAll(".js-ai-process-action").forEach((button) => {
   button.addEventListener("click", async () => {
+    if (!aiAnalysisForm) return;
     const originalText = button.textContent;
     const taskId = aiAnalysisForm.dataset.taskId;
     const provider = button.dataset.provider || "remote";
+    const selectedCard = getSelectedPromptPresetCard();
+    const selectedPrompt = selectedCard?.querySelector("textarea")?.value.trim() || "";
+    const selectedName = selectedCard?.querySelector("input[type='text']")?.value.trim() || "当前方案";
+    if (!selectedPrompt) {
+      if (aiProcessResult) aiProcessResult.textContent = "请先填写当前选中的 AI Prompt 方案。";
+      return;
+    }
+    if (provider === "remote") {
+      const confirmed = window.confirm(`确认使用“${selectedName}”发起远程 AI 分析吗？\n\n这会重新生成候选片段，并覆盖当前已有的 AI 候选结果。`);
+      if (!confirmed) return;
+    }
     button.disabled = true;
     button.textContent = "分析中...";
-    if (aiProcessResult) aiProcessResult.textContent = "正在保存偏好并启动 AI 分析...";
+    if (aiProcessResult) aiProcessResult.textContent = "正在保存 Prompt 方案并启动 AI 分析...";
 
     try {
-      await saveTaskAiPreference();
+      await saveTaskAiPromptSettings();
       const response = await fetch(`/api/tasks/${taskId}/process/ai?provider=${provider}`, {
         method: "POST",
       });
