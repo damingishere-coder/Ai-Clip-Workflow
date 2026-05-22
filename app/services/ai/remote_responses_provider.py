@@ -53,9 +53,10 @@ class RemoteResponsesProvider:
                 {"role": "user", "content": _merge_prompt(prompt, retry_instruction)},
             ],
             "response_format": {"type": "json_object"},
+            "max_tokens": 4096,
         }
         response = post_json(
-            build_url(self.config.base_url, "/v1/chat/completions"),
+            build_url(self.config.base_url, _chat_completions_path(self.config.base_url)),
             payload,
             self.config.api_key,
             self.config.timeout_seconds,
@@ -67,3 +68,14 @@ def _merge_prompt(prompt: str, retry_instruction: str | None) -> str:
     if not retry_instruction:
         return prompt
     return f"{prompt}\n\n{retry_instruction}"
+
+
+def _is_deepseek_endpoint(base_url: str) -> bool:
+    return "deepseek" in (base_url or "").lower()
+
+
+def _chat_completions_path(base_url: str) -> str:
+    normalized = (base_url or "").rstrip("/").lower()
+    if _is_deepseek_endpoint(normalized) or normalized.endswith("/v1"):
+        return "/chat/completions"
+    return "/v1/chat/completions"

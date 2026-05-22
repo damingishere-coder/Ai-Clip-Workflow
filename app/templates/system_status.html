@@ -132,7 +132,7 @@
       <button class="icon-button" id="close-ai-config" type="button" aria-label="关闭">×</button>
     </div>
     <form id="ai-config-form" class="settings-form">
-      <input name="ai_remote_review_model" type="hidden" value="{{ ai_config['values']['AI_REMOTE_REVIEW_MODEL'] }}">
+      <input name="ai_remote_review_model" type="hidden" value="{{ ai_config['values']['AI_REMOTE_MODEL'] }}">
       <input name="ai_remote_disable_response_storage" type="hidden" value="{{ ai_config['values']['AI_REMOTE_DISABLE_RESPONSE_STORAGE'] }}">
       <input name="ai_local_base_url" type="hidden" value="http://127.0.0.1:11434/v1">
       <input name="ai_local_protocol" type="hidden" value="chat_completions">
@@ -163,12 +163,29 @@
           <label><span>API Key</span><input name="ai_remote_api_key" type="password" placeholder="{{ ai_config['values']['AI_REMOTE_API_KEY'] or '留空则保留旧密钥，也兼容 OPENAI_API_KEY' }}"></label>
         </div>
         <div class="form-row">
-          <label><span>模型</span><input name="ai_remote_model" value="{{ ai_config['values']['AI_REMOTE_MODEL'] }}"></label>
+          <label>
+            <span>模型</span>
+            <select name="ai_remote_model">
+              {% if ai_config['values']['AI_REMOTE_MODEL'] not in ai_config['remote_model_options'] %}
+              <option value="{{ ai_config['values']['AI_REMOTE_MODEL'] }}" selected>{{ ai_config['values']['AI_REMOTE_MODEL'] }}</option>
+              {% endif %}
+              {% for model_name in ai_config['remote_model_options'] %}
+              <option value="{{ model_name }}" {{ "selected" if ai_config['values']['AI_REMOTE_MODEL'] == model_name else "" }}>{{ model_name }}</option>
+              {% endfor %}
+            </select>
+          </label>
           <label><span>Reasoning Effort</span><input name="ai_remote_reasoning_effort" value="{{ ai_config['values']['AI_REMOTE_REASONING_EFFORT'] }}"></label>
         </div>
-        <input name="ai_remote_protocol" type="hidden" value="responses">
+        <label>
+          <span>协议</span>
+          <select name="ai_remote_protocol">
+            {% for protocol_name in ai_config['remote_protocol_options'] %}
+            <option value="{{ protocol_name }}" {{ "selected" if ai_config['values']['AI_REMOTE_PROTOCOL'] == protocol_name else "" }}>{{ protocol_name }}</option>
+            {% endfor %}
+          </select>
+        </label>
         <input name="ai_remote_responses_path" type="hidden" value="/v1/responses">
-        <p class="form-hint">默认使用 OpenAI / Responses 协议，片段审核使用 Review Model，且不保存响应内容。API Key 留空会保留旧值，也兼容 OPENAI_API_KEY。</p>
+        <p class="form-hint">DeepSeek 请使用 chat_completions 协议，Base URL 推荐 https://api.deepseek.com，模型推荐 deepseek-v4-pro。API Key 留空会保留旧值，也兼容 OPENAI_API_KEY。</p>
       </div>
 
       <div class="settings-section">

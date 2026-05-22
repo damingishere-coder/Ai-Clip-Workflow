@@ -1,7 +1,7 @@
 # Next Steps
 
 ## 本次小改动
-- 已按浏览器标注调整视频预览尺寸：右侧预览栏更窄，播放器高度受控，竖屏视频会完整缩放显示，避免只露出半边画面。
+- 已修复 DeepSeek 远程 AI 分析配置：远程默认改为 `https://api.deepseek.com`、`deepseek-v4-pro`、`chat_completions`，系统状态页可选择远程协议和 DeepSeek 模型。
 
 ## 当前已处理
 

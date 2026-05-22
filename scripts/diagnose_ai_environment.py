@@ -55,7 +55,10 @@ def _task_prompt_check(task_id: str) -> bool:
 def main() -> int:
     failures = 0
     task_id = sys.argv[1] if len(sys.argv) > 1 else ""
-    remote_url = build_url(settings.ai_remote_base_url, settings.ai_remote_responses_path)
+    remote_path = settings.ai_remote_responses_path
+    if settings.ai_remote_protocol == "chat_completions":
+        remote_path = "/chat/completions" if settings.ai_remote_base_url.rstrip("/").endswith("/v1") or "deepseek" in settings.ai_remote_base_url.lower() else "/v1/chat/completions"
+    remote_url = build_url(settings.ai_remote_base_url, remote_path)
     local_url = build_url(settings.ai_local_base_url, "/chat/completions")
 
     print("AI environment diagnostics")

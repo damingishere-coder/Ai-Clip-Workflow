@@ -205,3 +205,6 @@
 - 更新 AI 分析 Prompt，要求摘要、推荐理由和剪辑建议输出更完整、可判断价值的内容。
 - 第十二轮开发：按浏览器标注调整视频预览尺寸。
 - 片段审核页右侧预览栏从 380px 缩小到更稳的 340px，并限制播放器高度，竖屏视频会完整缩放显示，不再把页面撑出横向滚动。
+- 第十三轮开发：修复 DeepSeek 远程 AI 分析配置。
+- 远程 AI 默认配置改为 DeepSeek OpenAI-compatible Chat Completions：`https://api.deepseek.com`、`deepseek-v4-pro`、`chat_completions`，避免继续用 Responses 协议和 `gpt-5.5` 模型名请求 DeepSeek。
+- 系统状态页 AI 配置弹窗新增远程协议和 DeepSeek 模型选择；保存配置时如果检测到 DeepSeek，会自动使用 `chat_completions` 并让 Review Model 跟随 DeepSeek 模型。

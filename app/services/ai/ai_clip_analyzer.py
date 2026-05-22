@@ -166,11 +166,14 @@ def _analyze_task_transcript_in_local_chunks(
 def build_provider(provider_name: str | None = None) -> AIProvider:
     resolved = (provider_name or settings.ai_default_provider).lower()
     if resolved == "remote":
+        remote_model = settings.ai_remote_review_model or settings.ai_remote_model
+        if settings.ai_remote_model.startswith("deepseek") and not remote_model.startswith("deepseek"):
+            remote_model = settings.ai_remote_model
         return RemoteResponsesProvider(
             ProviderConfig(
                 base_url=settings.ai_remote_base_url,
                 api_key=settings.ai_remote_api_key,
-                model=settings.ai_remote_review_model or settings.ai_remote_model,
+                model=remote_model,
                 protocol=settings.ai_remote_protocol,
                 timeout_seconds=settings.ai_request_timeout_seconds,
                 responses_path=settings.ai_remote_responses_path,

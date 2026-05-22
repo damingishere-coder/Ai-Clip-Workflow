@@ -54,6 +54,8 @@ SETTING_ATTRS = {
 
 SECRET_KEYS = {"AI_REMOTE_API_KEY", "AI_LOCAL_API_KEY"}
 LOCAL_MODEL_OPTIONS = ["qwen3:8b", "gemma3:12b", "qwen3:14b"]
+REMOTE_MODEL_OPTIONS = ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"]
+REMOTE_PROTOCOL_OPTIONS = ["chat_completions", "responses"]
 
 
 def _env_path() -> Path:
@@ -184,20 +186,34 @@ def get_ai_config_context() -> dict:
         "default_provider": values["AI_DEFAULT_PROVIDER"],
         "configured_count": int(remote_ready) + int(local_ready),
         "local_model_options": LOCAL_MODEL_OPTIONS,
+        "remote_model_options": REMOTE_MODEL_OPTIONS,
+        "remote_protocol_options": REMOTE_PROTOCOL_OPTIONS,
     }
 
 
 def save_ai_config(payload: AIConfigUpdate) -> dict:
     current_values = _current_config_values()
+    remote_base_url = payload.ai_remote_base_url.strip() or "https://api.deepseek.com"
+    remote_model = payload.ai_remote_model.strip() or "deepseek-v4-pro"
+    remote_protocol = payload.ai_remote_protocol.strip() or "chat_completions"
+    if "deepseek" in remote_base_url.lower() and remote_protocol == "responses":
+        remote_protocol = "chat_completions"
+    remote_review_model = payload.ai_remote_review_model.strip() or remote_model
+    if remote_model.startswith("deepseek") and not remote_review_model.startswith("deepseek"):
+        remote_review_model = remote_model
+    remote_reasoning_effort = payload.ai_remote_reasoning_effort.strip()
+    if remote_protocol == "chat_completions" and remote_model.startswith("deepseek"):
+        remote_reasoning_effort = ""
+
     updates = {
         "AI_DEFAULT_PROVIDER": payload.ai_default_provider.strip() or "remote",
         "AI_REQUEST_TIMEOUT_SECONDS": str(payload.ai_request_timeout_seconds),
-        "AI_REMOTE_BASE_URL": payload.ai_remote_base_url.strip(),
+        "AI_REMOTE_BASE_URL": remote_base_url,
         "AI_REMOTE_API_KEY": payload.ai_remote_api_key.strip() or current_values.get("AI_REMOTE_API_KEY", ""),
-        "AI_REMOTE_MODEL": payload.ai_remote_model.strip(),
-        "AI_REMOTE_REVIEW_MODEL": payload.ai_remote_review_model.strip() or "gpt-5.5",
-        "AI_REMOTE_PROTOCOL": payload.ai_remote_protocol.strip() or "responses",
-        "AI_REMOTE_REASONING_EFFORT": payload.ai_remote_reasoning_effort.strip(),
+        "AI_REMOTE_MODEL": remote_model,
+        "AI_REMOTE_REVIEW_MODEL": remote_review_model,
+        "AI_REMOTE_PROTOCOL": remote_protocol,
+        "AI_REMOTE_REASONING_EFFORT": remote_reasoning_effort,
         "AI_REMOTE_RESPONSES_PATH": payload.ai_remote_responses_path.strip() or "/v1/responses",
         "AI_REMOTE_DISABLE_RESPONSE_STORAGE": str(payload.ai_remote_disable_response_storage).lower(),
         "AI_LOCAL_BASE_URL": payload.ai_local_base_url.strip() or "http://127.0.0.1:11434/v1",
