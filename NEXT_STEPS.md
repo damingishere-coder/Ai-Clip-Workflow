@@ -1,7 +1,7 @@
 # Next Steps
 
 ## 本次小改动
-- 已修复 DeepSeek 远程 AI 分析配置：远程默认改为 `https://api.deepseek.com`、`deepseek-v4-pro`、`chat_completions`，系统状态页可选择远程协议和 DeepSeek 模型。
+- 已按要求将 DeepSeek 远程默认模型改为 `deepseek-v4-flash`，远程地址仍为 `https://api.deepseek.com`，协议仍为 `chat_completions`。
 
 ## 当前已处理
 

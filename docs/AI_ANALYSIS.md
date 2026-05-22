@@ -18,8 +18,8 @@
 AI_DEFAULT_PROVIDER=remote
 AI_REMOTE_BASE_URL=https://api.deepseek.com
 AI_REMOTE_API_KEY=你的 DeepSeek API Key
-AI_REMOTE_MODEL=deepseek-v4-pro
-AI_REMOTE_REVIEW_MODEL=deepseek-v4-pro
+AI_REMOTE_MODEL=deepseek-v4-flash
+AI_REMOTE_REVIEW_MODEL=deepseek-v4-flash
 AI_REMOTE_PROTOCOL=chat_completions
 AI_REMOTE_REASONING_EFFORT=
 AI_REMOTE_RESPONSES_PATH=/v1/responses

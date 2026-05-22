@@ -54,7 +54,7 @@ SETTING_ATTRS = {
 
 SECRET_KEYS = {"AI_REMOTE_API_KEY", "AI_LOCAL_API_KEY"}
 LOCAL_MODEL_OPTIONS = ["qwen3:8b", "gemma3:12b", "qwen3:14b"]
-REMOTE_MODEL_OPTIONS = ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"]
+REMOTE_MODEL_OPTIONS = ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"]
 REMOTE_PROTOCOL_OPTIONS = ["chat_completions", "responses"]
 
 
@@ -194,7 +194,7 @@ def get_ai_config_context() -> dict:
 def save_ai_config(payload: AIConfigUpdate) -> dict:
     current_values = _current_config_values()
     remote_base_url = payload.ai_remote_base_url.strip() or "https://api.deepseek.com"
-    remote_model = payload.ai_remote_model.strip() or "deepseek-v4-pro"
+    remote_model = payload.ai_remote_model.strip() or "deepseek-v4-flash"
     remote_protocol = payload.ai_remote_protocol.strip() or "chat_completions"
     if "deepseek" in remote_base_url.lower() and remote_protocol == "responses":
         remote_protocol = "chat_completions"

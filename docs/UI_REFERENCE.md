@@ -65,7 +65,7 @@ docs/design/live_streaming_slicing_workflow_ui_16x9.png
 
 当前系统状态页已补充推荐运行地址 `http://127.0.0.1:8001`、AI 配置状态、任务状态统计和 AI 配置弹窗。AI 配置弹窗保存到 `.env`，API Key 输入框默认脱敏，留空会保留旧密钥。弹窗头部和底部操作区固定可见，支持点击关闭、取消、遮罩区和 ESC 关闭；本地 AI 区域已简化为 Ollama 模型下拉选择。
 
-系统状态页现在会直接展示远程 AI Base URL、协议、片段审核模型、远程 Key 是否有效，以及本地 Ollama 是否在线和已安装模型。远程 Key 仍不显示明文；如果 Key 为空或明显过短，页面会把 AI 配置标记为异常。远程 AI 默认面向 DeepSeek，推荐 `https://api.deepseek.com`、`deepseek-v4-pro` 和 `chat_completions`；本地 AI 默认推荐 `qwen3:8b`，避免 `qwen3:14b` 在当前机器上长时间超时。
+系统状态页现在会直接展示远程 AI Base URL、协议、片段审核模型、远程 Key 是否有效，以及本地 Ollama 是否在线和已安装模型。远程 Key 仍不显示明文；如果 Key 为空或明显过短，页面会把 AI 配置标记为异常。远程 AI 默认面向 DeepSeek，推荐 `https://api.deepseek.com`、`deepseek-v4-flash` 和 `chat_completions`；本地 AI 默认推荐 `qwen3:8b`，避免 `qwen3:14b` 在当前机器上长时间超时。
 
 ## 4. 当前实现状态
 
