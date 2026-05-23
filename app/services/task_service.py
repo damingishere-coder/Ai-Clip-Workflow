@@ -431,6 +431,8 @@ def list_clip_candidates(task_id: str) -> list[dict]:
 def _ai_model_name(provider_name: str) -> str:
     if provider_name == "local":
         return settings.ai_local_model
+    if provider_name == "remote":
+        return settings.ai_remote_review_model or settings.ai_remote_model
     return settings.ai_remote_model
 
 
@@ -1191,6 +1193,20 @@ def _insert_clip_candidates(task_id: str, clips: list[dict]) -> None:
         connection.commit()
 
 
+def _summarize_analysis_clips(clips: list[dict]) -> list[dict]:
+    summaries = []
+    for clip in clips:
+        summaries.append(
+            {
+                "title": clip.get("title") or "",
+                "start_time": clip.get("start_time") or "",
+                "end_time": clip.get("end_time") or "",
+                "duration_seconds": int(clip.get("duration_seconds") or 0),
+            }
+        )
+    return summaries
+
+
 def _analyze_with_provider(task_id: str, task: dict, paths: dict[str, Path], provider_name: str):
     prompt_preset = get_task_ai_prompt_preset(task_id)
     prompt_template = (prompt_preset.get("prompt_text") or "").strip()
@@ -1305,13 +1321,19 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
     message = f"AI 分析完成，生成 {len(analysis_payload['clips'])} 条候选片段。"
     if fallback_notice:
         message = f"{fallback_notice} {message}"
+    provider_label = _ai_provider_label(used_provider)
+    model_name = _ai_model_name(used_provider)
     return {
         "status": "ok",
         "message": message,
         "provider": used_provider,
+        "provider_label": provider_label,
+        "model": model_name,
         "fallback_notice": fallback_notice,
+        "analysis_summary": analysis_payload.get("analysis_summary") or "",
+        "clip_summaries": _summarize_analysis_clips(analysis_payload["clips"]),
         "analysis_path": str(paths["analysis_path"]),
-        "review_url": f"/tasks/{task_id}/clips",
+        "review_url": f"/tasks/{task_id}/clips/review",
         "task": get_task(task_id, include_video_probe=False),
         "clips": list_clip_candidates(task_id),
     }

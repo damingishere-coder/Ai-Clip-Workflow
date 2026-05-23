@@ -82,17 +82,22 @@
         <p class="eyebrow">AI Analysis</p>
         <h2>AI 分析</h2>
       </div>
-      <span class="status-pill">{{ task.candidate_count }} 条候选</span>
+      <span class="status-pill" id="ai-candidate-count-pill">{{ task.candidate_count }} 条候选</span>
     </div>
     <form id="ai-analysis-form" class="settings-form ai-prompt-form" data-task-id="{{ task.id }}">
-      <div class="prompt-preset-grid">
+      <div class="prompt-preset-tabs" role="tablist" aria-label="AI Prompt 方案">
+        {% for preset in ai_prompt_presets %}
+        {% set is_selected = preset.id == (task.ai_prompt_preset_id or "preset_001") %}
+        <label class="prompt-preset-tab {{ 'active' if is_selected else '' }}" data-prompt-preset-tab data-preset-id="{{ preset.id }}" role="tab">
+          <input type="radio" name="ai_prompt_preset_id" value="{{ preset.id }}" {{ "checked" if is_selected else "" }}>
+          <span>{{ preset.slot }} 号</span>
+        </label>
+        {% endfor %}
+      </div>
+      <div class="prompt-preset-panels">
         {% for preset in ai_prompt_presets %}
         {% set is_selected = preset.id == (task.ai_prompt_preset_id or "preset_001") %}
         <article class="prompt-preset-card {{ 'active' if is_selected else '' }}" data-prompt-preset-card data-preset-id="{{ preset.id }}" data-preset-slot="{{ preset.slot }}">
-          <label class="prompt-preset-choice">
-            <input type="radio" name="ai_prompt_preset_id" value="{{ preset.id }}" {{ "checked" if is_selected else "" }}>
-            <span>{{ preset.slot }} 号方案</span>
-          </label>
           <label>
             <span>方案名称</span>
             <input type="text" name="preset_name_{{ preset.id }}" value="{{ preset.name }}" maxlength="80">
@@ -111,6 +116,7 @@
         <button class="secondary-button js-ai-process-action" type="button" data-provider="local">本地 AI 分析</button>
       </div>
       <p class="form-hint" id="ai-process-result"></p>
+      <div class="ai-analysis-result-card" id="ai-analysis-summary" hidden></div>
     </form>
   </article>
 

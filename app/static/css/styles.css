@@ -1556,53 +1556,135 @@ button:disabled {
   overflow: visible;
 }
 
-.prompt-preset-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+.prompt-preset-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.prompt-preset-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 86px;
+  min-height: 42px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  color: var(--muted);
+  font-weight: 800;
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.prompt-preset-tab input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.prompt-preset-tab.active {
+  border-color: rgba(37, 111, 255, 0.36);
+  background: linear-gradient(180deg, #ffffff, #f7fbff);
+  color: var(--blue);
+  box-shadow: 0 -6px 18px rgba(37, 111, 255, 0.08);
+}
+
+.prompt-preset-panels {
+  padding-top: 16px;
 }
 
 .prompt-preset-card {
   display: grid;
-  gap: 12px;
+  gap: 14px;
   min-width: 0;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.72);
+  padding: 16px;
+  border: 1px solid rgba(37, 111, 255, 0.2);
+  border-radius: 0 8px 8px 8px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(247, 251, 255, 0.72));
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
 }
 
-.prompt-preset-card.active {
-  border-color: rgba(37, 111, 255, 0.48);
-  background: linear-gradient(180deg, #ffffff, #f7fbff);
-  box-shadow: 0 10px 24px rgba(37, 111, 255, 0.1);
-}
-
-.prompt-preset-choice {
-  display: flex;
-  grid-auto-flow: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  min-height: 28px;
-}
-
-.prompt-preset-choice input {
-  width: auto;
-  min-height: auto;
-}
-
-.prompt-preset-choice span {
-  color: var(--blue);
-  font-weight: 800;
+.prompt-preset-card[hidden] {
+  display: none;
 }
 
 .prompt-preset-card textarea {
-  min-height: 260px;
+  min-height: 360px;
   resize: vertical;
   font-family: "SFMono-Regular", Consolas, "Microsoft YaHei UI", monospace;
   font-size: 13px;
   line-height: 1.65;
+}
+
+.ai-analysis-result-card {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid rgba(37, 111, 255, 0.22);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff, #f7fbff);
+  box-shadow: 0 14px 32px rgba(37, 111, 255, 0.08);
+}
+
+.ai-analysis-result-card[hidden] {
+  display: none;
+}
+
+.ai-analysis-result-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ai-analysis-result-header h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.ai-analysis-result-message {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.ai-analysis-result-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(37, 111, 255, 0.08);
+}
+
+.ai-analysis-result-meta span {
+  color: var(--muted);
+}
+
+.ai-analysis-result-list {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-analysis-result-item {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.ai-analysis-result-item span {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .modal-actions {
@@ -1834,9 +1916,24 @@ body.transcript-drawer-open .main-panel {
   .split-layout,
   .review-layout,
   .review-task-row,
-  .prompt-preset-grid,
   .review-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .prompt-preset-tabs,
+  .ai-analysis-result-header,
+  .ai-analysis-result-meta {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .prompt-preset-tab {
+    border-radius: 8px;
+    border: 1px solid var(--line);
+  }
+
+  .prompt-preset-card {
+    border-radius: 8px;
   }
 
   .process-panel,

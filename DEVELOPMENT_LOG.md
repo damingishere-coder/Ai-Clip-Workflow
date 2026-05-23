@@ -1,5 +1,21 @@
 # Development Log
 
+## 2026-05-23 Ai分析UI修改和审核问题修改
+
+- 任务详情页的 AI Prompt 方案从三张并排卡片改为文件夹标签式布局，顶部只显示 1、2、3 号方案，下面只展示当前选中方案的名称和可拉长 Prompt 输入框。
+- AI 分析完成后不再立即刷新页面，而是在 AI 分析区域下方显示本次选取结果摘要，包括实际 AI 来源 / 模型、候选数量、每条片段标题、开始时间、结束时间和视频长度。
+- AI 分析结果摘要新增“转到片段审核”按钮，可直接进入当前任务的片段审核页。
+- AI 分析接口补充返回 `provider_label`、`model`、`analysis_summary`、`clip_summaries` 和 `/clips/review` 审核地址；远程失败自动降级本地时会把原因返回给页面。
+- 片段审核页继续读取 `analysis/candidate_clips.json` 中的 `analysis_meta` 展示 AI 来源；如果远程不可用后自动降级，审核页显示本地 Ollama 属于实际执行结果。
+
+## 2026-05-23 Docker 名称统一与旧镜像清理
+
+- `docker-compose.yml` 新增 Compose 项目名 `live-streaming-slicing-workflow`，避免 Docker Desktop 继续按目录名显示为 `newproject2`。
+- `workflow` 服务新增固定镜像名 `live-streaming-slicing-workflow:latest`，后续重新构建会覆盖这个明确命名的镜像，不再继续生成 `newproject2-workflow`。
+- 保留容器名 `live-streaming-slicing-workflow`、端口 `8001:8001`、项目内数据库挂载和 E 盘任务产物挂载，避免影响已有数据和视频文件。
+- 确认 Docker Desktop 中多个 2.39GB 的 `<none>` 主要来自历史重新构建留下的悬空旧镜像；普通启动不会每次复制一份 2GB 项目内容。
+- 本轮清理策略只处理旧 Compose 项目资源、悬空镜像和无用构建缓存，不删除当前可运行镜像、数据库、任务目录或 E 盘产物。
+
 ## 2026-05-23 Ai分析prompt制定
 - 任务详情页的“AI 偏好”升级为“AI Prompt 方案”：提供 1、2、3 号全局共用方案卡片，可编辑方案名称和完整 Prompt。
 - 新增全局 `ai_prompt_presets` 表，并为任务增加当前选中的 `ai_prompt_preset_id`；数据库初始化时自动写入 1 号默认直播切片分析专家 Prompt。

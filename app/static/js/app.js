@@ -201,18 +201,94 @@ function updateWorkflowButtons(data) {
 const aiAnalysisForm = document.querySelector("#ai-analysis-form");
 const saveAiPromptsButton = document.querySelector("#save-ai-prompts-button");
 const aiProcessResult = document.querySelector("#ai-process-result");
+const aiAnalysisSummary = document.querySelector("#ai-analysis-summary");
+const aiCandidateCountPill = document.querySelector("#ai-candidate-count-pill");
 
 function getSelectedPromptPresetCard() {
   if (!aiAnalysisForm) return null;
   const selected = aiAnalysisForm.querySelector("input[name='ai_prompt_preset_id']:checked");
-  return selected ? selected.closest("[data-prompt-preset-card]") : null;
+  if (!selected) return null;
+  return aiAnalysisForm.querySelector(`[data-prompt-preset-card][data-preset-id='${selected.value}']`);
 }
 
 function updatePromptPresetCards() {
-  document.querySelectorAll("[data-prompt-preset-card]").forEach((card) => {
-    const radio = card.querySelector("input[name='ai_prompt_preset_id']");
-    card.classList.toggle("active", Boolean(radio?.checked));
+  const selected = aiAnalysisForm?.querySelector("input[name='ai_prompt_preset_id']:checked");
+  const selectedPresetId = selected?.value || "";
+  document.querySelectorAll("[data-prompt-preset-tab]").forEach((tab) => {
+    const radio = tab.querySelector("input[name='ai_prompt_preset_id']");
+    const isActive = radio?.value === selectedPresetId;
+    tab.classList.toggle("active", isActive);
+    tab.setAttribute("aria-selected", isActive ? "true" : "false");
   });
+  document.querySelectorAll("[data-prompt-preset-card]").forEach((card) => {
+    const isActive = card.dataset.presetId === selectedPresetId;
+    card.classList.toggle("active", isActive);
+    card.hidden = !isActive;
+  });
+}
+
+function formatClipDuration(seconds) {
+  const totalSeconds = Number(seconds) || 0;
+  const minutes = Math.floor(totalSeconds / 60);
+  const restSeconds = totalSeconds % 60;
+  if (minutes <= 0) return `${restSeconds} 秒`;
+  return `${minutes} 分 ${String(restSeconds).padStart(2, "0")} 秒`;
+}
+
+function renderAiAnalysisSummary(data) {
+  if (!aiAnalysisSummary) return;
+  const clips = Array.isArray(data.clips) ? data.clips : [];
+  aiAnalysisSummary.hidden = false;
+  aiAnalysisSummary.replaceChildren();
+
+  const header = document.createElement("div");
+  header.className = "ai-analysis-result-header";
+  const titleWrap = document.createElement("div");
+  const eyebrow = document.createElement("p");
+  eyebrow.className = "eyebrow";
+  eyebrow.textContent = "Analysis Result";
+  const title = document.createElement("h3");
+  title.textContent = "本次 AI 选取结果";
+  titleWrap.append(eyebrow, title);
+  const source = document.createElement("span");
+  source.className = "status-pill";
+  source.textContent = data.provider_label && data.model ? `${data.provider_label} · 模型 ${data.model}` : "AI 分析完成";
+  header.append(titleWrap, source);
+
+  const message = document.createElement("p");
+  message.className = "ai-analysis-result-message";
+  message.textContent = data.fallback_notice || data.analysis_summary || data.message || "AI 分析已完成。";
+
+  const meta = document.createElement("div");
+  meta.className = "ai-analysis-result-meta";
+  const count = document.createElement("strong");
+  count.textContent = `${clips.length} 条候选片段`;
+  const provider = document.createElement("span");
+  provider.textContent = data.fallback_notice ? "远程失败后已自动改用本地 AI" : "已按当前 Prompt 生成候选内容";
+  meta.append(count, provider);
+
+  const list = document.createElement("div");
+  list.className = "ai-analysis-result-list";
+  clips.forEach((clip, index) => {
+    const item = document.createElement("article");
+    item.className = "ai-analysis-result-item";
+    const itemTitle = document.createElement("strong");
+    itemTitle.textContent = `${String(index + 1).padStart(2, "0")} · ${clip.title || "未命名片段"}`;
+    const itemMeta = document.createElement("span");
+    itemMeta.textContent = `视频长度 ${formatClipDuration(clip.duration_seconds)} · ${clip.start_time || "--"} - ${clip.end_time || "--"}`;
+    item.append(itemTitle, itemMeta);
+    list.append(item);
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "button-row align-end";
+  const reviewLink = document.createElement("a");
+  reviewLink.className = "primary-button";
+  reviewLink.href = data.review_url || `/tasks/${aiAnalysisForm?.dataset.taskId || ""}/clips/review`;
+  reviewLink.textContent = "转到片段审核";
+  actions.append(reviewLink);
+
+  aiAnalysisSummary.append(header, message, meta, list, actions);
 }
 
 async function saveTaskAiPromptSettings() {
@@ -262,6 +338,11 @@ async function saveTaskAiPromptSettings() {
 if (aiAnalysisForm) {
   aiAnalysisForm.querySelectorAll("input[name='ai_prompt_preset_id']").forEach((radio) => {
     radio.addEventListener("change", updatePromptPresetCards);
+  });
+  aiAnalysisForm.querySelectorAll("[data-prompt-preset-card] input[type='text']").forEach((input) => {
+    input.addEventListener("input", () => {
+      if (aiProcessResult) aiProcessResult.textContent = "Prompt 方案内容已修改，分析前会自动保存。";
+    });
   });
   updatePromptPresetCards();
 }
@@ -315,8 +396,11 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
       if (!response.ok) {
         throw new Error(data.detail || "AI 分析失败");
       }
-      if (aiProcessResult) aiProcessResult.textContent = data.message || "AI 分析完成，正在刷新页面...";
-      window.location.reload();
+      if (aiProcessResult) aiProcessResult.textContent = data.message || "AI 分析完成。";
+      if (aiCandidateCountPill && Array.isArray(data.clips)) {
+        aiCandidateCountPill.textContent = `${data.clips.length} 条候选`;
+      }
+      renderAiAnalysisSummary(data);
     } catch (error) {
       if (aiProcessResult) aiProcessResult.textContent = `AI 分析失败：${error.message}`;
     } finally {
