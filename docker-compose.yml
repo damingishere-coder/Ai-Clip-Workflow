@@ -1,7 +1,11 @@
+name: live-streaming-slicing-workflow
+
 services:
   workflow:
     build: .
+    image: live-streaming-slicing-workflow:latest
     container_name: live-streaming-slicing-workflow
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir /app/app --reload-dir /app/prompts
     ports:
       - "8001:8001"
     env_file:
@@ -16,6 +20,8 @@ services:
       TRANSCRIPTION_DEVICE: cpu
       TRANSCRIPTION_COMPUTE_TYPE: int8
     volumes:
+      - ./app:/app/app
+      - ./prompts:/app/prompts
       - ./data:/app/data
       - E:/直播间切片工作流存储:/workspace/tasks
     restart: unless-stopped

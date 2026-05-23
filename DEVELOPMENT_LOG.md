@@ -8,6 +8,9 @@
 - AI 分析接口补充返回 `provider_label`、`model`、`analysis_summary`、`clip_summaries` 和 `/clips/review` 审核地址；远程失败自动降级本地时会把原因返回给页面。
 - 片段审核页继续读取 `analysis/candidate_clips.json` 中的 `analysis_meta` 展示 AI 来源；如果远程不可用后自动降级，审核页显示本地 Ollama 属于实际执行结果。
 - 远程分析按钮文案改为“DeepSeek AI 分析”，本地 `.env` 已按 DeepSeek OpenAI-compatible 配置更新为 `https://api.deepseek.com`、`deepseek-v4-flash`、`chat_completions`，并已通过远程连通性测试。
+- 更新全局静态资源版本号，避免 Docker 重建后浏览器继续使用旧版 CSS / JS 缓存，导致 AI Prompt 标签页仍按旧三列样式显示。
+- Docker 本地开发模式改为挂载 `app/` 和 `prompts/` 到容器内，并使用 `uvicorn --reload` 启动；后续修改页面、样式、JS、Python 或 Prompt 后，刷新网页即可看到，Python 改动会自动重载服务。
+- `/static` 静态资源增加本地 no-cache 响应头，避免浏览器继续使用旧 CSS / JS。
 
 ## 2026-05-23 Docker 名称统一与旧镜像清理
 
