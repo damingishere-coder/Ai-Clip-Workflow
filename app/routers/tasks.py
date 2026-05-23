@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query
 from app.models.task import (
     ClipCandidateBatchUpdate,
     ClipCandidateUpdate,
+    SubtitleStyleUpdate,
     TaskAIPreferenceUpdate,
     TaskAIPromptPresetUpdate,
     TaskCandidateClipCountUpdate,
@@ -214,14 +215,6 @@ async def get_clip_transcript_excerpt(task_id: str, clip_id: str) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/{task_id}/clips/generate")
-async def generate_clips_placeholder(task_id: str) -> dict:
-    try:
-        return task_service.request_clip_generation_placeholder(task_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
 @router.post("/{task_id}/process/cuts")
 async def process_video_cuts(task_id: str) -> dict:
     try:
@@ -231,4 +224,22 @@ async def process_video_cuts(task_id: str) -> dict:
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/output-clips/{output_clip_id}/subtitles")
+async def render_output_clip_subtitles(task_id: str, output_clip_id: str) -> dict:
+    try:
+        return task_service.render_subtitles_for_output_clip(task_id, output_clip_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/subtitle-style")
+async def save_subtitle_style(payload: SubtitleStyleUpdate) -> dict:
+    try:
+        return task_service.update_default_subtitle_style(payload)
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

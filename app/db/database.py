@@ -111,13 +111,46 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(task_id) REFERENCES tasks(id)
             );
+
+            CREATE TABLE IF NOT EXISTS subtitle_style_presets (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                font_family TEXT NOT NULL DEFAULT 'Microsoft YaHei',
+                font_size INTEGER NOT NULL DEFAULT 42,
+                position TEXT NOT NULL DEFAULT 'bottom_center',
+                font_color TEXT NOT NULL DEFAULT '#ffffff',
+                stroke_color TEXT NOT NULL DEFAULT '#111827',
+                shadow_enabled INTEGER NOT NULL DEFAULT 1,
+                is_default INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS subtitle_jobs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                output_clip_id TEXT NOT NULL,
+                style_preset_id TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                subtitle_file_path TEXT,
+                output_file_path TEXT,
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES tasks(id),
+                FOREIGN KEY(output_clip_id) REFERENCES output_clip(id),
+                FOREIGN KEY(style_preset_id) REFERENCES subtitle_style_presets(id)
+            );
             """
         )
         _migrate_tasks_table(connection)
         _migrate_clip_candidates_table(connection)
         _migrate_output_clip_table(connection)
         _migrate_ai_analysis_runs_table(connection)
+        _migrate_subtitle_style_presets_table(connection)
+        _migrate_subtitle_jobs_table(connection)
         _seed_ai_prompt_presets(connection)
+        _seed_subtitle_style_preset(connection)
         connection.commit()
 
 
@@ -308,6 +341,49 @@ def _migrate_ai_analysis_runs_table(connection: sqlite3.Connection) -> None:
             connection.execute(statement)
 
 
+def _migrate_subtitle_style_presets_table(connection: sqlite3.Connection) -> None:
+    columns = _get_table_columns(connection, "subtitle_style_presets")
+    if not columns:
+        return
+
+    migrations = {
+        "name": "ALTER TABLE subtitle_style_presets ADD COLUMN name TEXT NOT NULL DEFAULT '默认字幕样式'",
+        "font_family": "ALTER TABLE subtitle_style_presets ADD COLUMN font_family TEXT NOT NULL DEFAULT 'Microsoft YaHei'",
+        "font_size": "ALTER TABLE subtitle_style_presets ADD COLUMN font_size INTEGER NOT NULL DEFAULT 42",
+        "position": "ALTER TABLE subtitle_style_presets ADD COLUMN position TEXT NOT NULL DEFAULT 'bottom_center'",
+        "font_color": "ALTER TABLE subtitle_style_presets ADD COLUMN font_color TEXT NOT NULL DEFAULT '#ffffff'",
+        "stroke_color": "ALTER TABLE subtitle_style_presets ADD COLUMN stroke_color TEXT NOT NULL DEFAULT '#111827'",
+        "shadow_enabled": "ALTER TABLE subtitle_style_presets ADD COLUMN shadow_enabled INTEGER NOT NULL DEFAULT 1",
+        "is_default": "ALTER TABLE subtitle_style_presets ADD COLUMN is_default INTEGER NOT NULL DEFAULT 1",
+        "created_at": "ALTER TABLE subtitle_style_presets ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+        "updated_at": "ALTER TABLE subtitle_style_presets ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+    }
+    for column, statement in migrations.items():
+        if column not in columns:
+            connection.execute(statement)
+
+
+def _migrate_subtitle_jobs_table(connection: sqlite3.Connection) -> None:
+    columns = _get_table_columns(connection, "subtitle_jobs")
+    if not columns:
+        return
+
+    migrations = {
+        "task_id": "ALTER TABLE subtitle_jobs ADD COLUMN task_id TEXT",
+        "output_clip_id": "ALTER TABLE subtitle_jobs ADD COLUMN output_clip_id TEXT",
+        "style_preset_id": "ALTER TABLE subtitle_jobs ADD COLUMN style_preset_id TEXT",
+        "status": "ALTER TABLE subtitle_jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'",
+        "subtitle_file_path": "ALTER TABLE subtitle_jobs ADD COLUMN subtitle_file_path TEXT",
+        "output_file_path": "ALTER TABLE subtitle_jobs ADD COLUMN output_file_path TEXT",
+        "error_message": "ALTER TABLE subtitle_jobs ADD COLUMN error_message TEXT",
+        "created_at": "ALTER TABLE subtitle_jobs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+        "updated_at": "ALTER TABLE subtitle_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+    }
+    for column, statement in migrations.items():
+        if column not in columns:
+            connection.execute(statement)
+
+
 def _seed_ai_prompt_presets(connection: sqlite3.Connection) -> None:
     now = datetime.now().isoformat(timespec="seconds")
     default_prompt = ""
@@ -344,3 +420,35 @@ def _seed_ai_prompt_presets(connection: sqlite3.Connection) -> None:
             """,
             (preset_id, slot, name, prompt_text, is_default, now, now),
         )
+
+
+def _seed_subtitle_style_preset(connection: sqlite3.Connection) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    existing = connection.execute(
+        "SELECT id FROM subtitle_style_presets WHERE id = ?",
+        ("default",),
+    ).fetchone()
+    if existing:
+        return
+    connection.execute(
+        """
+        INSERT INTO subtitle_style_presets (
+            id, name, font_family, font_size, position, font_color,
+            stroke_color, shadow_enabled, is_default, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "default",
+            "默认字幕样式",
+            "Microsoft YaHei",
+            42,
+            "bottom_center",
+            "#ffffff",
+            "#111827",
+            1,
+            1,
+            now,
+            now,
+        ),
+    )

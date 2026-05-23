@@ -2019,6 +2019,10 @@ body.transcript-drawer-open .main-panel {
   gap: 12px;
 }
 
+.subtitle-output-grid-wide {
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+}
+
 .subtitle-output-card {
   display: grid;
   gap: 12px;
@@ -2036,6 +2040,67 @@ body.transcript-drawer-open .main-panel {
   border-radius: 8px;
   background: #111927;
   object-fit: contain;
+}
+
+.subtitled-preview {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.subtitled-preview video {
+  height: 180px;
+}
+
+.cut-edit-panel {
+  width: min(760px, 100%);
+}
+
+.cut-edit-body {
+  display: grid;
+  gap: 16px;
+  overflow: auto;
+}
+
+.cut-edit-body video {
+  width: 100%;
+  max-height: 58vh;
+  border: 1px solid #1d2738;
+  border-radius: 8px;
+  background: #111927;
+  object-fit: contain;
+}
+
+.iphone-trim-strip {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  height: 74px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f5f8fc;
+}
+
+.iphone-trim-strip span {
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.35), transparent),
+    #d7e0ef;
+}
+
+.trim-window {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 18%;
+  width: 48%;
+  border: 3px solid var(--blue);
+  border-radius: 8px;
+  box-shadow: 0 0 0 999px rgba(15, 23, 42, 0.08);
+  cursor: grab;
 }
 
 .compact-video-placeholder {

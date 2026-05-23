@@ -1,5 +1,25 @@
 # Development Log
 
+## 2026-05-24 自动加字幕功能完善
+- 将 `/subtitles` 调整为“字幕任务列表”一级页面，切片生成后按任务分组展示，用户需要先进入具体任务再处理字幕，避免不同视频混在一个工作台里。
+- 新增 `/subtitles/{task_id}` 单任务字幕工作台，展示该任务下每条输出切片、原视频预览、字幕状态、带字幕成片预览和后续推送入口。
+- 新增 `subtitle_style_presets` 和 `subtitle_jobs` 数据表，字幕样式从浏览器本地保存改为写入 SQLite，字幕生成状态也会落库。
+- 自动加字幕已接入真实 FFmpeg 流程：从任务转写文本按切片时间范围生成 `.ass` 字幕文件，再输出到任务目录 `06_subtitled`。
+- 新增带字幕视频访问接口 `/media/tasks/{task_id}/subtitled-clips/{output_clip_id}`，页面可直接对比原切片和带字幕成片。
+- “修改剪切”改为弹出剪切预览窗口，提供类似手机剪切时间轴的滑动预览入口；真正保存起止时间仍回到片段审核页执行。
+- 修复 Windows 本地服务读取 Docker 路径 `/workspace/tasks/...` 的兼容问题，会自动映射回当前任务存储目录。
+- 已验证：`python -m compileall app` 通过；`/subtitles` 和 `/subtitles/37601f8548fd` 页面返回 200；任务 `37601f8548fd` 已成功生成 1 条带字幕视频并能通过媒体接口访问。
+
+## 2026-05-24 v1.1 清理与呈现优化
+
+- 将 FastAPI 版本号更新为 `1.1.0`，侧边栏文案更新为“v1.1 本地切片全流程”。
+- 删除根目录重复 UI 图片副本，保留 `docs/design/live_streaming_slicing_workflow_ui_16x9.png` 作为正式设计参考。
+- 移除旧的 `/api/tasks/{task_id}/clips/generate` 切片占位接口，页面继续统一调用真实切割接口 `/api/tasks/{task_id}/process/cuts`。
+- 删除早期未引用的 `app/services/ai_clip_service.py` 占位服务，当前 AI 分析以 `app/services/ai/` 为主。
+- 工作台、任务列表和字幕推送页新增或强化输出切片、待加字幕、待推送数据呈现。
+- 重写 `docs/DATABASE_SCHEMA.md`，修复乱码并同步当前 `tasks`、`clip_candidates`、`output_clip`、AI Prompt 和 AI 分析历史表结构。
+- 同步更新 README、UI 参考、任务流、架构说明、片段审核说明和下一步计划。
+
 ## 2026-05-23 新增字幕、推送功能 demo
 
 - 新增 `/subtitles` 字幕与推送工作台，切片生成后的 `output_clip` 记录会进入这里作为后续字幕工作流队列。

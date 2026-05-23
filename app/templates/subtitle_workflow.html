@@ -2,22 +2,26 @@
 {% block title %}字幕推送 - {{ settings.app_name }}{% endblock %}
 
 {% block content %}
+{% if subtitle_task_mode %}
 <section class="page-heading">
   <div>
-    <p class="eyebrow">Subtitle & Publish</p>
-    <h1>字幕与推送工作台</h1>
-    <p>切片生成后，短视频会进入这里继续做视频检查、字幕样式、打码处理和一键推送配置。</p>
+    <p class="eyebrow">Subtitle Task</p>
+    <h1>{{ task.title }} · 字幕工作台</h1>
+    <p>每个任务单独处理字幕，方便区分不同视频的切片、字幕状态和后续推送准备。</p>
   </div>
-  <a class="secondary-button" href="/clips">返回片段审核</a>
+  <div class="button-row">
+    <a class="secondary-button" href="/subtitles">返回字幕任务列表</a>
+    <a class="secondary-button" href="/tasks/{{ task.id }}/clips/review">返回片段审核</a>
+  </div>
 </section>
 
-<section class="stat-grid review-stat-grid" aria-label="字幕推送统计">
+<section class="stat-grid review-stat-grid" aria-label="字幕任务统计">
   {% for item in stats %}
   <article class="stat-card tone-{{ item.tone }}">
     <div class="stat-icon"></div>
     <span>{{ item.label }}</span>
     <strong>{{ item.value }}</strong>
-    <small>Demo 阶段统计</small>
+    <small>{{ task.subtitle_stage }}</small>
   </article>
   {% endfor %}
 </section>
@@ -27,54 +31,47 @@
     <section class="panel">
       <div class="panel-header">
         <div>
-          <p class="eyebrow">Queue</p>
-          <h2>切片后视频队列</h2>
+          <p class="eyebrow">Clips</p>
+          <h2>本任务切片字幕队列</h2>
         </div>
-        <span class="status-pill tone-blue">{{ tasks|length }} 个任务</span>
+        <span class="status-pill tone-{{ task.subtitle_tone }}">{{ task.subtitle_stage }}</span>
       </div>
 
-      {% if tasks %}
-      <div class="subtitle-task-list">
-        {% for task in tasks %}
-        <article class="subtitle-task-card">
-          <div class="subtitle-task-head">
-            <div>
-              <span class="status-pill tone-{{ task.subtitle_tone }}">{{ task.subtitle_stage }}</span>
-              <h3>{{ task.title }}</h3>
-              <p>任务 ID：{{ task.id }} · 平台：{{ task.platform_label }} · 切片输出 {{ task.output_clips|length }} 条</p>
-            </div>
-            <div class="button-row">
-              <a class="secondary-button compact-button" href="/tasks/{{ task.id }}">详情</a>
-              <a class="secondary-button compact-button" href="/tasks/{{ task.id }}/clips/review">回到审核</a>
-            </div>
+      {% if output_clips %}
+      <div class="subtitle-output-grid subtitle-output-grid-wide">
+        {% for output in output_clips %}
+        <article class="subtitle-output-card" data-subtitle-output-card data-task-id="{{ task.id }}" data-output-id="{{ output.id }}">
+          {% if output.file_exists and output.status == "completed" %}
+          <video controls preload="metadata" src="{{ output.media_url }}"></video>
+          {% else %}
+          <div class="video-placeholder compact-video-placeholder">
+            <strong>无法预览原切片</strong>
+            <span>{{ output.error_message or "本地切片文件不存在" }}</span>
           </div>
-
-          <div class="subtitle-output-grid">
-            {% for output in task.output_clips %}
-            <article class="subtitle-output-card">
-              {% if output.file_exists and output.status == "completed" %}
-              <video controls preload="metadata" src="{{ output.media_url }}"></video>
-              {% else %}
-              <div class="video-placeholder compact-video-placeholder">
-                <strong>无法预览</strong>
-                <span>{{ output.error_message or "本地切片文件不存在" }}</span>
-              </div>
-              {% endif %}
-              <div class="subtitle-output-body">
-                <strong>{{ output.output_file_name or "未命名切片" }}</strong>
-                <p class="path-text">{{ output.output_file_path or "无输出路径" }}</p>
-                <div class="subtitle-output-actions">
-                  <span class="status-pill">{{ output.subtitle_stage }}</span>
-                  <span class="status-pill">{{ output.publish_stage }}</span>
-                </div>
-                <div class="button-row">
-                  <button class="secondary-button compact-button js-demo-toast" type="button" data-message="删除切片会在后续版本接入，目前请先回到片段审核确认。">删除</button>
-                  <a class="secondary-button compact-button" href="/tasks/{{ task.id }}/clips/review">修改剪切</a>
-                  <button class="primary-button compact-button js-demo-toast" type="button" data-message="一键自动加字幕会在接入字幕引擎后执行。">自动加字幕</button>
-                </div>
-              </div>
-            </article>
-            {% endfor %}
+          {% endif %}
+          <div class="subtitle-output-body">
+            <strong>{{ output.output_file_name or "未命名切片" }}</strong>
+            <p class="path-text">{{ output.output_file_path or "无输出路径" }}</p>
+            <div class="subtitle-output-actions">
+              <span class="status-pill" data-subtitle-status>{{ output.subtitle_status_label }}</span>
+              <span class="status-pill">{{ output.publish_stage }}</span>
+            </div>
+            {% if output.subtitled_file_exists %}
+            <div class="subtitled-preview">
+              <p class="eyebrow">Subtitled Preview</p>
+              <video controls preload="metadata" src="{{ output.subtitled_media_url }}"></video>
+            </div>
+            {% endif %}
+            {% if output.subtitle_error_message %}
+            <p class="error-text" data-subtitle-error>{{ output.subtitle_error_message }}</p>
+            {% else %}
+            <p class="form-hint" data-subtitle-error></p>
+            {% endif %}
+            <div class="button-row">
+              <button class="secondary-button compact-button js-demo-toast" type="button" data-message="删除切片会在后续版本接入二次确认；当前请先回到片段审核调整。">删除</button>
+              <button class="secondary-button compact-button" type="button" data-cut-edit-trigger onclick="window.openSubtitleCutEdit && window.openSubtitleCutEdit(this)">修改剪切</button>
+              <button class="primary-button compact-button" type="button" data-render-subtitle onclick="window.renderSubtitleClip && window.renderSubtitleClip(this)">自动加字幕</button>
+            </div>
           </div>
         </article>
         {% endfor %}
@@ -82,9 +79,9 @@
       {% else %}
       <article class="empty-state">
         <p class="eyebrow">Empty</p>
-        <h2>还没有进入字幕流程的切片</h2>
-        <p>请先在片段审核页点击“生成切片”。生成成功后，切片视频会自动出现在这个工作台里。</p>
-        <a class="primary-button" href="/clips">去片段审核</a>
+        <h2>这个任务还没有生成切片</h2>
+        <p>请先回到片段审核页点击“生成切片”。成功后，这里会出现每条短视频的字幕处理入口。</p>
+        <a class="primary-button" href="/tasks/{{ task.id }}/clips/review">去片段审核</a>
       </article>
       {% endif %}
     </section>
@@ -102,88 +99,196 @@
         <label>
           <span>字体</span>
           <select class="control" name="font_family">
-            <option>思源黑体 / 系统默认</option>
-            <option>微软雅黑</option>
-            <option>阿里巴巴普惠体</option>
+            <option value="Microsoft YaHei" {% if subtitle_style.font_family == "Microsoft YaHei" %}selected{% endif %}>微软雅黑 / 系统默认</option>
+            <option value="SimHei" {% if subtitle_style.font_family == "SimHei" %}selected{% endif %}>黑体</option>
+            <option value="Arial" {% if subtitle_style.font_family == "Arial" %}selected{% endif %}>Arial</option>
           </select>
         </label>
         <div class="form-row">
           <label>
             <span>字号</span>
-            <input type="number" name="font_size" value="42" min="20" max="88">
+            <input type="number" name="font_size" value="{{ subtitle_style.font_size }}" min="20" max="88">
           </label>
           <label>
             <span>位置</span>
             <select class="control" name="position">
-              <option>底部居中</option>
-              <option>中下方</option>
-              <option>顶部居中</option>
+              <option value="bottom_center" {% if subtitle_style.position == "bottom_center" %}selected{% endif %}>底部居中</option>
+              <option value="middle_lower" {% if subtitle_style.position == "middle_lower" %}selected{% endif %}>中下方</option>
+              <option value="top_center" {% if subtitle_style.position == "top_center" %}selected{% endif %}>顶部居中</option>
             </select>
           </label>
         </div>
         <div class="form-row">
           <label>
             <span>文字颜色</span>
-            <input type="color" name="font_color" value="#ffffff">
+            <input type="color" name="font_color" value="{{ subtitle_style.font_color }}">
           </label>
           <label>
             <span>描边颜色</span>
-            <input type="color" name="stroke_color" value="#111827">
+            <input type="color" name="stroke_color" value="{{ subtitle_style.stroke_color }}">
           </label>
         </div>
         <label class="toggle-line">
-          <input type="checkbox" name="shadow_enabled" checked>
+          <input type="checkbox" name="shadow_enabled" {% if subtitle_style.shadow_enabled %}checked{% endif %}>
           <span>启用阴影和描边，适合短视频平台观看</span>
         </label>
         <button class="primary-button" type="submit">保存字幕样式</button>
-        <p class="form-hint" id="subtitle-style-result">样式会先保存在当前浏览器，后续接入后端模板表。</p>
+        <p class="form-hint" id="subtitle-style-result">样式会保存到 SQLite，后续自动加字幕会使用这套模板。</p>
       </form>
-    </section>
-
-    <section class="panel">
-      <div class="panel-header compact">
-        <div>
-          <p class="eyebrow">Mosaic</p>
-          <h2>打码设置</h2>
-        </div>
-      </div>
-      <div class="compact-list mosaic-demo-list">
-        <li><strong>打码区域</strong><span>支持后续添加人脸、昵称、手机号、二维码区域。</span></li>
-        <li><strong>强度</strong><span>当前 demo 默认中等马赛克，后续用 FFmpeg filter 接入。</span></li>
-        <li><strong>预览</strong><span>先在视频队列里人工检查，再批量执行。</span></li>
-      </div>
-      <button class="secondary-button js-demo-toast" type="button" data-message="打码区域编辑器会在下一阶段接入视频画面标注。">添加打码区域</button>
     </section>
 
     <section class="panel">
       <div class="panel-header compact">
         <div>
           <p class="eyebrow">Publish</p>
-          <h2>一键推送配置</h2>
+          <h2>后续推送配置</h2>
         </div>
       </div>
-      <form class="settings-form compact-settings-form" id="publish-demo-form">
-        <div class="publish-account-row">
-          <span class="platform-badge douyin">抖音</span>
-          <strong>待登录</strong>
-          <button class="secondary-button compact-button js-demo-toast" type="button" data-message="抖音账号登录会在后续通过浏览器会话或官方接口接入。">保存账号</button>
-        </div>
-        <div class="publish-account-row">
-          <span class="platform-badge bilibili">B站</span>
-          <strong>待登录</strong>
-          <button class="secondary-button compact-button js-demo-toast" type="button" data-message="B站账号登录会在后续通过浏览器会话或官方接口接入。">保存账号</button>
-        </div>
-        <label>
-          <span>默认标题模板</span>
-          <input type="text" name="title_template" value="{{ '{{片段标题}}' }}｜直播高光切片">
-        </label>
-        <label>
-          <span>默认简介</span>
-          <textarea name="description_template" rows="4">由本地直播切片工作流自动生成，发布前可人工复核。</textarea>
-        </label>
-        <button class="primary-button js-demo-toast" type="button" data-message="一键推送按钮已预留，真实发布会在账号和平台接口确认后接入。">一键推送 Demo</button>
-      </form>
+      <div class="compact-list mosaic-demo-list">
+        <li><strong>打码</strong><span>区域编辑仍保留为后续功能，当前先完成字幕烧录。</span></li>
+        <li><strong>发布</strong><span>带字幕成片生成后，再进入抖音 / B站发布前确认。</span></li>
+      </div>
+      <button class="secondary-button js-demo-toast" type="button" data-message="一键推送会在账号、标题、简介和二次确认流程完成后接入。">一键推送</button>
     </section>
   </aside>
 </section>
+
+<div class="modal-backdrop" id="cut-edit-modal" hidden>
+  <section class="modal-panel cut-edit-panel" role="dialog" aria-modal="true" aria-labelledby="cut-edit-title">
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">Trim Preview</p>
+        <h2 id="cut-edit-title">修改剪切预览</h2>
+      </div>
+      <button class="icon-button" type="button" id="close-cut-edit" aria-label="关闭">×</button>
+    </div>
+    <div class="cut-edit-body">
+      <video controls id="cut-edit-video"></video>
+      <div class="iphone-trim-strip" aria-label="剪切时间轴">
+        <span></span><span></span><span></span><span></span><span></span>
+        <div class="trim-window" id="trim-window"></div>
+      </div>
+      <p class="form-hint">当前弹窗用于像手机剪切一样预览和滑动定位；真正保存起止时间请回到片段审核页修改。</p>
+    </div>
+    <div class="modal-actions">
+      <span class="form-hint" id="cut-edit-caption"></span>
+      <div class="button-row">
+        <a class="secondary-button" id="cut-edit-review-link" href="/tasks/{{ task.id }}/clips/review">去片段审核保存</a>
+        <button class="primary-button" type="button" id="play-cut-preview">预览播放</button>
+      </div>
+    </div>
+  </section>
+</div>
+<script>
+window.openSubtitleCutEdit = function (button) {
+  const card = button.closest("[data-subtitle-output-card]");
+  const modal = document.querySelector("#cut-edit-modal");
+  const modalVideo = document.querySelector("#cut-edit-video");
+  const sourceVideo = card?.querySelector(":scope > video");
+  const caption = document.querySelector("#cut-edit-caption");
+  if (!card || !modal || !modalVideo || !sourceVideo) return;
+  modalVideo.src = sourceVideo.currentSrc || sourceVideo.src;
+  if (caption) {
+    caption.textContent = card.querySelector(".subtitle-output-body strong")?.textContent || "当前切片";
+  }
+  modal.removeAttribute("hidden");
+  document.body.style.overflow = "hidden";
+};
+
+window.renderSubtitleClip = async function (button) {
+  const card = button.closest("[data-subtitle-output-card]");
+  if (!card || button.dataset.running === "1") return;
+  const statusNode = card.querySelector("[data-subtitle-status]");
+  const errorNode = card.querySelector("[data-subtitle-error]");
+  const originalText = button.textContent;
+  button.dataset.running = "1";
+  button.disabled = true;
+  button.textContent = "加字幕中...";
+  if (statusNode) statusNode.textContent = "字幕生成中";
+  if (errorNode) errorNode.textContent = "";
+  try {
+    const response = await fetch(`/api/tasks/${card.dataset.taskId}/output-clips/${card.dataset.outputId}/subtitles`, { method: "POST" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "自动加字幕失败");
+    if (statusNode) statusNode.textContent = data.output_clip?.subtitle_status_label || "已加字幕";
+    if (errorNode) errorNode.textContent = data.message || "自动加字幕完成。";
+    window.setTimeout(() => window.location.reload(), 700);
+  } catch (error) {
+    if (statusNode) statusNode.textContent = "字幕失败";
+    if (errorNode) errorNode.textContent = `自动加字幕失败：${error.message}`;
+  } finally {
+    button.dataset.running = "0";
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+};
+
+document.querySelector("#close-cut-edit")?.addEventListener("click", () => {
+  document.querySelector("#cut-edit-modal")?.setAttribute("hidden", "");
+  document.body.style.overflow = "";
+  document.querySelector("#cut-edit-video")?.pause();
+});
+</script>
+{% else %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Subtitle & Publish</p>
+    <h1>字幕任务列表</h1>
+    <p>切片生成后，每个视频任务会先进入这里；点进任务后再分别处理自动加字幕、检查和推送配置。</p>
+  </div>
+  <a class="secondary-button" href="/clips">返回片段审核</a>
+</section>
+
+<section class="stat-grid review-stat-grid" aria-label="字幕推送统计">
+  {% for item in stats %}
+  <article class="stat-card tone-{{ item.tone }}">
+    <div class="stat-icon"></div>
+    <span>{{ item.label }}</span>
+    <strong>{{ item.value }}</strong>
+    <small>来自已生成切片</small>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <div>
+      <p class="eyebrow">Tasks</p>
+      <h2>待处理字幕任务</h2>
+    </div>
+    <span class="status-pill tone-blue">{{ tasks|length }} 个任务</span>
+  </div>
+
+  {% if tasks %}
+  <div class="review-board subtitle-task-board">
+    {% for task in tasks %}
+    <article class="review-task-row">
+      <div class="review-task-main">
+        <span class="status-pill tone-{{ task.subtitle_tone }}">{{ task.subtitle_stage }}</span>
+        <h3>{{ task.title }}</h3>
+        <p>任务 ID：{{ task.id }} · 平台：{{ task.platform_label }} · 输出切片 {{ task.output_clips|length }} 条</p>
+      </div>
+      <dl class="review-metrics">
+        <div><dt>切片数</dt><dd>{{ task.output_clips|length }}</dd></div>
+        <div><dt>已加字幕</dt><dd>{{ task.subtitle_done_count }}</dd></div>
+        <div><dt>可预览</dt><dd>{{ task.output_clips|selectattr("file_exists")|list|length }}</dd></div>
+        <div><dt>状态</dt><dd>{{ task.subtitle_stage }}</dd></div>
+      </dl>
+      <div class="review-row-actions">
+        <a class="secondary-button compact-button" href="/tasks/{{ task.id }}">详情</a>
+        <a class="primary-button compact-button" href="/subtitles/{{ task.id }}">进入字幕处理</a>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <article class="empty-state">
+    <p class="eyebrow">Empty</p>
+    <h2>还没有进入字幕流程的切片</h2>
+    <p>请先在片段审核页点击“生成切片”。生成成功后，这里会按任务列出不同视频，方便逐个进入处理。</p>
+    <a class="primary-button" href="/clips">去片段审核</a>
+  </article>
+  {% endif %}
+</section>
+{% endif %}
 {% endblock %}

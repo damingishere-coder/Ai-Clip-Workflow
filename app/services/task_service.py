@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 from sqlite3 import Row
@@ -9,7 +10,7 @@ from uuid import uuid4
 
 from app.core.config import settings
 from app.db.database import get_connection
-from app.models.task import ClipCandidateBatchItem, ClipCandidateUpdate, TaskCreate, TaskStatus
+from app.models.task import ClipCandidateBatchItem, ClipCandidateUpdate, SubtitleStyleUpdate, TaskCreate, TaskStatus
 from app.services.ai_config_service import get_ai_config_context
 from app.services.ai.ai_clip_analyzer import (
     AIAnalysisError,
@@ -25,6 +26,7 @@ from app.services.storage_service import (
     get_artifact_paths,
     get_expected_subdirectories,
     get_source_video_path,
+    resolve_video_file_path,
     validate_source_video_path,
 )
 from app.services.transcript_service import (
@@ -93,6 +95,13 @@ OUTPUT_STATUS_LABELS = {
     "processing": "处理中",
     "completed": "已完成",
     "failed": "失败",
+}
+
+SUBTITLE_STATUS_LABELS = {
+    "pending": "待加字幕",
+    "processing": "字幕生成中",
+    "completed": "已加字幕",
+    "failed": "字幕失败",
 }
 
 _RUNNING_TRANSCRIPT_TASKS: set[str] = set()
@@ -631,20 +640,6 @@ def get_clip_candidate(task_id: str, clip_id: str) -> dict:
     raise ValueError("候选片段不存在")
 
 
-def request_clip_generation_placeholder(task_id: str) -> dict:
-    task = get_task(task_id, include_video_probe=False)
-    if not task:
-        raise ValueError("任务不存在")
-    enabled_count = sum(1 for clip in list_clip_candidates(task_id) if clip["enabled"])
-    _append_task_log(task_id, "用户点击生成切片，当前等待视频切割模块接入")
-    return {
-        "message": f"已收到生成切片请求。当前共有 {enabled_count} 条启用片段，待视频切割模块接入后会进入切割流程。",
-        "status": task["status"],
-        "status_label": task["status_label"],
-        "next_step": "待视频切割模块接入",
-    }
-
-
 def list_enabled_clip_candidates(task_id: str) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
@@ -680,25 +675,62 @@ def count_output_clips(task_id: str) -> int:
     return int(row["total"]) if row else 0
 
 
+def count_completed_output_clips(task_id: str) -> int:
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT COUNT(*) AS total FROM output_clip WHERE task_id = ? AND status = 'completed'",
+            (task_id,),
+        ).fetchone()
+    return int(row["total"]) if row else 0
+
+
 def list_output_clips(task_id: str) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, task_id, clip_candidate_id, output_file_path, output_file_name,
-                   status, error_message, created_at, updated_at
+            SELECT
+                output_clip.id, output_clip.task_id, output_clip.clip_candidate_id,
+                output_clip.output_file_path, output_clip.output_file_name,
+                output_clip.status, output_clip.error_message, output_clip.created_at, output_clip.updated_at,
+                subtitle_jobs.id AS subtitle_job_id,
+                subtitle_jobs.status AS subtitle_status,
+                subtitle_jobs.subtitle_file_path,
+                subtitle_jobs.output_file_path AS subtitled_output_file_path,
+                subtitle_jobs.error_message AS subtitle_error_message,
+                subtitle_jobs.updated_at AS subtitle_updated_at
             FROM output_clip
-            WHERE task_id = ?
+            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
+            WHERE output_clip.task_id = ?
             ORDER BY
-                CASE WHEN output_file_name IS NULL OR output_file_name = '' THEN 1 ELSE 0 END,
-                output_file_name ASC,
-                created_at ASC
+                CASE WHEN output_clip.output_file_name IS NULL OR output_clip.output_file_name = '' THEN 1 ELSE 0 END,
+                output_clip.output_file_name ASC,
+                output_clip.created_at ASC
             """,
             (task_id,),
         ).fetchall()
-    return [
-        {**dict(row), "status_label": OUTPUT_STATUS_LABELS.get(row["status"], row["status"])}
-        for row in rows
-    ]
+    clips = []
+    for row in rows:
+        output = dict(row)
+        raw_output_path = (output.get("output_file_path") or "").strip()
+        output_path = resolve_video_file_path(raw_output_path) if raw_output_path else None
+        raw_subtitled_path = (output.get("subtitled_output_file_path") or "").strip()
+        subtitled_path = resolve_video_file_path(raw_subtitled_path) if raw_subtitled_path else None
+        subtitle_status = output.get("subtitle_status") or "pending"
+        clips.append(
+            {
+                **output,
+                "status_label": OUTPUT_STATUS_LABELS.get(output["status"], output["status"]),
+                "file_exists": bool(output_path and output_path.exists() and output_path.is_file()),
+                "media_url": f"/media/tasks/{task_id}/output-clips/{output['id']}",
+                "subtitle_status": subtitle_status,
+                "subtitle_status_label": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),
+                "subtitle_stage": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),
+                "subtitled_file_exists": bool(subtitled_path and subtitled_path.exists() and subtitled_path.is_file()),
+                "subtitled_media_url": f"/media/tasks/{task_id}/subtitled-clips/{output['id']}",
+                "publish_stage": "待推送配置" if subtitle_status == "completed" else "待字幕确认",
+            }
+        )
+    return clips
 
 
 def get_output_clip(task_id: str, output_clip_id: str) -> dict | None:
@@ -714,41 +746,73 @@ def get_output_clip(task_id: str, output_clip_id: str) -> dict | None:
         ).fetchone()
     if not row:
         return None
-    return {**dict(row), "status_label": OUTPUT_STATUS_LABELS.get(row["status"], row["status"])}
+    output = {**dict(row), "status_label": OUTPUT_STATUS_LABELS.get(row["status"], row["status"])}
+    with get_connection() as connection:
+        subtitle_row = connection.execute(
+            """
+            SELECT *
+            FROM subtitle_jobs
+            WHERE task_id = ? AND output_clip_id = ?
+            """,
+            (task_id, output_clip_id),
+        ).fetchone()
+    if subtitle_row:
+        output.update(
+            {
+                "subtitle_job_id": subtitle_row["id"],
+                "subtitle_status": subtitle_row["status"],
+                "subtitle_file_path": subtitle_row["subtitle_file_path"],
+                "subtitled_output_file_path": subtitle_row["output_file_path"],
+                "subtitle_error_message": subtitle_row["error_message"],
+                "subtitle_status_label": SUBTITLE_STATUS_LABELS.get(subtitle_row["status"], subtitle_row["status"]),
+            }
+        )
+    else:
+        output.update({"subtitle_status": "pending", "subtitle_status_label": SUBTITLE_STATUS_LABELS["pending"]})
+    return output
 
 
 def get_subtitle_workflow_context() -> dict:
     tasks = list_tasks()
     workflow_tasks = []
-    total_output_clips = 0
+    total_output_records = 0
+    ready_output_clips = 0
+    completed_subtitles = 0
     playable_output_clips = 0
 
     for task in tasks:
         output_clips = []
         for output in list_output_clips(task["id"]):
-            raw_output_path = (output.get("output_file_path") or "").strip()
-            output_path = Path(raw_output_path) if raw_output_path else None
-            file_exists = bool(output_path and output_path.exists() and output_path.is_file())
+            total_output_records += 1
             if output.get("status") == "completed":
-                total_output_clips += 1
-            if file_exists:
+                ready_output_clips += 1
+            if output.get("subtitle_status") == "completed":
+                completed_subtitles += 1
+            if output.get("file_exists"):
                 playable_output_clips += 1
             output_clips.append(
                 {
                     **output,
-                    "file_exists": file_exists,
-                    "media_url": f"/media/tasks/{task['id']}/output-clips/{output['id']}",
-                    "subtitle_stage": "待加字幕" if output.get("status") == "completed" else "切片异常",
-                    "publish_stage": "待推送配置",
                 }
             )
 
         if output_clips:
+            task_completed_subtitles = sum(1 for output in output_clips if output.get("subtitle_status") == "completed")
+            if task_completed_subtitles == len(output_clips):
+                subtitle_stage = "字幕完成"
+                subtitle_tone = "green"
+            elif task_completed_subtitles:
+                subtitle_stage = "部分完成"
+                subtitle_tone = "amber"
+            else:
+                subtitle_stage = "待加字幕"
+                subtitle_tone = "blue"
             workflow_tasks.append(
                 {
                     **task,
-                    "subtitle_stage": "待加字幕",
-                    "subtitle_tone": "blue",
+                    "subtitle_stage": subtitle_stage,
+                    "subtitle_tone": subtitle_tone,
+                    "subtitle_done_count": task_completed_subtitles,
                     "output_clips": output_clips,
                 }
             )
@@ -756,12 +820,350 @@ def get_subtitle_workflow_context() -> dict:
     return {
         "tasks": workflow_tasks,
         "stats": [
-            {"label": "待加字幕切片", "value": total_output_clips, "tone": "blue"},
-            {"label": "可预览视频", "value": playable_output_clips, "tone": "green"},
-            {"label": "字幕样式模板", "value": 1, "tone": "purple"},
-            {"label": "待打码确认", "value": total_output_clips, "tone": "amber"},
-            {"label": "待一键推送", "value": total_output_clips, "tone": "red"},
+            {"label": "输出切片记录", "value": total_output_records, "tone": "green"},
+            {"label": "待加字幕切片", "value": ready_output_clips, "tone": "blue"},
+            {"label": "已加字幕成片", "value": completed_subtitles, "tone": "green"},
+            {"label": "可预览视频", "value": playable_output_clips, "tone": "purple"},
+            {"label": "待一键推送", "value": completed_subtitles, "tone": "red"},
         ],
+    }
+
+
+def get_default_subtitle_style() -> dict:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM subtitle_style_presets
+            WHERE is_default = 1
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    if not row:
+        return {
+            "id": "default",
+            "name": "默认字幕样式",
+            "font_family": "Microsoft YaHei",
+            "font_size": 42,
+            "position": "bottom_center",
+            "font_color": "#ffffff",
+            "stroke_color": "#111827",
+            "shadow_enabled": True,
+        }
+    style = dict(row)
+    style["shadow_enabled"] = bool(style.get("shadow_enabled"))
+    return style
+
+
+def update_default_subtitle_style(payload: SubtitleStyleUpdate) -> dict:
+    now = _now_iso()
+    with get_connection() as connection:
+        existing = connection.execute(
+            "SELECT id FROM subtitle_style_presets WHERE id = ?",
+            ("default",),
+        ).fetchone()
+        if existing:
+            connection.execute(
+                """
+                UPDATE subtitle_style_presets
+                SET font_family = ?, font_size = ?, position = ?, font_color = ?,
+                    stroke_color = ?, shadow_enabled = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    payload.font_family,
+                    payload.font_size,
+                    payload.position,
+                    payload.font_color,
+                    payload.stroke_color,
+                    1 if payload.shadow_enabled else 0,
+                    now,
+                    "default",
+                ),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO subtitle_style_presets (
+                    id, name, font_family, font_size, position, font_color,
+                    stroke_color, shadow_enabled, is_default, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "default",
+                    "默认字幕样式",
+                    payload.font_family,
+                    payload.font_size,
+                    payload.position,
+                    payload.font_color,
+                    payload.stroke_color,
+                    1 if payload.shadow_enabled else 0,
+                    1,
+                    now,
+                    now,
+                ),
+            )
+        connection.commit()
+    return {
+        "status": "ok",
+        "message": "字幕样式已保存到数据库。",
+        "style": get_default_subtitle_style(),
+    }
+
+
+def get_subtitle_task_context(task_id: str) -> dict:
+    task = get_task(task_id)
+    if not task:
+        raise ValueError("任务不存在")
+    output_clips = list_output_clips(task_id)
+    return {
+        "task": {
+            **task,
+            "subtitle_stage": _resolve_task_subtitle_stage(output_clips)[0],
+            "subtitle_tone": _resolve_task_subtitle_stage(output_clips)[1],
+        },
+        "output_clips": output_clips,
+        "subtitle_style": get_default_subtitle_style(),
+        "stats": [
+            {"label": "输出切片", "value": len(output_clips), "tone": "green"},
+            {
+                "label": "待加字幕",
+                "value": sum(1 for output in output_clips if output.get("subtitle_status") != "completed"),
+                "tone": "blue",
+            },
+            {
+                "label": "已加字幕",
+                "value": sum(1 for output in output_clips if output.get("subtitle_status") == "completed"),
+                "tone": "green",
+            },
+        ],
+    }
+
+
+def _resolve_task_subtitle_stage(output_clips: list[dict]) -> tuple[str, str]:
+    if not output_clips:
+        return "无切片", "amber"
+    completed = sum(1 for output in output_clips if output.get("subtitle_status") == "completed")
+    if completed == len(output_clips):
+        return "字幕完成", "green"
+    if completed:
+        return "部分完成", "amber"
+    return "待加字幕", "blue"
+
+
+def _subtitle_job_for_output(task_id: str, output_clip_id: str) -> dict | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM subtitle_jobs
+            WHERE task_id = ? AND output_clip_id = ?
+            """,
+            (task_id, output_clip_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _upsert_subtitle_job(
+    task_id: str,
+    output_clip_id: str,
+    status: str,
+    subtitle_file_path: str = "",
+    output_file_path: str = "",
+    error_message: str = "",
+) -> dict:
+    now = _now_iso()
+    existing = _subtitle_job_for_output(task_id, output_clip_id)
+    with get_connection() as connection:
+        if existing:
+            connection.execute(
+                """
+                UPDATE subtitle_jobs
+                SET status = ?, style_preset_id = ?, subtitle_file_path = ?,
+                    output_file_path = ?, error_message = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    "default",
+                    subtitle_file_path or existing.get("subtitle_file_path") or "",
+                    output_file_path or existing.get("output_file_path") or "",
+                    error_message,
+                    now,
+                    existing["id"],
+                ),
+            )
+            job_id = existing["id"]
+        else:
+            job_id = uuid4().hex[:12]
+            connection.execute(
+                """
+                INSERT INTO subtitle_jobs (
+                    id, task_id, output_clip_id, style_preset_id, status,
+                    subtitle_file_path, output_file_path, error_message, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    task_id,
+                    output_clip_id,
+                    "default",
+                    status,
+                    subtitle_file_path,
+                    output_file_path,
+                    error_message,
+                    now,
+                    now,
+                ),
+            )
+        connection.commit()
+    return _subtitle_job_for_output(task_id, output_clip_id) or {"id": job_id, "status": status}
+
+
+def _hex_to_ass_color(value: str) -> str:
+    cleaned = (value or "#ffffff").lstrip("#")
+    if len(cleaned) != 6:
+        cleaned = "ffffff"
+    red, green, blue = cleaned[0:2], cleaned[2:4], cleaned[4:6]
+    return f"&H00{blue}{green}{red}".upper()
+
+
+def _ass_time(seconds: float) -> str:
+    total_centiseconds = max(0, int(round(seconds * 100)))
+    total_seconds, centiseconds = divmod(total_centiseconds, 100)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}.{centiseconds:02d}"
+
+
+def _escape_ass_text(text: str) -> str:
+    return (text or "").replace("\\", "\\\\").replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
+
+
+def _build_subtitle_rows(task_id: str, output_clip: dict) -> tuple[int, list[dict[str, Any]]]:
+    clip = get_clip_candidate(task_id, output_clip["clip_candidate_id"]) if output_clip.get("clip_candidate_id") else None
+    if not clip:
+        return 0, [{"start_seconds": 0, "end_seconds": 3, "text": output_clip.get("output_file_name") or "精彩片段"}]
+
+    clip_start = int(clip["start_seconds"])
+    clip_end = int(clip["end_seconds"])
+    rows = read_transcript_range(get_artifact_paths(task_id)["transcript_path"], clip_start, clip_end, max_rows=120)
+    subtitle_rows = []
+    for row in rows:
+        row_start = _parse_time_to_seconds(row["start_time"])
+        row_end = _parse_time_to_seconds(row["end_time"])
+        start_seconds = max(0, row_start - clip_start)
+        end_seconds = max(start_seconds + 1, min(clip_end, row_end) - clip_start)
+        subtitle_rows.append({"start_seconds": start_seconds, "end_seconds": end_seconds, "text": row["text"]})
+    if subtitle_rows:
+        return clip_start, subtitle_rows
+
+    fallback_text = clip.get("summary") or clip.get("title") or "精彩片段"
+    return clip_start, [{"start_seconds": 0, "end_seconds": min(5, max(3, clip_end - clip_start)), "text": fallback_text}]
+
+
+def _write_ass_file(task_id: str, output_clip: dict, style: dict) -> Path:
+    paths = get_artifact_paths(task_id)
+    paths["subtitled_dir"].mkdir(parents=True, exist_ok=True)
+    subtitle_path = paths["subtitled_dir"] / f"{Path(output_clip.get('output_file_name') or output_clip['id']).stem}.ass"
+    _, rows = _build_subtitle_rows(task_id, output_clip)
+
+    alignment = "8" if style.get("position") == "top_center" else "2"
+    margin_v = "92" if style.get("position") == "bottom_center" else "190"
+    if style.get("position") == "top_center":
+        margin_v = "70"
+    outline = "3" if style.get("shadow_enabled") else "1"
+    shadow = "1" if style.get("shadow_enabled") else "0"
+    font_family = style.get("font_family") or "Microsoft YaHei"
+    font_size = int(style.get("font_size") or 42)
+    primary_color = _hex_to_ass_color(style.get("font_color") or "#ffffff")
+    outline_color = _hex_to_ass_color(style.get("stroke_color") or "#111827")
+    events = "\n".join(
+        f"Dialogue: 0,{_ass_time(row['start_seconds'])},{_ass_time(row['end_seconds'])},Default,,0,0,0,,{_escape_ass_text(row['text'])}"
+        for row in rows
+    )
+    content = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,{font_family},{font_size},{primary_color},&H000000FF,{outline_color},&H7F000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},60,60,{margin_v},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+{events}
+"""
+    subtitle_path.write_text(content, encoding="utf-8")
+    return subtitle_path
+
+
+def _ffmpeg_filter_path(path: Path) -> str:
+    normalized = str(path.resolve()).replace("\\", "/")
+    return normalized.replace(":", r"\:").replace("'", r"\'")
+
+
+def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
+    task = get_task(task_id, include_video_probe=False)
+    if not task:
+        raise ValueError("任务不存在")
+    output_clip = get_output_clip(task_id, output_clip_id)
+    if not output_clip:
+        raise ValueError("切片记录不存在")
+    input_path = resolve_video_file_path(output_clip.get("output_file_path")) or Path(output_clip.get("output_file_path") or "")
+    if output_clip.get("status") != "completed" or not input_path.exists():
+        raise ValueError("切片视频文件不存在，不能加字幕")
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("FFmpeg 不可用，无法生成字幕视频")
+
+    style = get_default_subtitle_style()
+    paths = get_artifact_paths(task_id)
+    paths["subtitled_dir"].mkdir(parents=True, exist_ok=True)
+    output_path = paths["subtitled_dir"] / f"{input_path.stem}_subtitled.mp4"
+    job = _upsert_subtitle_job(task_id, output_clip_id, "processing")
+    _append_task_log(task_id, f"开始自动加字幕：{input_path.name}")
+
+    try:
+        subtitle_path = _write_ass_file(task_id, output_clip, style)
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_path),
+            "-vf",
+            f"subtitles='{_ffmpeg_filter_path(subtitle_path)}'",
+            "-c:a",
+            "copy",
+            str(output_path),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "FFmpeg 字幕生成失败")
+    except Exception as exc:
+        error = str(exc)
+        _upsert_subtitle_job(task_id, output_clip_id, "failed", error_message=error)
+        _append_task_log(task_id, f"自动加字幕失败：{input_path.name}，原因：{error}")
+        raise
+
+    job = _upsert_subtitle_job(
+        task_id,
+        output_clip_id,
+        "completed",
+        subtitle_file_path=str(subtitle_path),
+        output_file_path=str(output_path),
+    )
+    _append_task_log(task_id, f"自动加字幕完成：{output_path.name}")
+    return {
+        "status": "ok",
+        "message": "自动加字幕完成，已生成带字幕视频。",
+        "job": job,
+        "output_clip": get_output_clip(task_id, output_clip_id),
+        "media_url": f"/media/tasks/{task_id}/subtitled-clips/{output_clip_id}",
     }
 
 
@@ -820,16 +1222,29 @@ def get_dashboard_context() -> dict:
         if task["status"] in {TaskStatus.pending_video.value, TaskStatus.pending_processing.value}
     )
     review_count = sum(1 for task in tasks if task["status"] == TaskStatus.pending_review.value)
-    completed_count = sum(1 for task in tasks if task["status"] == TaskStatus.completed.value)
+    completed_count = sum(
+        1
+        for task in tasks
+        if task["status"] in {TaskStatus.completed.value, TaskStatus.completed_with_errors.value}
+    )
+    output_clip_count = sum(int(task.get("output_clip_count") or 0) for task in tasks)
+    ready_for_subtitle_count = sum(count_completed_output_clips(task["id"]) for task in tasks)
     failed_count = sum(1 for task in tasks if task["status"] == TaskStatus.failed.value)
 
     return {
         "stats": [
-            {"label": "今日新增任务", "value": today_count, "note": "来自数据库", "tone": "blue"},
+            {"label": "今日新增任务", "value": today_count, "note": "来自 SQLite", "tone": "blue"},
             {"label": "待处理", "value": pending_count, "note": "可继续推进", "tone": "amber"},
             {"label": "待审核", "value": review_count, "note": "等待确认", "tone": "purple"},
-            {"label": "已完成", "value": completed_count, "note": "已输出", "tone": "green"},
+            {"label": "已切片任务", "value": completed_count, "note": f"输出 {output_clip_count} 条切片", "tone": "green"},
+            {"label": "待加字幕", "value": ready_for_subtitle_count, "note": "切片后工作流", "tone": "blue"},
+            {"label": "待推送", "value": ready_for_subtitle_count, "note": "需字幕和发布确认", "tone": "red"},
             {"label": "失败任务", "value": failed_count, "note": "需排查", "tone": "red"},
+        ],
+        "focus_stats": [
+            {"label": "输出切片", "value": output_clip_count, "description": "条短视频已生成记录"},
+            {"label": "待加字幕", "value": ready_for_subtitle_count, "description": "条切片可进入字幕工作台"},
+            {"label": "待推送", "value": ready_for_subtitle_count, "description": "条切片等待发布前确认"},
         ],
         "workflow_steps": WORKFLOW_STEPS,
         "recent_tasks": tasks[:5],

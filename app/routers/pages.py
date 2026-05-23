@@ -9,6 +9,7 @@ from app.services.task_service import (
     get_artifact_paths,
     get_clips_overview_context,
     get_dashboard_context,
+    get_subtitle_task_context,
     get_subtitle_workflow_context,
     get_system_status_context,
     get_latest_ai_analysis_run,
@@ -211,6 +212,25 @@ async def subtitle_workflow_page(request: Request):
             "request": request,
             "active_page": "subtitles",
             "settings": settings,
+            **context,
+        },
+    )
+
+
+@router.get("/subtitles/{task_id}")
+async def subtitle_task_page(request: Request, task_id: str):
+    try:
+        context = get_subtitle_task_context(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return templates.TemplateResponse(
+        name="subtitle_workflow.html",
+        request=request,
+        context={
+            "request": request,
+            "active_page": "subtitles",
+            "settings": settings,
+            "subtitle_task_mode": True,
             **context,
         },
     )

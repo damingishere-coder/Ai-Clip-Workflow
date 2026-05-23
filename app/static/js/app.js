@@ -816,33 +816,139 @@ const subtitleStyleForm = document.querySelector("#subtitle-style-form");
 const subtitleStyleResult = document.querySelector("#subtitle-style-result");
 
 if (subtitleStyleForm) {
-  const savedStyle = window.localStorage.getItem("subtitle_style_demo");
-  if (savedStyle) {
-    try {
-      const style = JSON.parse(savedStyle);
-      Object.entries(style).forEach(([name, value]) => {
-        const field = subtitleStyleForm.elements[name];
-        if (!field) return;
-        if (field.type === "checkbox") {
-          field.checked = Boolean(value);
-          return;
-        }
-        field.value = value;
-      });
-    } catch (error) {
-      window.localStorage.removeItem("subtitle_style_demo");
-    }
-  }
-
-  subtitleStyleForm.addEventListener("submit", (event) => {
+  subtitleStyleForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submitButton = subtitleStyleForm.querySelector("button[type='submit']");
     const formData = new FormData(subtitleStyleForm);
     const payload = Object.fromEntries(formData.entries());
+    payload.font_size = Number(payload.font_size || 42);
     payload.shadow_enabled = Boolean(subtitleStyleForm.elements.shadow_enabled?.checked);
-    window.localStorage.setItem("subtitle_style_demo", JSON.stringify(payload));
-    if (subtitleStyleResult) {
-      subtitleStyleResult.textContent = "字幕样式已保存到当前浏览器。后续会接入后端模板和批量渲染。";
+    if (submitButton) submitButton.disabled = true;
+    if (subtitleStyleResult) subtitleStyleResult.textContent = "正在保存字幕样式...";
+
+    try {
+      const response = await fetch("/api/tasks/subtitle-style", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "字幕样式保存失败");
+      }
+      if (subtitleStyleResult) subtitleStyleResult.textContent = data.message || "字幕样式已保存。";
+    } catch (error) {
+      if (subtitleStyleResult) subtitleStyleResult.textContent = `保存失败：${error.message}`;
+    } finally {
+      if (submitButton) submitButton.disabled = false;
     }
+  });
+}
+
+document.querySelectorAll("[data-render-subtitle]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const card = button.closest("[data-subtitle-output-card]");
+    if (!card) return;
+    const taskId = card.dataset.taskId;
+    const outputId = card.dataset.outputId;
+    const statusNode = card.querySelector("[data-subtitle-status]");
+    const errorNode = card.querySelector("[data-subtitle-error]");
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "加字幕中...";
+    if (statusNode) statusNode.textContent = "字幕生成中";
+    if (errorNode) errorNode.textContent = "";
+
+    try {
+      const response = await fetch(`/api/tasks/${taskId}/output-clips/${outputId}/subtitles`, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "自动加字幕失败");
+      }
+      if (statusNode) statusNode.textContent = data.output_clip?.subtitle_status_label || "已加字幕";
+      if (errorNode) errorNode.textContent = data.message || "自动加字幕完成。";
+      window.setTimeout(() => window.location.reload(), 700);
+    } catch (error) {
+      if (statusNode) statusNode.textContent = "字幕失败";
+      if (errorNode) errorNode.textContent = `自动加字幕失败：${error.message}`;
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
+});
+
+const cutEditModal = document.querySelector("#cut-edit-modal");
+const closeCutEditButton = document.querySelector("#close-cut-edit");
+const cutEditVideo = document.querySelector("#cut-edit-video");
+const cutEditCaption = document.querySelector("#cut-edit-caption");
+const playCutPreviewButton = document.querySelector("#play-cut-preview");
+const trimWindow = document.querySelector("#trim-window");
+
+function toggleCutEditModal(show) {
+  if (!cutEditModal) return;
+  if (show) {
+    cutEditModal.removeAttribute("hidden");
+    document.body.style.overflow = "hidden";
+    return;
+  }
+  cutEditModal.setAttribute("hidden", "");
+  document.body.style.overflow = "";
+  if (cutEditVideo) cutEditVideo.pause();
+}
+
+document.querySelectorAll("[data-cut-edit-trigger]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const card = button.closest("[data-subtitle-output-card]");
+    const sourceVideo = card?.querySelector(":scope > video");
+    if (!card || !cutEditVideo || !sourceVideo) return;
+    cutEditVideo.src = sourceVideo.currentSrc || sourceVideo.src;
+    if (cutEditCaption) {
+      cutEditCaption.textContent = card.querySelector(".subtitle-output-body strong")?.textContent || "当前切片";
+    }
+    toggleCutEditModal(true);
+  });
+});
+
+if (closeCutEditButton) {
+  closeCutEditButton.addEventListener("click", () => toggleCutEditModal(false));
+}
+
+if (cutEditModal) {
+  cutEditModal.addEventListener("click", (event) => {
+    if (event.target === cutEditModal) toggleCutEditModal(false);
+  });
+}
+
+if (playCutPreviewButton && cutEditVideo) {
+  playCutPreviewButton.addEventListener("click", () => {
+    cutEditVideo.currentTime = Math.max(0, cutEditVideo.currentTime || 0);
+    cutEditVideo.play().catch(() => {});
+  });
+}
+
+if (trimWindow) {
+  let dragging = false;
+  let startX = 0;
+  let startLeft = 18;
+  trimWindow.addEventListener("pointerdown", (event) => {
+    dragging = true;
+    startX = event.clientX;
+    startLeft = parseFloat(trimWindow.style.left || "18");
+    trimWindow.setPointerCapture(event.pointerId);
+  });
+  trimWindow.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    const parentWidth = trimWindow.parentElement?.clientWidth || 1;
+    const deltaPercent = ((event.clientX - startX) / parentWidth) * 100;
+    const nextLeft = Math.min(48, Math.max(4, startLeft + deltaPercent));
+    trimWindow.style.left = `${nextLeft}%`;
+    if (cutEditVideo?.duration) {
+      cutEditVideo.currentTime = Math.max(0, (nextLeft / 100) * cutEditVideo.duration);
+    }
+  });
+  trimWindow.addEventListener("pointerup", () => {
+    dragging = false;
   });
 }
 

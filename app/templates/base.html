@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260523-subtitle-publish-demo">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260524-subtitle-1">
   </head>
   <body>
     <div class="app-shell">
@@ -25,8 +25,8 @@
           <a class="{{ 'active' if active_page == 'system' else '' }}" href="/system"><span class="nav-dot"></span>系统状态</a>
         </nav>
         <div class="sidebar-note">
-          <strong>MVP 阶段</strong>
-        <span>本地视频上传、转写、AI 片段分析、自动切割、字幕与推送预留。</span>
+          <strong>v1.1 本地切片全流程</strong>
+        <span>上传、转写、AI 分析、人工审核和自动切片已走通；下一步完善字幕与一键推送。</span>
         </div>
       </aside>
 
@@ -47,6 +47,6 @@
       </main>
     </div>
 
-    <script src="{{ url_for('static', path='js/app.js') }}?v=20260523-subtitle-publish-demo"></script>
+    <script src="{{ url_for('static', path='js/app.js') }}?v=20260524-subtitle-1"></script>
   </body>
 </html>

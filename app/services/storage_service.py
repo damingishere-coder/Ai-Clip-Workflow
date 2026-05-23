@@ -6,7 +6,7 @@ from uuid import uuid4
 from app.core.config import EXTERNAL_STORAGE_ROOT, settings
 
 
-TASK_SUBDIRECTORIES = ("source", "audio", "transcripts", "analysis", "clips", "05_clips", "logs")
+TASK_SUBDIRECTORIES = ("source", "audio", "transcripts", "analysis", "clips", "05_clips", "06_subtitled", "logs")
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".flv", ".webm", ".m4v", ".ts"}
 
 
@@ -41,6 +41,7 @@ def get_artifact_paths(task_id: str) -> dict[str, Path]:
         "transcript_path": directories["transcripts"] / "transcript.md",
         "analysis_path": directories["analysis"] / "candidate_clips.json",
         "clips_dir": directories["05_clips"],
+        "subtitled_dir": directories["06_subtitled"],
         "log_path": directories["logs"] / "process.log",
     }
 
@@ -56,6 +57,12 @@ def resolve_video_file_path(path_value: str | None) -> Path | None:
     path = Path(path_value)
     if path.exists():
         return path
+
+    container_tasks_root = "/workspace/tasks/"
+    normalized_posix = path_value.replace("\\", "/")
+    if normalized_posix.startswith(container_tasks_root):
+        relative_value = normalized_posix[len(container_tasks_root) :]
+        return settings.tasks_dir.joinpath(*PureWindowsPath(relative_value).parts)
 
     windows_storage_root = str(settings.storage_root)
     raw_value = path_value.replace("/", "\\")

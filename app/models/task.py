@@ -63,6 +63,15 @@ class TaskCandidateClipCountUpdate(BaseModel):
     candidate_clip_count: int = Field(default=5, ge=1, le=50)
 
 
+class SubtitleStyleUpdate(BaseModel):
+    font_family: str = Field(default="Microsoft YaHei", min_length=1, max_length=120)
+    font_size: int = Field(default=42, ge=20, le=88)
+    position: Literal["bottom_center", "middle_lower", "top_center"] = "bottom_center"
+    font_color: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
+    stroke_color: str = Field(default="#111827", pattern=r"^#[0-9a-fA-F]{6}$")
+    shadow_enabled: bool = True
+
+
 class ClipCandidate(BaseModel):
     id: str
     task_id: str
