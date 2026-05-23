@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}字幕推送 - {{ settings.app_name }}{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Subtitle & Publish</p>
+    <h1>字幕与推送工作台</h1>
+    <p>切片生成后，短视频会进入这里继续做视频检查、字幕样式、打码处理和一键推送配置。</p>
+  </div>
+  <a class="secondary-button" href="/clips">返回片段审核</a>
+</section>
+
+<section class="stat-grid review-stat-grid" aria-label="字幕推送统计">
+  {% for item in stats %}
+  <article class="stat-card tone-{{ item.tone }}">
+    <div class="stat-icon"></div>
+    <span>{{ item.label }}</span>
+    <strong>{{ item.value }}</strong>
+    <small>Demo 阶段统计</small>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="subtitle-workflow-grid">
+  <div class="subtitle-queue">
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <p class="eyebrow">Queue</p>
+          <h2>切片后视频队列</h2>
+        </div>
+        <span class="status-pill tone-blue">{{ tasks|length }} 个任务</span>
+      </div>
+
+      {% if tasks %}
+      <div class="subtitle-task-list">
+        {% for task in tasks %}
+        <article class="subtitle-task-card">
+          <div class="subtitle-task-head">
+            <div>
+              <span class="status-pill tone-{{ task.subtitle_tone }}">{{ task.subtitle_stage }}</span>
+              <h3>{{ task.title }}</h3>
+              <p>任务 ID：{{ task.id }} · 平台：{{ task.platform_label }} · 切片输出 {{ task.output_clips|length }} 条</p>
+            </div>
+            <div class="button-row">
+              <a class="secondary-button compact-button" href="/tasks/{{ task.id }}">详情</a>
+              <a class="secondary-button compact-button" href="/tasks/{{ task.id }}/clips/review">回到审核</a>
+            </div>
+          </div>
+
+          <div class="subtitle-output-grid">
+            {% for output in task.output_clips %}
+            <article class="subtitle-output-card">
+              {% if output.file_exists and output.status == "completed" %}
+              <video controls preload="metadata" src="{{ output.media_url }}"></video>
+              {% else %}
+              <div class="video-placeholder compact-video-placeholder">
+                <strong>无法预览</strong>
+                <span>{{ output.error_message or "本地切片文件不存在" }}</span>
+              </div>
+              {% endif %}
+              <div class="subtitle-output-body">
+                <strong>{{ output.output_file_name or "未命名切片" }}</strong>
+                <p class="path-text">{{ output.output_file_path or "无输出路径" }}</p>
+                <div class="subtitle-output-actions">
+                  <span class="status-pill">{{ output.subtitle_stage }}</span>
+                  <span class="status-pill">{{ output.publish_stage }}</span>
+                </div>
+                <div class="button-row">
+                  <button class="secondary-button compact-button js-demo-toast" type="button" data-message="删除切片会在后续版本接入，目前请先回到片段审核确认。">删除</button>
+                  <a class="secondary-button compact-button" href="/tasks/{{ task.id }}/clips/review">修改剪切</a>
+                  <button class="primary-button compact-button js-demo-toast" type="button" data-message="一键自动加字幕会在接入字幕引擎后执行。">自动加字幕</button>
+                </div>
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <article class="empty-state">
+        <p class="eyebrow">Empty</p>
+        <h2>还没有进入字幕流程的切片</h2>
+        <p>请先在片段审核页点击“生成切片”。生成成功后，切片视频会自动出现在这个工作台里。</p>
+        <a class="primary-button" href="/clips">去片段审核</a>
+      </article>
+      {% endif %}
+    </section>
+  </div>
+
+  <aside class="subtitle-side">
+    <section class="panel">
+      <div class="panel-header compact">
+        <div>
+          <p class="eyebrow">Style</p>
+          <h2>字幕样式模板</h2>
+        </div>
+      </div>
+      <form class="settings-form compact-settings-form" id="subtitle-style-form">
+        <label>
+          <span>字体</span>
+          <select class="control" name="font_family">
+            <option>思源黑体 / 系统默认</option>
+            <option>微软雅黑</option>
+            <option>阿里巴巴普惠体</option>
+          </select>
+        </label>
+        <div class="form-row">
+          <label>
+            <span>字号</span>
+            <input type="number" name="font_size" value="42" min="20" max="88">
+          </label>
+          <label>
+            <span>位置</span>
+            <select class="control" name="position">
+              <option>底部居中</option>
+              <option>中下方</option>
+              <option>顶部居中</option>
+            </select>
+          </label>
+        </div>
+        <div class="form-row">
+          <label>
+            <span>文字颜色</span>
+            <input type="color" name="font_color" value="#ffffff">
+          </label>
+          <label>
+            <span>描边颜色</span>
+            <input type="color" name="stroke_color" value="#111827">
+          </label>
+        </div>
+        <label class="toggle-line">
+          <input type="checkbox" name="shadow_enabled" checked>
+          <span>启用阴影和描边，适合短视频平台观看</span>
+        </label>
+        <button class="primary-button" type="submit">保存字幕样式</button>
+        <p class="form-hint" id="subtitle-style-result">样式会先保存在当前浏览器，后续接入后端模板表。</p>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header compact">
+        <div>
+          <p class="eyebrow">Mosaic</p>
+          <h2>打码设置</h2>
+        </div>
+      </div>
+      <div class="compact-list mosaic-demo-list">
+        <li><strong>打码区域</strong><span>支持后续添加人脸、昵称、手机号、二维码区域。</span></li>
+        <li><strong>强度</strong><span>当前 demo 默认中等马赛克，后续用 FFmpeg filter 接入。</span></li>
+        <li><strong>预览</strong><span>先在视频队列里人工检查，再批量执行。</span></li>
+      </div>
+      <button class="secondary-button js-demo-toast" type="button" data-message="打码区域编辑器会在下一阶段接入视频画面标注。">添加打码区域</button>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header compact">
+        <div>
+          <p class="eyebrow">Publish</p>
+          <h2>一键推送配置</h2>
+        </div>
+      </div>
+      <form class="settings-form compact-settings-form" id="publish-demo-form">
+        <div class="publish-account-row">
+          <span class="platform-badge douyin">抖音</span>
+          <strong>待登录</strong>
+          <button class="secondary-button compact-button js-demo-toast" type="button" data-message="抖音账号登录会在后续通过浏览器会话或官方接口接入。">保存账号</button>
+        </div>
+        <div class="publish-account-row">
+          <span class="platform-badge bilibili">B站</span>
+          <strong>待登录</strong>
+          <button class="secondary-button compact-button js-demo-toast" type="button" data-message="B站账号登录会在后续通过浏览器会话或官方接口接入。">保存账号</button>
+        </div>
+        <label>
+          <span>默认标题模板</span>
+          <input type="text" name="title_template" value="{{ '{{片段标题}}' }}｜直播高光切片">
+        </label>
+        <label>
+          <span>默认简介</span>
+          <textarea name="description_template" rows="4">由本地直播切片工作流自动生成，发布前可人工复核。</textarea>
+        </label>
+        <button class="primary-button js-demo-toast" type="button" data-message="一键推送按钮已预留，真实发布会在账号和平台接口确认后接入。">一键推送 Demo</button>
+      </form>
+    </section>
+  </aside>
+</section>
+{% endblock %}

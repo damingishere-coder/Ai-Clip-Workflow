@@ -25,7 +25,7 @@ class TaskCreate(BaseModel):
     original_video_path: Optional[str] = None
     nas_file_path: Optional[str] = None
     max_clip_duration: int = Field(default=2, ge=1, le=60)
-    candidate_clip_count: int = Field(default=8, ge=1, le=50)
+    candidate_clip_count: int = Field(default=5, ge=1, le=50)
     ai_preference: Optional[str] = None
 
 
@@ -57,6 +57,10 @@ class AIPromptPresetUpdate(BaseModel):
 
 class TaskAIPromptPresetUpdate(BaseModel):
     ai_prompt_preset_id: str = Field(..., min_length=1, max_length=80)
+
+
+class TaskCandidateClipCountUpdate(BaseModel):
+    candidate_clip_count: int = Field(default=5, ge=1, le=50)
 
 
 class ClipCandidate(BaseModel):

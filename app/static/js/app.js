@@ -20,7 +20,7 @@ if (newTaskForm) {
       uploadData.append("task_name", payload.task_name || "");
       uploadData.append("platform", payload.platform || "general");
       uploadData.append("max_clip_duration", payload.max_clip_duration || "2");
-      uploadData.append("candidate_clip_count", payload.candidate_clip_count || "8");
+      uploadData.append("candidate_clip_count", payload.candidate_clip_count || "5");
       uploadData.append("ai_preference", "");
       uploadData.append("video_file", videoFileInput.files[0]);
       const response = await fetch("/api/tasks/upload", {
@@ -203,6 +203,22 @@ const saveAiPromptsButton = document.querySelector("#save-ai-prompts-button");
 const aiProcessResult = document.querySelector("#ai-process-result");
 const aiAnalysisSummary = document.querySelector("#ai-analysis-summary");
 const aiCandidateCountPill = document.querySelector("#ai-candidate-count-pill");
+const aiCandidateCountInput = document.querySelector("#ai-candidate-count-input");
+const showAiHistoryButton = document.querySelector("#show-ai-history-button");
+const refreshAiHistoryButton = document.querySelector("#refresh-ai-history-button");
+const aiAnalysisHistory = document.querySelector("#ai-analysis-history");
+const aiAnalysisHistoryList = document.querySelector("#ai-analysis-history-list");
+let aiAnalysisRuns = [];
+
+function readJsonScript(id, fallback) {
+  const node = document.querySelector(`#${id}`);
+  if (!node?.textContent?.trim()) return fallback;
+  try {
+    return JSON.parse(node.textContent);
+  } catch {
+    return fallback;
+  }
+}
 
 function getSelectedPromptPresetCard() {
   if (!aiAnalysisForm) return null;
@@ -237,7 +253,7 @@ function formatClipDuration(seconds) {
 
 function renderAiAnalysisSummary(data) {
   if (!aiAnalysisSummary) return;
-  const clips = Array.isArray(data.clips) ? data.clips : [];
+  const clips = Array.isArray(data.clips) && data.clips.length ? data.clips : (data.clip_summaries || []);
   aiAnalysisSummary.hidden = false;
   aiAnalysisSummary.replaceChildren();
 
@@ -248,7 +264,7 @@ function renderAiAnalysisSummary(data) {
   eyebrow.className = "eyebrow";
   eyebrow.textContent = "Analysis Result";
   const title = document.createElement("h3");
-  title.textContent = "本次 AI 选取结果";
+  title.textContent = data.run_number ? `${data.title || `第 ${data.run_number} 次分析`} · AI 选取结果` : "本次 AI 选取结果";
   titleWrap.append(eyebrow, title);
   const source = document.createElement("span");
   source.className = "status-pill";
@@ -264,7 +280,7 @@ function renderAiAnalysisSummary(data) {
   const count = document.createElement("strong");
   count.textContent = `${clips.length} 条候选片段`;
   const provider = document.createElement("span");
-  provider.textContent = data.fallback_notice ? "远程失败后已自动改用本地 AI" : "已按当前 Prompt 生成候选内容";
+  provider.textContent = data.fallback_notice ? "远程失败后已自动改用本地 AI" : `目标 ${data.requested_clip_count || clips.length || 0} 条`;
   meta.append(count, provider);
 
   const list = document.createElement("div");
@@ -289,6 +305,74 @@ function renderAiAnalysisSummary(data) {
   actions.append(reviewLink);
 
   aiAnalysisSummary.append(header, message, meta, list, actions);
+}
+
+function renderAiAnalysisHistory(runs) {
+  if (!aiAnalysisHistoryList) return;
+  aiAnalysisRuns = Array.isArray(runs) ? runs : [];
+  aiAnalysisHistoryList.replaceChildren();
+
+  if (!aiAnalysisRuns.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-note";
+    empty.textContent = "还没有历史分析结果。完成一次 DeepSeek AI 分析或本地 AI 分析后，这里会自动出现记录。";
+    aiAnalysisHistoryList.append(empty);
+    return;
+  }
+
+  aiAnalysisRuns.forEach((run) => {
+    const item = document.createElement("article");
+    item.className = "ai-history-item";
+    const main = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = `${run.title || `第 ${run.run_number} 次分析`} · ${run.clip_count || 0} 条`;
+    const meta = document.createElement("span");
+    meta.textContent = `${run.provider_label || "AI"} · ${run.model || "未知模型"} · ${run.ai_prompt_preset_name || "Prompt 方案"} · ${run.created_at || "未知时间"}`;
+    const summary = document.createElement("p");
+    summary.textContent = run.fallback_notice || run.analysis_summary || "暂无整体总结。";
+    main.append(title, meta, summary);
+
+    const restoreButton = document.createElement("button");
+    restoreButton.className = "secondary-button compact-button";
+    restoreButton.type = "button";
+    restoreButton.dataset.restoreRunId = run.id;
+    restoreButton.textContent = "恢复这次结果";
+    item.append(main, restoreButton);
+    aiAnalysisHistoryList.append(item);
+  });
+}
+
+async function refreshAiAnalysisHistory() {
+  if (!aiAnalysisForm) return;
+  const taskId = aiAnalysisForm.dataset.taskId;
+  const response = await fetch(`/api/tasks/${taskId}/ai-analysis-runs`);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "读取历史分析失败");
+  }
+  renderAiAnalysisHistory(data.runs || []);
+  if (data.latest) {
+    renderAiAnalysisSummary(data.latest);
+  }
+}
+
+async function saveTaskCandidateClipCount() {
+  if (!aiAnalysisForm || !aiCandidateCountInput) return null;
+  const taskId = aiAnalysisForm.dataset.taskId;
+  const count = Number(aiCandidateCountInput.value || 5);
+  if (!Number.isInteger(count) || count < 1 || count > 50) {
+    throw new Error("候选片段数量必须是 1 到 50 之间的整数。");
+  }
+  const response = await fetch(`/api/tasks/${taskId}/candidate-clip-count`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ candidate_clip_count: count }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "候选片段数量保存失败");
+  }
+  return data;
 }
 
 async function saveTaskAiPromptSettings() {
@@ -356,6 +440,7 @@ if (saveAiPromptsButton && aiAnalysisForm) {
 
     try {
       const data = await saveTaskAiPromptSettings();
+      await saveTaskCandidateClipCount();
       if (aiProcessResult) aiProcessResult.textContent = data.message || "AI Prompt 方案已保存。";
     } catch (error) {
       if (aiProcessResult) aiProcessResult.textContent = `保存失败：${error.message}`;
@@ -389,6 +474,7 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
 
     try {
       await saveTaskAiPromptSettings();
+      await saveTaskCandidateClipCount();
       const response = await fetch(`/api/tasks/${taskId}/process/ai?provider=${provider}`, {
         method: "POST",
       });
@@ -400,7 +486,8 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
       if (aiCandidateCountPill && Array.isArray(data.clips)) {
         aiCandidateCountPill.textContent = `${data.clips.length} 条候选`;
       }
-      renderAiAnalysisSummary(data);
+      renderAiAnalysisSummary(data.analysis_run || data);
+      renderAiAnalysisHistory(data.runs || aiAnalysisRuns);
     } catch (error) {
       if (aiProcessResult) aiProcessResult.textContent = `AI 分析失败：${error.message}`;
     } finally {
@@ -409,6 +496,73 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
     }
   });
 });
+
+if (aiAnalysisForm) {
+  const latestAiAnalysis = readJsonScript("latest-ai-analysis-data", null);
+  const initialAiAnalysisRuns = readJsonScript("ai-analysis-runs-data", []);
+  renderAiAnalysisHistory(initialAiAnalysisRuns);
+  if (latestAiAnalysis) {
+    renderAiAnalysisSummary(latestAiAnalysis);
+  }
+}
+
+if (showAiHistoryButton && aiAnalysisHistory) {
+  showAiHistoryButton.addEventListener("click", () => {
+    aiAnalysisHistory.hidden = !aiAnalysisHistory.hidden;
+  });
+}
+
+if (refreshAiHistoryButton) {
+  refreshAiHistoryButton.addEventListener("click", async () => {
+    const originalText = refreshAiHistoryButton.textContent;
+    refreshAiHistoryButton.disabled = true;
+    refreshAiHistoryButton.textContent = "刷新中...";
+    try {
+      await refreshAiAnalysisHistory();
+      if (aiProcessResult) aiProcessResult.textContent = "历史分析结果已刷新。";
+    } catch (error) {
+      if (aiProcessResult) aiProcessResult.textContent = `刷新历史失败：${error.message}`;
+    } finally {
+      refreshAiHistoryButton.disabled = false;
+      refreshAiHistoryButton.textContent = originalText;
+    }
+  });
+}
+
+if (aiAnalysisHistoryList) {
+  aiAnalysisHistoryList.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-restore-run-id]");
+    if (!button || !aiAnalysisForm) return;
+    const runId = button.dataset.restoreRunId;
+    const confirmed = window.confirm("确认恢复这次 AI 分析结果吗？\n\n当前片段审核页的候选片段会被这次历史结果覆盖。");
+    if (!confirmed) return;
+
+    const taskId = aiAnalysisForm.dataset.taskId;
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "恢复中...";
+    try {
+      const response = await fetch(`/api/tasks/${taskId}/ai-analysis-runs/${runId}/restore`, {
+        method: "POST",
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "恢复失败");
+      }
+      if (aiProcessResult) aiProcessResult.textContent = data.message || "历史结果已恢复。";
+      if (aiCandidateCountPill && Array.isArray(data.clips)) {
+        aiCandidateCountPill.textContent = `${data.clips.length} 条候选`;
+      }
+      renderAiAnalysisSummary(data.restored_run || data.latest);
+      renderAiAnalysisHistory(data.runs || aiAnalysisRuns);
+    } catch (error) {
+      if (aiProcessResult) aiProcessResult.textContent = `恢复失败：${error.message}`;
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
+}
 
 const clipFilterForm = document.querySelector("#clip-filter-form");
 if (clipFilterForm) {
@@ -621,7 +775,7 @@ if (generateClipsButton) {
       if (!response.ok) {
         throw new Error(data.detail || "生成切片请求失败");
       }
-      showClipReviewMessage(data.message || "当前待视频切割模块接入。", "success");
+      showClipReviewMessage(`${data.message || "切片生成完成。"} 可进入“字幕推送”继续加字幕、打码和发布配置。`, "success");
     } catch (error) {
       showClipReviewMessage(`生成切片失败：${error.message}`, "error");
     } finally {
@@ -655,6 +809,46 @@ document.querySelectorAll(".js-hide-task").forEach((button) => {
       button.disabled = false;
       button.textContent = originalText;
     }
+  });
+});
+
+const subtitleStyleForm = document.querySelector("#subtitle-style-form");
+const subtitleStyleResult = document.querySelector("#subtitle-style-result");
+
+if (subtitleStyleForm) {
+  const savedStyle = window.localStorage.getItem("subtitle_style_demo");
+  if (savedStyle) {
+    try {
+      const style = JSON.parse(savedStyle);
+      Object.entries(style).forEach(([name, value]) => {
+        const field = subtitleStyleForm.elements[name];
+        if (!field) return;
+        if (field.type === "checkbox") {
+          field.checked = Boolean(value);
+          return;
+        }
+        field.value = value;
+      });
+    } catch (error) {
+      window.localStorage.removeItem("subtitle_style_demo");
+    }
+  }
+
+  subtitleStyleForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const formData = new FormData(subtitleStyleForm);
+    const payload = Object.fromEntries(formData.entries());
+    payload.shadow_enabled = Boolean(subtitleStyleForm.elements.shadow_enabled?.checked);
+    window.localStorage.setItem("subtitle_style_demo", JSON.stringify(payload));
+    if (subtitleStyleResult) {
+      subtitleStyleResult.textContent = "字幕样式已保存到当前浏览器。后续会接入后端模板和批量渲染。";
+    }
+  });
+}
+
+document.querySelectorAll(".js-demo-toast").forEach((button) => {
+  button.addEventListener("click", () => {
+    window.alert(button.dataset.message || "这个功能已经预留入口，后续会继续接入。");
   });
 });
 

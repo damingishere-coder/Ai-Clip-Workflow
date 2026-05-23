@@ -9,12 +9,15 @@ from app.services.task_service import (
     get_artifact_paths,
     get_clips_overview_context,
     get_dashboard_context,
+    get_subtitle_workflow_context,
     get_system_status_context,
+    get_latest_ai_analysis_run,
     get_task,
     get_task_workflow_steps,
     get_transcript_preview,
     get_workflow_steps,
     list_clip_candidates,
+    list_ai_analysis_runs,
     list_output_clips,
     list_tasks,
 )
@@ -86,6 +89,8 @@ async def task_detail_page(request: Request, task_id: str):
             "transcript_lines": get_transcript_preview(task_id),
             "output_clips": list_output_clips(task_id),
             "ai_prompt_presets": list_ai_prompt_presets(),
+            "latest_ai_analysis_run": get_latest_ai_analysis_run(task_id),
+            "ai_analysis_runs": list_ai_analysis_runs(task_id),
         },
     )
 
@@ -190,6 +195,21 @@ async def clips_overview_page(request: Request):
         context={
             "request": request,
             "active_page": "clips",
+            "settings": settings,
+            **context,
+        },
+    )
+
+
+@router.get("/subtitles")
+async def subtitle_workflow_page(request: Request):
+    context = get_subtitle_workflow_context()
+    return templates.TemplateResponse(
+        name="subtitle_workflow.html",
+        request=request,
+        context={
+            "request": request,
+            "active_page": "subtitles",
             "settings": settings,
             **context,
         },

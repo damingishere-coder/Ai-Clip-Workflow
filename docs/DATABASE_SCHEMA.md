@@ -3,6 +3,7 @@
 
 - `tasks` 表新增 `ai_prompt_preset_id`，记录当前任务使用哪一套 AI 分析 Prompt。
 - 新增 `ai_prompt_presets` 表，用于保存全局共用的 1、2、3 号 Prompt 方案。
+- 新增 `ai_analysis_runs` 表，用于保存每一次 AI 分析历史，支持刷新后继续展示分析预览和恢复旧分析结果。
 
 ### ai_prompt_presets 表
 
@@ -15,6 +16,25 @@
 | `is_default` | INTEGER | 是否默认方案 |
 | `created_at` | TEXT | 创建时间 |
 | `updated_at` | TEXT | 更新时间 |
+
+### ai_analysis_runs 表
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | TEXT | 历史分析 ID |
+| `task_id` | TEXT | 所属任务 ID |
+| `run_number` | INTEGER | 第几次分析 |
+| `provider` | TEXT | 实际使用的 AI 来源 |
+| `provider_label` | TEXT | 页面展示用来源名称 |
+| `model` | TEXT | 实际使用模型 |
+| `ai_prompt_preset_id` | TEXT | 当次使用的 Prompt 方案 ID |
+| `ai_prompt_preset_name` | TEXT | 当次使用的 Prompt 方案名称 |
+| `requested_clip_count` | INTEGER | 当次请求输出的候选片段数量 |
+| `clip_count` | INTEGER | 当次实际生成的候选片段数量 |
+| `analysis_summary` | TEXT | 当次整体分析总结 |
+| `fallback_notice` | TEXT | 远程降级本地等提示 |
+| `analysis_payload_json` | TEXT | 完整 AI 分析结果 JSON |
+| `created_at` | TEXT | 创建时间 |
 褰撳墠鏁版嵁搴撲娇鐢?SQLite锛屾暟鎹簱鏂囦欢榛樿浣嶄簬锛?
 ```text
 data/workflow.sqlite3

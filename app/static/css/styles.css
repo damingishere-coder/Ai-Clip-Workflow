@@ -1556,6 +1556,17 @@ button:disabled {
   overflow: visible;
 }
 
+.ai-analysis-controls {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.ai-analysis-controls label {
+  max-width: 260px;
+}
+
 .prompt-preset-tabs {
   display: flex;
   align-items: center;
@@ -1685,6 +1696,55 @@ button:disabled {
 .ai-analysis-result-item span {
   color: var(--muted);
   font-size: 13px;
+}
+
+.ai-analysis-history-card {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.ai-analysis-history-card[hidden] {
+  display: none;
+}
+
+.ai-analysis-history-card h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.ai-analysis-history-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(247, 250, 255, 0.72);
+}
+
+.ai-history-item div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ai-history-item span,
+.ai-history-item p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .modal-actions {
@@ -1902,6 +1962,114 @@ body.transcript-drawer-open .main-panel {
   line-height: 1.6;
 }
 
+.subtitle-workflow-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+  gap: 16px;
+  align-items: start;
+}
+
+.subtitle-queue,
+.subtitle-side,
+.subtitle-task-list,
+.subtitle-output-body,
+.mosaic-demo-list {
+  display: grid;
+  gap: 14px;
+}
+
+.subtitle-side {
+  position: sticky;
+  top: 18px;
+}
+
+.subtitle-task-card {
+  display: grid;
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+}
+
+.subtitle-task-card:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.subtitle-task-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.subtitle-task-head h3,
+.subtitle-task-head p {
+  margin: 8px 0 0;
+}
+
+.subtitle-task-head p,
+.subtitle-output-body p {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.subtitle-output-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.subtitle-output-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.subtitle-output-card video {
+  display: block;
+  width: 100%;
+  height: 220px;
+  border: 1px solid #1d2738;
+  border-radius: 8px;
+  background: #111927;
+  object-fit: contain;
+}
+
+.compact-video-placeholder {
+  min-height: 220px;
+  margin-bottom: 0;
+}
+
+.subtitle-output-actions,
+.publish-account-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.compact-settings-form {
+  overflow: visible;
+  padding-right: 0;
+}
+
+.compact-settings-form input[type="color"] {
+  width: 100%;
+  min-height: 44px;
+  padding: 4px;
+}
+
+.publish-account-row {
+  justify-content: space-between;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
 .error-text {
   color: var(--red);
   overflow-wrap: anywhere;
@@ -1914,6 +2082,8 @@ body.transcript-drawer-open .main-panel {
   .detail-grid,
   .content-grid,
   .split-layout,
+  .subtitle-workflow-grid,
+  .subtitle-output-grid,
   .review-layout,
   .review-task-row,
   .review-metrics {
@@ -1921,10 +2091,17 @@ body.transcript-drawer-open .main-panel {
   }
 
   .prompt-preset-tabs,
+  .ai-analysis-controls,
   .ai-analysis-result-header,
-  .ai-analysis-result-meta {
+  .ai-analysis-result-meta,
+  .ai-history-item {
     align-items: stretch;
+    grid-template-columns: 1fr;
     flex-direction: column;
+  }
+
+  .ai-analysis-controls label {
+    max-width: none;
   }
 
   .prompt-preset-tab {
@@ -1944,6 +2121,10 @@ body.transcript-drawer-open .main-panel {
   }
 
   .preview-panel {
+    position: static;
+  }
+
+  .subtitle-side {
     position: static;
   }
 
@@ -1969,7 +2150,8 @@ body.transcript-drawer-open .main-panel {
 
   .topbar,
   .page-heading,
-  .panel-header {
+  .panel-header,
+  .subtitle-task-head {
     align-items: stretch;
     flex-direction: column;
   }

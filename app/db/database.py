@@ -36,7 +36,7 @@ def init_db() -> None:
                 original_video_path TEXT,
                 nas_file_path TEXT,
                 max_clip_duration INTEGER NOT NULL DEFAULT 2,
-                candidate_clip_count INTEGER NOT NULL DEFAULT 8,
+                candidate_clip_count INTEGER NOT NULL DEFAULT 5,
                 ai_preference TEXT,
                 ai_prompt_preset_id TEXT NOT NULL DEFAULT 'preset_001',
                 status TEXT NOT NULL DEFAULT 'pending_video',
@@ -93,11 +93,30 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS ai_analysis_runs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                run_number INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                provider_label TEXT NOT NULL,
+                model TEXT NOT NULL,
+                ai_prompt_preset_id TEXT,
+                ai_prompt_preset_name TEXT,
+                requested_clip_count INTEGER NOT NULL DEFAULT 5,
+                clip_count INTEGER NOT NULL DEFAULT 0,
+                analysis_summary TEXT,
+                fallback_notice TEXT,
+                analysis_payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES tasks(id)
+            );
             """
         )
         _migrate_tasks_table(connection)
         _migrate_clip_candidates_table(connection)
         _migrate_output_clip_table(connection)
+        _migrate_ai_analysis_runs_table(connection)
         _seed_ai_prompt_presets(connection)
         connection.commit()
 
@@ -116,7 +135,7 @@ def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
         "original_video_path": "ALTER TABLE tasks ADD COLUMN original_video_path TEXT",
         "nas_file_path": "ALTER TABLE tasks ADD COLUMN nas_file_path TEXT",
         "max_clip_duration": "ALTER TABLE tasks ADD COLUMN max_clip_duration INTEGER NOT NULL DEFAULT 2",
-        "candidate_clip_count": "ALTER TABLE tasks ADD COLUMN candidate_clip_count INTEGER NOT NULL DEFAULT 8",
+        "candidate_clip_count": "ALTER TABLE tasks ADD COLUMN candidate_clip_count INTEGER NOT NULL DEFAULT 5",
         "ai_preference": "ALTER TABLE tasks ADD COLUMN ai_preference TEXT",
         "ai_prompt_preset_id": "ALTER TABLE tasks ADD COLUMN ai_prompt_preset_id TEXT NOT NULL DEFAULT 'preset_001'",
         "status": "ALTER TABLE tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'pending_video'",
@@ -255,6 +274,33 @@ def _migrate_output_clip_table(connection: sqlite3.Connection) -> None:
         "error_message": "ALTER TABLE output_clip ADD COLUMN error_message TEXT",
         "created_at": "ALTER TABLE output_clip ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         "updated_at": "ALTER TABLE output_clip ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+    }
+
+    for column, statement in migrations.items():
+        if column not in columns:
+            connection.execute(statement)
+
+
+def _migrate_ai_analysis_runs_table(connection: sqlite3.Connection) -> None:
+    columns = _get_table_columns(connection, "ai_analysis_runs")
+    if not columns:
+        return
+
+    migrations = {
+        "id": "ALTER TABLE ai_analysis_runs ADD COLUMN id TEXT",
+        "task_id": "ALTER TABLE ai_analysis_runs ADD COLUMN task_id TEXT",
+        "run_number": "ALTER TABLE ai_analysis_runs ADD COLUMN run_number INTEGER NOT NULL DEFAULT 1",
+        "provider": "ALTER TABLE ai_analysis_runs ADD COLUMN provider TEXT NOT NULL DEFAULT 'remote'",
+        "provider_label": "ALTER TABLE ai_analysis_runs ADD COLUMN provider_label TEXT NOT NULL DEFAULT '远程 AI'",
+        "model": "ALTER TABLE ai_analysis_runs ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+        "ai_prompt_preset_id": "ALTER TABLE ai_analysis_runs ADD COLUMN ai_prompt_preset_id TEXT",
+        "ai_prompt_preset_name": "ALTER TABLE ai_analysis_runs ADD COLUMN ai_prompt_preset_name TEXT",
+        "requested_clip_count": "ALTER TABLE ai_analysis_runs ADD COLUMN requested_clip_count INTEGER NOT NULL DEFAULT 5",
+        "clip_count": "ALTER TABLE ai_analysis_runs ADD COLUMN clip_count INTEGER NOT NULL DEFAULT 0",
+        "analysis_summary": "ALTER TABLE ai_analysis_runs ADD COLUMN analysis_summary TEXT",
+        "fallback_notice": "ALTER TABLE ai_analysis_runs ADD COLUMN fallback_notice TEXT",
+        "analysis_payload_json": "ALTER TABLE ai_analysis_runs ADD COLUMN analysis_payload_json TEXT NOT NULL DEFAULT '{}'",
+        "created_at": "ALTER TABLE ai_analysis_runs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
     }
 
     for column, statement in migrations.items():

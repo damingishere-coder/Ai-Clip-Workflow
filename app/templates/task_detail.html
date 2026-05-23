@@ -85,6 +85,16 @@
       <span class="status-pill" id="ai-candidate-count-pill">{{ task.candidate_count }} 条候选</span>
     </div>
     <form id="ai-analysis-form" class="settings-form ai-prompt-form" data-task-id="{{ task.id }}">
+      <div class="ai-analysis-controls">
+        <label>
+          <span>候选片段数量</span>
+          <span class="unit-input">
+            <input id="ai-candidate-count-input" name="candidate_clip_count" type="number" min="1" max="50" step="1" value="{{ task.candidate_clip_count or 5 }}">
+            <small>条</small>
+          </span>
+        </label>
+        <button class="secondary-button" id="show-ai-history-button" type="button">历史分析结果</button>
+      </div>
       <div class="prompt-preset-tabs" role="tablist" aria-label="AI Prompt 方案">
         {% for preset in ai_prompt_presets %}
         {% set is_selected = preset.id == (task.ai_prompt_preset_id or "preset_001") %}
@@ -117,7 +127,19 @@
       </div>
       <p class="form-hint" id="ai-process-result"></p>
       <div class="ai-analysis-result-card" id="ai-analysis-summary" hidden></div>
+      <section class="ai-analysis-history-card" id="ai-analysis-history" hidden>
+        <div class="panel-header compact">
+          <div>
+            <p class="eyebrow">History</p>
+            <h3>历史分析结果</h3>
+          </div>
+          <button class="secondary-button compact-button" id="refresh-ai-history-button" type="button">刷新历史</button>
+        </div>
+        <div class="ai-analysis-history-list" id="ai-analysis-history-list"></div>
+      </section>
     </form>
+    <script type="application/json" id="latest-ai-analysis-data">{{ latest_ai_analysis_run | tojson }}</script>
+    <script type="application/json" id="ai-analysis-runs-data">{{ ai_analysis_runs | tojson }}</script>
   </article>
 
   <article class="panel transcript-panel" id="transcript-panel" data-task-id="{{ task.id }}">

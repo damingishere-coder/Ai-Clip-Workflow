@@ -7,6 +7,7 @@ from app.models.task import (
     ClipCandidateUpdate,
     TaskAIPreferenceUpdate,
     TaskAIPromptPresetUpdate,
+    TaskCandidateClipCountUpdate,
     TaskCreate,
     TaskStatusUpdate,
 )
@@ -36,7 +37,7 @@ async def create_upload_task(
     task_name: str = Form(...),
     platform: str = Form("general"),
     max_clip_duration: int = Form(2),
-    candidate_clip_count: int = Form(8),
+    candidate_clip_count: int = Form(5),
     ai_preference: str | None = Form(None),
     video_file: UploadFile = File(...),
 ) -> dict:
@@ -105,6 +106,14 @@ async def patch_task_ai_prompt_preset(task_id: str, payload: TaskAIPromptPresetU
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.patch("/{task_id}/candidate-clip-count")
+async def patch_task_candidate_clip_count(task_id: str, payload: TaskCandidateClipCountUpdate) -> dict:
+    try:
+        return task_service.update_task_candidate_clip_count(task_id, payload.candidate_clip_count)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/{task_id}/process/audio")
 async def process_audio(task_id: str) -> dict:
     try:
@@ -150,6 +159,26 @@ async def process_ai_analysis(
 ) -> dict:
     try:
         return task_service.process_task_ai_analysis(task_id, provider=provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{task_id}/ai-analysis-runs")
+async def get_ai_analysis_runs(task_id: str) -> dict:
+    try:
+        return {
+            "status": "ok",
+            "latest": task_service.get_latest_ai_analysis_run(task_id),
+            "runs": task_service.list_ai_analysis_runs(task_id),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/ai-analysis-runs/{run_id}/restore")
+async def restore_ai_analysis_run(task_id: str, run_id: str) -> dict:
+    try:
+        return task_service.restore_ai_analysis_run(task_id, run_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

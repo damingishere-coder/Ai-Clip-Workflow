@@ -138,6 +138,7 @@
     <div class="button-row review-actions">
       <button class="secondary-button" id="save-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/clips/batch-update" {{ "disabled" if not clips else "" }}>保存修改</button>
       <button class="primary-button" id="generate-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/cuts" {{ "disabled" if not clips else "" }}>生成切片</button>
+      <a class="secondary-button" href="/subtitles">去字幕推送</a>
     </div>
     <p class="form-hint" id="process-result"></p>
 

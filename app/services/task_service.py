@@ -701,6 +701,70 @@ def list_output_clips(task_id: str) -> list[dict]:
     ]
 
 
+def get_output_clip(task_id: str, output_clip_id: str) -> dict | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, task_id, clip_candidate_id, output_file_path, output_file_name,
+                   status, error_message, created_at, updated_at
+            FROM output_clip
+            WHERE task_id = ? AND id = ?
+            """,
+            (task_id, output_clip_id),
+        ).fetchone()
+    if not row:
+        return None
+    return {**dict(row), "status_label": OUTPUT_STATUS_LABELS.get(row["status"], row["status"])}
+
+
+def get_subtitle_workflow_context() -> dict:
+    tasks = list_tasks()
+    workflow_tasks = []
+    total_output_clips = 0
+    playable_output_clips = 0
+
+    for task in tasks:
+        output_clips = []
+        for output in list_output_clips(task["id"]):
+            raw_output_path = (output.get("output_file_path") or "").strip()
+            output_path = Path(raw_output_path) if raw_output_path else None
+            file_exists = bool(output_path and output_path.exists() and output_path.is_file())
+            if output.get("status") == "completed":
+                total_output_clips += 1
+            if file_exists:
+                playable_output_clips += 1
+            output_clips.append(
+                {
+                    **output,
+                    "file_exists": file_exists,
+                    "media_url": f"/media/tasks/{task['id']}/output-clips/{output['id']}",
+                    "subtitle_stage": "待加字幕" if output.get("status") == "completed" else "切片异常",
+                    "publish_stage": "待推送配置",
+                }
+            )
+
+        if output_clips:
+            workflow_tasks.append(
+                {
+                    **task,
+                    "subtitle_stage": "待加字幕",
+                    "subtitle_tone": "blue",
+                    "output_clips": output_clips,
+                }
+            )
+
+    return {
+        "tasks": workflow_tasks,
+        "stats": [
+            {"label": "待加字幕切片", "value": total_output_clips, "tone": "blue"},
+            {"label": "可预览视频", "value": playable_output_clips, "tone": "green"},
+            {"label": "字幕样式模板", "value": 1, "tone": "purple"},
+            {"label": "待打码确认", "value": total_output_clips, "tone": "amber"},
+            {"label": "待一键推送", "value": total_output_clips, "tone": "red"},
+        ],
+    }
+
+
 def get_transcript_preview(task_id: str) -> list[dict[str, str]]:
     paths = get_artifact_paths(task_id)
     return read_transcript_preview(paths["transcript_path"])
@@ -971,6 +1035,33 @@ def update_task_ai_preference(task_id: str, ai_preference: str | None) -> dict:
     }
 
 
+def update_task_candidate_clip_count(task_id: str, candidate_clip_count: int) -> dict:
+    task = get_task(task_id, include_video_probe=False)
+    if not task:
+        raise ValueError("任务不存在")
+    if candidate_clip_count < 1 or candidate_clip_count > 50:
+        raise ValueError("候选片段数量必须在 1 到 50 条之间")
+
+    now = _now_iso()
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE tasks
+            SET candidate_clip_count = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (candidate_clip_count, now, task_id),
+        )
+        connection.commit()
+
+    _append_task_log(task_id, f"已更新 AI 候选片段数量：{candidate_clip_count} 条")
+    return {
+        "status": "ok",
+        "message": f"候选片段数量已更新为 {candidate_clip_count} 条。",
+        "task": get_task(task_id, include_video_probe=False),
+    }
+
+
 def soft_delete_task(task_id: str) -> dict:
     task = get_task(task_id, include_video_probe=False)
     if not task:
@@ -1207,6 +1298,254 @@ def _summarize_analysis_clips(clips: list[dict]) -> list[dict]:
     return summaries
 
 
+def _analysis_run_row_to_dict(row: Row, include_payload: bool = False) -> dict:
+    run = dict(row)
+    payload = {}
+    if include_payload:
+        try:
+            payload = json.loads(run.get("analysis_payload_json") or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+
+    clips = payload.get("clips") or []
+    return {
+        "id": run.get("id"),
+        "task_id": run.get("task_id"),
+        "run_number": int(run.get("run_number") or 0),
+        "title": f"第 {int(run.get('run_number') or 0)} 次分析",
+        "provider": run.get("provider") or "",
+        "provider_label": run.get("provider_label") or _ai_provider_label(run.get("provider") or ""),
+        "model": run.get("model") or "",
+        "ai_prompt_preset_id": run.get("ai_prompt_preset_id") or "",
+        "ai_prompt_preset_name": run.get("ai_prompt_preset_name") or "",
+        "requested_clip_count": int(run.get("requested_clip_count") or 0),
+        "clip_count": int(run.get("clip_count") or 0),
+        "analysis_summary": run.get("analysis_summary") or "",
+        "fallback_notice": run.get("fallback_notice") or "",
+        "created_at": _format_datetime(run.get("created_at")),
+        "created_at_raw": run.get("created_at") or "",
+        "review_url": f"/tasks/{run.get('task_id')}/clips/review",
+        "clips": clips if include_payload else [],
+        "clip_summaries": _summarize_analysis_clips(clips) if include_payload else [],
+    }
+
+
+def _analysis_payload_to_preview(task_id: str, payload: dict, fallback: dict | None = None) -> dict:
+    fallback = fallback or {}
+    meta = payload.get("analysis_meta") or {}
+    clips = payload.get("clips") or []
+    provider = meta.get("provider") or fallback.get("provider") or settings.ai_default_provider
+    model = meta.get("model") or fallback.get("model") or _ai_model_name(provider)
+    return {
+        "id": fallback.get("id") or "",
+        "task_id": task_id,
+        "run_number": int(fallback.get("run_number") or 0),
+        "title": fallback.get("title") or "当前分析结果",
+        "provider": provider,
+        "provider_label": meta.get("provider_label") or fallback.get("provider_label") or _ai_provider_label(provider),
+        "model": model,
+        "ai_prompt_preset_id": fallback.get("ai_prompt_preset_id") or "",
+        "ai_prompt_preset_name": fallback.get("ai_prompt_preset_name") or "",
+        "requested_clip_count": int(fallback.get("requested_clip_count") or len(clips)),
+        "clip_count": len(clips),
+        "analysis_summary": payload.get("analysis_summary") or fallback.get("analysis_summary") or "",
+        "fallback_notice": fallback.get("fallback_notice") or "",
+        "created_at": _format_datetime(meta.get("generated_at") or fallback.get("created_at_raw")),
+        "created_at_raw": meta.get("generated_at") or fallback.get("created_at_raw") or "",
+        "review_url": f"/tasks/{task_id}/clips/review",
+        "clips": clips,
+        "clip_summaries": _summarize_analysis_clips(clips),
+    }
+
+
+def list_ai_analysis_runs(task_id: str) -> list[dict]:
+    if not get_task(task_id, include_video_probe=False):
+        raise ValueError("任务不存在")
+    _ensure_ai_analysis_history_from_current_file(task_id)
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM ai_analysis_runs
+            WHERE task_id = ?
+            ORDER BY run_number DESC, created_at DESC
+            """,
+            (task_id,),
+        ).fetchall()
+    return [_analysis_run_row_to_dict(row, include_payload=True) for row in rows]
+
+
+def get_latest_ai_analysis_run(task_id: str) -> dict | None:
+    if not get_task(task_id, include_video_probe=False):
+        raise ValueError("任务不存在")
+    _ensure_ai_analysis_history_from_current_file(task_id)
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM ai_analysis_runs
+            WHERE task_id = ?
+            ORDER BY run_number DESC, created_at DESC
+            LIMIT 1
+            """,
+            (task_id,),
+        ).fetchone()
+    if row:
+        return _analysis_run_row_to_dict(row, include_payload=True)
+
+    return None
+
+
+def _next_ai_analysis_run_number(connection, task_id: str) -> int:
+    row = connection.execute(
+        "SELECT COALESCE(MAX(run_number), 0) AS max_run_number FROM ai_analysis_runs WHERE task_id = ?",
+        (task_id,),
+    ).fetchone()
+    return int(row["max_run_number"] or 0) + 1
+
+
+def _insert_ai_analysis_run(
+    task_id: str,
+    analysis_payload: dict,
+    provider: str,
+    provider_label: str,
+    model: str,
+    fallback_notice: str,
+    prompt_preset: dict,
+    requested_clip_count: int,
+) -> dict:
+    now = _now_iso()
+    run_id = uuid4().hex[:12]
+    clips = analysis_payload.get("clips") or []
+    with get_connection() as connection:
+        run_number = _next_ai_analysis_run_number(connection, task_id)
+        connection.execute(
+            """
+            INSERT INTO ai_analysis_runs (
+                id, task_id, run_number, provider, provider_label, model,
+                ai_prompt_preset_id, ai_prompt_preset_name, requested_clip_count,
+                clip_count, analysis_summary, fallback_notice, analysis_payload_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                task_id,
+                run_number,
+                provider,
+                provider_label,
+                model,
+                prompt_preset.get("id") or "",
+                prompt_preset.get("name") or "",
+                requested_clip_count,
+                len(clips),
+                analysis_payload.get("analysis_summary") or "",
+                fallback_notice,
+                json.dumps(analysis_payload, ensure_ascii=False),
+                now,
+            ),
+        )
+        connection.commit()
+
+    return get_ai_analysis_run(task_id, run_id)
+
+
+def _ensure_ai_analysis_history_from_current_file(task_id: str) -> None:
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT COUNT(*) AS total FROM ai_analysis_runs WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+    if int(row["total"] or 0) > 0:
+        return
+
+    paths = get_artifact_paths(task_id)
+    if not paths["analysis_path"].exists():
+        return
+    try:
+        payload = json.loads(paths["analysis_path"].read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return
+
+    task = get_task(task_id, include_video_probe=False)
+    clips = payload.get("clips") or []
+    meta = payload.get("analysis_meta") or {}
+    provider = str(meta.get("provider") or settings.ai_default_provider).lower()
+    prompt_preset = get_task_ai_prompt_preset(task_id)
+    _insert_ai_analysis_run(
+        task_id=task_id,
+        analysis_payload=payload,
+        provider=provider,
+        provider_label=meta.get("provider_label") or _ai_provider_label(provider),
+        model=meta.get("model") or _ai_model_name(provider),
+        fallback_notice="",
+        prompt_preset=prompt_preset,
+        requested_clip_count=len(clips) or int(task.get("candidate_clip_count") or 5),
+    )
+
+
+def get_ai_analysis_run(task_id: str, run_id: str) -> dict:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM ai_analysis_runs
+            WHERE task_id = ? AND id = ?
+            """,
+            (task_id, run_id),
+        ).fetchone()
+    if not row:
+        raise ValueError("没有找到这条 AI 分析历史")
+    return _analysis_run_row_to_dict(row, include_payload=True)
+
+
+def _write_analysis_payload(task_id: str, payload: dict) -> None:
+    paths = get_artifact_paths(task_id)
+    paths["analysis_path"].parent.mkdir(parents=True, exist_ok=True)
+    paths["analysis_path"].write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def restore_ai_analysis_run(task_id: str, run_id: str) -> dict:
+    task = get_task(task_id, include_video_probe=False)
+    if not task:
+        raise ValueError("任务不存在")
+    run = get_ai_analysis_run(task_id, run_id)
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT analysis_payload_json
+            FROM ai_analysis_runs
+            WHERE task_id = ? AND id = ?
+            """,
+            (task_id, run_id),
+        ).fetchone()
+    if not row:
+        raise ValueError("没有找到这条 AI 分析历史")
+    try:
+        payload = json.loads(row["analysis_payload_json"])
+    except json.JSONDecodeError as exc:
+        raise ValueError("这条历史记录已损坏，无法恢复") from exc
+
+    _write_analysis_payload(task_id, payload)
+    _clear_clip_candidates(task_id)
+    _insert_clip_candidates(task_id, payload.get("clips") or [])
+    update_task_status(task_id, TaskStatus.pending_review)
+    _append_task_log(task_id, f"已恢复 AI 分析历史：第 {run['run_number']} 次分析")
+
+    return {
+        "status": "ok",
+        "message": f"已恢复第 {run['run_number']} 次 AI 分析结果。",
+        "restored_run": _analysis_payload_to_preview(task_id, payload, run),
+        "latest": get_latest_ai_analysis_run(task_id),
+        "runs": list_ai_analysis_runs(task_id),
+        "clips": list_clip_candidates(task_id),
+        "task": get_task(task_id, include_video_probe=False),
+    }
+
+
 def _analyze_with_provider(task_id: str, task: dict, paths: dict[str, Path], provider_name: str):
     prompt_preset = get_task_ai_prompt_preset(task_id)
     prompt_template = (prompt_preset.get("prompt_text") or "").strip()
@@ -1303,10 +1642,19 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             "model": _ai_model_name(used_provider),
             "generated_at": _now_iso(),
         }
-        paths["analysis_path"].parent.mkdir(parents=True, exist_ok=True)
-        paths["analysis_path"].write_text(
-            json.dumps(analysis_payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        _write_analysis_payload(task_id, analysis_payload)
+        prompt_preset = get_task_ai_prompt_preset(task_id)
+        provider_label = _ai_provider_label(used_provider)
+        model_name = _ai_model_name(used_provider)
+        analysis_run = _insert_ai_analysis_run(
+            task_id=task_id,
+            analysis_payload=analysis_payload,
+            provider=used_provider,
+            provider_label=provider_label,
+            model=model_name,
+            fallback_notice=fallback_notice,
+            prompt_preset=prompt_preset,
+            requested_clip_count=int(task["candidate_clip_count"]),
         )
         _clear_clip_candidates(task_id)
         _insert_clip_candidates(task_id, analysis_payload["clips"])
@@ -1321,8 +1669,6 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
     message = f"AI 分析完成，生成 {len(analysis_payload['clips'])} 条候选片段。"
     if fallback_notice:
         message = f"{fallback_notice} {message}"
-    provider_label = _ai_provider_label(used_provider)
-    model_name = _ai_model_name(used_provider)
     return {
         "status": "ok",
         "message": message,
@@ -1332,6 +1678,9 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
         "fallback_notice": fallback_notice,
         "analysis_summary": analysis_payload.get("analysis_summary") or "",
         "clip_summaries": _summarize_analysis_clips(analysis_payload["clips"]),
+        "analysis_run_id": analysis_run["id"],
+        "analysis_run": analysis_run,
+        "runs": list_ai_analysis_runs(task_id),
         "analysis_path": str(paths["analysis_path"]),
         "review_url": f"/tasks/{task_id}/clips/review",
         "task": get_task(task_id, include_video_probe=False),

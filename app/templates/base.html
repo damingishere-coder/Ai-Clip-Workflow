@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260523-deepseek-tabs">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260523-subtitle-publish-demo">
   </head>
   <body>
     <div class="app-shell">
@@ -21,11 +21,12 @@
           <a class="{{ 'active' if active_page == 'new_task' else '' }}" href="/tasks/new"><span class="nav-dot"></span>新建任务</a>
           <a class="{{ 'active' if active_page == 'tasks' else '' }}" href="/tasks"><span class="nav-dot"></span>任务列表</a>
           <a class="{{ 'active' if active_page == 'clips' else '' }}" href="/clips"><span class="nav-dot"></span>片段审核</a>
+          <a class="{{ 'active' if active_page == 'subtitles' else '' }}" href="/subtitles"><span class="nav-dot"></span>字幕推送</a>
           <a class="{{ 'active' if active_page == 'system' else '' }}" href="/system"><span class="nav-dot"></span>系统状态</a>
         </nav>
         <div class="sidebar-note">
           <strong>MVP 阶段</strong>
-          <span>本地视频上传、转写、AI 片段分析与自动切割。</span>
+        <span>本地视频上传、转写、AI 片段分析、自动切割、字幕与推送预留。</span>
         </div>
       </aside>
 
@@ -46,6 +47,6 @@
       </main>
     </div>
 
-    <script src="{{ url_for('static', path='js/app.js') }}?v=20260523-deepseek-tabs"></script>
+    <script src="{{ url_for('static', path='js/app.js') }}?v=20260523-subtitle-publish-demo"></script>
   </body>
 </html>
