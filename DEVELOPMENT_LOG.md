@@ -7,6 +7,7 @@
 - AI 分析结果摘要新增“转到片段审核”按钮，可直接进入当前任务的片段审核页。
 - AI 分析接口补充返回 `provider_label`、`model`、`analysis_summary`、`clip_summaries` 和 `/clips/review` 审核地址；远程失败自动降级本地时会把原因返回给页面。
 - 片段审核页继续读取 `analysis/candidate_clips.json` 中的 `analysis_meta` 展示 AI 来源；如果远程不可用后自动降级，审核页显示本地 Ollama 属于实际执行结果。
+- 远程分析按钮文案改为“DeepSeek AI 分析”，本地 `.env` 已按 DeepSeek OpenAI-compatible 配置更新为 `https://api.deepseek.com`、`deepseek-v4-flash`、`chat_completions`，并已通过远程连通性测试。
 
 ## 2026-05-23 Docker 名称统一与旧镜像清理
 

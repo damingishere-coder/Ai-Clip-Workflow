@@ -380,7 +380,7 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
       return;
     }
     if (provider === "remote") {
-      const confirmed = window.confirm(`确认使用“${selectedName}”发起远程 AI 分析吗？\n\n这会重新生成候选片段，并覆盖当前已有的 AI 候选结果。`);
+      const confirmed = window.confirm(`确认使用“${selectedName}”发起 DeepSeek AI 分析吗？\n\n这会重新生成候选片段，并覆盖当前已有的 AI 候选结果。`);
       if (!confirmed) return;
     }
     button.disabled = true;
