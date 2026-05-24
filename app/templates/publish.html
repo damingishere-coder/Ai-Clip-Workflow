@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}一键推送 - {{ settings.app_name }}{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Publish Center</p>
+    <h1>一键推送</h1>
+    <p>集中管理切片发布队列，发布前手动选择视频版本、平台、标题、简介和标签。</p>
+  </div>
+  <a class="secondary-button" href="/subtitles">返回字幕推送</a>
+</section>
+
+<section class="stat-grid review-stat-grid" aria-label="一键推送统计">
+  {% for item in stats %}
+  <article class="stat-card tone-{{ item.tone }}">
+    <div class="stat-icon"></div>
+    <span>{{ item.label }}</span>
+    <strong>{{ item.value }}</strong>
+    <small>本地发布队列</small>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="publish-layout">
+  <section class="panel">
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">Queue</p>
+        <h2>待推送切片</h2>
+      </div>
+      <span class="status-pill tone-blue">{{ publish_items|length }} 条</span>
+    </div>
+
+    {% if publish_items %}
+    <div class="publish-queue">
+      {% for item in publish_items %}
+      <article class="publish-card">
+        <div class="publish-card-main">
+          <div>
+            <span class="status-pill tone-{{ 'green' if item.subtitled_available else 'amber' }}">{{ item.subtitle_status_label }}</span>
+            <h3>{{ item.default_title }}</h3>
+            <p>任务：{{ item.task_name }} · 文件：{{ item.output_file_name or "未命名切片" }}</p>
+          </div>
+          {% if item.created_platform_labels %}
+          <span class="status-pill tone-purple">已建：{{ item.created_platform_labels }}</span>
+          {% endif %}
+        </div>
+
+        <form class="publish-form" data-publish-form>
+          <input type="hidden" name="task_id" value="{{ item.task_id }}">
+          <input type="hidden" name="output_clip_id" value="{{ item.output_clip_id }}">
+
+          <div class="publish-source-grid" role="radiogroup" aria-label="视频来源">
+            <label class="publish-choice {{ '' if item.original_available else 'is-disabled' }}">
+              <input type="radio" name="video_source" value="original" {% if item.original_available %}checked{% else %}disabled{% endif %}>
+              <span>原始切片</span>
+              <small>{{ "可用" if item.original_available else "文件缺失" }}</small>
+            </label>
+            <label class="publish-choice {{ '' if item.subtitled_available else 'is-disabled' }}">
+              <input type="radio" name="video_source" value="subtitled" {% if not item.original_available and item.subtitled_available %}checked{% endif %} {% if not item.subtitled_available %}disabled{% endif %}>
+              <span>带字幕成片</span>
+              <small>{{ "可用" if item.subtitled_available else "未生成" }}</small>
+            </label>
+          </div>
+
+          <div class="publish-platform-row">
+            <label><input type="checkbox" name="platforms" value="douyin"> 抖音</label>
+            <label><input type="checkbox" name="platforms" value="bilibili"> B站</label>
+          </div>
+
+          <div class="publish-fields">
+            <label>
+              <span>标题</span>
+              <input type="text" name="title" value="{{ item.default_title }}" maxlength="120">
+            </label>
+            <label>
+              <span>简介</span>
+              <textarea name="description" rows="3" maxlength="2000" placeholder="可填写发布简介"></textarea>
+            </label>
+            <label>
+              <span>标签</span>
+              <input type="text" name="tags" maxlength="500" placeholder="用逗号分隔，例如：直播切片, 高光">
+            </label>
+          </div>
+
+          <div class="publish-actions">
+            <p class="form-hint" data-publish-result>当前会创建本地推送任务，不会直接发布到平台。</p>
+            <button class="primary-button compact-button" type="submit">一键推送</button>
+          </div>
+        </form>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <article class="empty-state">
+      <p class="eyebrow">Empty</p>
+      <h2>还没有可推送的切片</h2>
+      <p>请先在片段审核页生成切片；如果需要字幕版本，再进入字幕推送页生成带字幕成片。</p>
+      <a class="primary-button" href="/clips">去片段审核</a>
+    </article>
+    {% endif %}
+  </section>
+
+  <aside class="panel publish-history-panel">
+    <div class="panel-header compact">
+      <div>
+        <p class="eyebrow">Jobs</p>
+        <h2>发布任务记录</h2>
+      </div>
+    </div>
+
+    {% if publish_jobs %}
+    <div class="publish-job-list">
+      {% for job in publish_jobs %}
+      <article class="publish-job-row" data-publish-job-id="{{ job.id }}">
+        <div>
+          <span class="status-pill tone-{{ job.status_tone }}">{{ job.status_label }}</span>
+          <h3>{{ job.title }}</h3>
+          <p>{{ job.platform_label }} · {{ job.video_source_label }} · {{ job.created_at }}</p>
+        </div>
+        {% if job.status != "cancelled" and job.status != "published" %}
+        <button class="secondary-button compact-button" type="button" data-cancel-publish-job>取消</button>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-note">暂无发布任务记录。</p>
+    {% endif %}
+  </aside>
+</section>
+{% endblock %}

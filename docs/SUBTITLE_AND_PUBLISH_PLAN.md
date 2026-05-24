@@ -80,3 +80,5 @@ E:\直播间切片工作流存储\{task_id}\06_subtitled\
 - 已新增 `subtitle_style_presets` 和 `subtitle_jobs`，字幕样式与字幕生成状态保存到 SQLite。
 - 自动加字幕已接入 FFmpeg：从 `transcript.md` 按切片时间范围生成 `.ass` 字幕，再输出到 `06_subtitled`。
 - 页面已支持原切片与带字幕成片预览；“修改剪切”已提供弹窗预览，保存能力后续接入片段审核数据。
+- 已新增独立 `/publish` 一键推送中心和 `publish_jobs` 表，支持手动选择原始切片 / 带字幕成片，并为抖音 / B站生成本地待推送记录。
+- 当前一键推送不会直接真实发布到平台，后续需要继续接入平台授权、发布 provider、二次确认、失败重试和日志追踪。

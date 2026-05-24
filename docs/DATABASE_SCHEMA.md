@@ -128,6 +128,27 @@ E:\直播间切片工作流存储\{task_id}\
 | `created_at` | TEXT | 创建时间，ISO 格式 |
 | `updated_at` | TEXT | 更新时间，ISO 格式 |
 
+## publish_jobs 表
+
+`publish_jobs` 保存每条切片面向抖音 / B站的本地发布任务记录。当前版本不保存账号密码，也不会直接真实发布到平台。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | TEXT | 发布任务 ID |
+| `task_id` | TEXT | 所属任务 ID |
+| `output_clip_id` | TEXT | 对应的输出切片 ID |
+| `platform` | TEXT | 发布平台：`douyin`、`bilibili` |
+| `video_source` | TEXT | 视频来源：`original` 原始切片、`subtitled` 带字幕成片 |
+| `video_file_path` | TEXT | 本次选择用于发布的视频文件路径 |
+| `title` | TEXT | 发布标题 |
+| `description` | TEXT | 发布简介 |
+| `tags` | TEXT | 发布标签，当前用文本保存 |
+| `status` | TEXT | 发布状态：`draft`、`ready`、`publishing`、`published`、`failed`、`cancelled` |
+| `error_message` | TEXT | 发布失败或取消原因 |
+| `provider_response` | TEXT | 后续真实平台接口返回内容或摘要 |
+| `created_at` | TEXT | 创建时间，ISO 格式 |
+| `updated_at` | TEXT | 更新时间，ISO 格式 |
+
 ## ai_prompt_presets 表
 
 `ai_prompt_presets` 保存全局共用的 1、2、3 号 AI 分析 Prompt 方案。

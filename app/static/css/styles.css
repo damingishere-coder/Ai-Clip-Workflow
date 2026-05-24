@@ -2208,6 +2208,132 @@ body.transcript-drawer-open .main-panel {
   background: var(--surface-muted);
 }
 
+.publish-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 390px);
+  gap: 16px;
+  align-items: start;
+}
+
+.publish-queue,
+.publish-form,
+.publish-fields,
+.publish-job-list {
+  display: grid;
+  gap: 14px;
+}
+
+.publish-card {
+  display: grid;
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+}
+
+.publish-card:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.publish-card-main,
+.publish-actions,
+.publish-job-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.publish-card-main h3,
+.publish-card-main p,
+.publish-job-row h3,
+.publish-job-row p {
+  margin: 8px 0 0;
+}
+
+.publish-card-main h3,
+.publish-job-row h3 {
+  font-size: 17px;
+  letter-spacing: 0;
+}
+
+.publish-card-main p,
+.publish-job-row p {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.publish-source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.publish-choice {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  align-items: center;
+  min-height: 74px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.publish-choice small {
+  grid-column: 2;
+  color: var(--muted);
+}
+
+.publish-choice.is-disabled {
+  opacity: 0.55;
+}
+
+.publish-platform-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.publish-platform-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 84px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  white-space: nowrap;
+}
+
+.publish-fields label {
+  display: grid;
+  gap: 8px;
+}
+
+.publish-fields input,
+.publish-fields textarea {
+  width: 100%;
+}
+
+.publish-history-panel {
+  position: sticky;
+  top: 18px;
+}
+
+.publish-job-row {
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.publish-job-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
 .error-text {
   color: var(--red);
   overflow-wrap: anywhere;
@@ -2222,6 +2348,8 @@ body.transcript-drawer-open .main-panel {
   .split-layout,
   .subtitle-workflow-grid,
   .subtitle-output-grid,
+  .publish-layout,
+  .publish-source-grid,
   .review-layout,
   .review-task-row,
   .review-metrics {
@@ -2263,6 +2391,10 @@ body.transcript-drawer-open .main-panel {
   }
 
   .subtitle-side {
+    position: static;
+  }
+
+  .publish-history-panel {
     position: static;
   }
 

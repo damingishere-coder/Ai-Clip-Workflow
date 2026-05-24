@@ -1102,6 +1102,82 @@ document.querySelectorAll(".js-demo-toast").forEach((button) => {
   });
 });
 
+document.querySelectorAll("[data-publish-form]").forEach((form) => {
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitButton = form.querySelector("button[type='submit']");
+    const resultNode = form.querySelector("[data-publish-result]");
+    const formData = new FormData(form);
+    const platforms = formData.getAll("platforms");
+    const videoSource = formData.get("video_source");
+    const payload = {
+      task_id: formData.get("task_id"),
+      output_clip_id: formData.get("output_clip_id"),
+      video_source: videoSource,
+      platforms,
+      title: String(formData.get("title") || "").trim(),
+      description: String(formData.get("description") || "").trim(),
+      tags: String(formData.get("tags") || "").trim(),
+    };
+
+    if (!payload.video_source) {
+      if (resultNode) resultNode.textContent = "请先选择原始切片或带字幕成片。";
+      return;
+    }
+    if (!payload.platforms.length) {
+      if (resultNode) resultNode.textContent = "请至少选择抖音或 B站。";
+      return;
+    }
+    if (!payload.title) {
+      if (resultNode) resultNode.textContent = "请填写标题。";
+      return;
+    }
+
+    if (submitButton) submitButton.disabled = true;
+    if (resultNode) resultNode.textContent = "正在创建本地推送任务...";
+    try {
+      const response = await fetch("/api/publish/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "创建推送任务失败");
+      }
+      if (resultNode) resultNode.textContent = data.message || "推送任务已创建。";
+      window.setTimeout(() => window.location.reload(), 700);
+    } catch (error) {
+      if (resultNode) resultNode.textContent = `创建失败：${error.message}`;
+    } finally {
+      if (submitButton) submitButton.disabled = false;
+    }
+  });
+});
+
+document.querySelectorAll("[data-cancel-publish-job]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const row = button.closest("[data-publish-job-id]");
+    const jobId = row?.dataset.publishJobId;
+    if (!jobId) return;
+    const confirmed = window.confirm("确认取消这条推送任务吗？\n\n这只会取消本地队列记录，不会删除视频文件。");
+    if (!confirmed) return;
+    button.disabled = true;
+    try {
+      const response = await fetch(`/api/publish/jobs/${jobId}/cancel`, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "取消失败");
+      }
+      window.alert(data.message || "推送任务已取消。");
+      window.location.reload();
+    } catch (error) {
+      window.alert(`取消失败：${error.message}`);
+      button.disabled = false;
+    }
+  });
+});
+
 const aiConfigModal = document.querySelector("#ai-config-modal");
 const aiConfigForm = document.querySelector("#ai-config-form");
 const aiConfigResult = document.querySelector("#ai-config-result");

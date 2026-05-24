@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260524-subtitle-1">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260524-publish-1">
   </head>
   <body>
     <div class="app-shell">
@@ -22,6 +22,7 @@
           <a class="{{ 'active' if active_page == 'tasks' else '' }}" href="/tasks"><span class="nav-dot"></span>任务列表</a>
           <a class="{{ 'active' if active_page == 'clips' else '' }}" href="/clips"><span class="nav-dot"></span>片段审核</a>
           <a class="{{ 'active' if active_page == 'subtitles' else '' }}" href="/subtitles"><span class="nav-dot"></span>字幕推送</a>
+          <a class="{{ 'active' if active_page == 'publish' else '' }}" href="/publish"><span class="nav-dot"></span>一键推送</a>
           <a class="{{ 'active' if active_page == 'system' else '' }}" href="/system"><span class="nav-dot"></span>系统状态</a>
         </nav>
         <div class="sidebar-note">
@@ -47,6 +48,6 @@
       </main>
     </div>
 
-    <script src="{{ url_for('static', path='js/app.js') }}?v=20260524-subtitle-1"></script>
+    <script src="{{ url_for('static', path='js/app.js') }}?v=20260524-publish-1"></script>
   </body>
 </html>

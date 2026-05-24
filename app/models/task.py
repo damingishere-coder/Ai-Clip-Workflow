@@ -72,6 +72,27 @@ class SubtitleStyleUpdate(BaseModel):
     shadow_enabled: bool = True
 
 
+class PublishJobCreate(BaseModel):
+    task_id: str = Field(..., min_length=1, max_length=80)
+    output_clip_id: str = Field(..., min_length=1, max_length=80)
+    video_source: Literal["original", "subtitled"] = "original"
+    platforms: list[Literal["douyin", "bilibili"]] = Field(default_factory=list)
+    title: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = Field(default="", max_length=2000)
+    tags: Optional[str] = Field(default="", max_length=500)
+
+    @validator("platforms")
+    def validate_platforms(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("至少选择一个发布平台")
+        return value
+
+
+class PublishJobStatusUpdate(BaseModel):
+    status: Literal["draft", "ready", "publishing", "published", "failed", "cancelled"]
+    error_message: Optional[str] = Field(default=None, max_length=1000)
+
+
 class ClipCandidate(BaseModel):
     id: str
     task_id: str

@@ -141,6 +141,25 @@ def init_db() -> None:
                 FOREIGN KEY(output_clip_id) REFERENCES output_clip(id),
                 FOREIGN KEY(style_preset_id) REFERENCES subtitle_style_presets(id)
             );
+
+            CREATE TABLE IF NOT EXISTS publish_jobs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                output_clip_id TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                video_source TEXT NOT NULL DEFAULT 'original',
+                video_file_path TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT,
+                tags TEXT,
+                status TEXT NOT NULL DEFAULT 'ready',
+                error_message TEXT,
+                provider_response TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES tasks(id),
+                FOREIGN KEY(output_clip_id) REFERENCES output_clip(id)
+            );
             """
         )
         _migrate_tasks_table(connection)
@@ -149,6 +168,7 @@ def init_db() -> None:
         _migrate_ai_analysis_runs_table(connection)
         _migrate_subtitle_style_presets_table(connection)
         _migrate_subtitle_jobs_table(connection)
+        _migrate_publish_jobs_table(connection)
         _seed_ai_prompt_presets(connection)
         _seed_subtitle_style_preset(connection)
         connection.commit()
@@ -378,6 +398,31 @@ def _migrate_subtitle_jobs_table(connection: sqlite3.Connection) -> None:
         "error_message": "ALTER TABLE subtitle_jobs ADD COLUMN error_message TEXT",
         "created_at": "ALTER TABLE subtitle_jobs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         "updated_at": "ALTER TABLE subtitle_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+    }
+    for column, statement in migrations.items():
+        if column not in columns:
+            connection.execute(statement)
+
+
+def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
+    columns = _get_table_columns(connection, "publish_jobs")
+    if not columns:
+        return
+
+    migrations = {
+        "task_id": "ALTER TABLE publish_jobs ADD COLUMN task_id TEXT",
+        "output_clip_id": "ALTER TABLE publish_jobs ADD COLUMN output_clip_id TEXT",
+        "platform": "ALTER TABLE publish_jobs ADD COLUMN platform TEXT NOT NULL DEFAULT 'douyin'",
+        "video_source": "ALTER TABLE publish_jobs ADD COLUMN video_source TEXT NOT NULL DEFAULT 'original'",
+        "video_file_path": "ALTER TABLE publish_jobs ADD COLUMN video_file_path TEXT NOT NULL DEFAULT ''",
+        "title": "ALTER TABLE publish_jobs ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+        "description": "ALTER TABLE publish_jobs ADD COLUMN description TEXT",
+        "tags": "ALTER TABLE publish_jobs ADD COLUMN tags TEXT",
+        "status": "ALTER TABLE publish_jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'",
+        "error_message": "ALTER TABLE publish_jobs ADD COLUMN error_message TEXT",
+        "provider_response": "ALTER TABLE publish_jobs ADD COLUMN provider_response TEXT",
+        "created_at": "ALTER TABLE publish_jobs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+        "updated_at": "ALTER TABLE publish_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
     }
     for column, statement in migrations.items():
         if column not in columns:
