@@ -55,6 +55,7 @@ def main() -> None:
             assert result["status"] == "started"
             assert len(background_tasks.tasks) == 1
             assert background_tasks.tasks[0][0] == task_service._run_task_transcript_background
+            assert background_tasks.tasks[0][1] == (task_id, None)
             assert duplicate["status"] == "running"
             assert cancel["status"] == "cancelling"
             assert task_id in task_service._CANCEL_TRANSCRIPT_TASKS

@@ -1,3 +1,4 @@
+import base64
 from dataclasses import dataclass
 from datetime import datetime
 import json
@@ -49,6 +50,9 @@ _CPU_FALLBACK_DEVICE = "cpu"
 _CPU_FALLBACK_COMPUTE_TYPE = "int8"
 _TRANSCRIPT_PROGRESS_FILE_NAME = "transcript_progress.json"
 _TRANSCRIPT_CHUNK_DIR_PREFIX = "transcript_chunks_"
+_VOLCENGINE_FLASH_MAX_SECONDS = 2 * 60 * 60
+_VOLCENGINE_FLASH_MAX_BYTES = 100 * 1024 * 1024
+_VOLCENGINE_FLASH_RECOMMENDED_BYTES = 20 * 1024 * 1024
 _ACTIVE_TRANSCRIPTION_PROVIDER = "local"
 _ACTIVE_TRANSCRIPTION_PROVIDER_LABEL = "本地 faster-whisper"
 _ACTIVE_TRANSCRIPTION_MODEL = ""
@@ -96,13 +100,14 @@ def write_transcript_markdown(
     audio_path: Path,
     transcript_path: Path,
     progress_callback: Callable[[dict], None] | None = None,
+    provider: str | None = None,
 ) -> dict[str, str]:
     if not audio_path.exists():
         raise RuntimeError("未找到音频文件，请先提取音频")
 
     transcript_path.parent.mkdir(parents=True, exist_ok=True)
     progress_path = get_transcript_progress_path(transcript_path)
-    _set_configured_transcription_runtime()
+    _set_configured_transcription_runtime(provider)
     _emit_transcript_progress(
         progress_path,
         progress_callback,
@@ -117,6 +122,7 @@ def write_transcript_markdown(
         transcript_path.parent,
         progress_path,
         progress_callback,
+        provider=provider,
     )
     content = build_transcript_markdown(task, audio_path, segments)
     temp_path = transcript_path.with_name(f"{transcript_path.name}.tmp")
@@ -131,7 +137,7 @@ def write_transcript_markdown(
         current_chunk=total_chunks,
         total_chunks=total_chunks,
         percent=100,
-        message="分段转写完成，Markdown 已生成",
+        message="转写完成，Markdown 已生成",
     )
     return {
         "status": "ok",
@@ -147,9 +153,11 @@ def transcribe_audio_with_configured_provider(
     working_dir: Path,
     progress_path: Path,
     progress_callback: Callable[[dict], None] | None = None,
+    provider: str | None = None,
 ) -> list[TranscriptSegment]:
-    provider = _normalize_provider_name(settings.transcription_provider)
-    fallback_provider = _normalize_provider_name(settings.transcription_fallback_provider)
+    provider_override = _normalize_provider_name(provider or "")
+    provider = provider_override or _normalize_provider_name(settings.transcription_provider)
+    fallback_provider = "" if provider_override else _normalize_provider_name(settings.transcription_fallback_provider)
     try:
         return transcribe_audio_with_provider(audio_path, working_dir, progress_path, provider, progress_callback)
     except Exception as exc:
@@ -284,70 +292,72 @@ def transcribe_audio_with_volcengine(
     )
 
     duration_seconds = get_audio_duration_seconds(audio_path)
-    chunks = build_transcript_chunks(
-        duration_seconds,
-        chunk_seconds=settings.transcription_chunk_seconds,
-        overlap_seconds=settings.transcription_chunk_overlap_seconds,
-    )
-    if not chunks:
-        raise RuntimeError("火山引擎远程转写失败：音频时长无效，无法分段")
+    if duration_seconds > _VOLCENGINE_FLASH_MAX_SECONDS:
+        raise RuntimeError("火山引擎极速版只支持 2 小时以内音频，请改用标准版或本地分段转写")
     _emit_transcript_progress(
         progress_path,
         progress_callback,
         status="running",
         current_chunk=0,
-        total_chunks=len(chunks),
+        total_chunks=1,
         percent=1,
-        message=f"已读取音频时长，准备通过火山引擎分成 {len(chunks)} 段转写",
+        message="已读取音频时长，符合火山极速版限制，准备整文件上传",
     )
 
-    all_segments: list[TranscriptSegment] = []
     with TemporaryDirectory(prefix=_TRANSCRIPT_CHUNK_DIR_PREFIX, dir=working_dir) as temp_dir:
         temp_dir_path = Path(temp_dir)
-        for chunk in chunks:
-            _emit_transcript_progress(
-                progress_path,
-                progress_callback,
-                status="running",
-                current_chunk=chunk.index,
-                total_chunks=len(chunks),
-                percent=_chunk_start_percent(chunk.index, len(chunks)),
-                message=f"正在压缩第 {chunk.index}/{len(chunks)} 段音频，准备上传火山引擎",
-            )
-            chunk_path = temp_dir_path / f"chunk_{chunk.index:04d}.{_remote_audio_extension()}"
-            _extract_remote_audio_chunk(audio_path, chunk_path, chunk)
-            _emit_transcript_progress(
-                progress_path,
-                progress_callback,
-                status="running",
-                current_chunk=chunk.index,
-                total_chunks=len(chunks),
-                percent=_chunk_start_percent(chunk.index, len(chunks)),
-                message=f"正在请求火山引擎转写第 {chunk.index}/{len(chunks)} 段",
-            )
-            chunk_segments = transcribe_audio_with_volcengine_flash(chunk_path, allow_empty=True)
-            all_segments.extend(_offset_chunk_segments(chunk_segments, chunk, settings.transcription_chunk_overlap_seconds))
-            _emit_transcript_progress(
-                progress_path,
-                progress_callback,
-                status="running",
-                current_chunk=chunk.index,
-                total_chunks=len(chunks),
-                percent=_chunk_percent(chunk.index, len(chunks)),
-                message=f"火山引擎已完成第 {chunk.index}/{len(chunks)} 段",
-            )
+        remote_audio_path = temp_dir_path / f"full_audio.{_remote_audio_extension()}"
+        _emit_transcript_progress(
+            progress_path,
+            progress_callback,
+            status="running",
+            current_chunk=0,
+            total_chunks=1,
+            percent=8,
+            message=f"正在压缩整段音频为 16k 单声道 {_remote_audio_extension().upper()}",
+        )
+        _prepare_remote_audio_file(audio_path, remote_audio_path)
+        remote_audio_size = remote_audio_path.stat().st_size
+        _validate_volcengine_flash_upload(remote_audio_path, remote_audio_size)
+        size_message = f"压缩后音频 {_format_bytes(remote_audio_size)}，正在一次性上传火山引擎"
+        if remote_audio_size > _VOLCENGINE_FLASH_RECOMMENDED_BYTES:
+            size_message += "（超过 20MB，上传速度取决于当前网络带宽）"
+        _emit_transcript_progress(
+            progress_path,
+            progress_callback,
+            status="running",
+            current_chunk=0,
+            total_chunks=1,
+            percent=35,
+            message=size_message,
+        )
+        segments = transcribe_audio_with_volcengine_flash(remote_audio_path)
 
-    if not all_segments:
+    if not segments:
         raise RuntimeError("火山引擎远程转写完成，但没有识别到可用语音内容")
-    return sorted(all_segments, key=lambda segment: (segment.start_seconds, segment.end_seconds))
+    _emit_transcript_progress(
+        progress_path,
+        progress_callback,
+        status="running",
+        current_chunk=1,
+        total_chunks=1,
+        percent=95,
+        message="火山引擎整文件转写完成，正在生成 Markdown",
+    )
+    return sorted(segments, key=lambda segment: (segment.start_seconds, segment.end_seconds))
 
 
 def transcribe_audio_with_volcengine_flash(audio_path: Path, allow_empty: bool = False) -> list[TranscriptSegment]:
     _ensure_volcengine_configured()
     headers = _volcengine_headers()
+    payload = {
+        "user": {"uid": settings.volcengine_asr_api_key or settings.volcengine_asr_app_key},
+        "audio": {"data": base64.b64encode(audio_path.read_bytes()).decode("ascii")},
+        "request": {"model_name": "bigmodel"},
+    }
     request = Request(
         settings.volcengine_asr_api_url,
-        data=audio_path.read_bytes(),
+        data=json.dumps(payload).encode("utf-8"),
         headers=headers,
         method="POST",
     )
@@ -489,6 +499,49 @@ def _extract_remote_audio_chunk(audio_path: Path, chunk_path: Path, chunk: Trans
         raise RuntimeError(result.stderr.strip() or f"FFmpeg 远程转写音频压缩失败：第 {chunk.index} 段")
 
 
+def _prepare_remote_audio_file(audio_path: Path, output_path: Path) -> None:
+    audio_format = settings.volcengine_asr_audio_format.lower().strip()
+    if audio_format in ("ogg", "opus", "ogg_opus"):
+        codec_args = ["-acodec", "libopus", "-b:a", "32k"]
+    else:
+        codec_args = ["-acodec", "libmp3lame", "-b:a", "64k"]
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(audio_path),
+        "-vn",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        *codec_args,
+        str(output_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "FFmpeg 远程转写整文件音频压缩失败")
+
+
+def _validate_volcengine_flash_upload(audio_path: Path, size_bytes: int | None = None) -> None:
+    size_bytes = audio_path.stat().st_size if size_bytes is None else size_bytes
+    if size_bytes <= 0:
+        raise RuntimeError("火山引擎远程转写失败：压缩后的音频文件为空")
+    if size_bytes > _VOLCENGINE_FLASH_MAX_BYTES:
+        raise RuntimeError(
+            "火山引擎极速版单文件限制 100MB；"
+            f"当前压缩后为 {_format_bytes(size_bytes)}，请改用标准版或本地分段转写"
+        )
+
+
+def _format_bytes(size_bytes: int) -> str:
+    if size_bytes >= 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f}MB"
+    if size_bytes >= 1024:
+        return f"{size_bytes / 1024:.1f}KB"
+    return f"{size_bytes}B"
+
+
 def _remote_audio_extension() -> str:
     audio_format = settings.volcengine_asr_audio_format.lower().strip()
     if audio_format in ("ogg", "opus", "ogg_opus"):
@@ -504,17 +557,23 @@ def _remote_audio_content_type() -> str:
 
 
 def _ensure_volcengine_configured() -> None:
-    if not settings.volcengine_asr_api_key and not settings.volcengine_asr_app_key:
-        raise RuntimeError("缺少火山引擎转写密钥，请在 .env 中填写 VOLCENGINE_ASR_API_KEY")
+    has_api_key = bool(settings.volcengine_asr_api_key)
+    has_app_token = bool(settings.volcengine_asr_app_key and settings.volcengine_asr_access_key)
+    if not has_api_key and not has_app_token:
+        raise RuntimeError(
+            "缺少火山引擎转写密钥，请在 .env 中填写 VOLCENGINE_ASR_API_KEY，"
+            "或填写 VOLCENGINE_ASR_APP_KEY + VOLCENGINE_ASR_ACCESS_KEY"
+        )
     if not settings.volcengine_asr_resource_id:
         raise RuntimeError("缺少火山引擎资源 ID，请在 .env 中填写 VOLCENGINE_ASR_RESOURCE_ID")
 
 
 def _volcengine_headers() -> dict[str, str]:
     headers = {
-        "Content-Type": _remote_audio_content_type(),
+        "Content-Type": "application/json",
         "X-Api-Resource-Id": settings.volcengine_asr_resource_id,
         "X-Api-Request-Id": uuid4().hex,
+        "X-Api-Sequence": "-1",
     }
     if settings.volcengine_asr_api_key:
         headers["X-Api-Key"] = settings.volcengine_asr_api_key
@@ -826,8 +885,8 @@ def _set_active_transcription_runtime(
     _ACTIVE_TRANSCRIPTION_COMPUTE_TYPE = compute_type
 
 
-def _set_configured_transcription_runtime() -> None:
-    provider = _normalize_provider_name(settings.transcription_provider)
+def _set_configured_transcription_runtime(provider: str | None = None) -> None:
+    provider = _normalize_provider_name(provider or settings.transcription_provider)
     if provider == "volcengine":
         _set_active_transcription_runtime(
             provider="volcengine",

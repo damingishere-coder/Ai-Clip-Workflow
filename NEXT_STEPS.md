@@ -24,15 +24,19 @@
 
 ## 2026-05-24 国内远程转写接入后
 - 已把转写默认方案改为“火山引擎远程转写优先，本地 faster-whisper 兜底”。
+- 任务详情页会显示两个明确入口：“AI 转写（火山引擎）”和“本地转写”；已有转写时显示“重新 AI 转写”和“重新本地转写”。
 - 已新增 `.env` 配置项：`TRANSCRIPTION_PROVIDER=volcengine`、`TRANSCRIPTION_FALLBACK_PROVIDER=local`、`VOLCENGINE_ASR_API_KEY`、`VOLCENGINE_ASR_RESOURCE_ID=volc.bigasr.auc_turbo`。
+- 注意：`VOLCENGINE_ASR_API_KEY` 需要火山引擎语音识别 App Key；`ark-` 开头的模型广场 Key 可能会被极速识别接口判定为 `Invalid X-Api-Key`。
+- 如果使用豆包语音旧版控制台的“服务接口认证信息”，不要把 `Access Token` 放到 `VOLCENGINE_ASR_API_KEY`；应把 `APP ID` 填到 `VOLCENGINE_ASR_APP_KEY`，把 `Access Token` 填到 `VOLCENGINE_ASR_ACCESS_KEY`。
+- 当前 `.env` 已切换为 `APP ID + Access Token` 方式，60 秒真实音频连通性测试已成功返回中文转写。
 - 已新增火山引擎连通性测试脚本：`scripts/test_volcengine_transcription_connection.py`。
 - 已新增“停止转写”按钮；如果误用本地模型开始转写，可以先停止，再重启服务后重新生成。
 - 下一步先在火山引擎控制台开通豆包语音相关权限，拿到 App Key 后填入 `.env` 的 `VOLCENGINE_ASR_API_KEY`。
 
 ## 国内转写下一步优先做
-1. 用真实任务音频运行 `.venv\Scripts\python.exe scripts\test_volcengine_transcription_connection.py "音频路径"`，确认火山引擎能返回中文转写。
-2. 修改 `.env` 后先重启 FastAPI / Docker 服务，再对 40 分钟视频点击“重新生成转写”，观察速度是否明显快于本地 CPU。
-3. 如果火山引擎 Key、余额或权限异常，先看页面错误；系统会按配置尝试退回本地转写。
+1. 在任务详情页对 40 分钟视频点击“重新 AI 转写”，确认完整远程转写速度和结果质量。
+2. 完成后打开“查看完整原文”，重点检查前 1 分钟、10 分钟、结尾几段的时间戳是否连续、中文是否可读。
+3. 如果火山引擎余额、权限或网络异常，先看页面错误；需要本地兜底时手动点击“本地转写”。
 4. 后续再按同一 Provider 接口接阿里云、腾讯云或讯飞，实现真正多家切换。
 
 ## 2026-05-24 自动加字幕功能完善后

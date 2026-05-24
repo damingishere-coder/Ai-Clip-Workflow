@@ -1600,7 +1600,29 @@ def process_task_audio(task_id: str) -> dict:
     return {**result, "task": get_task(task_id)}
 
 
-def process_task_transcript(task_id: str, background_tasks: Any | None = None) -> dict:
+def _transcript_provider_label(provider: str | None) -> str:
+    labels = {
+        "volcengine": "AI 转写（火山引擎）",
+        "local": "本地转写",
+    }
+    return labels.get((provider or "").lower(), "默认转写")
+
+
+def _normalize_transcript_provider(provider: str | None) -> str | None:
+    if provider is None or not str(provider).strip():
+        return None
+    value = str(provider).strip().lower()
+    if value not in {"volcengine", "local"}:
+        raise ValueError("未知转写方式，请选择 AI 转写（火山引擎）或本地转写")
+    return value
+
+
+def process_task_transcript(
+    task_id: str,
+    background_tasks: Any | None = None,
+    provider: str | None = None,
+) -> dict:
+    provider = _normalize_transcript_provider(provider)
     task = get_task(task_id)
     if not task:
         raise ValueError("任务不存在")
@@ -1615,7 +1637,7 @@ def process_task_transcript(task_id: str, background_tasks: Any | None = None) -
     if task_id in _RUNNING_TRANSCRIPT_TASKS and not _is_transcript_progress_stale(last_progress):
         return {
             "status": "running",
-            "message": "分段转写已经在后台运行，请稍后刷新查看进度。",
+            "message": "转写任务已经在后台运行，请稍后刷新查看进度。",
             "task": get_task(task_id),
         }
     if task_id in _RUNNING_TRANSCRIPT_TASKS:
@@ -1632,18 +1654,18 @@ def process_task_transcript(task_id: str, background_tasks: Any | None = None) -
         current_chunk=0,
         total_chunks=0,
         percent=1,
-        message="后台分段转写已启动，正在准备环境",
+        message="后台转写已启动，正在准备环境",
     )
-    _append_task_log(task_id, "开始后台分段语音转写")
+    _append_task_log(task_id, f"开始后台转写：{_transcript_provider_label(provider)}")
     _CANCEL_TRANSCRIPT_TASKS.discard(task_id)
     _RUNNING_TRANSCRIPT_TASKS.add(task_id)
     if background_tasks is not None:
-        background_tasks.add_task(_run_task_transcript_background, task_id)
+        background_tasks.add_task(_run_task_transcript_background, task_id, provider)
     else:
-        _run_task_transcript_background(task_id)
+        _run_task_transcript_background(task_id, provider)
     return {
         "status": "started",
-        "message": "已开始后台分段转写，请稍后刷新查看进度。",
+        "message": f"已开始{_transcript_provider_label(provider)}，请稍后查看进度。",
         "task": get_task(task_id),
     }
 
@@ -1682,7 +1704,9 @@ def process_task_transcript_workflow(
     task_id: str,
     background_tasks: Any | None = None,
     force: bool = False,
+    provider: str | None = None,
 ) -> dict:
+    provider = _normalize_transcript_provider(provider)
     task = get_task(task_id)
     if not task:
         raise ValueError("任务不存在")
@@ -1700,12 +1724,12 @@ def process_task_transcript_workflow(
         process_task_audio(task_id)
 
     if force:
-        _append_task_log(task_id, "用户明确要求重新生成转写 Markdown")
+        _append_task_log(task_id, f"用户明确要求重新生成转写 Markdown：{_transcript_provider_label(provider)}")
 
-    return process_task_transcript(task_id, background_tasks=background_tasks)
+    return process_task_transcript(task_id, background_tasks=background_tasks, provider=provider)
 
 
-def _run_task_transcript_background(task_id: str) -> None:
+def _run_task_transcript_background(task_id: str, provider: str | None = None) -> None:
     task = get_task(task_id)
     if not task:
         _RUNNING_TRANSCRIPT_TASKS.discard(task_id)
@@ -1732,6 +1756,7 @@ def _run_task_transcript_background(task_id: str) -> None:
             paths["audio_path"],
             paths["transcript_path"],
             progress_callback=progress_callback,
+            provider=provider,
         )
     except TranscriptCancelledError as exc:
         last_progress = read_transcript_progress(paths["transcript_path"])
@@ -1755,7 +1780,7 @@ def _run_task_transcript_background(task_id: str) -> None:
             current_chunk=int(last_progress.get("current_chunk") or 0),
             total_chunks=int(last_progress.get("total_chunks") or 0),
             percent=int(last_progress.get("percent") or 0),
-            message=f"分段转写失败：{error}",
+            message=f"转写失败：{error}",
         )
         update_task_status(task_id, TaskStatus.failed, error)
         _append_task_log(task_id, f"转写失败：{error}")

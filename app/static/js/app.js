@@ -188,23 +188,30 @@ if (transcriptPanel) {
 
 function updateWorkflowButtons(data) {
   const startButton = document.querySelector("#start-workflow-button");
-  if (!startButton) return;
+  const transcriptStartButtons = document.querySelectorAll(".js-transcript-start");
+  if (!startButton && !transcriptStartButtons.length) return;
   if (data.transcript_exists) {
-    startButton.textContent = "转写已完成";
-    startButton.disabled = true;
+    if (startButton) {
+      startButton.textContent = "转写已完成";
+      startButton.disabled = true;
+    }
     return;
   }
   if (data.progress?.status === "running" || data.task_status === "transcribing") {
-    startButton.textContent = "转写处理中";
-    startButton.disabled = true;
+    if (startButton) {
+      startButton.textContent = "转写处理中";
+      startButton.disabled = true;
+    }
+    transcriptStartButtons.forEach((button) => {
+      button.disabled = true;
+    });
     updateCancelTranscriptButtons(data.progress?.status || "running");
     return;
   }
   if (data.progress?.status === "cancelled") {
-    startButton.textContent = "重新生成转写";
-    startButton.disabled = false;
-    startButton.classList.add("js-process-action");
-    startButton.dataset.endpoint = `/api/tasks/${transcriptPanel?.dataset.taskId}/process/transcript-workflow?force=true`;
+    transcriptStartButtons.forEach((button) => {
+      button.disabled = false;
+    });
     updateCancelTranscriptButtons("cancelled");
   }
 }

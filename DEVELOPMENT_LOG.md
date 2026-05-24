@@ -17,10 +17,16 @@
 
 ## 2026-05-24 国内远程转写服务商接入
 - 新增可切换转写服务商配置：`TRANSCRIPTION_PROVIDER`、`TRANSCRIPTION_FALLBACK_PROVIDER`，默认优先使用火山引擎远程转写，失败后可自动退回本地 faster-whisper。
-- 接入火山引擎大模型录音文件极速版识别：分段压缩为 16k 单声道 MP3/OGG 后请求 `https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash`，再把 `utterances` 转成现有 `transcript.md` 时间戳格式。
+- 转写接口新增单次 `provider` 参数，任务详情页拆成“AI 转写（火山引擎）”和“本地转写”两个入口；显式选择火山引擎时不再自动切回本地，避免误以为远程已生效。
+- 接入火山引擎大模型录音文件极速版识别：远程转写会先把完整音频压缩为 16k 单声道 MP3/OGG，再一次性请求 `https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash`，不再像本地 faster-whisper 一样分段提交。
+- 火山极速版提交前会检查音频时长不超过 2 小时、压缩后单文件不超过 100MB；超过限制时提示改用标准版或本地分段转写。
 - 预留阿里云、腾讯云、讯飞 Provider 名称；当前版本只完整实现 `volcengine` 和 `local`，未实现厂商会给出明确错误提示。
 - 任务详情页转写进度会显示实际来源，例如“火山引擎远程转写 / volc.bigasr.auc_turbo / remote / mp3”。
 - 任务详情页新增“停止转写”按钮；后台任务会在当前分段结束后停止，并把进度标记为 `cancelled`，方便重新生成转写。
+- 确认 Docker 容器需要重新创建后才会重新读取 `.env` 中的火山 Key；仅修改本机 `.env` 不会自动注入已经运行的容器。
+- 真实短音频连通性测试已进入火山鉴权阶段；当前 `ark-` 开头 Key 返回 `Invalid X-Api-Key`，后续需要换成火山语音识别 App Key。
+- 兼容豆包语音旧版控制台“服务接口认证信息”：`APP ID` 写入 `VOLCENGINE_ASR_APP_KEY`，`Access Token` 写入 `VOLCENGINE_ASR_ACCESS_KEY`，不再误放到 `VOLCENGINE_ASR_API_KEY`。
+- 已使用真实任务音频跑通 60 秒火山远程转写连通性测试，返回 6 句中文识别结果；20 秒测试为空是因为样本前段有效人声较晚出现。
 - 新增 `scripts/test_volcengine_transcription_provider.py` 验证火山引擎结果解析和远程失败本地兜底；新增 `scripts/test_volcengine_transcription_connection.py` 用真实短音频检查火山引擎 Key 和接口。
 - 已运行 `.venv\Scripts\python.exe -m compileall app scripts`、`scripts/test_transcript_chunking.py`、`scripts/test_transcript_background_start.py`、`scripts/test_volcengine_transcription_provider.py`。
 

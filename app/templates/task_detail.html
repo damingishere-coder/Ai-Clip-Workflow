@@ -16,12 +16,14 @@
   <div class="button-row">
     {% if task.transcript_exists %}
     <button class="secondary-button" id="start-workflow-button" type="button" disabled>转写已完成</button>
-    <button class="secondary-button js-process-action" type="button" data-confirm="重新生成会覆盖当前转写文件，并且需要重新等待转写完成。确认重新生成吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?force=true">重新生成转写</button>
+    <button class="secondary-button js-process-action js-transcript-start" type="button" data-confirm="重新 AI 转写会覆盖当前转写文件，并且需要重新等待转写完成。确认重新生成吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?provider=volcengine&force=true">重新 AI 转写</button>
+    <button class="secondary-button js-process-action js-transcript-start" type="button" data-confirm="重新本地转写会覆盖当前转写文件，并且可能比较慢。确认重新生成吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?provider=local&force=true">重新本地转写</button>
     {% elif task.status == "transcribing" %}
     <button class="secondary-button" id="start-workflow-button" type="button" disabled>转写处理中</button>
     <button class="secondary-button js-cancel-transcript" type="button" data-task-id="{{ task.id }}">停止转写</button>
     {% else %}
-    <button class="secondary-button js-process-action" id="start-workflow-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow">{{ "继续处理" if task.audio_exists else "开始处理" }}</button>
+    <button class="primary-button js-process-action js-transcript-start" id="start-workflow-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?provider=volcengine">AI 转写（火山引擎）</button>
+    <button class="secondary-button js-process-action js-transcript-start" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?provider=local">本地转写</button>
     {% endif %}
     <a class="primary-button" href="/tasks/{{ task.id }}/clips/review">进入片段审核</a>
   </div>

@@ -53,6 +53,8 @@ def main() -> None:
     print(f"VOLCENGINE_ASR_API_URL={settings.volcengine_asr_api_url}")
     print(f"VOLCENGINE_ASR_RESOURCE_ID={settings.volcengine_asr_resource_id}")
     print(f"VOLCENGINE_ASR_API_KEY={'已填写' if settings.volcengine_asr_api_key else '未填写'}")
+    print(f"VOLCENGINE_ASR_APP_KEY={'已填写' if settings.volcengine_asr_app_key else '未填写'}")
+    print(f"VOLCENGINE_ASR_ACCESS_KEY={'已填写' if settings.volcengine_asr_access_key else '未填写'}")
     print(f"VOLCENGINE_ASR_AUDIO_FORMAT={settings.volcengine_asr_audio_format}")
 
     if settings.transcription_device.lower() == "cuda":
