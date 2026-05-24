@@ -1189,6 +1189,34 @@ fieldset input.visually-hidden-file {
   background: rgba(240, 253, 244, 0.78);
 }
 
+.ai-analysis-progress {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 14px;
+  border: 1px solid rgba(37, 111, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(247, 251, 255, 0.84);
+}
+
+.ai-analysis-progress[hidden] {
+  display: none;
+}
+
+.ai-analysis-progress[data-status="running"] .progress span {
+  background: linear-gradient(90deg, var(--blue), #22a06b);
+}
+
+.ai-analysis-progress[data-status="failed"] {
+  border-color: rgba(220, 38, 38, 0.24);
+  background: rgba(254, 242, 242, 0.78);
+}
+
+.ai-analysis-progress[data-status="completed"] {
+  border-color: rgba(22, 163, 74, 0.22);
+  background: rgba(240, 253, 244, 0.78);
+}
+
 .transcript-progress-heading {
   display: flex;
   align-items: center;
@@ -1745,6 +1773,51 @@ button:disabled {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.runtime-log-card {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.runtime-log-card h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.runtime-log-card pre {
+  min-height: 320px;
+  max-height: 520px;
+  margin: 0;
+  padding: 13px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0f172a;
+  color: #dbeafe;
+  font-family: "SFMono-Regular", Consolas, "Microsoft YaHei UI", monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#runtime-log-state[data-status="running"] {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+#runtime-log-state[data-status="completed"] {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+#runtime-log-state[data-status="failed"] {
+  background: var(--red-soft);
+  color: var(--red);
 }
 
 .modal-actions {

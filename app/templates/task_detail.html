@@ -126,6 +126,15 @@
         <button class="secondary-button js-ai-process-action" type="button" data-provider="remote">DeepSeek AI 分析</button>
         <button class="secondary-button js-ai-process-action" type="button" data-provider="local">本地 AI 分析</button>
       </div>
+      <div class="ai-analysis-progress" id="ai-analysis-progress" hidden>
+        <div class="transcript-progress-heading">
+          <strong id="ai-analysis-progress-message">AI 分析准备中</strong>
+          <span id="ai-analysis-progress-percent">0%</span>
+        </div>
+        <div class="progress">
+          <span id="ai-analysis-progress-bar" style="width: 0%"></span>
+        </div>
+      </div>
       <p class="form-hint" id="ai-process-result"></p>
       <div class="ai-analysis-result-card" id="ai-analysis-summary" hidden></div>
       <section class="ai-analysis-history-card" id="ai-analysis-history" hidden>
@@ -238,6 +247,16 @@
       <li>异常信息：{{ task.error_message }}</li>
       {% endif %}
     </ul>
+    <section class="runtime-log-card" aria-label="AI 分析运行日志">
+      <div class="panel-header compact">
+        <div>
+          <p class="eyebrow">Runtime</p>
+          <h3>运行日志</h3>
+        </div>
+        <span class="status-pill" id="runtime-log-state">待刷新</span>
+      </div>
+      <pre id="runtime-log-lines">点击 AI 分析后，这里会显示最新运行日志。</pre>
+    </section>
     <p class="form-hint" id="process-result"></p>
   </aside>
 </section>

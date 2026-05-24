@@ -1207,6 +1207,66 @@ def get_task_transcript_status(task_id: str) -> dict:
     }
 
 
+def _read_task_log_tail(task_id: str, limit: int = 80) -> list[str]:
+    paths = get_artifact_paths(task_id)
+    log_path = paths["log_path"]
+    if not log_path.exists():
+        return []
+    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return lines[-limit:]
+
+
+def get_task_ai_analysis_status(task_id: str) -> dict:
+    task = get_task(task_id, include_video_probe=False)
+    if not task:
+        raise ValueError("任务不存在")
+
+    paths = get_artifact_paths(task_id)
+    log_lines = _read_task_log_tail(task_id)
+    is_running = task.get("status") == TaskStatus.ai_analyzing.value
+    has_analysis = paths["analysis_path"].exists()
+
+    percent = 0
+    message = "等待开始 AI 分析"
+    status = "idle"
+    if is_running:
+        status = "running"
+        percent = 48
+        message = "AI 正在分析转写文本，请保持页面打开。"
+        if any("将使用分段分析" in line for line in log_lines):
+            percent = 62
+            message = "AI 已读取 Prompt 和转写文本，正在分段生成候选片段。"
+        if any("远程 AI 不可用" in line for line in log_lines):
+            percent = 72
+            message = "远程 AI 暂不可用，系统正在尝试本地 AI。"
+    elif task.get("status") == TaskStatus.pending_review.value and has_analysis:
+        status = "completed"
+        percent = 100
+        message = "AI 分析完成，候选片段已生成。"
+    elif task.get("status") == TaskStatus.failed.value and any("AI 分析失败" in line for line in log_lines):
+        status = "failed"
+        percent = 100
+        message = task.get("error_message") or "AI 分析失败，请查看右侧运行日志。"
+    elif has_analysis:
+        status = "completed"
+        percent = 100
+        message = "已找到 AI 分析结果文件。"
+
+    return {
+        "task_id": task_id,
+        "status": status,
+        "message": message,
+        "percent": percent,
+        "is_running": is_running,
+        "task_status": task.get("status"),
+        "task_status_label": task.get("status_label"),
+        "analysis_exists": has_analysis,
+        "log_path": str(paths["log_path"]),
+        "log_lines": log_lines,
+        "error_message": task.get("error_message") or "",
+    }
+
+
 def get_dashboard_context() -> dict:
     tasks = list_tasks()
     today = datetime.now().date()

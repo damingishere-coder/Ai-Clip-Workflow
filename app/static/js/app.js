@@ -256,6 +256,20 @@ const showAiHistoryButton = document.querySelector("#show-ai-history-button");
 const refreshAiHistoryButton = document.querySelector("#refresh-ai-history-button");
 const aiAnalysisHistory = document.querySelector("#ai-analysis-history");
 const aiAnalysisHistoryList = document.querySelector("#ai-analysis-history-list");
+const aiAnalysisProgress = document.querySelector("#ai-analysis-progress");
+const aiAnalysisProgressMessage = document.querySelector("#ai-analysis-progress-message");
+const aiAnalysisProgressPercent = document.querySelector("#ai-analysis-progress-percent");
+const aiAnalysisProgressBar = document.querySelector("#ai-analysis-progress-bar");
+const runtimeLogState = document.querySelector("#runtime-log-state");
+const runtimeLogLines = document.querySelector("#runtime-log-lines");
+let aiStatusPollingTimer = null;
+
+function summarizeErrorMessage(message, maxLength = 220) {
+  const text = String(message || "").replace(/\s+/g, " ").trim();
+  if (!text) return "操作失败，请查看任务日志。";
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...（详细原因请查看任务日志）`;
+}
 let aiAnalysisRuns = [];
 
 function readJsonScript(id, fallback) {
@@ -519,10 +533,20 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
     button.disabled = true;
     button.textContent = "分析中...";
     if (aiProcessResult) aiProcessResult.textContent = "正在保存 Prompt 方案并启动 AI 分析...";
+    renderAiAnalysisProgress({
+      status: "running",
+      percent: 18,
+      message: "正在保存 Prompt 方案并启动 AI 分析...",
+    });
+    renderRuntimeLog({
+      status: "running",
+      log_lines: ["正在启动 AI 分析，请稍等..."],
+    });
 
     try {
       await saveTaskAiPromptSettings();
       await saveTaskCandidateClipCount();
+      pollAiAnalysisStatus(true).catch(() => {});
       const response = await fetch(`/api/tasks/${taskId}/process/ai?provider=${provider}`, {
         method: "POST",
       });
@@ -531,14 +555,17 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
         throw new Error(data.detail || "AI 分析失败");
       }
       if (aiProcessResult) aiProcessResult.textContent = data.message || "AI 分析完成。";
+      await pollAiAnalysisStatus(false).catch(() => {});
       if (aiCandidateCountPill && Array.isArray(data.clips)) {
         aiCandidateCountPill.textContent = `${data.clips.length} 条候选`;
       }
       renderAiAnalysisSummary(data.analysis_run || data);
       renderAiAnalysisHistory(data.runs || aiAnalysisRuns);
     } catch (error) {
-      if (aiProcessResult) aiProcessResult.textContent = `AI 分析失败：${error.message}`;
+      if (aiProcessResult) aiProcessResult.textContent = `AI 分析失败：${summarizeErrorMessage(error.message)}`;
+      await pollAiAnalysisStatus(false).catch(() => {});
     } finally {
+      stopAiAnalysisStatusPolling();
       button.disabled = false;
       button.textContent = originalText;
     }
@@ -552,6 +579,7 @@ if (aiAnalysisForm) {
   if (latestAiAnalysis) {
     renderAiAnalysisSummary(latestAiAnalysis);
   }
+  pollAiAnalysisStatus(false).catch(() => {});
 }
 
 if (showAiHistoryButton && aiAnalysisHistory) {
@@ -891,6 +919,67 @@ if (subtitleStyleForm) {
       if (submitButton) submitButton.disabled = false;
     }
   });
+}
+
+function renderAiAnalysisProgress(status) {
+  if (!aiAnalysisProgress) return;
+  const percent = Math.max(0, Math.min(100, Number(status.percent || 0)));
+  aiAnalysisProgress.hidden = false;
+  aiAnalysisProgress.dataset.status = status.status || "idle";
+  if (aiAnalysisProgressMessage) {
+    aiAnalysisProgressMessage.textContent = status.message || "AI 分析进度";
+  }
+  if (aiAnalysisProgressPercent) {
+    aiAnalysisProgressPercent.textContent = `${percent}%`;
+  }
+  if (aiAnalysisProgressBar) {
+    aiAnalysisProgressBar.style.width = `${percent}%`;
+  }
+}
+
+function renderRuntimeLog(status) {
+  if (runtimeLogState) {
+    const labelMap = {
+      idle: "待开始",
+      running: "分析中",
+      completed: "已完成",
+      failed: "失败",
+    };
+    runtimeLogState.textContent = labelMap[status.status] || status.task_status_label || "已刷新";
+    runtimeLogState.dataset.status = status.status || "idle";
+  }
+  if (!runtimeLogLines) return;
+  const lines = Array.isArray(status.log_lines) ? status.log_lines : [];
+  runtimeLogLines.textContent = lines.length ? lines.join("\n") : "暂无运行日志。点击 AI 分析后，这里会自动刷新。";
+  runtimeLogLines.scrollTop = runtimeLogLines.scrollHeight;
+}
+
+async function pollAiAnalysisStatus(keepPolling = false) {
+  if (!aiAnalysisForm) return null;
+  const taskId = aiAnalysisForm.dataset.taskId;
+  const response = await fetch(`/api/tasks/${taskId}/ai-analysis-status`);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "读取 AI 分析状态失败");
+  }
+  renderAiAnalysisProgress(data);
+  renderRuntimeLog(data);
+  if (aiStatusPollingTimer) {
+    window.clearTimeout(aiStatusPollingTimer);
+    aiStatusPollingTimer = null;
+  }
+  if (keepPolling || data.is_running) {
+    aiStatusPollingTimer = window.setTimeout(() => {
+      pollAiAnalysisStatus(false).catch(() => {});
+    }, 3000);
+  }
+  return data;
+}
+
+function stopAiAnalysisStatusPolling() {
+  if (!aiStatusPollingTimer) return;
+  window.clearTimeout(aiStatusPollingTimer);
+  aiStatusPollingTimer = null;
 }
 
 document.querySelectorAll("[data-render-subtitle]").forEach((button) => {

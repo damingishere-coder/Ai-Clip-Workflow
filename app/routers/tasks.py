@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from app.models.task import (
     ClipCandidateBatchUpdate,
@@ -71,6 +72,14 @@ async def get_task_detail(task_id: str) -> dict:
 async def get_transcript_status(task_id: str) -> dict:
     try:
         return task_service.get_task_transcript_status(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{task_id}/ai-analysis-status")
+async def get_ai_analysis_status(task_id: str) -> dict:
+    try:
+        return task_service.get_task_ai_analysis_status(task_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -167,7 +176,7 @@ async def process_ai_analysis(
     provider: str | None = Query(default=None, pattern="^(remote|local)$"),
 ) -> dict:
     try:
-        return task_service.process_task_ai_analysis(task_id, provider=provider)
+        return await run_in_threadpool(task_service.process_task_ai_analysis, task_id, provider=provider)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
