@@ -39,6 +39,7 @@ def test_markdown_from_chunked_transcript() -> None:
     original_model_key = transcript_service._WHISPER_MODEL_KEY
     original_chunk_seconds = transcript_service.settings.transcription_chunk_seconds
     original_overlap_seconds = transcript_service.settings.transcription_chunk_overlap_seconds
+    original_provider = transcript_service.settings.transcription_provider
 
     def fake_duration(_audio_path: Path) -> float:
         return 65 * 60
@@ -61,6 +62,7 @@ def test_markdown_from_chunked_transcript() -> None:
         transcript_service._extract_audio_chunk = fake_extract
         transcript_service.transcribe_audio = fake_transcribe
         transcript_service._WHISPER_MODEL_KEY = ("medium", "cpu", "int8")
+        object.__setattr__(transcript_service.settings, "transcription_provider", "local")
         object.__setattr__(transcript_service.settings, "transcription_chunk_seconds", 600)
         object.__setattr__(transcript_service.settings, "transcription_chunk_overlap_seconds", 5)
 
@@ -91,6 +93,7 @@ def test_markdown_from_chunked_transcript() -> None:
         transcript_service._extract_audio_chunk = original_extract
         transcript_service.transcribe_audio = original_transcribe
         transcript_service._WHISPER_MODEL_KEY = original_model_key
+        object.__setattr__(transcript_service.settings, "transcription_provider", original_provider)
         object.__setattr__(transcript_service.settings, "transcription_chunk_seconds", original_chunk_seconds)
         object.__setattr__(transcript_service.settings, "transcription_chunk_overlap_seconds", original_overlap_seconds)
 

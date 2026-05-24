@@ -19,6 +19,7 @@
     <button class="secondary-button js-process-action" type="button" data-confirm="重新生成会覆盖当前转写文件，并且需要重新等待转写完成。确认重新生成吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?force=true">重新生成转写</button>
     {% elif task.status == "transcribing" %}
     <button class="secondary-button" id="start-workflow-button" type="button" disabled>转写处理中</button>
+    <button class="secondary-button js-cancel-transcript" type="button" data-task-id="{{ task.id }}">停止转写</button>
     {% else %}
     <button class="secondary-button js-process-action" id="start-workflow-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow">{{ "继续处理" if task.audio_exists else "开始处理" }}</button>
     {% endif %}
@@ -143,14 +144,17 @@
   </article>
 
   <article class="panel transcript-panel" id="transcript-panel" data-task-id="{{ task.id }}">
+    {% set transcript_progress = task.transcript_progress or {} %}
     <div class="panel-header">
       <div>
         <p class="eyebrow">Transcript</p>
         <h2>转写预览</h2>
       </div>
-      <a class="secondary-button" href="/tasks/{{ task.id }}/transcript">查看完整原文</a>
+      <div class="button-row">
+        <button class="secondary-button js-cancel-transcript" id="cancel-transcript-button" type="button" data-task-id="{{ task.id }}" {% if transcript_progress.status not in ["running", "cancelling"] and task.status != "transcribing" %}hidden{% endif %}>停止转写</button>
+        <a class="secondary-button" href="/tasks/{{ task.id }}/transcript">查看完整原文</a>
+      </div>
     </div>
-    {% set transcript_progress = task.transcript_progress or {} %}
     <div class="transcript-progress" id="transcript-progress" {% if not transcript_progress %}hidden{% endif %}>
       <div class="transcript-progress-heading">
         <strong id="transcript-progress-message">{{ transcript_progress.message or "转写进度" }}</strong>
@@ -168,7 +172,7 @@
       </p>
       <p id="transcript-progress-runtime">
         {% if transcript_progress.model %}
-        当前转写配置：{{ transcript_progress.model }} / {{ transcript_progress.device }} / {{ transcript_progress.compute_type }}
+        当前转写配置：{{ transcript_progress.provider_label or "转写服务" }} / {{ transcript_progress.model }} / {{ transcript_progress.device }} / {{ transcript_progress.compute_type }}
         {% endif %}
       </p>
     </div>

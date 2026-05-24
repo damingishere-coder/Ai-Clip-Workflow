@@ -1,5 +1,29 @@
 # Next Steps
 
+## 2026-05-24 长视频 AI 分析修复后
+- 已把远程 DeepSeek 和本地 Ollama 都改成分段分析，默认每段约 3 分钟，适合继续验证 40 分钟和 1 小时以上的长视频。
+- 已兼容旧 Prompt 返回的 `clip_key`、`viral_value` 等字段，当前 2 号“康熙来了综艺短视频切片专家”Prompt 也已更新为新 JSON 格式。
+- 页面上 AI 失败提示会变短；如果还失败，优先看任务右侧日志或 `E:\直播间切片工作流存储\任务ID\logs\process.log`。
+
+## 长视频 AI 下一步优先测试
+1. 打开任务 `f8e1edf6a57f`，先点击“DeepSeek AI 分析”，等待它按分段生成候选片段。
+2. 成功后进入片段审核页，检查候选片段的标题、起止时间、推荐理由和传播价值是否合理。
+3. 再点击“本地 AI 分析”做对比；本地 Ollama 会更慢，但不应再因为 `clip_key` 或 `spread_value` 字段失败。
+4. 如果 40 分钟任务稳定，再上传或选择 1 小时以上视频，按同样流程验证转写完成后的 AI 分析。
+
+## 2026-05-24 国内远程转写接入后
+- 已把转写默认方案改为“火山引擎远程转写优先，本地 faster-whisper 兜底”。
+- 已新增 `.env` 配置项：`TRANSCRIPTION_PROVIDER=volcengine`、`TRANSCRIPTION_FALLBACK_PROVIDER=local`、`VOLCENGINE_ASR_API_KEY`、`VOLCENGINE_ASR_RESOURCE_ID=volc.bigasr.auc_turbo`。
+- 已新增火山引擎连通性测试脚本：`scripts/test_volcengine_transcription_connection.py`。
+- 已新增“停止转写”按钮；如果误用本地模型开始转写，可以先停止，再重启服务后重新生成。
+- 下一步先在火山引擎控制台开通豆包语音相关权限，拿到 App Key 后填入 `.env` 的 `VOLCENGINE_ASR_API_KEY`。
+
+## 国内转写下一步优先做
+1. 用真实任务音频运行 `.venv\Scripts\python.exe scripts\test_volcengine_transcription_connection.py "音频路径"`，确认火山引擎能返回中文转写。
+2. 修改 `.env` 后先重启 FastAPI / Docker 服务，再对 40 分钟视频点击“重新生成转写”，观察速度是否明显快于本地 CPU。
+3. 如果火山引擎 Key、余额或权限异常，先看页面错误；系统会按配置尝试退回本地转写。
+4. 后续再按同一 Provider 接口接阿里云、腾讯云或讯飞，实现真正多家切换。
+
 ## 2026-05-24 自动加字幕功能完善后
 - 已把 `/subtitles` 改成字幕任务列表；不同视频任务需要点进详情页 `/subtitles/{task_id}` 后分别处理。
 - 已新增字幕样式表 `subtitle_style_presets` 和字幕任务表 `subtitle_jobs`，样式会保存到 SQLite。

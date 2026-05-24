@@ -1,5 +1,23 @@
 # Development Log
 
+## 2026-05-24 长视频 AI 分析稳定性修复
+- 远程 DeepSeek 和本地 Ollama 现在统一使用 3 分钟左右的小段分段分析，不再把 40 分钟或 1 小时以上转写全文一次性塞给 AI，避免长 JSON 输出被截断。
+- 新增 AI JSON 兼容层：可自动把 `clip_key` 转为 `clip_id`，从 `viral_value` 等字段补齐 `spread_value`，并为缺失的摘要、推荐理由、剪辑建议提供保底值。
+- 分段分析改为“部分失败可跳过”：单个小段失败会写入任务日志，只要其他小段生成了可用候选，就会合并、去重、排序并进入人工审核。
+- DeepSeek Chat Completions 的 `max_tokens` 提高到 8192，同时页面端会把超长技术错误压缩成可读摘要，详细错误继续写入任务日志。
+- 已同步更新当前 SQLite 中的 2 号“康熙来了综艺短视频切片专家”Prompt，让它直接输出程序需要的 `clip_id`、`spread_value` 等字段。
+- 新增 `scripts/test_ai_long_analysis_resilience.py`，覆盖远程分段、旧字段兼容和部分分段失败仍保留可用候选。
+- 已运行 `.venv\Scripts\python.exe -m compileall app scripts`、`.venv\Scripts\python.exe scripts\test_ai_json_validation.py`、`.venv\Scripts\python.exe scripts\test_local_ai_chunked_analysis.py`、`.venv\Scripts\python.exe scripts\test_ai_long_analysis_resilience.py`。
+
+## 2026-05-24 国内远程转写服务商接入
+- 新增可切换转写服务商配置：`TRANSCRIPTION_PROVIDER`、`TRANSCRIPTION_FALLBACK_PROVIDER`，默认优先使用火山引擎远程转写，失败后可自动退回本地 faster-whisper。
+- 接入火山引擎大模型录音文件极速版识别：分段压缩为 16k 单声道 MP3/OGG 后请求 `https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash`，再把 `utterances` 转成现有 `transcript.md` 时间戳格式。
+- 预留阿里云、腾讯云、讯飞 Provider 名称；当前版本只完整实现 `volcengine` 和 `local`，未实现厂商会给出明确错误提示。
+- 任务详情页转写进度会显示实际来源，例如“火山引擎远程转写 / volc.bigasr.auc_turbo / remote / mp3”。
+- 任务详情页新增“停止转写”按钮；后台任务会在当前分段结束后停止，并把进度标记为 `cancelled`，方便重新生成转写。
+- 新增 `scripts/test_volcengine_transcription_provider.py` 验证火山引擎结果解析和远程失败本地兜底；新增 `scripts/test_volcengine_transcription_connection.py` 用真实短音频检查火山引擎 Key 和接口。
+- 已运行 `.venv\Scripts\python.exe -m compileall app scripts`、`scripts/test_transcript_chunking.py`、`scripts/test_transcript_background_start.py`、`scripts/test_volcengine_transcription_provider.py`。
+
 ## 2026-05-24 自动加字幕功能完善
 - 将 `/subtitles` 调整为“字幕任务列表”一级页面，切片生成后按任务分组展示，用户需要先进入具体任务再处理字幕，避免不同视频混在一个工作台里。
 - 新增 `/subtitles/{task_id}` 单任务字幕工作台，展示该任务下每条输出切片、原视频预览、字幕状态、带字幕成片预览和后续推送入口。

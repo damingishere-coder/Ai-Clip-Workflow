@@ -86,6 +86,8 @@ class Settings:
     ai_windows_wsl_setup_acknowledged: str = _env("AI_WINDOWS_WSL_SETUP_ACKNOWLEDGED", "true")
     ai_model_context_window: int = int(_env("AI_MODEL_CONTEXT_WINDOW", "1000000"))
     ai_model_auto_compact_token_limit: int = int(_env("AI_MODEL_AUTO_COMPACT_TOKEN_LIMIT", "900000"))
+    transcription_provider: str = _env("TRANSCRIPTION_PROVIDER", "volcengine")
+    transcription_fallback_provider: str = _env("TRANSCRIPTION_FALLBACK_PROVIDER", "local")
     transcription_model: str = _env("TRANSCRIPTION_MODEL", "medium")
     transcription_language: str = _env("TRANSCRIPTION_LANGUAGE", "zh")
     transcription_device: str = _env("TRANSCRIPTION_DEVICE", "cpu")
@@ -93,6 +95,16 @@ class Settings:
     transcription_cpu_fallback_model: str = _env("TRANSCRIPTION_CPU_FALLBACK_MODEL", "medium")
     transcription_chunk_seconds: int = int(_env("TRANSCRIPTION_CHUNK_SECONDS", "120"))
     transcription_chunk_overlap_seconds: int = int(_env("TRANSCRIPTION_CHUNK_OVERLAP_SECONDS", "5"))
+    volcengine_asr_api_url: str = _env(
+        "VOLCENGINE_ASR_API_URL",
+        "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash",
+    )
+    volcengine_asr_api_key: str = _env("VOLCENGINE_ASR_API_KEY", "")
+    volcengine_asr_app_key: str = _env("VOLCENGINE_ASR_APP_KEY", "")
+    volcengine_asr_access_key: str = _env("VOLCENGINE_ASR_ACCESS_KEY", "")
+    volcengine_asr_resource_id: str = _env("VOLCENGINE_ASR_RESOURCE_ID", "volc.bigasr.auc_turbo")
+    volcengine_asr_timeout_seconds: int = int(_env("VOLCENGINE_ASR_TIMEOUT_SECONDS", "300"))
+    volcengine_asr_audio_format: str = _env("VOLCENGINE_ASR_AUDIO_FORMAT", "mp3")
 
 
 settings = Settings()

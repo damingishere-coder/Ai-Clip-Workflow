@@ -15,6 +15,7 @@ from app.services.transcript_service import (
     transcribe_audio,
     write_transcript_markdown,
 )
+import app.services.transcript_service as transcript_service
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,11 +47,16 @@ def main() -> None:
 
         if args.write_md:
             transcript_path = temp_path / "transcript.md"
-            write_transcript_markdown(
-                {"id": "smoke-test", "task_name": "真实转写冒烟测试", "source": str(audio_path)},
-                clip_path,
-                transcript_path,
-            )
+            original_provider = transcript_service.settings.transcription_provider
+            try:
+                object.__setattr__(transcript_service.settings, "transcription_provider", "local")
+                write_transcript_markdown(
+                    {"id": "smoke-test", "task_name": "真实转写冒烟测试", "source": str(audio_path)},
+                    clip_path,
+                    transcript_path,
+                )
+            finally:
+                object.__setattr__(transcript_service.settings, "transcription_provider", original_provider)
             print(f"测试 Markdown 已生成：{transcript_path}")
 
 

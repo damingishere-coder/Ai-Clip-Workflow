@@ -95,6 +95,7 @@ const transcriptProgressBar = document.querySelector("#transcript-progress-bar")
 const transcriptProgressDetail = document.querySelector("#transcript-progress-detail");
 const transcriptProgressRuntime = document.querySelector("#transcript-progress-runtime");
 const transcriptPreviewBox = document.querySelector("#transcript-preview-box");
+const cancelTranscriptButtons = document.querySelectorAll(".js-cancel-transcript");
 let transcriptPollingTimer = null;
 let transcriptPollingStartedFromRunning = false;
 
@@ -136,11 +137,12 @@ function renderTranscriptStatus(data) {
     transcriptProgressDetail.textContent = "转写进度：正在准备分段";
   }
 
-  const runtimeParts = [progress.model, progress.device, progress.compute_type].filter(Boolean);
+  const runtimeParts = [progress.provider_label, progress.model, progress.device, progress.compute_type].filter(Boolean);
   transcriptProgressRuntime.textContent = runtimeParts.length
     ? `当前转写配置：${runtimeParts.join(" / ")}`
     : "";
 
+  updateCancelTranscriptButtons(progress.status || data.task_status);
   renderTranscriptPreview(data.preview || [], data.transcript_exists);
   updateWorkflowButtons(data);
 }
@@ -155,7 +157,7 @@ async function pollTranscriptStatus() {
   }
   renderTranscriptStatus(data);
   const status = data.progress?.status;
-  if (status === "running") {
+  if (status === "running" || status === "cancelling") {
     transcriptPollingStartedFromRunning = true;
     transcriptPollingTimer = window.setTimeout(pollTranscriptStatus, 5000);
   } else if (status === "completed") {
@@ -195,8 +197,54 @@ function updateWorkflowButtons(data) {
   if (data.progress?.status === "running" || data.task_status === "transcribing") {
     startButton.textContent = "转写处理中";
     startButton.disabled = true;
+    updateCancelTranscriptButtons(data.progress?.status || "running");
+    return;
+  }
+  if (data.progress?.status === "cancelled") {
+    startButton.textContent = "重新生成转写";
+    startButton.disabled = false;
+    startButton.classList.add("js-process-action");
+    startButton.dataset.endpoint = `/api/tasks/${transcriptPanel?.dataset.taskId}/process/transcript-workflow?force=true`;
+    updateCancelTranscriptButtons("cancelled");
   }
 }
+
+function updateCancelTranscriptButtons(status) {
+  const shouldShow = status === "running" || status === "cancelling" || status === "transcribing";
+  cancelTranscriptButtons.forEach((button) => {
+    button.hidden = !shouldShow;
+    button.disabled = status === "cancelling";
+    button.textContent = status === "cancelling" ? "正在停止..." : "停止转写";
+  });
+}
+
+cancelTranscriptButtons.forEach((button) => {
+  button.addEventListener("click", async () => {
+    if (!window.confirm("停止后不会删除已生成的旧转写文件。确认停止当前转写吗？")) {
+      return;
+    }
+    const result = document.querySelector("#process-result");
+    const taskId = button.dataset.taskId || transcriptPanel?.dataset.taskId;
+    cancelTranscriptButtons.forEach((item) => {
+      item.disabled = true;
+      item.textContent = "正在停止...";
+    });
+    if (result) result.textContent = "正在请求停止转写...";
+
+    try {
+      const response = await fetch(`/api/tasks/${taskId}/process/transcript-cancel`, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "停止转写失败");
+      }
+      if (result) result.textContent = data.message || "已请求停止转写。";
+      startTranscriptPolling(true);
+    } catch (error) {
+      if (result) result.textContent = `停止转写失败：${error.message}`;
+      updateCancelTranscriptButtons("running");
+    }
+  });
+});
 
 const aiAnalysisForm = document.querySelector("#ai-analysis-form");
 const saveAiPromptsButton = document.querySelector("#save-ai-prompts-button");

@@ -41,6 +41,8 @@ def main() -> None:
 
     print()
     print("=== 当前转写配置 ===")
+    print(f"TRANSCRIPTION_PROVIDER={settings.transcription_provider}")
+    print(f"TRANSCRIPTION_FALLBACK_PROVIDER={settings.transcription_fallback_provider}")
     print(f"TRANSCRIPTION_MODEL={settings.transcription_model}")
     print(f"TRANSCRIPTION_LANGUAGE={settings.transcription_language}")
     print(f"TRANSCRIPTION_DEVICE={settings.transcription_device}")
@@ -48,6 +50,10 @@ def main() -> None:
     print(f"TRANSCRIPTION_CPU_FALLBACK_MODEL={settings.transcription_cpu_fallback_model}")
     print(f"TRANSCRIPTION_CHUNK_SECONDS={settings.transcription_chunk_seconds}")
     print(f"TRANSCRIPTION_CHUNK_OVERLAP_SECONDS={settings.transcription_chunk_overlap_seconds}")
+    print(f"VOLCENGINE_ASR_API_URL={settings.volcengine_asr_api_url}")
+    print(f"VOLCENGINE_ASR_RESOURCE_ID={settings.volcengine_asr_resource_id}")
+    print(f"VOLCENGINE_ASR_API_KEY={'已填写' if settings.volcengine_asr_api_key else '未填写'}")
+    print(f"VOLCENGINE_ASR_AUDIO_FORMAT={settings.volcengine_asr_audio_format}")
 
     if settings.transcription_device.lower() == "cuda":
         print()

@@ -105,6 +105,11 @@ SUBTITLE_STATUS_LABELS = {
 }
 
 _RUNNING_TRANSCRIPT_TASKS: set[str] = set()
+_CANCEL_TRANSCRIPT_TASKS: set[str] = set()
+
+
+class TranscriptCancelledError(RuntimeError):
+    pass
 _TRANSCRIPT_STALE_AFTER = timedelta(minutes=10)
 
 
@@ -1570,6 +1575,7 @@ def process_task_transcript(task_id: str, background_tasks: Any | None = None) -
         message="后台分段转写已启动，正在准备环境",
     )
     _append_task_log(task_id, "开始后台分段语音转写")
+    _CANCEL_TRANSCRIPT_TASKS.discard(task_id)
     _RUNNING_TRANSCRIPT_TASKS.add(task_id)
     if background_tasks is not None:
         background_tasks.add_task(_run_task_transcript_background, task_id)
@@ -1578,6 +1584,36 @@ def process_task_transcript(task_id: str, background_tasks: Any | None = None) -
     return {
         "status": "started",
         "message": "已开始后台分段转写，请稍后刷新查看进度。",
+        "task": get_task(task_id),
+    }
+
+
+def cancel_task_transcript(task_id: str) -> dict:
+    task = get_task(task_id)
+    if not task:
+        raise ValueError("任务不存在")
+    paths = get_artifact_paths(task_id)
+    progress = read_transcript_progress(paths["transcript_path"])
+    if task_id not in _RUNNING_TRANSCRIPT_TASKS and progress.get("status") != "running":
+        return {
+            "status": "not_running",
+            "message": "当前没有正在运行的转写任务。",
+            "task": get_task(task_id),
+        }
+
+    _CANCEL_TRANSCRIPT_TASKS.add(task_id)
+    write_transcript_progress(
+        paths["transcript_path"],
+        status="cancelling",
+        current_chunk=int(progress.get("current_chunk") or 0),
+        total_chunks=int(progress.get("total_chunks") or 0),
+        percent=int(progress.get("percent") or 0),
+        message="已请求停止转写，当前分段结束后会停止。",
+    )
+    _append_task_log(task_id, "用户请求停止当前转写任务")
+    return {
+        "status": "cancelling",
+        "message": "已请求停止转写，当前分段结束后会停止。",
         "task": get_task(task_id),
     }
 
@@ -1617,6 +1653,8 @@ def _run_task_transcript_background(task_id: str) -> None:
     paths = get_artifact_paths(task_id)
 
     def progress_callback(progress: dict) -> None:
+        if task_id in _CANCEL_TRANSCRIPT_TASKS:
+            raise TranscriptCancelledError("用户已停止当前转写任务")
         message = progress.get("message") or "转写进度已更新"
         current_chunk = int(progress.get("current_chunk") or 0)
         total_chunks = int(progress.get("total_chunks") or 0)
@@ -1627,12 +1665,27 @@ def _run_task_transcript_background(task_id: str) -> None:
             _append_task_log(task_id, message)
 
     try:
+        if task_id in _CANCEL_TRANSCRIPT_TASKS:
+            raise TranscriptCancelledError("用户已停止当前转写任务")
         write_transcript_markdown(
             task,
             paths["audio_path"],
             paths["transcript_path"],
             progress_callback=progress_callback,
         )
+    except TranscriptCancelledError as exc:
+        last_progress = read_transcript_progress(paths["transcript_path"])
+        write_transcript_progress(
+            paths["transcript_path"],
+            status="cancelled",
+            current_chunk=int(last_progress.get("current_chunk") or 0),
+            total_chunks=int(last_progress.get("total_chunks") or 0),
+            percent=int(last_progress.get("percent") or 0),
+            message="转写已停止，可以重新生成转写。",
+        )
+        update_task_status(task_id, TaskStatus.pending_processing)
+        _append_task_log(task_id, str(exc))
+        return
     except Exception as exc:
         error = str(exc)
         last_progress = read_transcript_progress(paths["transcript_path"])
@@ -1649,6 +1702,7 @@ def _run_task_transcript_background(task_id: str) -> None:
         return
     finally:
         _RUNNING_TRANSCRIPT_TASKS.discard(task_id)
+        _CANCEL_TRANSCRIPT_TASKS.discard(task_id)
 
     update_task_status(task_id, TaskStatus.pending_ai)
     _append_task_log(task_id, f"真实转写 Markdown 已生成：{paths['transcript_path']}")

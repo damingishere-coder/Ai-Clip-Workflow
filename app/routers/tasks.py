@@ -153,6 +153,14 @@ async def process_transcript_workflow(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/{task_id}/process/transcript-cancel")
+async def cancel_transcript(task_id: str) -> dict:
+    try:
+        return task_service.cancel_task_transcript(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/{task_id}/process/ai")
 async def process_ai_analysis(
     task_id: str,

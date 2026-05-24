@@ -50,17 +50,21 @@ def main() -> None:
             background_tasks = FakeBackgroundTasks()
             result = task_service.process_task_transcript(task_id, background_tasks=background_tasks)
             duplicate = task_service.process_task_transcript(task_id, background_tasks=FakeBackgroundTasks())
+            cancel = task_service.cancel_task_transcript(task_id)
 
             assert result["status"] == "started"
             assert len(background_tasks.tasks) == 1
             assert background_tasks.tasks[0][0] == task_service._run_task_transcript_background
             assert duplicate["status"] == "running"
+            assert cancel["status"] == "cancelling"
+            assert task_id in task_service._CANCEL_TRANSCRIPT_TASKS
         finally:
             task_service.get_task = original_get_task
             task_service.get_artifact_paths = original_get_artifact_paths
             task_service.update_task_status = original_update_task_status
             task_service._append_task_log = original_append_task_log
             task_service._RUNNING_TRANSCRIPT_TASKS.discard(task_id)
+            task_service._CANCEL_TRANSCRIPT_TASKS.discard(task_id)
 
     print("transcript background start test passed")
 
