@@ -497,20 +497,36 @@ def get_task_ai_source_label(task_id: str) -> str:
     return f"{_ai_provider_label(provider_name)} · 模型 {model_name}"
 
 
-def get_clip_transcript_excerpt(task_id: str, clip_id: str) -> dict:
+def get_clip_transcript_excerpt(
+    task_id: str,
+    clip_id: str,
+    start_time: str | None = None,
+    end_time: str | None = None,
+) -> dict:
     clip = get_clip_candidate(task_id, clip_id)
+    start_seconds = int(clip["start_seconds"])
+    end_seconds = int(clip["end_seconds"])
+    start_label = clip["start_time"]
+    end_label = clip["end_time"]
+    if start_time and end_time:
+        start_seconds = _parse_time_to_seconds(start_time)
+        end_seconds = _parse_time_to_seconds(end_time)
+        if end_seconds <= start_seconds:
+            raise ValueError("结束时间必须大于开始时间")
+        start_label = _format_seconds_as_time(start_seconds)
+        end_label = _format_seconds_as_time(end_seconds)
     paths = get_artifact_paths(task_id)
     rows = read_transcript_range(
         paths["transcript_path"],
-        int(clip["start_seconds"]),
-        int(clip["end_seconds"]),
+        start_seconds,
+        end_seconds,
     )
     return {
         "task_id": task_id,
         "clip_id": clip_id,
         "title": clip["title"],
-        "start_time": clip["start_time"],
-        "end_time": clip["end_time"],
+        "start_time": start_label,
+        "end_time": end_label,
         "rows": rows,
     }
 
@@ -697,6 +713,12 @@ def list_output_clips(task_id: str) -> list[dict]:
                 output_clip.id, output_clip.task_id, output_clip.clip_candidate_id,
                 output_clip.output_file_path, output_clip.output_file_name,
                 output_clip.status, output_clip.error_message, output_clip.created_at, output_clip.updated_at,
+                clip_candidates.title AS clip_title,
+                clip_candidates.start_time AS clip_start_time,
+                clip_candidates.end_time AS clip_end_time,
+                clip_candidates.duration_seconds AS clip_duration_seconds,
+                clip_candidates.summary AS clip_summary,
+                clip_candidates.enabled AS clip_enabled,
                 subtitle_jobs.id AS subtitle_job_id,
                 subtitle_jobs.status AS subtitle_status,
                 subtitle_jobs.subtitle_file_path,
@@ -704,6 +726,7 @@ def list_output_clips(task_id: str) -> list[dict]:
                 subtitle_jobs.error_message AS subtitle_error_message,
                 subtitle_jobs.updated_at AS subtitle_updated_at
             FROM output_clip
+            LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
             LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
             WHERE output_clip.task_id = ?
             ORDER BY
@@ -721,12 +744,23 @@ def list_output_clips(task_id: str) -> list[dict]:
         raw_subtitled_path = (output.get("subtitled_output_file_path") or "").strip()
         subtitled_path = resolve_video_file_path(raw_subtitled_path) if raw_subtitled_path else None
         subtitle_status = output.get("subtitle_status") or "pending"
+        clip_start_time = output.get("clip_start_time") or ""
+        clip_end_time = output.get("clip_end_time") or ""
+        try:
+            clip_start_seconds = _parse_time_to_seconds(clip_start_time) if clip_start_time else 0
+            clip_end_seconds = _parse_time_to_seconds(clip_end_time) if clip_end_time else 0
+        except ValueError:
+            clip_start_seconds = 0
+            clip_end_seconds = 0
         clips.append(
             {
                 **output,
                 "status_label": OUTPUT_STATUS_LABELS.get(output["status"], output["status"]),
                 "file_exists": bool(output_path and output_path.exists() and output_path.is_file()),
                 "media_url": f"/media/tasks/{task_id}/output-clips/{output['id']}",
+                "source_media_url": f"/media/tasks/{task_id}/source-video",
+                "clip_start_seconds": clip_start_seconds,
+                "clip_end_seconds": clip_end_seconds,
                 "subtitle_status": subtitle_status,
                 "subtitle_status_label": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),
                 "subtitle_stage": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),

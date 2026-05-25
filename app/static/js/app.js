@@ -658,7 +658,27 @@ const clipTranscriptTitle = document.querySelector("#clip-transcript-title");
 const clipTranscriptTime = document.querySelector("#clip-transcript-time");
 const clipTranscriptBody = document.querySelector("#clip-transcript-body");
 const closeTranscriptDrawerButton = document.querySelector("#close-transcript-drawer");
+const sourceMonitorModal = document.querySelector("#source-monitor-modal");
+const closeSourceMonitorButton = document.querySelector("#close-source-monitor");
+const cancelSourceMonitorButton = document.querySelector("#cancel-source-monitor");
+const applySourceMonitorButton = document.querySelector("#apply-source-monitor");
+const sourceMonitorVideo = document.querySelector("#source-monitor-video");
+const sourceMonitorTrack = document.querySelector("#source-monitor-track");
+const sourceMonitorRange = document.querySelector("#source-monitor-range");
+const sourceMonitorPlayhead = document.querySelector("#source-monitor-playhead");
+const sourceMonitorInHandle = document.querySelector("#source-monitor-in-handle");
+const sourceMonitorOutHandle = document.querySelector("#source-monitor-out-handle");
+const sourceMonitorCurrent = document.querySelector("#source-monitor-current");
+const sourceMonitorDuration = document.querySelector("#source-monitor-duration");
+const sourceMonitorZoom = document.querySelector("#source-monitor-zoom");
+const sourceMonitorWindowStart = document.querySelector("#source-monitor-window-start");
+const sourceMonitorWindowEnd = document.querySelector("#source-monitor-window-end");
+const sourceMonitorInTime = document.querySelector("#source-monitor-in-time");
+const sourceMonitorOutTime = document.querySelector("#source-monitor-out-time");
+const sourceMonitorMessage = document.querySelector("#source-monitor-message");
 let activePreviewEndSeconds = null;
+let activeSourceMonitor = null;
+let activeSourceDrag = null;
 
 function showClipReviewMessage(message, tone = "info") {
   if (!clipReviewMessage) return;
@@ -693,10 +713,198 @@ function timeTextToSeconds(value) {
   return parts[0] * 3600 + parts[1] * 60 + parts[2];
 }
 
+function secondsToTimeText(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const restSeconds = total % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(restSeconds).padStart(2, "0")}`;
+}
+
+function formatTimecode(seconds) {
+  return `${secondsToTimeText(seconds)}:00`;
+}
+
 function updateCardTimeDataset(card) {
   if (!card) return;
   card.dataset.startSeconds = String(timeTextToSeconds(card.querySelector("[name='start_time']")?.value));
   card.dataset.endSeconds = String(timeTextToSeconds(card.querySelector("[name='end_time']")?.value));
+}
+
+function setSourceMonitorMessage(message, tone = "info") {
+  if (!sourceMonitorMessage) return;
+  sourceMonitorMessage.textContent = message;
+  sourceMonitorMessage.dataset.tone = tone;
+}
+
+function getReviewMaxClipSeconds() {
+  const value = Number(clipReviewForm?.dataset.maxClipSeconds || 0);
+  return Number.isFinite(value) && value > 0 ? value : 300;
+}
+
+function getSourceVideoDuration() {
+  const videoDuration = Number(sourceMonitorVideo?.duration || 0);
+  if (Number.isFinite(videoDuration) && videoDuration > 0) return videoDuration;
+  if (!activeSourceMonitor) return 1;
+  return Math.max(activeSourceMonitor.endSeconds + 60, activeSourceMonitor.startSeconds + 61);
+}
+
+function clampSeconds(value, min, max) {
+  return Math.max(min, Math.min(Number(value) || 0, max));
+}
+
+function getSourceWindowRange() {
+  if (!activeSourceMonitor) return { start: 0, end: 1, span: 1 };
+  const duration = getSourceVideoDuration();
+  const selected = Math.max(1, activeSourceMonitor.endSeconds - activeSourceMonitor.startSeconds);
+  const midpoint = (activeSourceMonitor.startSeconds + activeSourceMonitor.endSeconds) / 2;
+  const zoom = sourceMonitorZoom?.value || "fit";
+  const spanMap = {
+    fit: Math.max(120, selected * 4),
+    half: Math.max(60, selected * 2),
+    quarter: Math.max(30, selected * 1.25),
+  };
+  const span = Math.min(duration, spanMap[zoom] || spanMap.fit);
+  const start = clampSeconds(midpoint - span / 2, 0, Math.max(0, duration - span));
+  return { start, end: start + span, span };
+}
+
+function normalizeSourceRange(startSeconds, endSeconds, anchor = "end") {
+  const duration = getSourceVideoDuration();
+  const maxClipSeconds = getReviewMaxClipSeconds();
+  const minGap = 1;
+  let start = clampSeconds(startSeconds, 0, Math.max(0, duration - minGap));
+  let end = clampSeconds(endSeconds, start + minGap, duration);
+  let adjusted = false;
+
+  if (end - start > maxClipSeconds) {
+    adjusted = true;
+    if (anchor === "start") {
+      end = Math.min(duration, start + maxClipSeconds);
+    } else if (anchor === "end") {
+      start = Math.max(0, end - maxClipSeconds);
+    } else {
+      end = Math.min(duration, start + maxClipSeconds);
+    }
+  }
+
+  if (end <= start) {
+    adjusted = true;
+    if (anchor === "end") {
+      start = Math.max(0, end - minGap);
+    } else {
+      end = Math.min(duration, start + minGap);
+    }
+  }
+
+  return { start, end, adjusted };
+}
+
+function renderSourceMonitor() {
+  if (!activeSourceMonitor || !sourceMonitorRange) return;
+  const duration = getSourceVideoDuration();
+  const view = getSourceWindowRange();
+  const toPercent = (seconds) => ((clampSeconds(seconds, view.start, view.end) - view.start) / view.span) * 100;
+  const startPercent = toPercent(activeSourceMonitor.startSeconds);
+  const endPercent = toPercent(activeSourceMonitor.endSeconds);
+  const currentSeconds = Number(sourceMonitorVideo?.currentTime || activeSourceMonitor.startSeconds);
+  const playheadPercent = toPercent(currentSeconds);
+
+  sourceMonitorRange.style.left = `${startPercent}%`;
+  sourceMonitorRange.style.width = `${Math.max(1, endPercent - startPercent)}%`;
+  if (sourceMonitorPlayhead) sourceMonitorPlayhead.style.left = `${playheadPercent}%`;
+  if (sourceMonitorCurrent) sourceMonitorCurrent.textContent = formatTimecode(currentSeconds);
+  if (sourceMonitorDuration) sourceMonitorDuration.textContent = `片段 ${secondsToTimeText(activeSourceMonitor.endSeconds - activeSourceMonitor.startSeconds)}`;
+  if (sourceMonitorWindowStart) sourceMonitorWindowStart.textContent = secondsToTimeText(view.start);
+  if (sourceMonitorWindowEnd) sourceMonitorWindowEnd.textContent = secondsToTimeText(Math.min(duration, view.end));
+  if (sourceMonitorInTime) sourceMonitorInTime.textContent = `入点 ${secondsToTimeText(activeSourceMonitor.startSeconds)}`;
+  if (sourceMonitorOutTime) sourceMonitorOutTime.textContent = `出点 ${secondsToTimeText(activeSourceMonitor.endSeconds)}`;
+}
+
+function updateSourceMonitorRange(startSeconds, endSeconds, anchor = "end", seekTo = null) {
+  if (!activeSourceMonitor) return;
+  const normalized = normalizeSourceRange(startSeconds, endSeconds, anchor);
+  activeSourceMonitor.startSeconds = normalized.start;
+  activeSourceMonitor.endSeconds = normalized.end;
+  renderSourceMonitor();
+  if (sourceMonitorVideo && seekTo) {
+    sourceMonitorVideo.currentTime = seekTo === "out" ? activeSourceMonitor.endSeconds : activeSourceMonitor.startSeconds;
+  }
+  if (normalized.adjusted) {
+    setSourceMonitorMessage(`已按任务限制自动收紧范围，单条最长 ${Math.round(getReviewMaxClipSeconds() / 60)} 分钟。`, "info");
+  }
+}
+
+function setSourceMonitorTime(seconds) {
+  if (!sourceMonitorVideo) return;
+  sourceMonitorVideo.currentTime = clampSeconds(seconds, 0, getSourceVideoDuration());
+  renderSourceMonitor();
+}
+
+function secondsFromSourcePointer(event) {
+  if (!sourceMonitorTrack) return 0;
+  const rect = sourceMonitorTrack.getBoundingClientRect();
+  const ratio = clampSeconds((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+  const view = getSourceWindowRange();
+  return view.start + ratio * view.span;
+}
+
+function toggleSourceMonitor(show) {
+  if (!sourceMonitorModal) return;
+  if (show) {
+    sourceMonitorModal.removeAttribute("hidden");
+    document.body.style.overflow = "hidden";
+    return;
+  }
+  sourceMonitorModal.setAttribute("hidden", "");
+  document.body.style.overflow = "";
+  activeSourceMonitor = null;
+  activeSourceDrag = null;
+  if (sourceMonitorVideo) sourceMonitorVideo.pause();
+}
+
+function openSourceMonitor(card) {
+  if (!card || !sourceMonitorVideo) {
+    showClipReviewMessage("没有找到源视频，暂时无法打开源监视器。", "error");
+    return;
+  }
+  updateCardTimeDataset(card);
+  const startSeconds = Number(card.dataset.startSeconds || 0);
+  const endSeconds = Number(card.dataset.endSeconds || startSeconds + 1);
+  activeSourceMonitor = {
+    card,
+    startSeconds,
+    endSeconds,
+    isPreviewing: false,
+    stepSeconds: 1,
+  };
+  const normalized = normalizeSourceRange(startSeconds, endSeconds, "end");
+  activeSourceMonitor = {
+    card,
+    startSeconds: normalized.start,
+    endSeconds: normalized.end,
+    isPreviewing: false,
+    stepSeconds: 1,
+  };
+  sourceMonitorVideo.currentTime = activeSourceMonitor.startSeconds;
+  if (sourceMonitorZoom) sourceMonitorZoom.value = "fit";
+  setSourceMonitorMessage("拖动蓝色范围左右手柄，或播放到合适位置后设置入点 / 出点。");
+  toggleSourceMonitor(true);
+  renderSourceMonitor();
+}
+
+function applySourceMonitorToCard() {
+  if (!activeSourceMonitor?.card) return;
+  const card = activeSourceMonitor.card;
+  const startInput = card.querySelector("[name='start_time']");
+  const endInput = card.querySelector("[name='end_time']");
+  if (startInput) startInput.value = secondsToTimeText(activeSourceMonitor.startSeconds);
+  if (endInput) endInput.value = secondsToTimeText(activeSourceMonitor.endSeconds);
+  updateCardTimeDataset(card);
+  const durationPill = card.querySelector(".status-pill");
+  if (durationPill) durationPill.textContent = `${Math.round(activeSourceMonitor.endSeconds - activeSourceMonitor.startSeconds)} 秒`;
+  showClipReviewMessage("已应用新的入点 / 出点。确认无误后，请点击右侧“保存修改”写入数据库。", "success");
+  toggleSourceMonitor(false);
 }
 
 document.querySelectorAll("[data-clip-card] input[name='start_time'], [data-clip-card] input[name='end_time']").forEach((input) => {
@@ -794,7 +1002,10 @@ async function openTranscriptDrawer(card) {
     clipTranscriptBody.append(loading);
   }
   try {
-    const response = await fetch(`/api/tasks/${taskId}/clips/${clipId}/transcript-excerpt`);
+    const startTime = card.querySelector("[name='start_time']")?.value || "";
+    const endTime = card.querySelector("[name='end_time']")?.value || "";
+    const params = new URLSearchParams({ start_time: startTime, end_time: endTime });
+    const response = await fetch(`/api/tasks/${taskId}/clips/${clipId}/transcript-excerpt?${params.toString()}`);
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.detail || "读取转写失败");
@@ -825,6 +1036,12 @@ document.querySelectorAll("[data-transcript-trigger]").forEach((button) => {
   });
 });
 
+document.querySelectorAll("[data-source-monitor-trigger]").forEach((button) => {
+  button.addEventListener("click", () => {
+    openSourceMonitor(button.closest("[data-clip-card]"));
+  });
+});
+
 if (closeTranscriptDrawerButton) {
   closeTranscriptDrawerButton.addEventListener("click", closeTranscriptDrawer);
 }
@@ -835,6 +1052,105 @@ if (clipPreviewVideo) {
       clipPreviewVideo.pause();
       activePreviewEndSeconds = null;
     }
+  });
+}
+
+if (closeSourceMonitorButton) {
+  closeSourceMonitorButton.addEventListener("click", () => toggleSourceMonitor(false));
+}
+
+if (cancelSourceMonitorButton) {
+  cancelSourceMonitorButton.addEventListener("click", () => toggleSourceMonitor(false));
+}
+
+if (applySourceMonitorButton) {
+  applySourceMonitorButton.addEventListener("click", applySourceMonitorToCard);
+}
+
+if (sourceMonitorModal) {
+  sourceMonitorModal.addEventListener("click", (event) => {
+    if (event.target === sourceMonitorModal) toggleSourceMonitor(false);
+  });
+}
+
+if (sourceMonitorZoom) {
+  sourceMonitorZoom.addEventListener("change", renderSourceMonitor);
+}
+
+document.querySelectorAll("[data-source-step]").forEach((button) => {
+  button.addEventListener("click", () => {
+    if (!activeSourceMonitor) return;
+    document.querySelectorAll("[data-source-step]").forEach((item) => item.classList.remove("active"));
+    button.classList.add("active");
+    activeSourceMonitor.stepSeconds = Number(button.dataset.sourceStep || 1);
+  });
+});
+
+document.querySelectorAll("[data-source-action]").forEach((button) => {
+  button.addEventListener("click", () => {
+    if (!activeSourceMonitor || !sourceMonitorVideo) return;
+    const action = button.dataset.sourceAction;
+    const current = Number(sourceMonitorVideo.currentTime || activeSourceMonitor.startSeconds);
+    const step = Number(activeSourceMonitor.stepSeconds || 1);
+    if (action === "mark-in") updateSourceMonitorRange(current, activeSourceMonitor.endSeconds, "start", "in");
+    if (action === "mark-out") updateSourceMonitorRange(activeSourceMonitor.startSeconds, current, "end", "out");
+    if (action === "jump-in") setSourceMonitorTime(activeSourceMonitor.startSeconds);
+    if (action === "jump-out") setSourceMonitorTime(activeSourceMonitor.endSeconds);
+    if (action === "preview") {
+      activeSourceMonitor.isPreviewing = true;
+      setSourceMonitorTime(activeSourceMonitor.startSeconds);
+      sourceMonitorVideo.play().catch(() => {});
+    }
+    if (action === "in-back") updateSourceMonitorRange(activeSourceMonitor.startSeconds - step, activeSourceMonitor.endSeconds, "start", "in");
+    if (action === "in-forward") updateSourceMonitorRange(activeSourceMonitor.startSeconds + step, activeSourceMonitor.endSeconds, "start", "in");
+    if (action === "out-back") updateSourceMonitorRange(activeSourceMonitor.startSeconds, activeSourceMonitor.endSeconds - step, "end", "out");
+    if (action === "out-forward") updateSourceMonitorRange(activeSourceMonitor.startSeconds, activeSourceMonitor.endSeconds + step, "end", "out");
+  });
+});
+
+if (sourceMonitorTrack) {
+  sourceMonitorTrack.addEventListener("click", (event) => {
+    if (!activeSourceMonitor || event.target === sourceMonitorInHandle || event.target === sourceMonitorOutHandle) return;
+    setSourceMonitorTime(secondsFromSourcePointer(event));
+  });
+}
+
+[sourceMonitorInHandle, sourceMonitorOutHandle].forEach((handle) => {
+  if (!handle) return;
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    activeSourceDrag = handle === sourceMonitorInHandle ? "in" : "out";
+    handle.setPointerCapture(event.pointerId);
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!activeSourceMonitor || !activeSourceDrag) return;
+    const nextSeconds = secondsFromSourcePointer(event);
+    if (activeSourceDrag === "in") {
+      updateSourceMonitorRange(nextSeconds, activeSourceMonitor.endSeconds, "start");
+    } else {
+      updateSourceMonitorRange(activeSourceMonitor.startSeconds, nextSeconds, "end");
+    }
+  });
+  handle.addEventListener("pointerup", () => {
+    activeSourceDrag = null;
+  });
+  handle.addEventListener("pointercancel", () => {
+    activeSourceDrag = null;
+  });
+});
+
+if (sourceMonitorVideo) {
+  sourceMonitorVideo.addEventListener("loadedmetadata", renderSourceMonitor);
+  sourceMonitorVideo.addEventListener("timeupdate", () => {
+    if (!activeSourceMonitor) return;
+    if (activeSourceMonitor.isPreviewing && sourceMonitorVideo.currentTime >= activeSourceMonitor.endSeconds) {
+      sourceMonitorVideo.pause();
+      activeSourceMonitor.isPreviewing = false;
+      setSourceMonitorTime(activeSourceMonitor.endSeconds);
+      setSourceMonitorMessage("当前片段预览已到出点。", "success");
+      return;
+    }
+    renderSourceMonitor();
   });
 }
 
@@ -1020,7 +1336,119 @@ const closeCutEditButton = document.querySelector("#close-cut-edit");
 const cutEditVideo = document.querySelector("#cut-edit-video");
 const cutEditCaption = document.querySelector("#cut-edit-caption");
 const playCutPreviewButton = document.querySelector("#play-cut-preview");
-const trimWindow = document.querySelector("#trim-window");
+const saveCutEditButton = document.querySelector("#save-cut-edit");
+const cutEditSaveMessage = document.querySelector("#cut-edit-save-message");
+const trimFrameTrack = document.querySelector("#trim-frame-track");
+const trimSelection = document.querySelector("#trim-selection");
+const trimOutsideLeft = document.querySelector("#trim-outside-left");
+const trimOutsideRight = document.querySelector("#trim-outside-right");
+const trimStartHandle = document.querySelector("#trim-start-handle");
+const trimEndHandle = document.querySelector("#trim-end-handle");
+const trimStartInput = document.querySelector("#trim-start-input");
+const trimEndInput = document.querySelector("#trim-end-input");
+const trimDurationLabel = document.querySelector("#trim-duration-label");
+const trimPlayheadRange = document.querySelector("#trim-playhead-range");
+const trimStartPosition = document.querySelector("#trim-start-position");
+const trimCurrentPosition = document.querySelector("#trim-current-position");
+const trimEndPosition = document.querySelector("#trim-end-position");
+const setTrimStartButton = document.querySelector("#set-trim-start");
+const setTrimEndButton = document.querySelector("#set-trim-end");
+let activeTrimState = null;
+
+function setCutEditMessage(message, tone = "info") {
+  if (!cutEditSaveMessage) return;
+  cutEditSaveMessage.textContent = message;
+  cutEditSaveMessage.dataset.tone = tone;
+}
+
+function getTrimDuration() {
+  if (!activeTrimState) return 1;
+  const videoDuration = Number(cutEditVideo?.duration || 0);
+  return Math.max(1, videoDuration || activeTrimState.endSeconds || activeTrimState.startSeconds + 1);
+}
+
+function clampTrimSeconds(value, min, max) {
+  return Math.max(min, Math.min(Number(value) || 0, max));
+}
+
+function updateTrimViewport() {
+  if (!activeTrimState) return;
+  const duration = getTrimDuration();
+  const selected = Math.max(1, activeTrimState.endSeconds - activeTrimState.startSeconds);
+  const span = Math.min(duration, Math.max(24, selected * 5));
+  const midpoint = (activeTrimState.startSeconds + activeTrimState.endSeconds) / 2;
+  const viewStart = clampTrimSeconds(midpoint - span / 2, 0, Math.max(0, duration - span));
+  activeTrimState.viewStart = viewStart;
+  activeTrimState.viewEnd = viewStart + span;
+}
+
+function getTrimViewport() {
+  if (!activeTrimState) return { start: 0, end: 1, span: 1 };
+  if (!Number.isFinite(activeTrimState.viewStart) || !Number.isFinite(activeTrimState.viewEnd)) {
+    updateTrimViewport();
+  }
+  const start = activeTrimState.viewStart || 0;
+  const end = Math.max(start + 1, activeTrimState.viewEnd || getTrimDuration());
+  return { start, end, span: end - start };
+}
+
+function normalizeTrimRange(startSeconds, endSeconds) {
+  const duration = getTrimDuration();
+  const minGap = 1;
+  let start = Math.max(0, Math.min(Number(startSeconds) || 0, duration - minGap));
+  let end = Math.max(start + minGap, Math.min(Number(endSeconds) || start + minGap, duration));
+  if (end > duration) {
+    end = duration;
+    start = Math.max(0, end - minGap);
+  }
+  return { start, end };
+}
+
+function renderTrimEditor() {
+  if (!activeTrimState || !trimSelection) return;
+  const viewport = getTrimViewport();
+  const startPercent = ((activeTrimState.startSeconds - viewport.start) / viewport.span) * 100;
+  const endPercent = ((activeTrimState.endSeconds - viewport.start) / viewport.span) * 100;
+  trimSelection.style.left = `${startPercent}%`;
+  trimSelection.style.width = `${Math.max(1, endPercent - startPercent)}%`;
+  if (trimOutsideLeft) trimOutsideLeft.style.width = `${startPercent}%`;
+  if (trimOutsideRight) trimOutsideRight.style.left = `${endPercent}%`;
+  if (trimStartInput) trimStartInput.value = secondsToTimeText(activeTrimState.startSeconds);
+  if (trimEndInput) trimEndInput.value = secondsToTimeText(activeTrimState.endSeconds);
+  if (trimDurationLabel) trimDurationLabel.textContent = `选中 ${secondsToTimeText(activeTrimState.endSeconds - activeTrimState.startSeconds)}`;
+  if (trimStartPosition) trimStartPosition.textContent = secondsToTimeText(activeTrimState.startSeconds);
+  if (trimEndPosition) trimEndPosition.textContent = secondsToTimeText(activeTrimState.endSeconds);
+  if (trimPlayheadRange) {
+    trimPlayheadRange.min = String(viewport.start);
+    trimPlayheadRange.max = String(viewport.end);
+    trimPlayheadRange.value = String(Math.min(viewport.end, Math.max(viewport.start, cutEditVideo?.currentTime || activeTrimState.startSeconds)));
+  }
+}
+
+function updateTrimRange(startSeconds, endSeconds, seekTo = "start") {
+  if (!activeTrimState) return;
+  const normalized = normalizeTrimRange(startSeconds, endSeconds);
+  activeTrimState.startSeconds = normalized.start;
+  activeTrimState.endSeconds = normalized.end;
+  updateTrimViewport();
+  renderTrimEditor();
+  if (cutEditVideo) {
+    cutEditVideo.currentTime = seekTo === "end" ? activeTrimState.endSeconds : activeTrimState.startSeconds;
+  }
+}
+
+function updateTrimFromPointer(event, handle) {
+  if (!activeTrimState || !trimFrameTrack) return;
+  const rect = trimFrameTrack.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
+  const viewport = getTrimViewport();
+  const nextSeconds = viewport.start + ratio * viewport.span;
+  if (handle === "start") {
+    updateTrimRange(nextSeconds, activeTrimState.endSeconds, "start");
+  } else {
+    updateTrimRange(activeTrimState.startSeconds, nextSeconds, "end");
+  }
+}
 
 function toggleCutEditModal(show) {
   if (!cutEditModal) return;
@@ -1032,6 +1460,7 @@ function toggleCutEditModal(show) {
   cutEditModal.setAttribute("hidden", "");
   document.body.style.overflow = "";
   if (cutEditVideo) cutEditVideo.pause();
+  activeTrimState = null;
 }
 
 document.querySelectorAll("[data-cut-edit-trigger]").forEach((button) => {
@@ -1039,11 +1468,26 @@ document.querySelectorAll("[data-cut-edit-trigger]").forEach((button) => {
     const card = button.closest("[data-subtitle-output-card]");
     const sourceVideo = card?.querySelector(":scope > video");
     if (!card || !cutEditVideo || !sourceVideo) return;
-    cutEditVideo.src = sourceVideo.currentSrc || sourceVideo.src;
+    const startSeconds = Number(card.dataset.startSeconds || 0);
+    const endSeconds = Number(card.dataset.endSeconds || sourceVideo.duration || startSeconds + 1);
+    activeTrimState = {
+      card,
+      taskId: card.dataset.taskId || "",
+      clipId: card.dataset.clipId || "",
+      title: card.dataset.clipTitle || card.querySelector(".subtitle-output-body strong")?.textContent || "当前切片",
+      summary: card.dataset.clipSummary || "",
+      enabled: card.dataset.clipEnabled !== "0",
+      startSeconds,
+      endSeconds,
+    };
+    cutEditVideo.src = card.dataset.sourceMediaUrl || sourceVideo.currentSrc || sourceVideo.src;
     if (cutEditCaption) {
-      cutEditCaption.textContent = card.querySelector(".subtitle-output-body strong")?.textContent || "当前切片";
+      cutEditCaption.textContent = activeTrimState.title;
     }
+    setCutEditMessage("拖动黄色左右把手调整入点和出点。", "info");
     toggleCutEditModal(true);
+    renderTrimEditor();
+    cutEditVideo.currentTime = Math.max(0, startSeconds);
   });
 });
 
@@ -1059,33 +1503,124 @@ if (cutEditModal) {
 
 if (playCutPreviewButton && cutEditVideo) {
   playCutPreviewButton.addEventListener("click", () => {
-    cutEditVideo.currentTime = Math.max(0, cutEditVideo.currentTime || 0);
+    if (activeTrimState) {
+      cutEditVideo.currentTime = Math.max(0, activeTrimState.startSeconds);
+    }
     cutEditVideo.play().catch(() => {});
   });
 }
 
-if (trimWindow) {
-  let dragging = false;
-  let startX = 0;
-  let startLeft = 18;
-  trimWindow.addEventListener("pointerdown", (event) => {
-    dragging = true;
-    startX = event.clientX;
-    startLeft = parseFloat(trimWindow.style.left || "18");
-    trimWindow.setPointerCapture(event.pointerId);
+if (cutEditVideo) {
+  cutEditVideo.addEventListener("loadedmetadata", () => {
+    if (!activeTrimState) return;
+    const normalized = normalizeTrimRange(activeTrimState.startSeconds, activeTrimState.endSeconds);
+    activeTrimState.startSeconds = normalized.start;
+    activeTrimState.endSeconds = normalized.end;
+    updateTrimViewport();
+    cutEditVideo.currentTime = activeTrimState.startSeconds;
+    renderTrimEditor();
   });
-  trimWindow.addEventListener("pointermove", (event) => {
-    if (!dragging) return;
-    const parentWidth = trimWindow.parentElement?.clientWidth || 1;
-    const deltaPercent = ((event.clientX - startX) / parentWidth) * 100;
-    const nextLeft = Math.min(48, Math.max(4, startLeft + deltaPercent));
-    trimWindow.style.left = `${nextLeft}%`;
-    if (cutEditVideo?.duration) {
-      cutEditVideo.currentTime = Math.max(0, (nextLeft / 100) * cutEditVideo.duration);
+  cutEditVideo.addEventListener("timeupdate", () => {
+    if (!activeTrimState) return;
+    if (trimCurrentPosition) trimCurrentPosition.textContent = secondsToTimeText(cutEditVideo.currentTime);
+    if (trimPlayheadRange) trimPlayheadRange.value = String(cutEditVideo.currentTime);
+    if (cutEditVideo.currentTime >= activeTrimState.endSeconds) {
+      cutEditVideo.pause();
+      cutEditVideo.currentTime = activeTrimState.startSeconds;
     }
   });
-  trimWindow.addEventListener("pointerup", () => {
+}
+
+if (trimPlayheadRange && cutEditVideo) {
+  trimPlayheadRange.addEventListener("input", () => {
+    cutEditVideo.currentTime = Number(trimPlayheadRange.value || 0);
+  });
+}
+
+[
+  [trimStartHandle, "start"],
+  [trimEndHandle, "end"],
+].forEach(([handleNode, handleName]) => {
+  if (!handleNode) return;
+  let dragging = false;
+  handleNode.addEventListener("pointerdown", (event) => {
+    dragging = true;
+    handleNode.setPointerCapture(event.pointerId);
+    updateTrimFromPointer(event, handleName);
+  });
+  handleNode.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    updateTrimFromPointer(event, handleName);
+  });
+  handleNode.addEventListener("pointerup", () => {
     dragging = false;
+  });
+  handleNode.addEventListener("pointercancel", () => {
+    dragging = false;
+  });
+});
+
+if (trimStartInput) {
+  trimStartInput.addEventListener("change", () => {
+    updateTrimRange(timeTextToSeconds(trimStartInput.value), activeTrimState?.endSeconds || 1, "start");
+  });
+}
+
+if (trimEndInput) {
+  trimEndInput.addEventListener("change", () => {
+    updateTrimRange(activeTrimState?.startSeconds || 0, timeTextToSeconds(trimEndInput.value), "end");
+  });
+}
+
+if (setTrimStartButton && cutEditVideo) {
+  setTrimStartButton.addEventListener("click", () => {
+    updateTrimRange(cutEditVideo.currentTime, activeTrimState?.endSeconds || cutEditVideo.currentTime + 1, "start");
+  });
+}
+
+if (setTrimEndButton && cutEditVideo) {
+  setTrimEndButton.addEventListener("click", () => {
+    updateTrimRange(activeTrimState?.startSeconds || 0, cutEditVideo.currentTime, "end");
+  });
+}
+
+if (saveCutEditButton) {
+  saveCutEditButton.addEventListener("click", async () => {
+    if (!activeTrimState?.taskId || !activeTrimState?.clipId) {
+      setCutEditMessage("这条切片没有关联到候选片段，不能直接保存时间。", "error");
+      return;
+    }
+    const originalText = saveCutEditButton.textContent;
+    saveCutEditButton.disabled = true;
+    saveCutEditButton.textContent = "保存中...";
+    setCutEditMessage("正在保存入点和出点...", "info");
+    try {
+      const response = await fetch(`/api/tasks/${activeTrimState.taskId}/clips/${activeTrimState.clipId}/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: activeTrimState.title,
+          start_time: secondsToTimeText(activeTrimState.startSeconds),
+          end_time: secondsToTimeText(activeTrimState.endSeconds),
+          enabled: activeTrimState.enabled,
+          summary: activeTrimState.summary,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "保存失败");
+      }
+      activeTrimState.card.dataset.startSeconds = String(activeTrimState.startSeconds);
+      activeTrimState.card.dataset.endSeconds = String(activeTrimState.endSeconds);
+      activeTrimState.card.dataset.startTime = secondsToTimeText(activeTrimState.startSeconds);
+      activeTrimState.card.dataset.endTime = secondsToTimeText(activeTrimState.endSeconds);
+      setCutEditMessage("已保存。请回到片段审核页重新生成切片，才能得到新视频文件。", "success");
+    } catch (error) {
+      setCutEditMessage(`保存失败：${error.message}`, "error");
+    } finally {
+      saveCutEditButton.disabled = false;
+      saveCutEditButton.textContent = originalText;
+    }
   });
 }
 
@@ -1171,3 +1706,261 @@ if (aiConfigForm) {
     }
   });
 }
+
+document.querySelectorAll("[data-publish-tab]").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    const platform = tab.dataset.publishTab;
+    document.querySelectorAll("[data-publish-tab]").forEach((item) => {
+      item.classList.toggle("active", item === tab);
+    });
+    document.querySelectorAll("[data-publish-panel]").forEach((panel) => {
+      panel.classList.toggle("active", panel.dataset.publishPanel === platform);
+    });
+  });
+});
+
+function setPublishMessage(node, message, tone = "info") {
+  if (!node) return;
+  node.textContent = message;
+  node.dataset.tone = tone;
+}
+
+function publishFormPayload(form, submitter = null) {
+  const formData = new FormData(form);
+  const payload = Object.fromEntries(formData.entries());
+  if (submitter?.dataset.publishMode) {
+    payload.publish_mode = submitter.dataset.publishMode;
+  }
+  if (submitter?.dataset.batchMode) {
+    payload.publish_mode = submitter.dataset.batchMode;
+  }
+  payload.allow_download = Boolean(form.elements.allow_download?.checked);
+  payload.cover_time_seconds = Number(payload.cover_time_seconds || 0);
+  return payload;
+}
+
+document.querySelectorAll("[data-publish-config-form]").forEach((form) => {
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const resultNode = form.querySelector("[data-publish-config-result]");
+    const submitButton = form.querySelector("button[type='submit']");
+    const payload = publishFormPayload(form);
+    submitButton.disabled = true;
+    setPublishMessage(resultNode, "正在保存平台配置...");
+
+    try {
+      const response = await fetch(`/api/publish/platforms/${form.dataset.platform}/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "保存失败");
+      }
+      setPublishMessage(resultNode, data.message || "配置已保存。", "success");
+    } catch (error) {
+      setPublishMessage(resultNode, `保存失败：${error.message}`, "error");
+    } finally {
+      submitButton.disabled = false;
+    }
+  });
+});
+
+document.querySelectorAll("[data-test-publish-config]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const form = button.closest("[data-publish-config-form]");
+    const resultNode = form?.querySelector("[data-publish-config-result]");
+    button.disabled = true;
+    setPublishMessage(resultNode, "正在检查配置...");
+
+    try {
+      const response = await fetch(`/api/publish/platforms/${button.dataset.platform}/test`, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "检查失败");
+      }
+      setPublishMessage(resultNode, data.message || "配置检查完成。", data.status === "ok" ? "success" : "error");
+    } catch (error) {
+      setPublishMessage(resultNode, `检查失败：${error.message}`, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+});
+
+document.querySelectorAll("[data-douyin-oauth]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const form = button.closest("[data-publish-config-form]");
+    const resultNode = form?.querySelector("[data-publish-config-result]");
+    button.disabled = true;
+    setPublishMessage(resultNode, "正在生成抖音授权链接...");
+
+    try {
+      const response = await fetch("/api/publish/douyin/oauth-url");
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "生成授权链接失败");
+      }
+      window.open(data.url, "_blank", "noopener,noreferrer");
+      setPublishMessage(resultNode, "已打开抖音授权页。授权后会回到本地发布中心。", "success");
+    } catch (error) {
+      setPublishMessage(resultNode, `授权失败：${error.message}`, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+});
+
+document.querySelectorAll("[data-publish-account-form]").forEach((form) => {
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const resultNode = form.querySelector("[data-publish-account-result]");
+    const submitButton = form.querySelector("button[type='submit']");
+    const payload = publishFormPayload(form);
+    submitButton.disabled = true;
+    setPublishMessage(resultNode, "正在保存账号...");
+
+    try {
+      const response = await fetch("/api/publish/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "账号保存失败");
+      }
+      setPublishMessage(resultNode, data.message || "账号已保存，正在刷新...", "success");
+      window.setTimeout(() => window.location.reload(), 600);
+    } catch (error) {
+      setPublishMessage(resultNode, `账号保存失败：${error.message}`, "error");
+    } finally {
+      submitButton.disabled = false;
+    }
+  });
+});
+
+document.querySelectorAll("[data-publish-job-form]").forEach((form) => {
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitter = event.submitter;
+    const payload = publishFormPayload(form, submitter);
+    const resultNode = form.querySelector("[data-publish-job-result]");
+    const originalText = submitter?.textContent || "";
+
+    if (payload.publish_mode === "api_publish") {
+      const platformLabel = form.dataset.platform === "douyin" ? "抖音" : "B站";
+      const confirmed = window.confirm(`确认发布到真实${platformLabel}平台吗？\n\n请确认账号、标题、视频版本和标签都已经检查过。`);
+      if (!confirmed) return;
+    }
+
+    if (submitter) {
+      submitter.disabled = true;
+      submitter.textContent = "处理中...";
+    }
+    setPublishMessage(resultNode, "正在创建发布任务...");
+
+    try {
+      const response = await fetch("/api/publish/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || "创建发布任务失败");
+      }
+      setPublishMessage(resultNode, data.message || "发布任务已创建。", data.status === "failed" ? "error" : "success");
+      window.setTimeout(() => window.location.reload(), 900);
+    } catch (error) {
+      setPublishMessage(resultNode, `创建失败：${error.message}`, "error");
+    } finally {
+      if (submitter) {
+        submitter.disabled = false;
+        submitter.textContent = originalText;
+      }
+    }
+  });
+});
+
+document.querySelectorAll("[data-publish-batch-form]").forEach((form) => {
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitter = event.submitter;
+    const platform = form.dataset.platform;
+    const resultNode = form.querySelector("[data-publish-batch-result]");
+    const selectedIds = Array.from(document.querySelectorAll(`[data-batch-output-id='${platform}']:checked`)).map(
+      (item) => item.value
+    );
+    const payload = publishFormPayload(form, submitter);
+    payload.platform = platform;
+    payload.output_clip_ids = selectedIds;
+    if (!selectedIds.length) {
+      setPublishMessage(resultNode, "请先勾选至少一条切片。", "error");
+      return;
+    }
+
+    const originalText = submitter?.textContent || "";
+    if (submitter) {
+      submitter.disabled = true;
+      submitter.textContent = "处理中...";
+    }
+    setPublishMessage(resultNode, "正在批量创建发布任务...");
+
+    try {
+      const response = await fetch("/api/publish/jobs/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "批量创建失败");
+      }
+      setPublishMessage(resultNode, data.message || "批量任务已创建。", "success");
+      window.setTimeout(() => window.location.reload(), 800);
+    } catch (error) {
+      setPublishMessage(resultNode, `批量创建失败：${error.message}`, "error");
+    } finally {
+      if (submitter) {
+        submitter.disabled = false;
+        submitter.textContent = originalText;
+      }
+    }
+  });
+});
+
+document.querySelectorAll("[data-publish-job-action]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const row = button.closest("[data-publish-job-id]");
+    const jobId = row?.dataset.publishJobId;
+    const action = button.dataset.publishJobAction;
+    const endpointMap = {
+      retry: `/api/publish/jobs/${jobId}/retry`,
+      "mark-published": `/api/publish/jobs/${jobId}/mark-published`,
+      "mark-failed": `/api/publish/jobs/${jobId}/mark-failed`,
+      cancel: `/api/publish/jobs/${jobId}/cancel`,
+    };
+    if (!jobId || !endpointMap[action]) return;
+    if (action === "retry" && !window.confirm("确认重试真实发布吗？")) return;
+
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "处理中...";
+
+    try {
+      const response = await fetch(endpointMap[action], { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || "操作失败");
+      }
+      window.location.reload();
+    } catch (error) {
+      window.alert(`操作失败：${error.message}`);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
+});

@@ -40,7 +40,22 @@
       {% if output_clips %}
       <div class="subtitle-output-grid subtitle-output-grid-wide">
         {% for output in output_clips %}
-        <article class="subtitle-output-card" data-subtitle-output-card data-task-id="{{ task.id }}" data-output-id="{{ output.id }}">
+        <article
+          class="subtitle-output-card"
+          data-subtitle-output-card
+          data-task-id="{{ task.id }}"
+          data-output-id="{{ output.id }}"
+          data-clip-id="{{ output.clip_candidate_id or '' }}"
+          data-clip-title="{{ output.clip_title or output.output_file_name or '' }}"
+          data-clip-summary="{{ output.clip_summary or '' }}"
+          data-start-time="{{ output.clip_start_time or '' }}"
+          data-end-time="{{ output.clip_end_time or '' }}"
+          data-start-seconds="{{ output.clip_start_seconds }}"
+          data-end-seconds="{{ output.clip_end_seconds }}"
+          data-duration-seconds="{{ output.clip_duration_seconds or 0 }}"
+          data-source-media-url="{{ output.source_media_url }}"
+          data-clip-enabled="{{ 1 if output.clip_enabled is none or output.clip_enabled else 0 }}"
+        >
           {% if output.file_exists and output.status == "completed" %}
           <video controls preload="metadata" src="{{ output.media_url }}"></video>
           {% else %}
@@ -69,8 +84,8 @@
             {% endif %}
             <div class="button-row">
               <button class="secondary-button compact-button js-demo-toast" type="button" data-message="删除切片会在后续版本接入二次确认；当前请先回到片段审核调整。">删除</button>
-              <button class="secondary-button compact-button" type="button" data-cut-edit-trigger onclick="window.openSubtitleCutEdit && window.openSubtitleCutEdit(this)">修改剪切</button>
-              <button class="primary-button compact-button" type="button" data-render-subtitle onclick="window.renderSubtitleClip && window.renderSubtitleClip(this)">自动加字幕</button>
+              <button class="secondary-button compact-button" type="button" data-cut-edit-trigger>修改剪切</button>
+              <button class="primary-button compact-button" type="button" data-render-subtitle>自动加字幕</button>
             </div>
           </div>
         </article>
@@ -146,9 +161,9 @@
       </div>
       <div class="compact-list mosaic-demo-list">
         <li><strong>打码</strong><span>区域编辑仍保留为后续功能，当前先完成字幕烧录。</span></li>
-        <li><strong>发布</strong><span>带字幕成片生成后，再进入抖音 / B站发布前确认。</span></li>
+        <li><strong>发布</strong><span>带字幕成片生成后，进入抖音 / B站发布后台做账号、标题和真实发布确认。</span></li>
       </div>
-      <button class="secondary-button js-demo-toast" type="button" data-message="一键推送会在账号、标题、简介和二次确认流程完成后接入。">一键推送</button>
+      <a class="primary-button" href="/publish">去发布中心</a>
     </section>
   </aside>
 </section>
@@ -157,78 +172,58 @@
   <section class="modal-panel cut-edit-panel" role="dialog" aria-modal="true" aria-labelledby="cut-edit-title">
     <div class="panel-header">
       <div>
-        <p class="eyebrow">Trim Preview</p>
-        <h2 id="cut-edit-title">修改剪切预览</h2>
+        <p class="eyebrow">Trim Editor</p>
+        <h2 id="cut-edit-title">编辑入点 / 出点</h2>
       </div>
       <button class="icon-button" type="button" id="close-cut-edit" aria-label="关闭">×</button>
     </div>
     <div class="cut-edit-body">
-      <video controls id="cut-edit-video"></video>
-      <div class="iphone-trim-strip" aria-label="剪切时间轴">
-        <span></span><span></span><span></span><span></span><span></span>
-        <div class="trim-window" id="trim-window"></div>
+      <video controls id="cut-edit-video" preload="metadata"></video>
+      <div class="trim-editor-meta">
+        <span id="cut-edit-caption">请选择一条切片</span>
+        <strong id="trim-duration-label">--</strong>
       </div>
-      <p class="form-hint">当前弹窗用于像手机剪切一样预览和滑动定位；真正保存起止时间请回到片段审核页修改。</p>
+      <div class="phone-trim-editor" id="trim-editor">
+        <div class="trim-frame-track" id="trim-frame-track" aria-label="剪切时间轴">
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+          <div class="trim-outside trim-outside-left" id="trim-outside-left"></div>
+          <div class="trim-outside trim-outside-right" id="trim-outside-right"></div>
+          <div class="trim-selection" id="trim-selection">
+            <button class="trim-handle trim-handle-start" id="trim-start-handle" type="button" aria-label="拖动入点"><span>入点</span></button>
+            <button class="trim-handle trim-handle-end" id="trim-end-handle" type="button" aria-label="拖动出点"><span>出点</span></button>
+          </div>
+        </div>
+        <input class="trim-playhead-range" id="trim-playhead-range" type="range" min="0" max="1" step="0.1" value="0" aria-label="播放定位">
+        <div class="trim-time-scale">
+          <span id="trim-start-position">00:00</span>
+          <span id="trim-current-position">00:00</span>
+          <span id="trim-end-position">00:00</span>
+        </div>
+      </div>
+      <div class="trim-time-editor">
+        <label>
+          <span>入点</span>
+          <input class="control" id="trim-start-input" type="text" inputmode="numeric" placeholder="00:00:00">
+        </label>
+        <label>
+          <span>出点</span>
+          <input class="control" id="trim-end-input" type="text" inputmode="numeric" placeholder="00:00:00">
+        </label>
+        <button class="secondary-button compact-button" type="button" id="set-trim-start">设当前位置为入点</button>
+        <button class="secondary-button compact-button" type="button" id="set-trim-end">设当前位置为出点</button>
+      </div>
+      <p class="form-hint">拖动黄色左右手柄，或直接输入时间；点击保存会写回片段审核页，之后重新生成切片即可得到新视频。</p>
     </div>
     <div class="modal-actions">
-      <span class="form-hint" id="cut-edit-caption"></span>
+      <span class="form-hint" id="cut-edit-save-message"></span>
       <div class="button-row">
-        <a class="secondary-button" id="cut-edit-review-link" href="/tasks/{{ task.id }}/clips/review">去片段审核保存</a>
-        <button class="primary-button" type="button" id="play-cut-preview">预览播放</button>
+        <a class="secondary-button" id="cut-edit-review-link" href="/tasks/{{ task.id }}/clips/review">去片段审核重新切片</a>
+        <button class="secondary-button" type="button" id="play-cut-preview">预览这一段</button>
+        <button class="primary-button" type="button" id="save-cut-edit">保存入点 / 出点</button>
       </div>
     </div>
   </section>
 </div>
-<script>
-window.openSubtitleCutEdit = function (button) {
-  const card = button.closest("[data-subtitle-output-card]");
-  const modal = document.querySelector("#cut-edit-modal");
-  const modalVideo = document.querySelector("#cut-edit-video");
-  const sourceVideo = card?.querySelector(":scope > video");
-  const caption = document.querySelector("#cut-edit-caption");
-  if (!card || !modal || !modalVideo || !sourceVideo) return;
-  modalVideo.src = sourceVideo.currentSrc || sourceVideo.src;
-  if (caption) {
-    caption.textContent = card.querySelector(".subtitle-output-body strong")?.textContent || "当前切片";
-  }
-  modal.removeAttribute("hidden");
-  document.body.style.overflow = "hidden";
-};
-
-window.renderSubtitleClip = async function (button) {
-  const card = button.closest("[data-subtitle-output-card]");
-  if (!card || button.dataset.running === "1") return;
-  const statusNode = card.querySelector("[data-subtitle-status]");
-  const errorNode = card.querySelector("[data-subtitle-error]");
-  const originalText = button.textContent;
-  button.dataset.running = "1";
-  button.disabled = true;
-  button.textContent = "加字幕中...";
-  if (statusNode) statusNode.textContent = "字幕生成中";
-  if (errorNode) errorNode.textContent = "";
-  try {
-    const response = await fetch(`/api/tasks/${card.dataset.taskId}/output-clips/${card.dataset.outputId}/subtitles`, { method: "POST" });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "自动加字幕失败");
-    if (statusNode) statusNode.textContent = data.output_clip?.subtitle_status_label || "已加字幕";
-    if (errorNode) errorNode.textContent = data.message || "自动加字幕完成。";
-    window.setTimeout(() => window.location.reload(), 700);
-  } catch (error) {
-    if (statusNode) statusNode.textContent = "字幕失败";
-    if (errorNode) errorNode.textContent = `自动加字幕失败：${error.message}`;
-  } finally {
-    button.dataset.running = "0";
-    button.disabled = false;
-    button.textContent = originalText;
-  }
-};
-
-document.querySelector("#close-cut-edit")?.addEventListener("click", () => {
-  document.querySelector("#cut-edit-modal")?.setAttribute("hidden", "");
-  document.body.style.overflow = "";
-  document.querySelector("#cut-edit-video")?.pause();
-});
-</script>
 {% else %}
 <section class="page-heading">
   <div>
