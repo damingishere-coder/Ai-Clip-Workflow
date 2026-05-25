@@ -85,18 +85,12 @@ GET /api/tasks/{task_id}/clips/{clip_id}/transcript-excerpt
 - 按推荐分排序。
 - 按时间顺序排序。
 
-## 后续切割流程
+## 自动切割流程
 
-页面底部“生成切片”按钮当前调用预留接口：
-
-```text
-POST /api/tasks/{task_id}/clips/generate
-```
-
-该接口当前用于第九轮前的流程占位，会提示“待视频切割模块接入”，不会把任务状态改成 `cutting`。
-
-第九轮可以把这个入口接到真实 FFmpeg 切割流程，或调整为调用现有预研接口：
+页面底部“生成切片”按钮当前调用真实 FFmpeg 切割接口：
 
 ```text
 POST /api/tasks/{task_id}/process/cuts
 ```
+
+该接口会读取当前启用的候选片段，进入 `cutting` 状态，并把切片结果写入 `output_clip` 表。全部成功时任务进入 `completed`；部分成功时进入 `completed_with_errors`；全部失败时进入 `failed`。

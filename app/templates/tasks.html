@@ -6,7 +6,7 @@
   <div>
     <p class="eyebrow">Tasks</p>
     <h1>任务列表</h1>
-    <p>查看每条直播视频的处理状态、候选片段数量与异常信息。</p>
+    <p>查看每条直播视频的处理状态、候选片段、输出切片和字幕推送进度。</p>
   </div>
   <a class="primary-button" href="/tasks/new">新建任务</a>
 </section>
@@ -40,6 +40,7 @@
           <th>视频时长</th>
           <th>当前状态</th>
           <th>候选片段数</th>
+          <th>输出切片</th>
           <th>后续工作流</th>
           <th>创建时间</th>
           <th>操作</th>
@@ -54,9 +55,10 @@
           <td>{{ task.duration }}</td>
           <td><span class="status-pill">{{ task.status_label }}</span></td>
           <td>{{ task.candidate_count }}</td>
+          <td>{{ task.output_clip_count }} 条</td>
           <td>
             {% if task.output_clip_count > 0 %}
-            <span class="status-pill tone-blue">待加字幕</span>
+            <span class="status-pill tone-blue">待加字幕 / 待推送</span>
             {% elif task.status in ["completed", "completed_with_errors"] %}
             <span class="status-pill tone-amber">等待切片文件</span>
             {% else %}
@@ -74,7 +76,7 @@
         {% endfor %}
         {% else %}
         <tr>
-          <td colspan="8" class="empty-table-cell">
+          <td colspan="9" class="empty-table-cell">
             暂无任务。请先进入“新建任务”页面创建一条任务。
           </td>
         </tr>

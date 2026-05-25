@@ -2,16 +2,17 @@
 
 直播切片工作流是一个运行在 Windows 本地的个人后台工具，用来把直播长视频整理成可审核、可切割的短视频候选片段。
 
-当前 MVP 聚焦本地处理链路：新建任务、上传本地视频、提取音频、生成转写、AI 分析候选片段、人工审核、自动切割输出。
+当前版本：`v1.1`。本地切片全流程已走通：新建任务、上传本地视频、提取音频、生成转写、AI 分析候选片段、人工审核、自动切割输出。下一步重点是完善字幕添加和平台一键推送。
 
 ## 当前状态
 
 - 后端：FastAPI 可启动。
 - 前端：HTML + CSS + JavaScript + Jinja2 后台页面。
 - 数据库：SQLite，保存任务、候选片段、输出片段等信息。
-- 视频处理：预留并接入 FFmpeg / FFprobe 调用位置。
+- 视频处理：FFmpeg / FFprobe 已用于音频提取和自动切片。
 - 转写：本地 faster-whisper 链路已接入。
 - AI 分析：支持远程 OpenAI-compatible API 和本地 Ollama 风格接口。
+- 后续工作流：字幕工作台和一键推送入口已可见，真实字幕烧录与平台发布在下一阶段完善。
 - 配置安全：真实 `.env` 已被 Git 忽略，不会提交真实 API Key。
 
 ## 新手启动方式
@@ -60,6 +61,7 @@ docs/DATABASE_SCHEMA.md        数据库表结构
 docs/AI_ANALYSIS.md            AI 分析配置与流程
 docs/CLIP_REVIEW.md            候选片段审核说明
 docs/VIDEO_CUTTING.md          自动切割说明
+docs/SUBTITLE_AND_PUBLISH_PLAN.md 字幕添加与一键推送计划
 docs/UI_REFERENCE.md           UI 页面与设计参考
 DEVELOPMENT_LOG.md             开发记录
 NEXT_STEPS.md                  下一步计划

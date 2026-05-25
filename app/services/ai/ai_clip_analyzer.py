@@ -17,8 +17,10 @@ from app.services.ai.remote_responses_provider import RemoteResponsesProvider
 
 
 PROMPT_PATH = settings.project_root / "prompts" / "clip_analysis_prompt.txt"
-LOCAL_ANALYSIS_CHUNK_SECONDS = 180
-LOCAL_ANALYSIS_MAX_CONTEXT_CHARS = 4500
+ANALYSIS_CHUNK_SECONDS = 180
+ANALYSIS_MAX_CONTEXT_CHARS = 4500
+LOCAL_ANALYSIS_CHUNK_SECONDS = ANALYSIS_CHUNK_SECONDS
+LOCAL_ANALYSIS_MAX_CONTEXT_CHARS = ANALYSIS_MAX_CONTEXT_CHARS
 
 
 class AIAnalysisError(RuntimeError):
@@ -58,34 +60,7 @@ class TranscriptChunk:
 def analyze_task_transcript(request: AnalysisRequest) -> AIClipAnalysisResult:
     transcript_text = _read_transcript(request.transcript_path)
     transcript_bounds = _get_transcript_bounds(transcript_text)
-    if request.provider_name == "local":
-        return _analyze_task_transcript_in_local_chunks(request, transcript_text, transcript_bounds)
-
-    prompt = _render_prompt(
-        max_clip_duration=request.max_clip_duration_minutes * 60,
-        target_clip_count=request.target_clip_count,
-        ai_preference=request.ai_preference,
-        transcript_text=transcript_text,
-        prompt_template=request.prompt_template,
-    )
-    provider = build_provider(request.provider_name)
-
-    raw_text = provider.generate_json(prompt)
-    try:
-        result = _parse_and_validate(raw_text, task_id=request.task_id)
-    except AIAnalysisError as first_error:
-        retry_instruction = (
-            "上一次输出无法被程序解析或校验。请重新输出严格 JSON，"
-            "不要 Markdown，不要解释文字，字段必须完整，片段时长不能超限。"
-        )
-        raw_text = provider.generate_json(prompt, retry_instruction=retry_instruction)
-        try:
-            result = _parse_and_validate(raw_text, task_id=request.task_id)
-        except AIAnalysisError as second_error:
-            raise AIAnalysisError(f"AI 返回非法 JSON，安全重试后仍失败：{second_error}") from first_error
-
-    _validate_clip_constraints(result, request, transcript_bounds)
-    return result
+    return _analyze_task_transcript_in_chunks(request, transcript_text, transcript_bounds)
 
 
 def inspect_local_analysis_plan(request: AnalysisRequest) -> dict[str, Any]:
@@ -102,15 +77,15 @@ def inspect_local_analysis_plan(request: AnalysisRequest) -> dict[str, Any]:
     }
 
 
-def _analyze_task_transcript_in_local_chunks(
+def _analyze_task_transcript_in_chunks(
     request: AnalysisRequest,
     transcript_text: str,
     transcript_bounds: tuple[int, int],
 ) -> AIClipAnalysisResult:
-    provider = build_provider("local")
+    provider = build_provider(request.provider_name)
     chunks = _build_local_analysis_chunks(request, transcript_text)
     if not chunks:
-        raise AIAnalysisError("本地 AI 分段分析失败：没有从转写文本中解析到可分析的时间戳正文")
+        raise AIAnalysisError("AI 分段分析失败：没有从转写文本中解析到可分析的时间戳正文")
 
     clips = []
     failures: list[str] = []
@@ -130,18 +105,17 @@ def _analyze_task_transcript_in_local_chunks(
             except AIAnalysisError as first_error:
                 retry_instruction = (
                     "上一次输出无法被程序解析或校验。请重新输出严格 JSON，"
-                    "不要 Markdown，不要解释文字，字段必须完整，片段时长不能超限。"
+                    "不要 Markdown，不要解释文字。每个 clips 项必须包含："
+                    "clip_id、title、start_time、end_time、duration_seconds、summary、"
+                    "highlight_reason、spread_value、suggested_editing、confidence_score、selected_by_default。"
+                    "spread_value 只能是“高”“中”“低”。片段时长不能超限。"
                 )
                 raw_text = provider.generate_json(prompt, retry_instruction=retry_instruction)
                 try:
                     chunk_result = _parse_and_validate(raw_text, task_id=request.task_id)
                 except AIAnalysisError as second_error:
                     raise AIAnalysisError(f"AI 返回非法 JSON，安全重试后仍失败：{second_error}") from first_error
-            _validate_clip_constraints(
-                chunk_result,
-                request,
-                (chunk.start_seconds, chunk.end_seconds),
-            )
+            _validate_clip_constraints(chunk_result, request, transcript_bounds)
             clips.extend(chunk_result.clips)
         except Exception as exc:
             failures.append(
@@ -153,12 +127,13 @@ def _analyze_task_transcript_in_local_chunks(
     merged_clips = _dedupe_and_rank_clips(clips, request.target_clip_count)
     if not merged_clips:
         failure_text = "；".join(failures[:5]) if failures else "没有候选片段"
-        raise AIAnalysisError(f"本地 AI 分段分析没有生成可用候选片段：{failure_text}")
+        raise AIAnalysisError(f"AI 分段分析没有生成可用候选片段：{failure_text}")
 
     for index, clip in enumerate(merged_clips, start=1):
         clip.clip_id = f"clip_{index:03d}"
 
-    summary = f"本地 AI 已按 {len(chunks)} 个小段完成分段分析，并合并为 {len(merged_clips)} 条候选片段。"
+    provider_label = "本地 AI" if request.provider_name == "local" else "远程 AI"
+    summary = f"{provider_label} 已按 {len(chunks)} 个小段完成分段分析，并合并为 {len(merged_clips)} 条候选片段。"
     if failures:
         summary += f" 有 {len(failures)} 个小段失败，已跳过失败小段。"
     result = AIClipAnalysisResult(task_id=request.task_id, analysis_summary=summary, clips=merged_clips)
@@ -250,8 +225,8 @@ def _build_local_analysis_chunks(request: AnalysisRequest, transcript_text: str)
             transcript_text=candidate_text,
             prompt_template=request.prompt_template,
         )
-        exceeds_time = row.end_seconds - current_start > LOCAL_ANALYSIS_CHUNK_SECONDS
-        exceeds_size = len(candidate_prompt) > LOCAL_ANALYSIS_MAX_CONTEXT_CHARS
+        exceeds_time = row.end_seconds - current_start > ANALYSIS_CHUNK_SECONDS
+        exceeds_size = len(candidate_prompt) > ANALYSIS_MAX_CONTEXT_CHARS
         if current_lines and (exceeds_time or exceeds_size):
             chunks_text.append((current_start, current_end, "\n".join(current_lines)))
             current_lines = [row_line]
@@ -364,6 +339,7 @@ def _parse_and_validate(raw_text: str, task_id: str | None = None) -> AIClipAnal
     except json.JSONDecodeError as exc:
         raise AIAnalysisError(f"JSON 解析失败：{exc}") from exc
 
+    payload = _normalize_ai_payload(payload)
     if task_id and isinstance(payload, dict) and not payload.get("task_id"):
         payload["task_id"] = task_id
 
@@ -379,6 +355,68 @@ def _parse_and_validate(raw_text: str, task_id: str | None = None) -> AIClipAnal
     if task_id and not result.task_id:
         result.task_id = task_id
     return result
+
+
+def _normalize_ai_payload(payload: Any) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+
+    normalized = dict(payload)
+    raw_clips = normalized.get("clips")
+    if not isinstance(raw_clips, list):
+        return normalized
+
+    normalized_clips = []
+    for index, raw_clip in enumerate(raw_clips, start=1):
+        if not isinstance(raw_clip, dict):
+            normalized_clips.append(raw_clip)
+            continue
+
+        clip = dict(raw_clip)
+        if not clip.get("clip_id") and clip.get("clip_key"):
+            clip["clip_id"] = clip["clip_key"]
+        if not clip.get("clip_id"):
+            clip["clip_id"] = f"clip_{index:03d}"
+
+        if not clip.get("spread_value"):
+            clip["spread_value"] = _normalize_spread_value(clip.get("viral_value") or clip.get("spread"))
+        else:
+            clip["spread_value"] = _normalize_spread_value(clip.get("spread_value"))
+
+        if not clip.get("highlight_reason"):
+            clip["highlight_reason"] = clip.get("viral_value") or clip.get("hook") or clip.get("summary") or "片段具备一定传播价值"
+        if not clip.get("suggested_editing"):
+            clip["suggested_editing"] = clip.get("editing_notes") or "保留核心对话，并用字幕强调笑点或观点。"
+        if not clip.get("summary"):
+            clip["summary"] = clip.get("hook") or clip.get("highlight_reason") or "候选片段来自转写文本中的高价值内容。"
+        if not clip.get("title"):
+            title_options = clip.get("title_options")
+            if isinstance(title_options, dict):
+                clip["title"] = (
+                    title_options.get("douyin_style")
+                    or title_options.get("bilibili_xiaohongshu_style")
+                    or "候选片段"
+                )
+            else:
+                clip["title"] = "候选片段"
+        if "selected_by_default" not in clip:
+            clip["selected_by_default"] = float(clip.get("confidence_score") or 0) >= 0.75
+
+        normalized_clips.append(clip)
+
+    normalized["clips"] = normalized_clips
+    return normalized
+
+
+def _normalize_spread_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if text in {"高", "中", "低"}:
+        return text
+    if any(marker in text for marker in ("高", "爆", "强", "viral", "hot")):
+        return "高"
+    if any(marker in text for marker in ("低", "弱", "普通")):
+        return "低"
+    return "中"
 
 
 _TIME_PATTERN = re.compile(r"\b(?:(\d{2}):)?(\d{2}):(\d{2})\b")

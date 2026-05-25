@@ -17,7 +17,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     description=settings.app_description,
-    version="0.1.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 

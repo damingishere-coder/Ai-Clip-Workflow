@@ -84,7 +84,6 @@ docs/DATABASE_SCHEMA.md
 
 - `transcript_service.py`：本地 faster-whisper 转写、分钟级原文整理和转写预览解析。
 - `app/services/ai/`：AI 候选片段分析模块，包含 Provider 抽象、远程中转站 Provider、本地大模型 Provider 和片段分析编排。
-- `ai_clip_service.py`：早期 AI 候选片段占位接口，后续以 `app/services/ai/` 为主。
 - `video_cut_service.py`：FFmpeg 自动切割接口。
 - `storage_service.py`：任务目录与文件路径管理接口。
 - `task_service.py`：任务状态与业务编排接口。

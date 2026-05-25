@@ -6,7 +6,7 @@
   <div>
     <p class="eyebrow">Dashboard</p>
     <h1>工作台</h1>
-    <p>从直播录像到候选切片的本地处理链路，当前任务数据来自 SQLite。</p>
+    <p>v1.1 已走通本地上传、转写、AI 分析、人工审核和自动切片，当前任务数据来自 SQLite。</p>
   </div>
   <a class="secondary-button" href="/tasks">查看全部任务</a>
 </section>
@@ -48,9 +48,9 @@
       </div>
     </div>
     <ul class="compact-list">
-      <li><strong>{{ stats[2].value }}</strong><span>条任务等待人工审核</span></li>
-      <li><strong>{{ stats[1].value }}</strong><span>条任务等待进入处理流程</span></li>
-      <li><strong>{{ stats[4].value }}</strong><span>条任务需要排查异常</span></li>
+      {% for item in focus_stats %}
+      <li><strong>{{ item.value }}</strong><span>{{ item.description }}</span></li>
+      {% endfor %}
     </ul>
   </article>
 </section>
@@ -70,6 +70,7 @@
           <th>平台</th>
           <th>状态</th>
           <th>候选片段</th>
+          <th>输出切片</th>
           <th>创建时间</th>
           <th>进度</th>
           <th>操作</th>
@@ -83,6 +84,7 @@
           <td><span class="platform-badge {{ task.platform_key }}">{{ task.platform_label }}</span></td>
           <td><span class="status-pill">{{ task.status_label }}</span></td>
           <td>{{ task.candidate_count }}</td>
+          <td>{{ task.output_clip_count }}</td>
           <td>{{ task.created_at }}</td>
           <td>
             <div class="progress">
@@ -94,7 +96,7 @@
         {% endfor %}
         {% else %}
         <tr>
-          <td colspan="7" class="empty-table-cell">
+          <td colspan="8" class="empty-table-cell">
             还没有任务。点击右上角“新建任务”创建第一条直播切片任务。
           </td>
         </tr>

@@ -458,6 +458,19 @@ def _ai_provider_label(provider_name: str) -> str:
     return provider_name or "AI"
 
 
+def _summarize_ai_error(error: str) -> str:
+    text = " ".join(str(error or "").split())
+    if not text:
+        return "AI 分析失败，请查看任务日志。"
+    if "AI 分段分析没有生成可用候选片段" in text:
+        return "AI 分析失败：所有分段都没有生成可用候选片段，详细原因已写入任务日志。"
+    if "JSON 解析失败" in text or "JSON 字段校验失败" in text or "AI 返回非法 JSON" in text:
+        return "AI 分析失败：AI 返回的 JSON 不完整或字段不符合要求，详细原因已写入任务日志。"
+    if len(text) > 220:
+        return f"{text[:220]}...（详细原因已写入任务日志）"
+    return text
+
+
 def _read_analysis_meta(task_id: str) -> dict:
     paths = get_artifact_paths(task_id)
     if not paths["analysis_path"].exists():
@@ -2118,13 +2131,14 @@ def _analyze_with_provider(task_id: str, task: dict, paths: dict[str, Path], pro
     _append_task_log(task_id, f"AI Prompt 方案：{prompt_preset.get('slot')}号 - {prompt_preset.get('name')}")
     if provider_name == "local":
         ensure_local_ai_ready()
-        plan = inspect_local_analysis_plan(request)
-        _append_task_log(
-            task_id,
-            "本地 AI 将使用分段分析："
-            f"{plan['chunk_count']} 段，单段约 {plan['chunk_seconds']} 秒，"
-            f"最大 prompt 约 {plan['max_prompt_chars']} 字",
-        )
+    plan = inspect_local_analysis_plan(request)
+    provider_label = _ai_provider_label(provider_name)
+    _append_task_log(
+        task_id,
+        f"{provider_label} 将使用分段分析："
+        f"{plan['chunk_count']} 段，单段约 {plan['chunk_seconds']} 秒，"
+        f"最大 prompt 约 {plan['max_prompt_chars']} 字",
+    )
     return analyze_task_transcript(request)
 
 
@@ -2214,9 +2228,10 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
         _insert_clip_candidates(task_id, analysis_payload["clips"])
     except (AIAnalysisError, Exception) as exc:
         error = str(exc)
-        update_task_status(task_id, TaskStatus.failed, error)
+        user_error = _summarize_ai_error(error)
+        update_task_status(task_id, TaskStatus.failed, user_error)
         _append_task_log(task_id, f"AI 分析失败：{error}")
-        raise ValueError(error) from exc
+        raise ValueError(user_error) from exc
 
     update_task_status(task_id, TaskStatus.pending_review)
     _append_task_log(task_id, f"AI 分析完成，Provider：{used_provider}，生成候选片段：{len(analysis_payload['clips'])} 条")

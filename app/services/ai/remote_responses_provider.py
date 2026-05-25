@@ -53,7 +53,7 @@ class RemoteResponsesProvider:
                 {"role": "user", "content": _merge_prompt(prompt, retry_instruction)},
             ],
             "response_format": {"type": "json_object"},
-            "max_tokens": 4096,
+            "max_tokens": 8192,
         }
         response = post_json(
             build_url(self.config.base_url, _chat_completions_path(self.config.base_url)),
