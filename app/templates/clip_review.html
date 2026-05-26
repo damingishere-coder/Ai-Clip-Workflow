@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block title %}片段审核 - {{ settings.app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', path='vendor/nouislider/nouislider.min.css') }}?v=15.8.1">
+{% endblock %}
 
 {% block content %}
 <section class="page-heading">
@@ -219,11 +222,7 @@
         </div>
 
         <div class="source-monitor-track" id="source-monitor-track" aria-label="源监视器时间轴">
-          <div class="source-monitor-window" id="source-monitor-window"></div>
-          <div class="source-monitor-range" id="source-monitor-range">
-            <button class="source-monitor-handle source-monitor-handle-in" id="source-monitor-in-handle" type="button" aria-label="拖动入点"></button>
-            <button class="source-monitor-handle source-monitor-handle-out" id="source-monitor-out-handle" type="button" aria-label="拖动出点"></button>
-          </div>
+          <div class="source-monitor-slider" id="source-monitor-slider"></div>
           <button class="source-monitor-playhead" id="source-monitor-playhead" type="button" aria-label="播放头"></button>
         </div>
 
@@ -266,4 +265,7 @@
     </div>
   </section>
 </div>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', path='vendor/nouislider/nouislider.min.js') }}?v=15.8.1"></script>
 {% endblock %}

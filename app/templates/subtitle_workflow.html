@@ -1,4 +1,7 @@
 {% extends "base.html" %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', path='vendor/nouislider/nouislider.min.css') }}?v=15.8.1">
+{% endblock %}
 {% block title %}字幕推送 - {{ settings.app_name }}{% endblock %}
 
 {% block content %}
@@ -53,7 +56,8 @@
           data-start-seconds="{{ output.clip_start_seconds }}"
           data-end-seconds="{{ output.clip_end_seconds }}"
           data-duration-seconds="{{ output.clip_duration_seconds or 0 }}"
-          data-source-media-url="{{ output.source_media_url }}"
+          data-output-base-start-seconds="{{ output.clip_start_seconds }}"
+          data-output-media-url="{{ output.media_url }}"
           data-clip-enabled="{{ 1 if output.clip_enabled is none or output.clip_enabled else 0 }}"
         >
           {% if output.file_exists and output.status == "completed" %}
@@ -185,15 +189,13 @@
       </div>
       <div class="phone-trim-editor" id="trim-editor">
         <div class="trim-frame-track" id="trim-frame-track" aria-label="剪切时间轴">
-          <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-          <div class="trim-outside trim-outside-left" id="trim-outside-left"></div>
-          <div class="trim-outside trim-outside-right" id="trim-outside-right"></div>
-          <div class="trim-selection" id="trim-selection">
-            <button class="trim-handle trim-handle-start" id="trim-start-handle" type="button" aria-label="拖动入点"><span>入点</span></button>
-            <button class="trim-handle trim-handle-end" id="trim-end-handle" type="button" aria-label="拖动出点"><span>出点</span></button>
+          <button class="trim-strip-play" id="trim-strip-play" type="button" aria-label="播放选中片段"></button>
+          <div class="trim-frame-strip" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
           </div>
+          <div class="trim-slider" id="trim-slider"></div>
+          <button class="trim-playhead" id="trim-playhead" type="button" aria-label="当前播放位置"></button>
         </div>
-        <input class="trim-playhead-range" id="trim-playhead-range" type="range" min="0" max="1" step="0.1" value="0" aria-label="播放定位">
         <div class="trim-time-scale">
           <span id="trim-start-position">00:00</span>
           <span id="trim-current-position">00:00</span>
@@ -286,4 +288,7 @@
   {% endif %}
 </section>
 {% endif %}
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', path='vendor/nouislider/nouislider.min.js') }}?v=15.8.1"></script>
 {% endblock %}
