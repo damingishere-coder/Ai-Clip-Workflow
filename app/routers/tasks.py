@@ -225,9 +225,14 @@ async def batch_update_clip_candidates(
 
 
 @router.get("/{task_id}/clips/{clip_id}/transcript-excerpt")
-async def get_clip_transcript_excerpt(task_id: str, clip_id: str) -> dict:
+async def get_clip_transcript_excerpt(
+    task_id: str,
+    clip_id: str,
+    start_time: str | None = None,
+    end_time: str | None = None,
+) -> dict:
     try:
-        return task_service.get_clip_transcript_excerpt(task_id, clip_id)
+        return task_service.get_clip_transcript_excerpt(task_id, clip_id, start_time, end_time)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

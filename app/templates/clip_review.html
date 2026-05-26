@@ -24,7 +24,7 @@
 <div class="page-alert" id="clip-review-message" hidden></div>
 
 <section class="review-layout">
-  <form class="clip-list" id="clip-review-form" data-task-id="{{ task.id }}">
+  <form class="clip-list" id="clip-review-form" data-task-id="{{ task.id }}" data-max-clip-seconds="{{ task.max_clip_duration * 60 }}">
     {% if clips %}
     {% for clip in clips %}
     <article
@@ -56,7 +56,11 @@
       </div>
 
       <div class="clip-card-tools">
-        <button class="secondary-button compact-button" type="button" data-transcript-trigger>查看这一段转写</button>
+        <div class="clip-tool-buttons">
+          <button class="secondary-button compact-button" type="button" data-preview-trigger>播放预览</button>
+          <button class="secondary-button compact-button" type="button" data-source-monitor-trigger>编辑出入点</button>
+          <button class="secondary-button compact-button" type="button" data-transcript-trigger>查看这一段转写</button>
+        </div>
         <span>起止时间可手动调整，保存时会校验不超过 {{ task.max_clip_duration }} 分钟。</span>
       </div>
 
@@ -182,4 +186,84 @@
     <p class="empty-note">点击左侧候选片段的“查看这一段转写”，这里会显示对应时间段的原文。</p>
   </div>
 </aside>
+
+<div class="modal-backdrop source-monitor-backdrop" id="source-monitor-modal" hidden>
+  <section class="modal-panel source-monitor-panel" role="dialog" aria-modal="true" aria-labelledby="source-monitor-title">
+    <div class="source-monitor-head">
+      <div>
+        <p class="eyebrow">Source Monitor</p>
+        <h2 id="source-monitor-title">编辑入点 / 出点</h2>
+      </div>
+      <button class="icon-button source-monitor-close" type="button" id="close-source-monitor" aria-label="关闭源监视器">×</button>
+    </div>
+
+    <div class="source-monitor-body">
+      {% if task.source_exists %}
+      <video id="source-monitor-video" controls preload="metadata" src="/media/tasks/{{ task.id }}/source-video"></video>
+      {% else %}
+      <div class="video-placeholder source-monitor-empty">
+        <strong>没有源视频</strong>
+        <span>请先回到任务详情确认源视频文件是否存在。</span>
+      </div>
+      {% endif %}
+
+      <div class="source-monitor-console">
+        <div class="source-monitor-status">
+          <strong id="source-monitor-current">00:00:00:00</strong>
+          <select class="source-monitor-zoom" id="source-monitor-zoom" aria-label="时间轴缩放">
+            <option value="fit">适合</option>
+            <option value="half">1/2</option>
+            <option value="quarter">1/4</option>
+          </select>
+          <span id="source-monitor-duration">片段 00:00:00</span>
+        </div>
+
+        <div class="source-monitor-track" id="source-monitor-track" aria-label="源监视器时间轴">
+          <div class="source-monitor-window" id="source-monitor-window"></div>
+          <div class="source-monitor-range" id="source-monitor-range">
+            <button class="source-monitor-handle source-monitor-handle-in" id="source-monitor-in-handle" type="button" aria-label="拖动入点"></button>
+            <button class="source-monitor-handle source-monitor-handle-out" id="source-monitor-out-handle" type="button" aria-label="拖动出点"></button>
+          </div>
+          <button class="source-monitor-playhead" id="source-monitor-playhead" type="button" aria-label="播放头"></button>
+        </div>
+
+        <div class="source-monitor-times">
+          <span id="source-monitor-window-start">00:00:00</span>
+          <span id="source-monitor-in-time">入点 00:00:00</span>
+          <span id="source-monitor-out-time">出点 00:00:00</span>
+          <span id="source-monitor-window-end">00:00:00</span>
+        </div>
+
+        <div class="source-monitor-controls">
+          <div class="source-monitor-stepper" aria-label="微调步长">
+            <span>步长</span>
+            <button class="source-monitor-step active" type="button" data-source-step="1">1秒</button>
+            <button class="source-monitor-step" type="button" data-source-step="5">5秒</button>
+            <button class="source-monitor-step" type="button" data-source-step="15">15秒</button>
+          </div>
+          <div class="source-monitor-actions">
+            <button class="secondary-button compact-button" type="button" data-source-action="mark-in">设为入点</button>
+            <button class="secondary-button compact-button" type="button" data-source-action="mark-out">设为出点</button>
+            <button class="secondary-button compact-button" type="button" data-source-action="jump-in">跳到入点</button>
+            <button class="secondary-button compact-button" type="button" data-source-action="jump-out">跳到出点</button>
+            <button class="secondary-button compact-button" type="button" data-source-action="preview">预览当前片段</button>
+          </div>
+          <div class="source-monitor-actions">
+            <button class="secondary-button compact-button" type="button" data-source-action="in-back">入点提前</button>
+            <button class="secondary-button compact-button" type="button" data-source-action="in-forward">入点后移</button>
+            <button class="secondary-button compact-button" type="button" data-source-action="out-back">出点提前</button>
+            <button class="secondary-button compact-button" type="button" data-source-action="out-forward">出点后移</button>
+          </div>
+        </div>
+
+        <p class="source-monitor-message" id="source-monitor-message">调整后点击“应用到片段”，再点击页面右侧“保存修改”写入数据库。</p>
+      </div>
+    </div>
+
+    <div class="source-monitor-footer">
+      <button class="secondary-button" type="button" id="cancel-source-monitor">取消</button>
+      <button class="primary-button" type="button" id="apply-source-monitor">应用到片段</button>
+    </div>
+  </section>
+</div>
 {% endblock %}
