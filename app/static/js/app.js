@@ -19,7 +19,7 @@ if (newTaskForm) {
       const uploadData = new FormData();
       uploadData.append("task_name", payload.task_name || "");
       uploadData.append("platform", payload.platform || "general");
-      uploadData.append("max_clip_duration", payload.max_clip_duration || "2");
+      uploadData.append("max_clip_duration", payload.max_clip_duration || "5");
       uploadData.append("candidate_clip_count", payload.candidate_clip_count || "5");
       uploadData.append("ai_preference", "");
       uploadData.append("video_file", videoFileInput.files[0]);
@@ -363,7 +363,7 @@ function renderAiAnalysisSummary(data) {
   const reviewLink = document.createElement("a");
   reviewLink.className = "primary-button";
   reviewLink.href = data.review_url || `/tasks/${aiAnalysisForm?.dataset.taskId || ""}/clips/review`;
-  reviewLink.textContent = "转到片段审核";
+  reviewLink.textContent = "去检查并生成切片";
   actions.append(reviewLink);
 
   aiAnalysisSummary.append(header, message, meta, list, actions);
@@ -685,8 +685,18 @@ function showClipReviewMessage(message, tone = "info") {
   clipReviewMessage.dataset.tone = tone;
 }
 
+function getClipReviewCards() {
+  return Array.from(document.querySelectorAll("[data-clip-card]"));
+}
+
+function updateClipReviewActionState() {
+  const hasCards = getClipReviewCards().length > 0;
+  if (saveClipsButton) saveClipsButton.disabled = !hasCards;
+  if (generateClipsButton) generateClipsButton.disabled = !hasCards;
+}
+
 function collectClipReviewPayload() {
-  const cards = Array.from(document.querySelectorAll("[data-clip-card]"));
+  const cards = getClipReviewCards();
   return cards.map((card) => ({
     id: card.dataset.clipId,
     title: card.querySelector("[name='title']").value.trim(),
@@ -695,6 +705,44 @@ function collectClipReviewPayload() {
     enabled: card.querySelector("[name='enabled']").checked,
     summary: card.querySelector("[name='summary']").value.trim(),
   }));
+}
+
+async function deleteClipCard(card, button) {
+  if (!clipReviewForm || !card) return;
+  const taskId = clipReviewForm.dataset.taskId;
+  const clipId = card.dataset.clipId;
+  const originalText = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "\u5220\u9664\u4e2d...";
+  }
+  card.classList.add("is-removing");
+  showClipReviewMessage("\u6b63\u5728\u5220\u9664\u8fd9\u6761\u5019\u9009\u7247\u6bb5...", "info");
+
+  try {
+    const response = await fetch(`/api/tasks/${taskId}/clips/${clipId}`, { method: "DELETE" });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "\u5220\u9664\u5931\u8d25");
+    }
+    if (activeSourceMonitor?.card === card) {
+      toggleSourceMonitor(false);
+    }
+    card.remove();
+    updateClipReviewActionState();
+    closeTranscriptDrawer();
+    showClipReviewMessage(
+      data.message || "\u5df2\u5220\u9664\u8be5\u5019\u9009\u7247\u6bb5\uff0c\u540e\u7eed\u751f\u6210\u5207\u7247\u4e0d\u4f1a\u518d\u4f7f\u7528\u5b83\u3002",
+      "success",
+    );
+  } catch (error) {
+    card.classList.remove("is-removing");
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+    showClipReviewMessage(`\u5220\u9664\u5931\u8d25\uff1a${error.message}`, "error");
+  }
 }
 
 function timeTextToSeconds(value) {
@@ -1112,6 +1160,12 @@ document.querySelectorAll("[data-source-monitor-trigger]").forEach((button) => {
   });
 });
 
+document.querySelectorAll("[data-delete-trigger]").forEach((button) => {
+  button.addEventListener("click", () => {
+    deleteClipCard(button.closest("[data-clip-card]"), button);
+  });
+});
+
 if (closeTranscriptDrawerButton) {
   closeTranscriptDrawerButton.addEventListener("click", closeTranscriptDrawer);
 }
@@ -1224,23 +1278,23 @@ if (generateClipsButton) {
 document.querySelectorAll(".js-hide-task").forEach((button) => {
   button.addEventListener("click", async () => {
     const taskTitle = button.dataset.taskTitle || "这条任务";
-    const confirmed = window.confirm(`确认隐藏“${taskTitle}”吗？\n\n这只会从列表隐藏任务，不会删除原视频、切片文件和任务目录。`);
+    const confirmed = window.confirm(`确认把“${taskTitle}”移入 E 盘回收站吗？\n\n这会从列表隐藏任务，并把对应项目文件夹移动到 E:\\直播间切片工作流存储\\_回收站，不会删除原视频、切片文件和任务目录。`);
     if (!confirmed) return;
 
     const originalText = button.textContent;
     button.disabled = true;
-    button.textContent = "隐藏中...";
+    button.textContent = "移动中...";
 
     try {
       const response = await fetch(`/api/tasks/${button.dataset.taskId}`, { method: "DELETE" });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.detail || "隐藏失败");
+        throw new Error(data.detail || "移入回收站失败");
       }
-      window.alert(data.message || "任务已隐藏。");
+      window.alert(data.message || "任务已移入回收站。");
       window.location.reload();
     } catch (error) {
-      window.alert(`隐藏失败：${error.message}`);
+      window.alert(`移入回收站失败：${error.message}`);
     } finally {
       button.disabled = false;
       button.textContent = originalText;

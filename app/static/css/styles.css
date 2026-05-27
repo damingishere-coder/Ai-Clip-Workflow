@@ -1277,11 +1277,26 @@ fieldset input.visually-hidden-file {
 
 .clip-list {
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .clip-card {
-  padding: 18px;
+  gap: 11px;
+  padding: 12px;
+}
+
+.clip-card label {
+  gap: 4px;
+}
+
+.clip-card label span {
+  font-size: 12px;
+}
+
+.clip-card input,
+.clip-card textarea {
+  min-height: 34px;
+  padding: 7px 10px;
 }
 
 .clip-index {
@@ -1291,21 +1306,25 @@ fieldset input.visually-hidden-file {
 
 .clip-media-row {
   display: grid;
-  grid-template-columns: 112px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
   align-items: center;
 }
 
 .clip-media-row p {
-  margin: 6px 0 0;
+  display: -webkit-box;
+  margin: 4px 0 0;
+  overflow: hidden;
   color: var(--muted);
-  line-height: 1.6;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .thumb-placeholder {
   display: grid;
-  width: 112px;
-  height: 66px;
+  width: 92px;
+  height: 52px;
   place-items: center;
   border: 0;
   border-radius: 8px;
@@ -1357,13 +1376,13 @@ fieldset input.visually-hidden-file {
 .clip-copy {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 8px;
   margin: 0;
 }
 
 .clip-copy div {
-  min-height: 92px;
-  padding: 12px;
+  min-height: 74px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.64);
@@ -1378,11 +1397,12 @@ fieldset input.visually-hidden-file {
 .clip-copy dd {
   margin: 0;
   color: var(--muted);
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
 .clip-card textarea {
-  min-height: 112px;
+  height: 74px;
+  min-height: 74px;
   resize: vertical;
 }
 
@@ -1391,7 +1411,7 @@ fieldset input.visually-hidden-file {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 0 2px;
+  padding: 2px 0 0;
 }
 
 .clip-tool-buttons {
@@ -1401,9 +1421,40 @@ fieldset input.visually-hidden-file {
 }
 
 .clip-card-tools span {
+  display: none;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.clip-details {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.clip-details summary {
+  min-height: 34px;
+  padding: 8px 10px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.clip-details .clip-copy {
+  padding: 0 10px 10px;
+}
+
+.compact-delete-button {
+  min-height: 28px;
+  padding: 0 4px;
+  font-size: 13px;
+}
+
+.clip-card.is-removing {
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .compact-button {

@@ -1,8 +1,64 @@
 ﻿# 鏁版嵁搴撶粨鏋勮鏄?
+## 2026-05-25：发布后台新增表
+
+- 新增 `publish_platform_configs`：保存抖音 / B站开放平台应用配置、OAuth 地址、上传接口、创建 / 投稿接口和测试结果。
+- 新增 `publish_accounts`：保存发布账号、open_id / UID、access_token、refresh_token、授权状态和备注；不保存平台账号密码。
+- 新增 `publish_jobs`：保存每条切片的发布任务、视频来源、账号、标题、简介、标签、平台返回 ID、审核状态、错误码、错误信息和重试次数。
+
+### publish_platform_configs 表
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `platform` | TEXT | 平台：`douyin` 或 `bilibili` |
+| `client_key` | TEXT | Client Key / App Key |
+| `client_secret` | TEXT | Client Secret，本地保存，页面脱敏展示 |
+| `redirect_uri` | TEXT | OAuth 回调地址 |
+| `upload_url` | TEXT | 视频上传接口 |
+| `create_url` | TEXT | 创建视频 / 投稿接口 |
+| `last_test_status` | TEXT | 最近一次配置检查状态 |
+| `last_test_message` | TEXT | 最近一次配置检查说明 |
+
+### publish_accounts 表
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | TEXT | 账号记录 ID |
+| `platform` | TEXT | 平台 |
+| `account_name` | TEXT | 本地展示昵称 |
+| `open_id` | TEXT | 开放平台 open_id |
+| `access_token` | TEXT | 接口访问 token |
+| `refresh_token` | TEXT | 刷新 token |
+| `authorization_status` | TEXT | 授权状态：`manual` / `authorized` |
+| `remark` | TEXT | 备注 |
+
+### publish_jobs 表
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | TEXT | 发布任务 ID |
+| `task_id` | TEXT | 所属视频任务 ID |
+| `output_clip_id` | TEXT | 所属输出切片 ID |
+| `account_id` | TEXT | 发布账号 ID |
+| `platform` | TEXT | 发布平台 |
+| `publish_mode` | TEXT | `draft`、`manual_review` 或 `api_publish` |
+| `video_source` | TEXT | `original` 或 `subtitled` |
+| `video_file_path` | TEXT | 本次发布使用的视频路径 |
+| `title` | TEXT | 标题 |
+| `description` | TEXT | 简介 / 正文 |
+| `tags` | TEXT | 标签 |
+| `status` | TEXT | 草稿、待人工发布、发布中、已发布、失败、取消 |
+| `audit_status` | TEXT | 平台审核状态 |
+| `platform_item_id` | TEXT | 平台稿件 / 视频 ID |
+| `platform_upload_id` | TEXT | 平台上传 ID |
+| `error_code` | TEXT | 平台错误码 |
+| `error_message` | TEXT | 错误说明 |
+| `provider_response` | TEXT | 平台响应摘要 JSON |
+| `retry_count` | INTEGER | 重试次数 |
+
 ## 2026-05-23：AI Prompt 方案
 
 - `tasks` 表新增 `ai_prompt_preset_id`，记录当前任务使用哪一套 AI 分析 Prompt。
-- 新增 `ai_prompt_presets` 表，用于保存全局共用的 1、2、3 号 Prompt 方案。
+- 新增 `ai_prompt_presets` 表，用于保存全局共用的 1、2、3 号 Prompt 方案；2 号方案为空时会自动写入“综艺访谈完整上下文专家”Prompt，若 2 号已有内容且 3 号为空，则写入 3 号以避免覆盖已有 Prompt。
 - 新增 `ai_analysis_runs` 表，用于保存每一次 AI 分析历史，支持刷新后继续展示分析预览和恢复旧分析结果。
 
 ### ai_prompt_presets 表
@@ -55,7 +111,7 @@ E:\鐩存挱闂村垏鐗囧伐浣滄祦瀛樺偍\{task_id}\
 | `platform` | TEXT | 骞冲彴绫诲瀷锛歚douyin`銆乣bilibili`銆乣general` |
 | `original_video_path` | TEXT | 鏈湴涓婁紶瑙嗛璺緞锛屽悗缁帴鐪熷疄涓婁紶鍚庡啓鍏?|
 | `nas_file_path` | TEXT | NAS / 鏈湴宸叉湁瑙嗛璺緞 |
-| `max_clip_duration` | INTEGER | 鍗曟潯鍒囩墖鏈€闀挎椂闀匡紝鍗曚綅锛氬垎閽?|
+| `max_clip_duration` | INTEGER | 单条切片最长时长，单位：分钟；新建任务默认建议为 5 分钟 |
 | `candidate_clip_count` | INTEGER | 甯屾湜 AI 杈撳嚭鐨勫€欓€夌墖娈垫暟閲?|
 | `ai_preference` | TEXT | AI 鐗囨閫夋嫨鍋忓ソ |
 | `status` | TEXT | 褰撳墠浠诲姟鐘舵€?|
@@ -139,3 +195,14 @@ E:\鐩存挱闂村垏鐗囧伐浣滄祦瀛樺偍\{task_id}\
 | 杈撳嚭鍒囩墖 | `05_clips\` |
 | 澶勭悊鏃ュ織 | `logs\process.log` |
 
+
+## 2026-05-27：候选片段软删除字段
+
+`clip_candidates` 表新增以下字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `is_deleted` | INTEGER | 候选片段是否已从审核页隐藏，`1` 表示隐藏；自动切片不会再使用 |
+| `deleted_at` | TEXT | 候选片段隐藏时间，ISO 格式 |
+
+候选片段删除是软删除：`DELETE /api/tasks/{task_id}/clips/{clip_id}` 只更新数据库记录，不删除源视频、转写文件、AI 分析文件或已生成切片文件。

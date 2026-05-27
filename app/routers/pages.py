@@ -5,6 +5,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.core.config import settings
 from app.services.ai_prompt_preset_service import list_ai_prompt_presets
+from app.services.publish_service import get_publish_center_context
 from app.services.task_service import (
     get_artifact_paths,
     get_clips_overview_context,
@@ -232,6 +233,21 @@ async def subtitle_task_page(request: Request, task_id: str):
             "settings": settings,
             "subtitle_task_mode": True,
             **context,
+        },
+    )
+
+
+@router.get("/publish")
+async def publish_center_page(request: Request):
+    return templates.TemplateResponse(
+        name="publish.html",
+        request=request,
+        context={
+            "request": request,
+            "active_page": "publish",
+            "settings": settings,
+            "publish_message": request.query_params.get("publish_message", ""),
+            **get_publish_center_context(),
         },
     )
 

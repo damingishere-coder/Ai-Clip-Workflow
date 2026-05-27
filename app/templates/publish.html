@@ -1,0 +1,333 @@
+{% extends "base.html" %}
+{% block title %}发布中心 - {{ settings.app_name }}{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Publish Center</p>
+    <h1>抖音 + B站发布中心</h1>
+    <p>发布前统一准备账号授权、视频版本、标题、简介、标签和平台返回状态；真实发布会先二次确认。</p>
+  </div>
+  <a class="secondary-button" href="/subtitles">返回字幕推送</a>
+</section>
+
+{% if publish_message %}
+<section class="inline-alert tone-blue">{{ publish_message }}</section>
+{% endif %}
+
+<section class="stat-grid review-stat-grid" aria-label="发布中心统计">
+  {% for item in stats %}
+  <article class="stat-card tone-{{ item.tone }}">
+    <div class="stat-icon"></div>
+    <span>{{ item.label }}</span>
+    <strong>{{ item.value }}</strong>
+    <small>抖音 / B站后台</small>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="publish-console">
+  <div class="publish-tabs" role="tablist" aria-label="发布平台">
+    {% for config in publish_configs %}
+    <button
+      class="{{ 'active' if loop.first else '' }}"
+      type="button"
+      role="tab"
+      data-publish-tab="{{ config.platform }}"
+    >
+      {{ config.platform_label }}后台
+    </button>
+    {% endfor %}
+  </div>
+
+  {% for config in publish_configs %}
+  {% set platform_accounts = accounts_by_platform.get(config.platform, []) %}
+  {% set platform_jobs = jobs_by_platform.get(config.platform, []) %}
+  <section class="publish-platform-panel {{ 'active' if loop.first else '' }}" data-publish-panel="{{ config.platform }}">
+    <div class="publish-backend-grid">
+      <section class="panel">
+        <div class="panel-header compact">
+          <div>
+            <p class="eyebrow">Config</p>
+            <h2>{{ config.platform_label }}应用配置</h2>
+          </div>
+          <span class="status-pill tone-{{ 'green' if config.configured else 'amber' }}">{{ '已填写凭证' if config.configured else '待配置' }}</span>
+        </div>
+        <form class="settings-form compact-settings-form" data-publish-config-form data-platform="{{ config.platform }}">
+          <label>
+            <span>应用名称</span>
+            <input type="text" name="app_name" value="{{ config.app_name }}" placeholder="{{ config.platform_label }}开放平台应用">
+          </label>
+          <div class="form-row">
+            <label>
+              <span>Client Key / App Key</span>
+              <input type="text" name="client_key" value="{{ config.client_key }}" placeholder="从开放平台复制">
+            </label>
+            <label>
+              <span>Client Secret</span>
+              <input type="password" name="client_secret" value="" placeholder="{{ config.client_secret_masked or '留空表示不修改旧密钥' }}">
+            </label>
+          </div>
+          <label>
+            <span>OAuth 回调地址</span>
+            <input type="text" name="redirect_uri" value="{{ config.redirect_uri }}" placeholder="例如：http://127.0.0.1:8001/api/publish/douyin/oauth/callback">
+          </label>
+          <label>
+            <span>授权 Scope</span>
+            <input type="text" name="scope" value="{{ config.scope }}" placeholder="video.create,video.upload,user_info">
+          </label>
+          <div class="form-row">
+            <label>
+              <span>上传接口</span>
+              <input type="text" name="upload_url" value="{{ config.upload_url }}" placeholder="平台视频上传接口">
+            </label>
+            <label>
+              <span>创建 / 投稿接口</span>
+              <input type="text" name="create_url" value="{{ config.create_url }}" placeholder="平台创建视频或稿件接口">
+            </label>
+          </div>
+          <input type="hidden" name="api_base_url" value="{{ config.api_base_url }}">
+          <input type="hidden" name="auth_url" value="{{ config.auth_url }}">
+          <input type="hidden" name="token_url" value="{{ config.token_url }}">
+          <input type="hidden" name="refresh_url" value="{{ config.refresh_url }}">
+          <textarea name="extra_config" rows="3" placeholder="可选：平台额外 JSON 配置">{{ config.extra_config or '' }}</textarea>
+          <div class="button-row">
+            <button class="primary-button compact-button" type="submit">保存配置</button>
+            <button class="secondary-button compact-button" type="button" data-test-publish-config data-platform="{{ config.platform }}">测试配置</button>
+            {% if config.platform == "douyin" %}
+            <button class="secondary-button compact-button" type="button" data-douyin-oauth>打开抖音授权</button>
+            {% endif %}
+          </div>
+          <p class="form-hint" data-publish-config-result>
+            {% if config.last_test_message %}上次检查：{{ config.last_test_message }}{% else %}不会保存平台账号密码；这里只保存开放平台应用凭证。{% endif %}
+          </p>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header compact">
+          <div>
+            <p class="eyebrow">Accounts</p>
+            <h2>{{ config.platform_label }}账号</h2>
+          </div>
+          <span class="status-pill tone-blue">{{ platform_accounts|length }} 个</span>
+        </div>
+        <form class="settings-form compact-settings-form" data-publish-account-form data-platform="{{ config.platform }}">
+          <input type="hidden" name="platform" value="{{ config.platform }}">
+          <div class="form-row">
+            <label>
+              <span>账号昵称</span>
+              <input type="text" name="account_name" maxlength="120" placeholder="例如：主账号">
+            </label>
+            <label>
+              <span>Open ID / UID</span>
+              <input type="text" name="open_id" placeholder="抖音填 open_id，B站填 UID">
+            </label>
+          </div>
+          <label>
+            <span>Access Token</span>
+            <input type="password" name="access_token" placeholder="完成授权后可粘贴；没有则先保存为手动账号">
+          </label>
+          <textarea name="remark" rows="2" placeholder="备注：账号用途、负责人、授权状态"></textarea>
+          <button class="primary-button compact-button" type="submit">新增账号</button>
+          <p class="form-hint" data-publish-account-result>抖音建议优先使用“打开抖音授权”；B站先保存开放平台账号信息。</p>
+        </form>
+        <div class="publish-account-list">
+          {% for account in platform_accounts %}
+          <article class="publish-account-row">
+            <div>
+              <strong>{{ account.account_name }}</strong>
+              <span>{{ account.authorization_status }} · {{ account.open_id or account.account_uid or '未填写 ID' }}</span>
+            </div>
+            <span class="status-pill tone-{{ 'green' if account.is_authorized else 'amber' }}">{{ '已授权' if account.is_authorized else '手动账号' }}</span>
+          </article>
+          {% else %}
+          <p class="empty-note">还没有 {{ config.platform_label }} 账号。</p>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+
+    <section class="panel publish-task-panel">
+      <div class="panel-header">
+        <div>
+          <p class="eyebrow">Queue</p>
+          <h2>{{ config.platform_label }}待发布切片</h2>
+        </div>
+        <span class="status-pill tone-blue">{{ publish_items|length }} 条</span>
+      </div>
+
+      {% if publish_items %}
+      <form class="publish-batch-bar" data-publish-batch-form data-platform="{{ config.platform }}">
+        <strong>批量配置</strong>
+        <select class="control" name="account_id">
+          <option value="">选择账号</option>
+          {% for account in platform_accounts %}
+          <option value="{{ account.id }}">{{ account.account_name }}</option>
+          {% endfor %}
+        </select>
+        <select class="control" name="video_source">
+          <option value="original">原始切片</option>
+          <option value="subtitled">带字幕成片</option>
+        </select>
+        <input type="text" name="title_prefix" maxlength="80" placeholder="标题前缀，可留空">
+        <input type="text" name="tags" maxlength="500" placeholder="统一标签，用逗号分隔">
+        <button class="secondary-button compact-button" type="submit" data-batch-mode="draft">批量保存草稿</button>
+        <button class="primary-button compact-button" type="submit" data-batch-mode="manual_review">批量创建任务</button>
+        <p class="form-hint" data-publish-batch-result>先勾选下方切片，再批量套用账号和标签。</p>
+      </form>
+
+      <div class="publish-queue">
+        {% for item in publish_items %}
+        <article class="publish-card">
+          <form data-publish-job-form data-platform="{{ config.platform }}">
+            <input type="hidden" name="task_id" value="{{ item.task_id }}">
+            <input type="hidden" name="output_clip_id" value="{{ item.output_clip_id }}">
+            <input type="hidden" name="platform" value="{{ config.platform }}">
+            <div class="publish-card-main">
+              <label class="publish-select-line">
+                <input type="checkbox" name="batch_output_clip_id" value="{{ item.output_clip_id }}" data-batch-output-id="{{ config.platform }}">
+                <span>加入批量</span>
+              </label>
+              <div>
+                <span class="status-pill tone-{{ 'green' if item.subtitled_available else 'amber' }}">{{ item.subtitle_status_label }}</span>
+                <h3>{{ item.default_title }}</h3>
+                <p>任务：{{ item.task_name }} · 文件：{{ item.output_file_name or '未命名切片' }}</p>
+              </div>
+            </div>
+
+            <div class="publish-source-grid" role="radiogroup" aria-label="视频来源">
+              <label class="publish-choice {{ '' if item.original_available else 'is-disabled' }}">
+                <input type="radio" name="video_source" value="original" {% if item.original_available %}checked{% else %}disabled{% endif %}>
+                <span>原始切片</span>
+                <small>{{ "可用" if item.original_available else "文件缺失" }}</small>
+              </label>
+              <label class="publish-choice {{ '' if item.subtitled_available else 'is-disabled' }}">
+                <input type="radio" name="video_source" value="subtitled" {% if item.subtitled_available %}checked{% endif %} {% if not item.subtitled_available %}disabled{% endif %}>
+                <span>带字幕成片</span>
+                <small>{{ "可用" if item.subtitled_available else "未生成" }}</small>
+              </label>
+            </div>
+
+            <div class="publish-fields">
+              <label>
+                <span>发布账号</span>
+                <select class="control" name="account_id">
+                  <option value="">先选择账号</option>
+                  {% for account in platform_accounts %}
+                  <option value="{{ account.id }}">{{ account.account_name }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>
+                <span>标题</span>
+                <input type="text" name="title" value="{{ item.default_title }}" maxlength="120">
+              </label>
+              <label>
+                <span>简介 / 正文</span>
+                <textarea name="description" rows="3" maxlength="2000" placeholder="可填写发布简介"></textarea>
+              </label>
+              <label>
+                <span>标签</span>
+                <input type="text" name="tags" maxlength="500" placeholder="直播切片, 高光">
+              </label>
+              {% if config.platform == "douyin" %}
+              <div class="form-row">
+                <label>
+                  <span>可见范围</span>
+                  <select class="control" name="visibility">
+                    <option value="public">公开</option>
+                    <option value="friends">朋友可见</option>
+                    <option value="private">仅自己可见</option>
+                  </select>
+                </label>
+                <label>
+                  <span>封面时间点（秒）</span>
+                  <input type="number" name="cover_time_seconds" min="0" step="0.5" value="0">
+                </label>
+              </div>
+              <label class="toggle-line">
+                <input type="checkbox" name="allow_download" checked>
+                <span>允许下载</span>
+              </label>
+              {% else %}
+              <div class="form-row">
+                <label>
+                  <span>B站分区 ID</span>
+                  <input type="text" name="bilibili_tid" placeholder="拿到开放平台权限后填写">
+                </label>
+                <label>
+                  <span>稿件类型</span>
+                  <select class="control" name="bilibili_copyright">
+                    <option value="original">原创</option>
+                    <option value="repost">转载</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                <span>转载来源</span>
+                <input type="text" name="bilibili_source" placeholder="原创可留空">
+              </label>
+              {% endif %}
+            </div>
+
+            <div class="publish-actions">
+              <p class="form-hint" data-publish-job-result>真实发布前会弹出二次确认。</p>
+              <button class="secondary-button compact-button" type="submit" data-publish-mode="draft">保存草稿</button>
+              <button class="secondary-button compact-button" type="submit" data-publish-mode="manual_review">创建人工发布任务</button>
+              <button class="primary-button compact-button" type="submit" data-publish-mode="api_publish">发布到{{ config.platform_label }}</button>
+            </div>
+          </form>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <article class="empty-state">
+        <p class="eyebrow">Empty</p>
+        <h2>还没有可发布的切片</h2>
+        <p>请先在片段审核页生成切片；需要字幕版本时，再到字幕推送页生成带字幕成片。</p>
+        <a class="primary-button" href="/clips">去片段审核</a>
+      </article>
+      {% endif %}
+    </section>
+
+    <section class="panel publish-history-panel">
+      <div class="panel-header compact">
+        <div>
+          <p class="eyebrow">Jobs</p>
+          <h2>{{ config.platform_label }}发布记录</h2>
+        </div>
+      </div>
+      {% if platform_jobs %}
+      <div class="publish-job-list">
+        {% for job in platform_jobs %}
+        <article class="publish-job-row" data-publish-job-id="{{ job.id }}">
+          <div>
+            <span class="status-pill tone-{{ job.status_tone }}">{{ job.status_label }}</span>
+            <h3>{{ job.title }}</h3>
+            <p>{{ job.account_name }} · {{ job.video_source_label }} · {{ job.publish_mode_label }} · {{ job.created_at }}</p>
+            {% if job.error_message %}
+            <p class="error-text">{{ job.error_message }}</p>
+            {% endif %}
+          </div>
+          <div class="button-row">
+            {% if job.status == "failed" and job.publish_mode == "api_publish" %}
+            <button class="secondary-button compact-button" type="button" data-publish-job-action="retry">重试</button>
+            {% endif %}
+            {% if job.status not in ["published", "cancelled"] %}
+            <button class="secondary-button compact-button" type="button" data-publish-job-action="mark-published">标记已发布</button>
+            <button class="secondary-button compact-button" type="button" data-publish-job-action="mark-failed">标记失败</button>
+            <button class="secondary-button compact-button" type="button" data-publish-job-action="cancel">取消</button>
+            {% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="empty-note">暂无 {{ config.platform_label }}发布记录。</p>
+      {% endif %}
+    </section>
+  </section>
+  {% endfor %}
+</section>
+{% endblock %}

@@ -15,7 +15,7 @@ from app.models.task import (
 )
 from app.services import task_service
 from app.services.ai_prompt_preset_service import update_task_ai_prompt_preset
-from app.services.storage_service import save_uploaded_video
+from app.services.storage_service import allocate_task_dir_name, save_uploaded_video
 
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -38,13 +38,19 @@ async def create_task(payload: TaskCreate) -> dict:
 async def create_upload_task(
     task_name: str = Form(...),
     platform: str = Form("general"),
-    max_clip_duration: int = Form(2),
+    max_clip_duration: int = Form(5),
     candidate_clip_count: int = Form(5),
     ai_preference: str | None = Form(None),
     video_file: UploadFile = File(...),
 ) -> dict:
     task_id = uuid4().hex[:12]
-    saved_path = save_uploaded_video(task_id, video_file.filename or "source_video.mp4", video_file.file)
+    task_dir_name = allocate_task_dir_name(task_name, exclude_task_id=task_id)
+    saved_path = save_uploaded_video(
+        task_id,
+        video_file.filename or "source_video.mp4",
+        video_file.file,
+        task_dir_name=task_dir_name,
+    )
     payload = TaskCreate(
         task_name=task_name,
         source_type="upload",
@@ -55,7 +61,7 @@ async def create_upload_task(
         ai_preference=ai_preference,
     )
     try:
-        return task_service.create_task_record(payload, task_id=task_id)
+        return task_service.create_task_record(payload, task_id=task_id, task_dir_name=task_dir_name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -211,6 +217,14 @@ async def update_clip_candidate(
         return task_service.update_clip_candidate(task_id, clip_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/{task_id}/clips/{clip_id}")
+async def delete_clip_candidate(task_id: str, clip_id: str) -> dict:
+    try:
+        return task_service.delete_clip_candidate(task_id, clip_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/{task_id}/clips/batch-update")

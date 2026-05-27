@@ -53,9 +53,10 @@
       <label>
         <span>单条切片最长</span>
         <span class="unit-input">
-          <input name="max_clip_duration" type="number" min="1" max="60" step="1" value="2" required>
+          <input name="max_clip_duration" type="number" min="1" max="60" step="1" value="5" required>
           <small>分钟</small>
         </span>
+        <span class="form-hint">直播干货建议 3-5 分钟；综艺、访谈、康熙来了建议 4-6 分钟。</span>
       </label>
       <label>
         <span>候选片段数量</span>
@@ -93,7 +94,7 @@
   </section>
   <section class="panel soft-tip">
     <p class="eyebrow">小贴士</p>
-    <p>AI 偏好不在新建任务时填写。进入任务详情后，在“AI 分析”板块填写它；它只影响 AI 优先推荐哪些候选片段和推荐理由，不会直接改变原视频，最终成片仍以人工审核启用的片段为准。</p>
+    <p>AI 偏好不在新建任务时填写。进入任务详情后，在“AI 分析”板块填写它；建议综艺访谈任务选择 2 号 Prompt，让 AI 直接输出更完整、可发布的候选片段。片段审核页保留为检查入口，最终成片仍以启用片段为准。</p>
   </section>
   </aside>
 </section>

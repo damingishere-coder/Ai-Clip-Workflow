@@ -110,3 +110,15 @@ POST /api/tasks/{task_id}/clips/generate
 ```text
 POST /api/tasks/{task_id}/process/cuts
 ```
+
+## 2026-05-27 删除候选片段与紧凑审核
+
+片段审核页现在支持删除单条候选片段。点击候选卡片里的“删除”后，页面会立刻移除该卡片，并调用：
+
+```text
+DELETE /api/tasks/{task_id}/clips/{clip_id}
+```
+
+删除采用软删除方式，只把 `clip_candidates.is_deleted` 标记为 `1` 并写入 `deleted_at`，不会删除源视频、转写文件、AI 分析文件或已生成切片文件。候选片段列表、启用片段统计和自动切片流程默认排除已删除片段。
+
+候选片段卡片也改为紧凑布局：标题、起止时间、摘要和常用操作默认展示；推荐理由、传播价值、剪辑建议和 AI 来源默认收进可展开区域，方便连续向下审核多个片段。

@@ -9,7 +9,7 @@
   <div>
     <p class="eyebrow">Clip Review</p>
     <h1>片段审核 · {{ task.title }}</h1>
-    <p>任务 ID：{{ task.id }} · 候选片段 {{ clip_count }} 条 · 已启用 {{ enabled_clip_count }} 条 · 单条最长 {{ task.max_clip_duration }} 分钟，AI 可以选择更短的精彩段落</p>
+    <p>任务 ID：{{ task.id }} · 候选片段 {{ clip_count }} 条 · 已启用 {{ enabled_clip_count }} 条 · 单条最长 {{ task.max_clip_duration }} 分钟。AI 已按可直接切片的完整短视频单元选取，当前页面用于检查、微调和生成切片。</p>
   </div>
   <form class="toolbar compact-toolbar" method="get" id="clip-filter-form">
     <select class="control" name="clip_filter" aria-label="筛选">
@@ -45,6 +45,7 @@
           <span>启用</span>
         </label>
         <span class="clip-index">{{ "%02d"|format(loop.index) }}</span>
+        <button class="link-button danger compact-delete-button" type="button" data-delete-trigger>&#21024;&#38500;</button>
         <span class="status-pill">{{ clip.duration_seconds }} 秒</span>
       </div>
 
@@ -64,7 +65,7 @@
           <button class="secondary-button compact-button" type="button" data-source-monitor-trigger>编辑出入点</button>
           <button class="secondary-button compact-button" type="button" data-transcript-trigger>查看这一段转写</button>
         </div>
-        <span>起止时间可手动调整，保存时会校验不超过 {{ task.max_clip_duration }} 分钟。</span>
+        <span>AI 已尽量保留铺垫、核心内容和自然收尾；如需兜底，可手动微调，保存时会校验不超过 {{ task.max_clip_duration }} 分钟。</span>
       </div>
 
       <label>
@@ -88,12 +89,15 @@
         <textarea name="summary" rows="4" placeholder="这段内容讲了什么、冲突点是什么、适合剪成什么主题。">{{ clip.summary }}</textarea>
       </label>
 
-      <dl class="clip-copy">
+      <details class="clip-details">
+        <summary>&#25512;&#33616;&#29702;&#30001; / &#21098;&#36753;&#24314;&#35758;</summary>
+        <dl class="clip-copy">
         <div><dt>推荐理由</dt><dd>{{ clip.highlight_reason or "暂无。建议点击右侧“查看这一段转写”核对原文，再补充推荐理由。" }}</dd></div>
         <div><dt>传播价值</dt><dd>{{ clip.spread_value or "暂无" }}</dd></div>
         <div><dt>剪辑建议</dt><dd>{{ clip.suggested_editing or "暂无。可以补充开头钩子、字幕重点、删减位置。" }}</dd></div>
         <div><dt>AI 来源 / 模型</dt><dd>{{ clip.ai_source_label }}</dd></div>
-      </dl>
+        </dl>
+      </details>
     </article>
     {% endfor %}
     {% else %}
@@ -138,9 +142,9 @@
       </div>
     </div>
     <ul class="compact-list">
-      <li>保存后任务仍保持：{{ task.status_label }}</li>
-      <li>生成切片会使用当前启用的候选片段，并写入切片输出目录。</li>
-      <li>AI 分析策略：远程使用完整转写；本地使用 3 分钟左右的小段分析后合并候选。</li>
+      <li>保存后任务仍保持：{{ task.status_label }}，这里主要作为 AI 结果检查入口。</li>
+      <li>生成切片会直接使用当前启用的 AI 候选片段，并写入切片输出目录。</li>
+      <li>AI 分析策略：优先选择有铺垫、爆点 / 观点、反应和自然收尾的完整片段。</li>
     </ul>
     <div class="button-row review-actions">
       <button class="secondary-button" id="save-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/clips/batch-update" {{ "disabled" if not clips else "" }}>保存修改</button>

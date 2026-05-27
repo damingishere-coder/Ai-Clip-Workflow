@@ -24,7 +24,7 @@ class TaskCreate(BaseModel):
     platform: Literal["douyin", "bilibili", "general"] = "general"
     original_video_path: Optional[str] = None
     nas_file_path: Optional[str] = None
-    max_clip_duration: int = Field(default=2, ge=1, le=60)
+    max_clip_duration: int = Field(default=5, ge=1, le=60)
     candidate_clip_count: int = Field(default=5, ge=1, le=50)
     ai_preference: Optional[str] = None
 
@@ -72,6 +72,71 @@ class SubtitleStyleUpdate(BaseModel):
     shadow_enabled: bool = True
 
 
+class PublishPlatformConfigUpdate(BaseModel):
+    app_name: str = Field(default="", max_length=120)
+    client_key: str = Field(default="", max_length=300)
+    client_secret: str = Field(default="", max_length=500)
+    redirect_uri: str = Field(default="", max_length=1000)
+    scope: str = Field(default="", max_length=1000)
+    api_base_url: str = Field(default="", max_length=1000)
+    auth_url: str = Field(default="", max_length=1000)
+    token_url: str = Field(default="", max_length=1000)
+    refresh_url: str = Field(default="", max_length=1000)
+    upload_url: str = Field(default="", max_length=1000)
+    create_url: str = Field(default="", max_length=1000)
+    extra_config: Optional[str] = Field(default="", max_length=4000)
+
+
+class PublishAccountCreate(BaseModel):
+    platform: Literal["douyin", "bilibili"]
+    account_name: str = Field(..., min_length=1, max_length=120)
+    account_uid: Optional[str] = Field(default="", max_length=200)
+    open_id: Optional[str] = Field(default="", max_length=300)
+    access_token: Optional[str] = Field(default="", max_length=2000)
+    refresh_token: Optional[str] = Field(default="", max_length=2000)
+    token_expires_at: Optional[str] = Field(default="", max_length=80)
+    refresh_expires_at: Optional[str] = Field(default="", max_length=80)
+    scopes: Optional[str] = Field(default="", max_length=1000)
+    remark: Optional[str] = Field(default="", max_length=1000)
+
+
+class PublishJobCreate(BaseModel):
+    task_id: str = Field(..., min_length=1, max_length=80)
+    output_clip_id: str = Field(..., min_length=1, max_length=80)
+    platform: Literal["douyin", "bilibili"]
+    account_id: Optional[str] = Field(default="", max_length=80)
+    publish_mode: Literal["draft", "manual_review", "api_publish"] = "manual_review"
+    video_source: Literal["original", "subtitled"] = "original"
+    title: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = Field(default="", max_length=2000)
+    tags: Optional[str] = Field(default="", max_length=500)
+    visibility: Literal["public", "friends", "private"] = "public"
+    cover_mode: Literal["auto", "time"] = "auto"
+    cover_time_seconds: float = Field(default=0, ge=0)
+    allow_download: bool = True
+    bilibili_tid: Optional[str] = Field(default="", max_length=80)
+    bilibili_copyright: Literal["original", "repost"] = "original"
+    bilibili_source: Optional[str] = Field(default="", max_length=300)
+    scheduled_at: Optional[str] = Field(default="", max_length=80)
+
+
+class PublishBatchJobCreate(BaseModel):
+    output_clip_ids: list[str] = Field(default_factory=list)
+    platform: Literal["douyin", "bilibili"]
+    account_id: Optional[str] = Field(default="", max_length=80)
+    publish_mode: Literal["draft", "manual_review"] = "manual_review"
+    video_source: Literal["original", "subtitled"] = "original"
+    title_prefix: Optional[str] = Field(default="", max_length=80)
+    description: Optional[str] = Field(default="", max_length=2000)
+    tags: Optional[str] = Field(default="", max_length=500)
+
+    @validator("output_clip_ids")
+    def validate_output_clip_ids(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("至少选择一条切片")
+        return value
+
+
 class ClipCandidate(BaseModel):
     id: str
     task_id: str
@@ -88,6 +153,8 @@ class ClipCandidate(BaseModel):
     selected_by_default: bool = True
     enabled: bool = True
     reviewed: bool = False
+    is_deleted: bool = False
+    deleted_at: Optional[str] = None
 
 
 class ClipCandidateUpdate(BaseModel):

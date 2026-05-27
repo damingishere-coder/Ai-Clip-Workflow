@@ -46,10 +46,11 @@ WORKFLOW_STEPS = [
     "音频提取",
     "转写",
     "AI 分析",
-    "人工审核",
+    "AI 结果检查",
     "自动切割",
     "输出完成",
 ]
+AI_CLIP_MIN_RECOMMENDED_SECONDS = 45
 
 STATUS_LABELS = {
     TaskStatus.pending_video.value: "待提交视频",
@@ -58,7 +59,7 @@ STATUS_LABELS = {
     TaskStatus.transcribing.value: "转写中",
     TaskStatus.pending_ai.value: "待 AI 分析",
     TaskStatus.ai_analyzing.value: "AI 分析中",
-    TaskStatus.pending_review.value: "待人工审核",
+    TaskStatus.pending_review.value: "AI 结果待检查",
     TaskStatus.cutting.value: "切割中",
     TaskStatus.completed.value: "已完成",
     TaskStatus.completed_with_errors.value: "部分完成",
@@ -325,7 +326,7 @@ def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
 
     source = get_source_path(task)
     source_path = get_source_video_path(task)
-    paths = get_artifact_paths(task["id"])
+    paths = get_artifact_paths(task["id"], task.get("task_dir_name"))
     source_exists = bool(source_path and source_path.exists())
     video_meta = _probe_video(source_path) if include_video_probe else {"duration": "尚未读取", "video_size": "尚未读取"}
 
@@ -353,6 +354,7 @@ def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
         "error_message": task.get("error_message") or "",
         "is_deleted": bool(task.get("is_deleted")),
         "deleted_at": _format_datetime(task.get("deleted_at")),
+        "task_dir_name": task.get("task_dir_name") or task["id"],
         "storage_root": str(settings.storage_root),
         "task_dir": str(paths["task_dir"]),
         "audio_path": str(paths["audio_path"]),
@@ -375,7 +377,7 @@ def list_tasks(include_deleted: bool = False) -> list[dict]:
         rows = connection.execute(
             f"""
             SELECT
-                id, task_name, source_type, platform, original_video_path, nas_file_path,
+                id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path,
                 max_clip_duration, candidate_clip_count, ai_preference, ai_prompt_preset_id, status, progress,
                 error_message, is_deleted, deleted_at, created_at, updated_at
             FROM tasks
@@ -391,7 +393,7 @@ def get_task(task_id: str, include_video_probe: bool = True) -> dict | None:
         row = connection.execute(
             """
             SELECT
-                id, task_name, source_type, platform, original_video_path, nas_file_path,
+                id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path,
                 max_clip_duration, candidate_clip_count, ai_preference, ai_prompt_preset_id, status, progress,
                 error_message, is_deleted, deleted_at, created_at, updated_at
             FROM tasks
@@ -409,9 +411,9 @@ def list_clip_candidates(task_id: str) -> list[dict]:
             """
             SELECT id, task_id, clip_key, title, start_time, end_time, duration_seconds, summary,
                    reason, highlight_reason, spread_value, suggested_editing, confidence_score,
-                   selected_by_default, enabled, reviewed, created_at, updated_at
+                   selected_by_default, enabled, reviewed, is_deleted, deleted_at, created_at, updated_at
             FROM clip_candidates
-            WHERE task_id = ?
+            WHERE task_id = ? AND is_deleted = 0
             ORDER BY start_time ASC
             """,
             (task_id,),
@@ -435,6 +437,8 @@ def list_clip_candidates(task_id: str) -> list[dict]:
                 "selected_by_default": bool(clip.get("selected_by_default")),
                 "enabled": bool(clip.get("enabled")),
                 "reviewed": bool(clip.get("reviewed")),
+                "is_deleted": bool(clip.get("is_deleted")),
+                "deleted_at": clip.get("deleted_at"),
                 "start_seconds": _parse_time_to_seconds(clip["start_time"]),
                 "end_seconds": _parse_time_to_seconds(clip["end_time"]),
             }
@@ -534,7 +538,7 @@ def get_clip_transcript_excerpt(
 def count_clip_candidates(task_id: str) -> int:
     with get_connection() as connection:
         row = connection.execute(
-            "SELECT COUNT(*) AS total FROM clip_candidates WHERE task_id = ?",
+            "SELECT COUNT(*) AS total FROM clip_candidates WHERE task_id = ? AND is_deleted = 0",
             (task_id,),
         ).fetchone()
     return int(row["total"]) if row else 0
@@ -543,7 +547,7 @@ def count_clip_candidates(task_id: str) -> int:
 def count_enabled_clip_candidates(task_id: str) -> int:
     with get_connection() as connection:
         row = connection.execute(
-            "SELECT COUNT(*) AS total FROM clip_candidates WHERE task_id = ? AND enabled = 1",
+            "SELECT COUNT(*) AS total FROM clip_candidates WHERE task_id = ? AND enabled = 1 AND is_deleted = 0",
             (task_id,),
         ).fetchone()
     return int(row["total"]) if row else 0
@@ -585,7 +589,7 @@ def update_clip_candidate(task_id: str, clip_id: str, payload: ClipCandidateUpda
             UPDATE clip_candidates
             SET title = ?, start_time = ?, end_time = ?, duration_seconds = ?,
                 enabled = ?, summary = ?, reviewed = 1, updated_at = ?
-            WHERE id = ? AND task_id = ?
+            WHERE id = ? AND task_id = ? AND is_deleted = 0
             """,
             (
                 data["title"],
@@ -627,7 +631,7 @@ def update_clip_candidates_batch(task_id: str, payloads: list[ClipCandidateBatch
                 UPDATE clip_candidates
                 SET title = ?, start_time = ?, end_time = ?, duration_seconds = ?,
                     enabled = ?, summary = ?, reviewed = 1, updated_at = ?
-                WHERE id = ? AND task_id = ?
+                WHERE id = ? AND task_id = ? AND is_deleted = 0
                 """,
                 (
                     data["title"],
@@ -648,7 +652,7 @@ def update_clip_candidates_batch(task_id: str, payloads: list[ClipCandidateBatch
 
     _append_task_log(task_id, f"已批量保存 {len(validated)} 条候选片段审核修改")
     return {
-        "message": f"已保存 {len(validated)} 条候选片段，任务状态仍保持待人工审核。",
+        "message": f"已保存 {len(validated)} 条候选片段，任务状态仍保持 AI 结果待检查。",
         "task": get_task(task_id, include_video_probe=False),
         "clips": list_clip_candidates(task_id),
     }
@@ -661,15 +665,49 @@ def get_clip_candidate(task_id: str, clip_id: str) -> dict:
     raise ValueError("候选片段不存在")
 
 
+def delete_clip_candidate(task_id: str, clip_id: str) -> dict:
+    task = get_task(task_id, include_video_probe=False)
+    if not task:
+        raise ValueError("Task does not exist")
+
+    now = _now_iso()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE clip_candidates
+            SET is_deleted = 1,
+                deleted_at = ?,
+                enabled = 0,
+                reviewed = 1,
+                updated_at = ?
+            WHERE id = ? AND task_id = ? AND is_deleted = 0
+            """,
+            (now, now, clip_id, task_id),
+        )
+        connection.execute("UPDATE tasks SET updated_at = ? WHERE id = ?", (now, task_id))
+        connection.commit()
+
+    if cursor.rowcount == 0:
+        raise ValueError("Clip candidate does not exist")
+
+    _append_task_log(task_id, f"Deleted clip candidate: {clip_id}")
+    return {
+        "message": "Clip candidate deleted. Future cutting will not use it.",
+        "task": get_task(task_id, include_video_probe=False),
+        "clip_count": count_clip_candidates(task_id),
+        "enabled_clip_count": count_enabled_clip_candidates(task_id),
+    }
+
+
 def list_enabled_clip_candidates(task_id: str) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
             """
             SELECT id, task_id, clip_key, title, start_time, end_time, duration_seconds, summary,
                    reason, highlight_reason, spread_value, suggested_editing, confidence_score,
-                   selected_by_default, enabled, reviewed, created_at, updated_at
+                   selected_by_default, enabled, reviewed, is_deleted, deleted_at, created_at, updated_at
             FROM clip_candidates
-            WHERE task_id = ? AND enabled = 1
+            WHERE task_id = ? AND enabled = 1 AND is_deleted = 0
             ORDER BY start_time ASC
             """,
             (task_id,),
@@ -682,6 +720,8 @@ def list_enabled_clip_candidates(task_id: str) -> list[dict]:
             "selected_by_default": bool(row["selected_by_default"]),
             "enabled": bool(row["enabled"]),
             "reviewed": bool(row["reviewed"]),
+            "is_deleted": bool(row["is_deleted"]),
+            "deleted_at": row["deleted_at"],
         }
         for row in rows
     ]
@@ -1276,7 +1316,7 @@ def get_task_ai_analysis_status(task_id: str) -> dict:
     elif task.get("status") == TaskStatus.pending_review.value and has_analysis:
         status = "completed"
         percent = 100
-        message = "AI 分析完成，候选片段已生成。"
+        message = "AI 分析完成，候选片段已生成，可检查后直接生成切片。"
     elif task.get("status") == TaskStatus.failed.value and any("AI 分析失败" in line for line in log_lines):
         status = "failed"
         percent = 100
@@ -1334,7 +1374,7 @@ def get_dashboard_context() -> dict:
         "stats": [
             {"label": "今日新增任务", "value": today_count, "note": "来自 SQLite", "tone": "blue"},
             {"label": "待处理", "value": pending_count, "note": "可继续推进", "tone": "amber"},
-            {"label": "待审核", "value": review_count, "note": "等待确认", "tone": "purple"},
+            {"label": "待检查", "value": review_count, "note": "AI 结果可生成切片", "tone": "purple"},
             {"label": "已切片任务", "value": completed_count, "note": f"输出 {output_clip_count} 条切片", "tone": "green"},
             {"label": "待加字幕", "value": ready_for_subtitle_count, "note": "切片后工作流", "tone": "blue"},
             {"label": "待推送", "value": ready_for_subtitle_count, "note": "需字幕和发布确认", "tone": "red"},
@@ -1368,7 +1408,7 @@ def get_clips_overview_context() -> dict:
             review_stage = "部分完成"
             review_tone = "amber"
         elif task["status"] == TaskStatus.pending_review.value or review_ready:
-            review_stage = "待审核"
+            review_stage = "待检查"
             review_tone = "purple"
         elif task["status"] in {TaskStatus.pending_ai.value, TaskStatus.ai_analyzing.value}:
             review_stage = "待 AI"
@@ -1402,8 +1442,8 @@ def get_clips_overview_context() -> dict:
                 "tone": "blue",
             },
             {
-                "label": "待人工审核",
-                "value": sum(1 for task in enriched_tasks if task["review_stage"] == "待审核"),
+                "label": "待检查",
+                "value": sum(1 for task in enriched_tasks if task["review_stage"] == "待检查"),
                 "tone": "purple",
             },
             {
@@ -1429,10 +1469,14 @@ def get_clips_overview_context() -> dict:
     }
 
 
-def create_task_record(payload: TaskCreate, task_id: str | None = None) -> dict:
+def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir_name: str | None = None) -> dict:
     resolved_task_id = task_id or uuid4().hex[:12]
+    resolved_task_dir_name = task_dir_name or allocate_task_dir_name(
+        payload.task_name,
+        exclude_task_id=resolved_task_id,
+    )
     now = _now_iso()
-    create_task_directory(resolved_task_id)
+    create_task_directory(resolved_task_id, resolved_task_dir_name)
 
     source_path = payload.nas_file_path if payload.source_type == "nas" else payload.original_video_path
     has_source_file = bool(source_path)
@@ -1453,6 +1497,7 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None) -> dict:
         insert_data = {
             "id": resolved_task_id,
             "task_name": payload.task_name,
+            "task_dir_name": resolved_task_dir_name,
             "source_type": payload.source_type,
             "platform": payload.platform,
             "original_video_path": payload.original_video_path,
@@ -1491,6 +1536,7 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None) -> dict:
     return {
         "id": resolved_task_id,
         "task_name": payload.task_name,
+        "task_dir_name": resolved_task_dir_name,
         "status": initial_status,
         "status_label": get_status_label(initial_status),
         "detail_url": f"/tasks/{resolved_task_id}",
@@ -2163,6 +2209,33 @@ def _should_fallback_to_local_ai(error: str) -> bool:
     return any(marker in lowered for marker in markers)
 
 
+
+def _append_ai_clip_quality_warnings(task_id: str, clips: list[dict]) -> None:
+    short_clips = []
+    for clip in clips:
+        try:
+            duration_seconds = int(clip.get("duration_seconds") or 0)
+        except (TypeError, ValueError):
+            duration_seconds = 0
+        if 0 < duration_seconds < AI_CLIP_MIN_RECOMMENDED_SECONDS:
+            short_clips.append(
+                f"{clip.get('title') or clip.get('clip_id') or '未命名片段'} {duration_seconds}秒"
+            )
+
+    if not short_clips:
+        return
+
+    preview = "、".join(short_clips[:5])
+    if len(short_clips) > 5:
+        preview += f" 等 {len(short_clips)} 条"
+    _append_task_log(
+        task_id,
+        "AI 片段完整性提示："
+        f"{preview} 短于建议的 {AI_CLIP_MIN_RECOMMENDED_SECONDS} 秒。"
+        "这不影响切片，但如果成片仍有割裂感，建议用 2 号综艺访谈 Prompt 或把单条切片最长调到 4-6 分钟后重跑 AI。",
+    )
+
+
 def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
     task = get_task(task_id, include_video_probe=False)
     if not task:
@@ -2221,6 +2294,7 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
         )
         _clear_clip_candidates(task_id)
         _insert_clip_candidates(task_id, analysis_payload["clips"])
+        _append_ai_clip_quality_warnings(task_id, analysis_payload["clips"])
     except (AIAnalysisError, Exception) as exc:
         error = str(exc)
         update_task_status(task_id, TaskStatus.failed, error)
@@ -2229,7 +2303,7 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
 
     update_task_status(task_id, TaskStatus.pending_review)
     _append_task_log(task_id, f"AI 分析完成，Provider：{used_provider}，生成候选片段：{len(analysis_payload['clips'])} 条")
-    message = f"AI 分析完成，生成 {len(analysis_payload['clips'])} 条候选片段。"
+    message = f"AI 分析完成，已生成 {len(analysis_payload['clips'])} 条可直接切片的候选片段，可进入片段审核检查或直接生成切片。"
     if fallback_notice:
         message = f"{fallback_notice} {message}"
     return {
