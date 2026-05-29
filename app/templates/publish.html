@@ -184,6 +184,8 @@
             <input type="hidden" name="task_id" value="{{ item.task_id }}">
             <input type="hidden" name="output_clip_id" value="{{ item.output_clip_id }}">
             <input type="hidden" name="platform" value="{{ config.platform }}">
+            <input type="hidden" name="cover_mode" value="auto">
+            <input type="hidden" name="cover_file_path" value="">
             <div class="publish-card-main">
               <label class="publish-select-line">
                 <input type="checkbox" name="batch_output_clip_id" value="{{ item.output_clip_id }}" data-batch-output-id="{{ config.platform }}">
@@ -241,10 +243,6 @@
                     <option value="private">仅自己可见</option>
                   </select>
                 </label>
-                <label>
-                  <span>封面时间点（秒）</span>
-                  <input type="number" name="cover_time_seconds" min="0" step="0.5" value="0">
-                </label>
               </div>
               <label class="toggle-line">
                 <input type="checkbox" name="allow_download" checked>
@@ -270,6 +268,21 @@
               </label>
               {% endif %}
             </div>
+
+            <section class="publish-cover-box" aria-label="发布封面">
+              <div class="publish-cover-preview" data-cover-preview>
+                <span>还未生成封面</span>
+                <img alt="发布封面预览" hidden>
+              </div>
+              <div class="publish-cover-controls">
+                <label>
+                  <span>封面时间点（秒）</span>
+                  <input type="number" name="cover_time_seconds" min="0" step="0.5" value="0">
+                </label>
+                <button class="secondary-button compact-button" type="button" data-generate-cover>生成封面</button>
+                <p class="form-hint" data-cover-result>默认从当前选择的视频版本截图，并把标题压到封面上。</p>
+              </div>
+            </section>
 
             <div class="publish-actions">
               <p class="form-hint" data-publish-job-result>真实发布前会弹出二次确认。</p>
@@ -306,6 +319,9 @@
             <span class="status-pill tone-{{ job.status_tone }}">{{ job.status_label }}</span>
             <h3>{{ job.title }}</h3>
             <p>{{ job.account_name }} · {{ job.video_source_label }} · {{ job.publish_mode_label }} · {{ job.created_at }}</p>
+            {% if job.cover_media_url %}
+            <img class="publish-job-cover" src="{{ job.cover_media_url }}" alt="发布封面">
+            {% endif %}
             {% if job.error_message %}
             <p class="error-text">{{ job.error_message }}</p>
             {% endif %}

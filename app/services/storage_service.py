@@ -9,7 +9,7 @@ from uuid import uuid4
 from app.core.config import EXTERNAL_STORAGE_ROOT, settings
 
 
-TASK_SUBDIRECTORIES = ("source", "audio", "transcripts", "analysis", "clips", "05_clips", "06_subtitled", "logs")
+TASK_SUBDIRECTORIES = ("source", "audio", "transcripts", "analysis", "clips", "05_clips", "06_subtitled", "07_covers", "logs")
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".flv", ".webm", ".m4v", ".ts"}
 TRASH_DIR_NAME = "_回收站"
 _WINDOWS_FORBIDDEN_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -143,6 +143,7 @@ def get_artifact_paths(task_id: str, task_dir_name: str | None = None) -> dict[s
         "analysis_path": directories["analysis"] / "candidate_clips.json",
         "clips_dir": directories["05_clips"],
         "subtitled_dir": directories["06_subtitled"],
+        "covers_dir": directories["07_covers"],
         "log_path": directories["logs"] / "process.log",
     }
 

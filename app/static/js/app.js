@@ -1873,6 +1873,24 @@ function publishFormPayload(form, submitter = null) {
   return payload;
 }
 
+function setCoverPreview(form, coverUrl) {
+  const preview = form.querySelector("[data-cover-preview]");
+  const image = preview?.querySelector("img");
+  const emptyText = preview?.querySelector("span");
+  if (!preview || !image || !emptyText) return;
+  if (coverUrl) {
+    image.src = `${coverUrl}?t=${Date.now()}`;
+    image.hidden = false;
+    emptyText.hidden = true;
+    preview.classList.add("has-cover");
+    return;
+  }
+  image.removeAttribute("src");
+  image.hidden = true;
+  emptyText.hidden = false;
+  preview.classList.remove("has-cover");
+}
+
 document.querySelectorAll("[data-publish-config-form]").forEach((form) => {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1971,6 +1989,63 @@ document.querySelectorAll("[data-publish-account-form]").forEach((form) => {
       setPublishMessage(resultNode, `账号保存失败：${error.message}`, "error");
     } finally {
       submitButton.disabled = false;
+    }
+  });
+});
+
+document.querySelectorAll("[data-publish-job-form]").forEach((form) => {
+  form.querySelectorAll("input[name='video_source']").forEach((input) => {
+    input.addEventListener("change", () => {
+      form.elements.cover_file_path.value = "";
+      form.elements.cover_mode.value = "auto";
+      setCoverPreview(form, "");
+      setPublishMessage(form.querySelector("[data-cover-result]"), "视频版本已切换，请重新生成封面。");
+    });
+  });
+});
+
+document.querySelectorAll("[data-generate-cover]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const form = button.closest("[data-publish-job-form]");
+    if (!form) return;
+    const resultNode = form.querySelector("[data-cover-result]");
+    const payload = publishFormPayload(form);
+    payload.cover_mode = "time";
+    if (!String(payload.title || "").trim()) {
+      setPublishMessage(resultNode, "请先填写标题，封面会使用这个标题作为大字。", "error");
+      return;
+    }
+
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "生成中...";
+    setPublishMessage(resultNode, "正在截取视频画面并生成封面...");
+
+    try {
+      const response = await fetch("/api/publish/covers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_id: payload.task_id,
+          output_clip_id: payload.output_clip_id,
+          video_source: payload.video_source,
+          title: payload.title,
+          cover_time_seconds: payload.cover_time_seconds,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || "封面生成失败");
+      }
+      form.elements.cover_file_path.value = data.cover_file_path || "";
+      form.elements.cover_mode.value = "time";
+      setCoverPreview(form, data.cover_media_url);
+      setPublishMessage(resultNode, data.message || "封面已生成。", "success");
+    } catch (error) {
+      setPublishMessage(resultNode, `封面生成失败：${error.message}`, "error");
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
     }
   });
 });

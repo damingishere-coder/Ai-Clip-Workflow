@@ -358,3 +358,11 @@
 - 任务列表删除动作已从“隐藏”改为“移入回收站”：页面仍会隐藏任务，但对应项目目录会移动到 `_回收站`。
 - 新增一次性迁移脚本 `scripts/migrate_task_dirs_to_project_names.py`；默认 dry-run 只预览，带 `--apply` 才会真正移动文件夹并更新数据库路径。
 - 已执行迁移，数据库备份为 `data/workflow.sqlite3.bak_20260527_011841`。
+
+## 2026-05-29 封面 MVP 方案添加
+
+- 发布中心新增封面 MVP：每条待发布切片都可以在发布前输入封面时间点并生成封面预览。
+- 封面生成采用“视频截图 + 暗色遮罩 + 标题大字”的稳定方案，暂不调用 AI 生图。
+- 新增发布封面接口：`POST /api/publish/covers` 可在创建发布任务前生成封面；`POST /api/publish/jobs/{job_id}/cover` 预留给已有发布任务重新生成封面。
+- 封面文件保存到任务目录 `07_covers/`，并通过 `/media/tasks/{task_id}/covers/{file_name}` 以内联图片方式预览。
+- 发布任务创建时会保存 `cover_file_path`，发布记录里能看到已生成封面缩略图。

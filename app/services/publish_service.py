@@ -1,4 +1,6 @@
 import json
+import re
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -7,6 +9,7 @@ from app.db.database import get_connection
 from app.models.task import (
     PublishAccountCreate,
     PublishBatchJobCreate,
+    PublishCoverCreate,
     PublishJobCreate,
     PublishPlatformConfigUpdate,
 )
@@ -15,7 +18,8 @@ from app.services.publish_providers import (
     DouyinPublishProvider,
     PublishProviderError,
 )
-from app.services.storage_service import resolve_video_file_path
+from app.services.storage_service import get_artifact_paths, resolve_video_file_path
+from app.services.video_cut_service import ensure_ffmpeg_available, sanitize_filename_part, summarize_stderr
 
 
 PLATFORM_LABELS = {
@@ -52,6 +56,9 @@ PUBLISH_MODE_LABELS = {
     "api_publish": "真实接口发布",
 }
 
+COVER_WIDTH = 1280
+COVER_HEIGHT = 720
+
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -68,6 +75,12 @@ def _mask_secret(value: str | None) -> str:
     if len(value) <= 8:
         return "*" * len(value)
     return f"{value[:4]}{'*' * max(4, len(value) - 8)}{value[-4:]}"
+
+
+def _cover_media_url(task_id: str, cover_file_path: str | None) -> str:
+    if not cover_file_path:
+        return ""
+    return f"/media/tasks/{task_id}/covers/{Path(cover_file_path).name}"
 
 
 def _normalize_config(row) -> dict:
@@ -109,6 +122,7 @@ def _normalize_job(row) -> dict:
             "video_source_label": VIDEO_SOURCE_LABELS.get(job.get("video_source"), job.get("video_source")),
             "publish_mode_label": PUBLISH_MODE_LABELS.get(job.get("publish_mode"), job.get("publish_mode")),
             "account_name": job.get("account_name") or "未选择账号",
+            "cover_media_url": _cover_media_url(job.get("task_id") or "", job.get("cover_file_path")),
         }
     )
     return job
@@ -355,6 +369,140 @@ def _resolve_publish_video_path(output_clip: dict, video_source: str) -> tuple[s
     return raw_path, resolved_path
 
 
+def _wrap_cover_title(title: str) -> str:
+    text = re.sub(r"\s+", " ", (title or "").strip()) or "精彩片段"
+    if len(text) > 34:
+        text = f"{text[:34]}..."
+    if len(text) <= 15:
+        return text
+    split_at = min(17, max(10, len(text) // 2))
+    return f"{text[:split_at]}\n{text[split_at:]}"
+
+
+def _escape_drawtext_value(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace(":", "\\:")
+        .replace("'", "\\'")
+        .replace(",", "\\,")
+        .replace("%", "\\%")
+        .replace("\n", "\\n")
+    )
+
+
+def _cover_font_option() -> str:
+    candidates = [
+        Path("C:/Windows/Fonts/msyh.ttc"),
+        Path("C:/Windows/Fonts/msyh.ttf"),
+        Path("C:/Windows/Fonts/simhei.ttf"),
+        Path("C:/Windows/Fonts/arial.ttf"),
+    ]
+    for font_path in candidates:
+        if font_path.exists():
+            return f"fontfile='{str(font_path).replace('\\', '/').replace(':', '\\:')}'"
+    return "font='Microsoft YaHei'"
+
+
+def _build_cover_filter(title: str) -> str:
+    cover_title = _escape_drawtext_value(_wrap_cover_title(title))
+    return ",".join(
+        [
+            f"scale={COVER_WIDTH}:{COVER_HEIGHT}:force_original_aspect_ratio=increase",
+            f"crop={COVER_WIDTH}:{COVER_HEIGHT}",
+            "format=yuv420p",
+            "drawbox=x=0:y=0:w=iw:h=ih:color=black@0.18:t=fill",
+            "drawbox=x=0:y=ih*0.50:w=iw:h=ih*0.50:color=black@0.40:t=fill",
+            (
+                "drawtext="
+                f"{_cover_font_option()}:"
+                f"text='{cover_title}':"
+                "x=(w-text_w)/2:"
+                "y=h*0.58:"
+                "fontsize=64:"
+                "fontcolor=white:"
+                "borderw=4:"
+                "bordercolor=black@0.55:"
+                "line_spacing=16"
+            ),
+        ]
+    )
+
+
+def _unique_cover_path(task_id: str, output_clip_id: str, video_source: str, title: str) -> Path:
+    cover_dir = get_artifact_paths(task_id)["covers_dir"]
+    cover_dir.mkdir(parents=True, exist_ok=True)
+    safe_title = sanitize_filename_part(title, fallback="cover")
+    base_name = f"{output_clip_id}_{video_source}_{safe_title}"
+    output_path = cover_dir / f"{base_name}.jpg"
+    if not output_path.exists():
+        return output_path
+    for index in range(2, 1000):
+        candidate = cover_dir / f"{base_name}_{index}.jpg"
+        if not candidate.exists():
+            return candidate
+    return cover_dir / f"{base_name}_{uuid4().hex[:6]}.jpg"
+
+
+def generate_publish_cover(payload: PublishCoverCreate, job_id: str | None = None) -> dict:
+    output_clip = _get_output_clip_for_publish(payload.task_id, payload.output_clip_id)
+    if not output_clip:
+        raise ValueError("切片记录不存在。")
+
+    _, video_path = _resolve_publish_video_path(output_clip, payload.video_source)
+    ffmpeg_path = ensure_ffmpeg_available()
+    cover_path = _unique_cover_path(payload.task_id, payload.output_clip_id, payload.video_source, payload.title)
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-ss",
+        f"{float(payload.cover_time_seconds or 0):.3f}",
+        "-i",
+        str(video_path),
+        "-frames:v",
+        "1",
+        "-vf",
+        _build_cover_filter(payload.title),
+        "-q:v",
+        "2",
+        str(cover_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        raise ValueError(f"封面生成失败：{summarize_stderr(result.stderr)}")
+    if not cover_path.exists() or cover_path.stat().st_size == 0:
+        raise ValueError("封面生成失败：FFmpeg 没有输出有效图片。")
+
+    if job_id:
+        with get_connection() as connection:
+            connection.execute(
+                """
+                UPDATE publish_jobs
+                SET cover_mode = 'time', cover_time_seconds = ?, cover_file_path = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (float(payload.cover_time_seconds or 0), str(cover_path), _now_iso(), job_id),
+            )
+            connection.commit()
+
+    return {
+        "status": "ok",
+        "message": "封面已生成。",
+        "cover_file_path": str(cover_path),
+        "cover_media_url": _cover_media_url(payload.task_id, str(cover_path)),
+    }
+
+
+def generate_publish_job_cover(job_id: str, payload: PublishCoverCreate) -> dict:
+    job = get_publish_job(job_id)
+    if not job:
+        raise ValueError("发布任务不存在。")
+    if job.get("task_id") != payload.task_id or job.get("output_clip_id") != payload.output_clip_id:
+        raise ValueError("封面参数和发布任务不一致。")
+    result = generate_publish_cover(payload, job_id=job_id)
+    result["job"] = get_publish_job(job_id)
+    return result
+
+
 def _validate_api_publish_ready(payload: PublishJobCreate) -> tuple[dict, dict]:
     account = get_account(payload.account_id or "")
     if not account:
@@ -391,10 +539,10 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
                 id, task_id, output_clip_id, account_id, platform, publish_mode,
                 video_source, video_file_path, title, description, tags, visibility,
                 cover_mode, cover_time_seconds, allow_download, bilibili_tid,
-                bilibili_copyright, bilibili_source, scheduled_at, status, audit_status,
-                provider_response, created_at, updated_at
+                bilibili_copyright, bilibili_source, cover_file_path, scheduled_at,
+                status, audit_status, provider_response, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -415,6 +563,7 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
                 (payload.bilibili_tid or "").strip(),
                 payload.bilibili_copyright,
                 (payload.bilibili_source or "").strip(),
+                (payload.cover_file_path or "").strip(),
                 (payload.scheduled_at or "").strip(),
                 status,
                 "not_submitted",

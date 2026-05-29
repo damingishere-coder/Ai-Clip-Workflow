@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from app.services import task_service
-from app.services.storage_service import get_source_video_path, resolve_video_file_path, validate_source_video_path
+from app.services.storage_service import get_artifact_paths, get_source_video_path, resolve_video_file_path, validate_source_video_path
 
 
 router = APIRouter(prefix="/media/tasks", tags=["media"])
@@ -13,6 +13,16 @@ router = APIRouter(prefix="/media/tasks", tags=["media"])
 
 def _video_response(path: Path) -> FileResponse:
     media_type = mimetypes.guess_type(path.name)[0] or "video/mp4"
+    return FileResponse(
+        path=path,
+        media_type=media_type,
+        filename=path.name,
+        content_disposition_type="inline",
+    )
+
+
+def _image_response(path: Path) -> FileResponse:
+    media_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
     return FileResponse(
         path=path,
         media_type=media_type,
@@ -67,3 +77,17 @@ async def get_task_subtitled_clip(task_id: str, output_clip_id: str) -> FileResp
         raise HTTPException(status_code=404, detail="带字幕视频文件不存在")
 
     return _video_response(output_path)
+
+
+@router.get("/{task_id}/covers/{file_name}")
+async def get_task_cover(task_id: str, file_name: str) -> FileResponse:
+    task = task_service.get_task(task_id, include_video_probe=False)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    safe_name = Path(file_name).name
+    cover_path = get_artifact_paths(task_id, task.get("task_dir_name"))["covers_dir"] / safe_name
+    if not cover_path.exists() or not cover_path.is_file():
+        raise HTTPException(status_code=404, detail="封面文件不存在")
+
+    return _image_response(cover_path)

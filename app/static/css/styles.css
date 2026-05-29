@@ -3037,6 +3037,63 @@ body.transcript-drawer-open .main-panel {
   resize: vertical;
 }
 
+.publish-cover-box {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.publish-cover-preview {
+  position: relative;
+  display: grid;
+  min-height: 170px;
+  overflow: hidden;
+  place-items: center;
+  border: 1px dashed rgba(37, 111, 255, 0.28);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(37, 111, 255, 0.14), rgba(34, 160, 107, 0.10)),
+    #eef4fb;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  aspect-ratio: 16 / 9;
+}
+
+.publish-cover-preview img,
+.publish-job-cover {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  object-fit: cover;
+  aspect-ratio: 16 / 9;
+}
+
+.publish-cover-preview img {
+  height: 100%;
+}
+
+.publish-cover-controls {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+}
+
+.publish-cover-controls .form-hint {
+  margin: 0;
+}
+
+.publish-job-cover {
+  max-width: 220px;
+  margin-top: 10px;
+  border: 1px solid var(--line);
+}
+
 .publish-actions {
   padding-top: 10px;
   border-top: 1px solid var(--line);
@@ -3078,6 +3135,7 @@ body.transcript-drawer-open .main-panel {
   .review-metrics,
   .publish-backend-grid,
   .publish-batch-bar,
+  .publish-cover-box,
   .publish-fields,
   .publish-source-grid {
     grid-template-columns: 1fr;

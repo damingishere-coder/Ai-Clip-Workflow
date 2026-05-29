@@ -113,6 +113,7 @@ class PublishJobCreate(BaseModel):
     visibility: Literal["public", "friends", "private"] = "public"
     cover_mode: Literal["auto", "time"] = "auto"
     cover_time_seconds: float = Field(default=0, ge=0)
+    cover_file_path: Optional[str] = Field(default="", max_length=1000)
     allow_download: bool = True
     bilibili_tid: Optional[str] = Field(default="", max_length=80)
     bilibili_copyright: Literal["original", "repost"] = "original"
@@ -135,6 +136,14 @@ class PublishBatchJobCreate(BaseModel):
         if not value:
             raise ValueError("至少选择一条切片")
         return value
+
+
+class PublishCoverCreate(BaseModel):
+    task_id: str = Field(..., min_length=1, max_length=80)
+    output_clip_id: str = Field(..., min_length=1, max_length=80)
+    video_source: Literal["original", "subtitled"] = "original"
+    title: str = Field(..., min_length=1, max_length=120)
+    cover_time_seconds: float = Field(default=0, ge=0)
 
 
 class ClipCandidate(BaseModel):

@@ -3,7 +3,13 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
 
-from app.models.task import PublishAccountCreate, PublishBatchJobCreate, PublishJobCreate, PublishPlatformConfigUpdate
+from app.models.task import (
+    PublishAccountCreate,
+    PublishBatchJobCreate,
+    PublishCoverCreate,
+    PublishJobCreate,
+    PublishPlatformConfigUpdate,
+)
 from app.services import publish_service
 
 
@@ -80,6 +86,22 @@ async def create_publish_job(payload: PublishJobCreate) -> dict:
 async def create_batch_publish_jobs(payload: PublishBatchJobCreate) -> dict:
     try:
         return publish_service.create_batch_publish_jobs(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/covers")
+async def generate_publish_cover(payload: PublishCoverCreate) -> dict:
+    try:
+        return publish_service.generate_publish_cover(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/cover")
+async def generate_publish_job_cover(job_id: str, payload: PublishCoverCreate) -> dict:
+    try:
+        return publish_service.generate_publish_job_cover(job_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
