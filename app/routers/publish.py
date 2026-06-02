@@ -1,14 +1,17 @@
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
 from app.models.task import (
     PublishAccountCreate,
     PublishBatchJobCreate,
     PublishCoverCreate,
+    PublishCoverFrameBatchCreate,
     PublishJobCreate,
     PublishPlatformConfigUpdate,
+    PublishSendJobUpdate,
+    PublishSendStart,
 )
 from app.services import publish_service
 
@@ -74,6 +77,19 @@ async def list_publish_jobs() -> dict:
     return {"jobs": publish_service.list_publish_jobs()}
 
 
+@router.get("/queue")
+async def get_send_queue() -> dict:
+    return publish_service.get_publish_center_context()
+
+
+@router.post("/queue/refresh")
+async def refresh_send_queue(use_ai: bool = Query(default=False)) -> dict:
+    try:
+        return publish_service.refresh_send_queue(use_ai=use_ai)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/jobs")
 async def create_publish_job(payload: PublishJobCreate) -> dict:
     try:
@@ -98,10 +114,53 @@ async def generate_publish_cover(payload: PublishCoverCreate) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/covers/frames")
+async def generate_publish_cover_frames(payload: PublishCoverFrameBatchCreate) -> dict:
+    try:
+        return publish_service.generate_publish_cover_frames(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/jobs/{job_id}/cover")
 async def generate_publish_job_cover(job_id: str, payload: PublishCoverCreate) -> dict:
     try:
         return publish_service.generate_publish_job_cover(job_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/jobs/{job_id}/send-content")
+async def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
+    try:
+        return publish_service.update_send_job(job_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/metadata")
+async def regenerate_send_job_metadata(job_id: str, use_ai: bool = Query(default=True)) -> dict:
+    try:
+        return publish_service.regenerate_send_job_metadata(job_id, use_ai=use_ai)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/send")
+async def send_publish_job(job_id: str, background_tasks: BackgroundTasks) -> dict:
+    try:
+        return publish_service.start_opencli_send_batch(
+            PublishSendStart(job_ids=[job_id]),
+            background_tasks=background_tasks,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/send/start")
+async def start_send_queue(payload: PublishSendStart, background_tasks: BackgroundTasks) -> dict:
+    try:
+        return publish_service.start_opencli_send_batch(payload, background_tasks=background_tasks)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260526-trim-1">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260602-send-center-2">
     {% block extra_head %}{% endblock %}
   </head>
   <body>
@@ -23,12 +23,12 @@
           <a class="{{ 'active' if active_page == 'tasks' else '' }}" href="/tasks"><span class="nav-dot"></span>任务列表</a>
           <a class="{{ 'active' if active_page == 'clips' else '' }}" href="/clips"><span class="nav-dot"></span>片段审核</a>
           <a class="{{ 'active' if active_page == 'subtitles' else '' }}" href="/subtitles"><span class="nav-dot"></span>字幕推送</a>
-          <a class="{{ 'active' if active_page == 'publish' else '' }}" href="/publish"><span class="nav-dot"></span>发布中心</a>
+          <a class="{{ 'active' if active_page == 'publish' else '' }}" href="/publish"><span class="nav-dot"></span>发送中心</a>
           <a class="{{ 'active' if active_page == 'system' else '' }}" href="/system"><span class="nav-dot"></span>系统状态</a>
         </nav>
         <div class="sidebar-note">
           <strong>v1.1 本地切片全流程</strong>
-        <span>上传、转写、AI 分析、人工审核和自动切片已走通；发布中心正在接入抖音和 B站后台。</span>
+        <span>上传、转写、AI 分析、人工审核和自动切片已走通；发送中心使用 opencli 逐条投稿到抖音和 B站。</span>
         </div>
       </aside>
 
@@ -50,6 +50,6 @@
     </div>
 
     {% block extra_scripts %}{% endblock %}
-    <script src="{{ url_for('static', path='js/app.js') }}?v=20260526-trim-1"></script>
+    <script src="{{ url_for('static', path='js/app.js') }}?v=20260602-send-center-2"></script>
   </body>
 </html>

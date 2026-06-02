@@ -1,5 +1,32 @@
 # Development Log
 
+## 2026-06-02 DeepSeek AI JSON 解析稳定性修复
+- 修复使用 2 号“康熙来了综艺短视频切片专家”Prompt 运行 DeepSeek AI 分析时，AI 返回接近 JSON 但存在尾随逗号、Markdown 代码块、未加双引号字段名或 Python 风格布尔值，导致 `AI 返回非法 JSON，安全重试后仍失败` 的问题。
+- `app/services/ai/ai_clip_analyzer.py` 新增 AI JSON 提取和轻量修复流程：先尝试标准 JSON，再提取正文里的 JSON 主体，并兼容常见 AI 输出瑕疵；修复后仍会继续走 Pydantic 字段校验、时间范围校验和片段时长校验。
+- `app/services/ai/remote_responses_provider.py` 将 DeepSeek Chat Completions 的 `max_tokens` 从 4096 提高到 8192，并加入较低 `temperature`，降低长 Prompt 输出半截 JSON 或格式漂移的概率。
+- `scripts/test_ai_json_validation.py` 新增本地回归测试，覆盖标准 JSON、Markdown fenced JSON、尾随逗号、未加双引号字段名和 Python literal 五种情况。
+- 已验证：`.venv\Scripts\python.exe scripts\test_ai_json_validation.py` 通过；`.venv\Scripts\python.exe -m py_compile app\services\ai\ai_clip_analyzer.py app\services\ai\remote_responses_provider.py scripts\test_ai_json_validation.py` 通过；`.venv\Scripts\python.exe scripts\test_remote_ai_connection.py` 通过。
+
+## 2026-06-02 停止转写卡住修复
+- 修复任务详情页点击“停止转写”后一直停留在“正在停止 / 转写中”的问题。
+- 原因：如果后台服务重启过，内存里的运行中任务标记会丢失，但 `transcript_progress.json` 仍可能停在 `cancelling`，前端会持续轮询并一直显示正在停止。
+- `app/services/task_service.py` 新增停止转写自愈逻辑：当状态查询或再次点击停止时，发现 `cancelling` 进度已经没有真实后台任务承接，会自动写成 `cancelled`，并把任务状态退回可重新处理的 `pending_processing`。
+- `scripts/test_transcript_background_start.py` 新增回归测试，覆盖服务重启后遗留 `cancelling` 进度的自动收尾场景。
+
+## 2026-05-30 火山引擎远程转写请求修复
+- 已定位“测试4”远程转写失败原因：程序把 MP3 二进制直接 POST 到火山引擎接口，服务端按 JSON 解析时遇到 MP3 文件头 `ID3`，返回 HTTP 400：`invalid character 'I' looking for beginning of value`。
+- `app/services/transcript_service.py` 已改为按火山引擎极速版要求发送 JSON 请求体，将音频内容 base64 后放入 `audio.data`，并设置 `Content-Type: application/json`、`X-Api-Sequence: -1`。
+- 新增火山引擎业务状态码检查；当分段转写遇到 `20000003` 无有效人声且当前允许空结果时，会跳过该空白小段继续处理，避免静音片段导致整条视频失败。
+- `scripts/test_volcengine_transcription_connection.py` 已兼容当前 `.env` 中的 `VOLCENGINE_ASR_APP_KEY` / `VOLCENGINE_ASR_ACCESS_KEY` 配置，不再只检查 `VOLCENGINE_ASR_API_KEY`。
+- 已运行 `.venv\Scripts\python.exe scripts\test_volcengine_transcription_provider.py`、`.venv\Scripts\python.exe -m compileall app scripts`。
+- 已用“测试4”的音频做真实火山引擎连通性测试：前 8 秒静音片段按空结果跳过，前 60 秒可成功识别 16 句。
+
+## 2026-05-30 分支合并确认
+- 已检查当前目录为 `C:\Users\10578\Documents\New project 2`，当前分支原本为 `codex/subtitlefunction`，工作区干净，没有未提交改动。
+- 本地没有 `main` 分支，当前项目主分支为 `master`。
+- 已确认 `codex/subtitlefunction` 已经是 `master` 的祖先分支，执行 `git merge codex/subtitlefunction` 后 Git 返回 `Already up to date.`，说明当前分支内容已经合入主分支。
+- 当前已停留在 `master` 分支；本次合并没有产生代码冲突，也没有改动业务文件。
+
 ## 2026-05-27 片段审核功能优化
 - 片段审核页新增候选片段删除能力：每张候选卡片提供“删除”按钮，点击后立即从页面移除，并通过 `DELETE /api/tasks/{task_id}/clips/{clip_id}` 写入数据库隐藏状态。
 - `clip_candidates` 表新增 `is_deleted` 和 `deleted_at` 字段；候选片段列表、启用片段统计和自动切片流程默认排除已删除片段，删除不会影响源视频、转写文件或已生成切片文件。
@@ -366,3 +393,13 @@
 - 新增发布封面接口：`POST /api/publish/covers` 可在创建发布任务前生成封面；`POST /api/publish/jobs/{job_id}/cover` 预留给已有发布任务重新生成封面。
 - 封面文件保存到任务目录 `07_covers/`，并通过 `/media/tasks/{task_id}/covers/{file_name}` 以内联图片方式预览。
 - 发布任务创建时会保存 `cover_file_path`，发布记录里能看到已生成封面缩略图。
+
+## 2026-06-02 发送中心 2.0 版本
+
+- 已把 `/publish` 从“发布中心”改为“发送中心”，页面不再展示抖音 / B站开放平台 API 配置、Client Key、Access Token、OAuth 和账号表单。
+- 新页面以待发送队列为主：从已完成切片读取切好的原片、封面帧、AI 标题、AI 话题和平台状态，默认生成抖音 + B站双平台队列。
+- 新增发送队列接口：`POST /api/publish/queue/refresh` 可从已完成切片生成 opencli 发送任务；`POST /api/publish/send/start` 可按队列逐条发送；`POST /api/publish/jobs/{job_id}/send` 可发送单条任务。
+- 封面逻辑改为“从视频中选一帧”：新增 `POST /api/publish/covers/frames` 生成多张候选帧，页面可手动切换并保存，不再默认叠加标题大字。
+- AI 元数据补齐已接入：优先使用切片标题，话题和简介可由 AI 根据标题、摘要、推荐理由和转写片段生成；缺失时页面可一键重新生成。
+- 自动发送改为 opencli 网页自动化：抖音打开 `creator.douyin.com` 投稿页，B站打开创作中心投稿页；发送批次一次只执行一条，避免平台窗口互相抢焦点。
+- 已新增 `scripts/test_send_center_opencli_queue.py`，验证抖音 / B站 opencli 命令组装和备用元数据生成；已通过页面渲染检查，确认 `/publish` 不再出现 API 配置词。
