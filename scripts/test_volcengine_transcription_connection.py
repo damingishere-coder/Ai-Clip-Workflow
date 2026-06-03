@@ -27,8 +27,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if not settings.volcengine_asr_api_key:
-        raise SystemExit("未填写 VOLCENGINE_ASR_API_KEY。请先在 .env 中填写火山引擎 App Key。")
+    if not settings.volcengine_asr_api_key and not settings.volcengine_asr_app_key:
+        raise SystemExit("未填写火山引擎转写密钥。请先在 .env 中填写 VOLCENGINE_ASR_API_KEY 或 VOLCENGINE_ASR_APP_KEY。")
 
     audio_path = Path(args.audio_path)
     if not audio_path.exists():

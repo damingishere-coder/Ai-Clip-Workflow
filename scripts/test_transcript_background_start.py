@@ -69,5 +69,70 @@ def main() -> None:
     print("transcript background start test passed")
 
 
-if __name__ == "__main__":
+def test_orphan_cancelling_progress_is_finalized() -> None:
+    original_get_task = task_service.get_task
+    original_get_artifact_paths = task_service.get_artifact_paths
+    original_update_task_status = task_service.update_task_status
+    original_append_task_log = task_service._append_task_log
+    task_id = "orphan-cancel-test"
+    updated_statuses = []
+
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        transcript_path = temp_path / "transcript.md"
+
+        def fake_get_task(_task_id):
+            return {"id": task_id, "task_name": "Orphan Cancel Test", "status": "transcribing"}
+
+        def fake_get_artifact_paths(_task_id):
+            return {
+                "transcript_path": transcript_path,
+                "log_path": temp_path / "process.log",
+            }
+
+        def fake_update_task_status(_task_id, status, *_args, **_kwargs):
+            updated_statuses.append(status)
+            return fake_get_task(task_id)
+
+        try:
+            task_service.get_task = fake_get_task
+            task_service.get_artifact_paths = fake_get_artifact_paths
+            task_service.update_task_status = fake_update_task_status
+            task_service._append_task_log = lambda *_args, **_kwargs: None
+            task_service._RUNNING_TRANSCRIPT_TASKS.discard(task_id)
+            task_service._CANCEL_TRANSCRIPT_TASKS.discard(task_id)
+
+            task_service.write_transcript_progress(
+                transcript_path,
+                status="cancelling",
+                current_chunk=1,
+                total_chunks=23,
+                percent=2,
+                message="Stopping",
+            )
+
+            status = task_service.get_task_transcript_status(task_id)
+            progress = task_service.read_transcript_progress(transcript_path)
+            cancel = task_service.cancel_task_transcript(task_id)
+
+            assert status["progress"]["status"] == "cancelled"
+            assert progress["status"] == "cancelled"
+            assert cancel["status"] == "not_running"
+            assert task_service.TaskStatus.pending_processing in updated_statuses
+        finally:
+            task_service.get_task = original_get_task
+            task_service.get_artifact_paths = original_get_artifact_paths
+            task_service.update_task_status = original_update_task_status
+            task_service._append_task_log = original_append_task_log
+            task_service._RUNNING_TRANSCRIPT_TASKS.discard(task_id)
+            task_service._CANCEL_TRANSCRIPT_TASKS.discard(task_id)
+
+
+def run_tests() -> None:
     main()
+    test_orphan_cancelling_progress_is_finalized()
+    print("orphan cancelling progress test passed")
+
+
+if __name__ == "__main__":
+    run_tests()

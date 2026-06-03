@@ -1,5 +1,11 @@
 # Development Log
 
+## 2026-06-04 AI 远程分析旧字段兼容修复
+- 修复远程 AI 返回旧字段导致分析失败的问题：当 AI 输出 `clip_key`、`viral_value`、`reason`、`editing_suggestion` 等旧字段时，程序会在 Pydantic 校验前自动转换为当前需要的 `clip_id`、`spread_value`、`highlight_reason`、`suggested_editing`。
+- 新增 AI 片段字段保底逻辑：缺少 `clip_id` 时自动生成 `clip_001` 这类编号；缺少 `summary`、`spread_value`、`suggested_editing` 时填入可审核的安全默认值；缺少 `duration_seconds` 但有起止时间时自动计算片段时长。
+- `scripts/test_ai_json_validation.py` 新增旧字段回归用例，覆盖本次报错里的 `clip_key` / `viral_value` / `reason` 格式。
+- 本次不调整页面结构、不扩大 Prompt 或模型接入范围，因此不需要同步更新 `docs/UI_REFERENCE.md`。
+
 ## 2026-06-02 DeepSeek AI JSON 解析稳定性修复
 - 修复使用 2 号“康熙来了综艺短视频切片专家”Prompt 运行 DeepSeek AI 分析时，AI 返回接近 JSON 但存在尾随逗号、Markdown 代码块、未加双引号字段名或 Python 风格布尔值，导致 `AI 返回非法 JSON，安全重试后仍失败` 的问题。
 - `app/services/ai/ai_clip_analyzer.py` 新增 AI JSON 提取和轻量修复流程：先尝试标准 JSON，再提取正文里的 JSON 主体，并兼容常见 AI 输出瑕疵；修复后仍会继续走 Pydantic 字段校验、时间范围校验和片段时长校验。
