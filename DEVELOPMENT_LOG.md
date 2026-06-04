@@ -443,6 +443,12 @@
 - opencli 自动发送命令现在会使用检测到的完整可执行文件路径，避免后台服务环境变量不完整时启动失败。
 - 已补充 `scripts/test_send_center_opencli_queue.py` 测试，覆盖 Windows npm 目录里的 `opencli.cmd` 备用检测。
 
+## 2026-06-04 发送中心 opencli 参数修复
+
+- 修复自动发送第一步报错 `unknown option '--window'` 的问题。
+- opencli `browser open` 命令已改为 `opencli browser <session> --window foreground open <url>`，不再把 `--window` 放到网址后面。
+- 已补充发送中心测试，确认抖音 / B站打开页面命令里的 `--window` 参数位置正确。
+
 ## 2026-06-04 自动字幕中文方块修复
 
 - 修复自动加字幕后中文显示成小方块的问题：ASS 字幕生成会优先使用已保存的中文字体，并在字体不可用时兜底到 Windows 本机可用中文字体。

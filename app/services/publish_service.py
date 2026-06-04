@@ -1401,7 +1401,7 @@ def _job_cover_path(job: dict) -> Path | None:
 
 
 def _browser_open_command(session: str, url: str) -> list[str]:
-    return [_opencli_command(), "browser", session, "open", url, "--window", "foreground"]
+    return [_opencli_command(), "browser", session, "--window", "foreground", "open", url]
 
 
 def _browser_wait_command(session: str, seconds: int) -> list[str]:

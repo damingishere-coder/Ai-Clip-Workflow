@@ -32,6 +32,8 @@ def test_douyin_browser_commands() -> None:
         Path(r"C:\tmp\clip.mp4"),
         Path(r"C:\tmp\cover.jpg"),
     )
+    assert commands[0][2:6] == ["send-douyin-job-douyin", "--window", "foreground", "open"]
+    assert "--window" not in commands[0][6:]
     text = _joined(commands)
     assert "creator.douyin.com" in text
     assert "upload input[type='file']" in text
@@ -48,6 +50,8 @@ def test_bilibili_browser_commands() -> None:
         Path(r"C:\tmp\clip.mp4"),
         Path(r"C:\tmp\cover.jpg"),
     )
+    assert commands[0][2:6] == ["send-bilibili-job-bilibili", "--window", "foreground", "open"]
+    assert "--window" not in commands[0][6:]
     text = _joined(commands)
     assert "member.bilibili.com/platform/upload/video/frame" in text
     assert "upload input[type='file']" in text

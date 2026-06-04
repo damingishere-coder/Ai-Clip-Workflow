@@ -321,6 +321,10 @@
 - 如果页面还显示“没有检测到 opencli”，优先重启项目后台服务并刷新 `/publish`；如果仍然出现，再检查服务是否运行在 Docker 容器里，因为 Docker 容器内看不到 Windows 主机的 opencli。
 - 下一步建议在 Windows 本机启动项目后进入 `/publish`，确认顶部 opencli 提示消失，再勾选一条任务测试“发送此条”。
 
+## 2026-06-04 本次小改动：修复 opencli `--window` 参数
+- 已修复发送中心调用 opencli 时 `unknown option '--window'` 的报错，原因是参数位置放错。
+- 下一步继续在 Windows 本机版 `http://127.0.0.1:8002/publish` 测试“发送此条”；如果页面已打开但上传 / 填写失败，再根据具体错误继续调整选择器。
+
 ## 当前已处理
 
 - 已新增 Docker 一键启动方式：`docker compose up --build`，固定访问 `http://127.0.0.1:8001`。
