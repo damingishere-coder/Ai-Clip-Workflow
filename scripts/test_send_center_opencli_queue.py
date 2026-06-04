@@ -45,7 +45,9 @@ def test_douyin_browser_commands() -> None:
     assert "upload input[type='file']" not in " ".join(commands[2])
     assert "fill input[placeholder*='title']" not in text
     assert "fill input[placeholder*='\u6807\u9898'],textarea[placeholder*='\u6807\u9898']" not in text
+    assert "fill textarea[placeholder*='\u7b80\u4ecb'],textarea[placeholder*='\u63cf\u8ff0'],div[contenteditable='true']" not in text
     assert "title_field_not_found" in text
+    assert "caption_field_not_found" in text
     assert "High energy clip" in text
     assert "#live #highlight" in text
     assert "\u53d1\u5e03" in text
@@ -65,7 +67,9 @@ def test_bilibili_browser_commands() -> None:
     assert "member.bilibili.com/platform/upload/video/frame" in text
     assert "upload input[type='file']" in text
     assert "fill input[placeholder*='\u6807\u9898'],textarea[placeholder*='\u6807\u9898']" not in text
+    assert "fill textarea[placeholder*='\u7b80\u4ecb'],textarea[placeholder*='\u4ecb\u7ecd'],textarea" not in text
     assert "title_field_not_found" in text
+    assert "description_field_not_found" in text
     assert "High energy clip" in text
     assert "live" in text
     assert "highlight" in text

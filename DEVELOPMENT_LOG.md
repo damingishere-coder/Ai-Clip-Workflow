@@ -485,3 +485,10 @@
 - 发现 `127.0.0.1:8002` 仍由旧 Python 后台进程监听，因此浏览器实际调用的还是修复前的运行态代码。
 - 已停止旧的 `8002` uvicorn 进程，并用当前项目代码重新启动本机服务；`http://127.0.0.1:8002/publish` 已返回 HTTP 200。
 - 后续如果再次看到完全相同的旧 CSS selector 报错，优先确认是否访问的是 Windows 本机 `8002`，并重启后台服务后再测。
+
+## 2026-06-04 发送中心简介填写修复
+
+- 修复抖音填写简介/描述时 opencli 返回 `filled: true` 但 `verified: false` 的问题：不再使用直接 `fill textarea[placeholder*='简介'],textarea[placeholder*='描述'],div[contenteditable='true']` 命令。
+- 抖音简介和 B站简介都改为浏览器脚本填写，会优先选择可见、可编辑输入框，并对 `contenteditable` 输入框模拟插入文本，必要时再写入完整文本。
+- 已补充 `scripts/test_send_center_opencli_queue.py` 测试，确认抖音 / B站简介不会再生成容易被严格校验卡住的直接 `fill` 命令。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。

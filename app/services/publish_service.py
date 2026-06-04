@@ -1422,6 +1422,28 @@ _TITLE_FIELD_SELECTOR = ",".join(
 )
 
 
+_DOUYIN_CAPTION_FIELD_SELECTOR = ",".join(
+    [
+        "textarea[placeholder*='简介']",
+        "textarea[placeholder*='描述']",
+        "[contenteditable='true'][aria-label*='简介']",
+        "[contenteditable='true'][aria-label*='描述']",
+        "[contenteditable='true'][data-placeholder*='简介']",
+        "[contenteditable='true'][data-placeholder*='描述']",
+        "div[contenteditable='true']",
+    ]
+)
+
+
+_BILIBILI_DESCRIPTION_FIELD_SELECTOR = ",".join(
+    [
+        "textarea[placeholder*='简介']",
+        "textarea[placeholder*='介绍']",
+        "textarea",
+    ]
+)
+
+
 def _fill_visible_field_script(selector: str, value: str, field_name: str) -> str:
     return (
         "(()=>{"
@@ -1440,7 +1462,16 @@ def _fill_visible_field_script(selector: str, value: str, field_name: str) -> st
         "if(!el){throw new Error(missingError);}"
         "el.scrollIntoView({block:'center',inline:'center'});"
         "el.focus();"
-        "if(el.isContentEditable){el.textContent=value;}"
+        "if(el.isContentEditable){"
+        "const selection=window.getSelection();"
+        "const range=document.createRange();"
+        "range.selectNodeContents(el);"
+        "selection.removeAllRanges();"
+        "selection.addRange(range);"
+        "const inserted=document.execCommand?.('insertText',false,value);"
+        "const actual=(el.textContent||'').replace(/[\\u200B-\\u200D\\uFEFF]/g,'');"
+        "if(!inserted||actual!==value){el.textContent=value;}"
+        "}"
         "else{"
         "const proto=el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;"
         "const setter=Object.getOwnPropertyDescriptor(proto,'value')?.set;"
@@ -1455,6 +1486,17 @@ def _fill_visible_field_script(selector: str, value: str, field_name: str) -> st
 
 def _browser_fill_title_command(session: str, title: str) -> list[str]:
     return _browser_eval_command(session, _fill_visible_field_script(_TITLE_FIELD_SELECTOR, title, "title"))
+
+
+def _browser_fill_douyin_caption_command(session: str, caption: str) -> list[str]:
+    return _browser_eval_command(session, _fill_visible_field_script(_DOUYIN_CAPTION_FIELD_SELECTOR, caption, "caption"))
+
+
+def _browser_fill_bilibili_description_command(session: str, description: str) -> list[str]:
+    return _browser_eval_command(
+        session,
+        _fill_visible_field_script(_BILIBILI_DESCRIPTION_FIELD_SELECTOR, description, "description"),
+    )
 
 
 def _local_media_url(job: dict) -> str:
@@ -1508,9 +1550,7 @@ def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path
         _browser_fill_title_command(session, title),
     ]
     if caption:
-        commands.append(
-            [opencli, "browser", session, "fill", "textarea[placeholder*='简介'],textarea[placeholder*='描述'],div[contenteditable='true']", caption]
-        )
+        commands.append(_browser_fill_douyin_caption_command(session, caption))
     commands.extend(
         [
             [opencli, "browser", session, "click", "--role", "button", "--name", "发布"],
@@ -1536,7 +1576,7 @@ def _build_bilibili_browser_commands(job: dict, video_path: Path, cover_path: Pa
     if tags:
         commands.append([opencli, "browser", session, "fill", "input[placeholder*='标签'],input[placeholder*='tag']", tags])
     if description:
-        commands.append([opencli, "browser", session, "fill", "textarea[placeholder*='简介'],textarea[placeholder*='介绍'],textarea", description])
+        commands.append(_browser_fill_bilibili_description_command(session, description))
     if cover_path:
         commands.extend(
             [
