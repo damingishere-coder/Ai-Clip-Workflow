@@ -449,3 +449,12 @@
 - FFmpeg `subtitles` 滤镜现在会显式传入 `C:\Windows\Fonts` 作为字体目录，避免 libass 找不到微软雅黑、黑体、Noto Sans SC 等中文字体。
 - 字幕样式页面补充 `Noto Sans SC` 和 `Source Han Sans CN` 选项，方便后续选择更稳定的中文字体。
 - 已验证：`python -m compileall app` 通过。
+
+## 2026-06-04 发送中心标题话题安全与自动封面
+
+- 发送中心新增本地内容安全清洗：AI 或人工填写的标题、平台话题和简介会自动规避低俗脏话、死亡血腥、暴力恐怖、色情、赌博博彩、诈骗引流、绝对化夸张等高风险表达。
+- AI 元数据 Prompt 已明确要求 `tags` 返回平台 `#话题` 关键词，不再把标题重新解释成话题；页面字段同步改为“平台 #话题”。
+- 刷新发送队列时会自动为每条切片截取一张默认封面帧，并写入发送任务；已有任务如果没有封面，刷新队列也会自动补封面。
+- 保留“更换封面帧”能力：需要人工挑图时仍可生成多张候选帧并切换。
+- 已补充 `scripts/test_send_center_opencli_queue.py` 测试，覆盖敏感词清洗、平台 #话题格式和旧脏数据发送前清洗。
+- 已验证：`python -m compileall app`、`python scripts/test_send_center_opencli_queue.py` 通过。

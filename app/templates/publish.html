@@ -7,11 +7,11 @@
   <div>
     <p class="eyebrow">Send Center 2.0</p>
     <h1>抖音 + B站发送中心</h1>
-    <p>切好的视频、封面帧、AI 标题和话题在这里排队；确认后由 opencli 使用 Chrome 登录态逐条发送。</p>
+    <p>切好的视频、自动封面帧、AI 标题和平台 #话题在这里排队；确认后由 opencli 使用 Chrome 登录态逐条发送。</p>
   </div>
   <div class="button-row">
     <button type="button" class="secondary-button" data-refresh-send-queue data-use-ai="false">刷新发送队列</button>
-    <button type="button" class="secondary-button" data-refresh-send-queue data-use-ai="true">AI 补齐话题</button>
+    <button type="button" class="secondary-button" data-refresh-send-queue data-use-ai="true">AI 补齐标题/话题</button>
     <button type="button" class="primary-button" data-start-send-queue>开始发送全部</button>
   </div>
 </section>
@@ -68,7 +68,7 @@
           <video controls preload="metadata" src="{{ item.video_media_url }}"></video>
           <div class="send-cover-preview{% if item.cover_media_url %} has-cover{% endif %}" data-cover-preview>
             <img src="{{ item.cover_media_url }}" alt="封面预览" {% if not item.cover_media_url %}hidden{% endif %}>
-            <span {% if item.cover_media_url %}hidden{% endif %}>封面帧待选择</span>
+            <span {% if item.cover_media_url %}hidden{% endif %}>刷新队列后自动选帧</span>
           </div>
         </div>
 
@@ -100,8 +100,8 @@
               <input name="title" value="{{ item.title }}" maxlength="120" required>
             </label>
             <label>
-              <span>AI 话题</span>
-              <input name="tags" value="{{ item.tags }}" maxlength="500" placeholder="用逗号分隔，例如 直播切片, 高能名场面">
+              <span>平台 #话题</span>
+              <input name="tags" value="{{ item.tags }}" maxlength="500" placeholder="例如 #直播切片 #高能名场面">
             </label>
             <label class="span-2">
               <span>正文 / 简介</span>
@@ -140,7 +140,7 @@
           </div>
 
           <div class="cover-frame-list" data-cover-frame-list>
-            <span>生成候选帧后，可在这里手动切换封面。</span>
+            <span>系统会先自动选一帧；需要更换时再生成候选帧。</span>
           </div>
 
           {% if item.error_message %}
@@ -156,8 +156,8 @@
             </p>
             <div class="button-row">
               <button type="submit" class="secondary-button" {% if not item.job_id %}disabled{% endif %}>保存</button>
-              <button type="button" class="secondary-button" data-regenerate-send-metadata {% if not item.job_id %}disabled{% endif %}>重新生成话题</button>
-              <button type="button" class="secondary-button" data-generate-cover-frames>选封面帧</button>
+              <button type="button" class="secondary-button" data-regenerate-send-metadata {% if not item.job_id %}disabled{% endif %}>重新生成标题/话题</button>
+              <button type="button" class="secondary-button" data-generate-cover-frames>更换封面帧</button>
               <button type="button" class="primary-button" data-send-single-job {% if not item.job_id or item.status not in ["ready", "failed"] %}disabled{% endif %}>发送此条</button>
             </div>
           </div>
@@ -196,7 +196,7 @@
       </div>
     </div>
     <div class="send-preview-copy">
-      <p><strong>抖音：</strong>上传视频，填写标题/正文话题，设置封面，点击发布。</p>
+      <p><strong>抖音：</strong>上传视频，填写标题/正文 #话题，设置封面，点击发布。</p>
       <p><strong>B站：</strong>上传视频，填写封面、标题、分区、标签、简介，点击立即投稿。</p>
       <p>遇到验证码、登录失效或风控弹窗时，任务会进入失败，等待人工处理。</p>
     </div>

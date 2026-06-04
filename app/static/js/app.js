@@ -2230,7 +2230,7 @@ document.querySelectorAll("[data-refresh-send-queue]").forEach((button) => {
     const originalText = button.textContent;
     button.disabled = true;
     button.textContent = useAi ? "AI 生成中..." : "刷新中...";
-    setSendCenterMessage(useAi ? "正在用 AI 补齐标题、话题和简介..." : "正在从已完成切片刷新发送队列...");
+    setSendCenterMessage(useAi ? "正在用 AI 补齐标题、#话题和简介，并自动选择封面帧..." : "正在从已完成切片刷新发送队列，并自动选择封面帧...");
 
     try {
       const response = await fetch(`/api/publish/queue/refresh?use_ai=${useAi ? "true" : "false"}`, { method: "POST" });
@@ -2238,7 +2238,7 @@ document.querySelectorAll("[data-refresh-send-queue]").forEach((button) => {
       if (!response.ok) {
         throw new Error(data.detail || data.message || "刷新队列失败");
       }
-      setSendCenterMessage(data.message || "发送队列已刷新。", "success");
+      setSendCenterMessage(data.message || "发送队列已刷新，封面帧已自动选择。", "success");
       reloadSendCenter();
     } catch (error) {
       setSendCenterMessage(`刷新失败：${error.message}`, "error");
@@ -2341,7 +2341,7 @@ document.querySelectorAll("[data-generate-cover-frames]").forEach((button) => {
         throw new Error(data.detail || data.message || "候选封面生成失败");
       }
       renderCoverFrames(form, data.frames || []);
-      setPublishMessage(resultNode, data.message || "候选封面已生成，请选择一张后保存。", "success");
+      setPublishMessage(resultNode, data.message || "候选封面已生成，已先选中第一张；需要更换可点其他帧。", "success");
     } catch (error) {
       setPublishMessage(resultNode, `封面帧生成失败：${error.message}`, "error");
     } finally {
@@ -2360,7 +2360,7 @@ document.querySelectorAll("[data-regenerate-send-metadata]").forEach((button) =>
     const originalText = button.textContent;
     button.disabled = true;
     button.textContent = "生成中...";
-    setPublishMessage(resultNode, "正在重新生成标题、话题和简介...");
+    setPublishMessage(resultNode, "正在重新生成标题、#话题和简介...");
 
     try {
       const response = await fetch(`/api/publish/jobs/${jobId}/metadata?use_ai=true`, { method: "POST" });

@@ -73,6 +73,64 @@ OPENCLI_TIMEOUT_SECONDS = 900
 DEFAULT_BILIBILI_TID = "娱乐"
 _SEND_LOCK = Lock()
 
+SAFE_TOPIC_FALLBACKS = ("精彩片段", "高光片段", "直播切片")
+CONTENT_SAFETY_REPLACEMENTS = (
+    ("笑死我了", "笑到停不下"),
+    ("笑死", "笑到停不下"),
+    ("气死", "太上头"),
+    ("社死", "大型尴尬"),
+    ("作死", "危险尝试"),
+    ("死亡", "危险"),
+    ("死了", "没绷住"),
+    ("死", "不妙"),
+    ("屎一样", "有点离谱"),
+    ("这坨", "这段"),
+    ("拉屎", "尴尬瞬间"),
+    ("屎", "糟糕"),
+    ("尿", "尴尬"),
+    ("屁", "离谱"),
+    ("傻逼", "离谱"),
+    ("傻X", "离谱"),
+    ("傻x", "离谱"),
+    ("色情", "成人向内容"),
+    ("黄色", "成人向内容"),
+    ("裸露", "不适内容"),
+    ("约炮", "不当邀约"),
+    ("招嫖", "违法行为"),
+    ("嫖娼", "违法行为"),
+    ("强奸", "严重违法行为"),
+    ("血腥", "强刺激"),
+    ("暴力", "冲突"),
+    ("杀人", "危险事件"),
+    ("自杀", "危险行为"),
+    ("自残", "危险行为"),
+    ("尸体", "不适画面"),
+    ("赌博", "风险行为"),
+    ("博彩", "风险行为"),
+    ("诈骗", "风险套路"),
+    ("洗钱", "违法风险"),
+    ("毒品", "违禁内容"),
+    ("吸毒", "危险行为"),
+    ("加微信", "交流"),
+    ("微信号", "联系方式"),
+    ("QQ群", "社群"),
+)
+CONTENT_SAFETY_REMOVE_WORDS = (
+    "全网第一",
+    "唯一官方",
+    "100%",
+    "稳赚",
+    "稳赚不赔",
+    "无风险",
+    "包过",
+    "必赚",
+    "点击领取",
+    "私加",
+    "加我",
+    "买粉",
+    "刷单",
+)
+
 CommandRunner = Callable[[list[str]], subprocess.CompletedProcess]
 
 
@@ -145,6 +203,42 @@ def _parse_json_text(value: str | None) -> dict:
 def _truncate(value: str, max_length: int) -> str:
     text = re.sub(r"\s+", " ", (value or "").strip())
     return text[:max_length]
+
+
+def _apply_content_safety(value: str | None) -> str:
+    text = value or ""
+    for source, replacement in sorted(CONTENT_SAFETY_REPLACEMENTS, key=lambda item: len(item[0]), reverse=True):
+        text = re.sub(re.escape(source), replacement, text, flags=re.IGNORECASE)
+    for source in sorted(CONTENT_SAFETY_REMOVE_WORDS, key=len, reverse=True):
+        text = re.sub(re.escape(source), "", text, flags=re.IGNORECASE)
+    text = re.sub(r"[#＃]{2,}", "#", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip(" \t\r\n,，。.!！?？、；;:-_#＃")
+
+
+def _sanitize_publish_title(value: str | None, fallback: str = "精彩片段") -> str:
+    title = _apply_content_safety(value)
+    title = re.sub(r"[#＃]+", "", title)
+    title = _truncate(title, 80)
+    return title or fallback
+
+
+def _sanitize_publish_description(value: str | None, fallback: str = "") -> str:
+    description = _apply_content_safety(value)
+    return _truncate(description or fallback, 700)
+
+
+def _sanitize_publish_content(
+    title: str | None,
+    tags: list[str] | str | None,
+    description: str | None,
+    title_fallback: str = "精彩片段",
+    description_fallback: str = "",
+) -> dict:
+    safe_title = _sanitize_publish_title(title, title_fallback)
+    safe_tags = _format_tags(tags) or _format_tags(SAFE_TOPIC_FALLBACKS)
+    safe_description = _sanitize_publish_description(description, description_fallback)
+    return {"title": safe_title, "tags": safe_tags, "description": safe_description}
 
 
 def _normalize_config(row) -> dict:
@@ -526,24 +620,34 @@ def _format_tags(tags: list[str] | str | None) -> str:
         raw_tags = tags or []
     cleaned: list[str] = []
     for tag in raw_tags:
-        value = re.sub(r"[^\w\u4e00-\u9fff]+", "", str(tag).strip().lstrip("#"))
+        value = _apply_content_safety(str(tag).strip().lstrip("#"))
+        if re.search(r"(这是一段|这是|标题|简介|解释|适合|内容说明)", value):
+            continue
+        if len(value) > 12:
+            value = re.sub(r"(这是一段|这是|关于|适合|标题|简介|解释|内容|视频|片段|话题)", "", value)
+        value = re.sub(r"[^\w\u4e00-\u9fff]+", "", value)
+        if len(value) > 10:
+            continue
         if value and value not in cleaned:
-            cleaned.append(value[:20])
+            cleaned.append(value)
     return ", ".join(cleaned[:8])
 
 
 def _compose_description(item: dict, title: str, tags: str) -> str:
     summary = (item.get("clip_summary") or item.get("highlight_reason") or "").strip()
     if summary:
-        return _truncate(summary, 700)
+        return _sanitize_publish_description(summary)
     tag_text = " ".join(f"#{tag.strip()}" for tag in tags.split(",") if tag.strip())
-    return _truncate(f"{title}\n{tag_text}".strip(), 700)
+    return _sanitize_publish_description(f"{title}\n{tag_text}".strip())
 
 
 def _metadata_prompt(item: dict) -> str:
     return (
         "请根据下面的直播切片信息，为抖音和B站发布生成标题和话题。"
-        "只输出 JSON，不要 Markdown。JSON 格式："
+        "只输出 JSON，不要 Markdown。"
+        "tags 必须是真正的平台 #话题关键词，不是标题解释，每个话题 2 到 10 个字，返回时不要带 #。"
+        "标题、话题、简介都要主动规避低俗脏话、排泄词、死亡血腥、暴力恐怖、色情、赌博博彩、诈骗引流、绝对化夸张等平台高风险表达；"
+        "遇到类似表达请换成温和说法。JSON 格式："
         '{"title":"不超过30字的中文标题","tags":["话题1","话题2","话题3","话题4","话题5"],"description":"不超过180字的简介"}。'
         "\n\n"
         f"任务：{item.get('task_name') or ''}\n"
@@ -556,8 +660,8 @@ def _metadata_prompt(item: dict) -> str:
 
 
 def generate_publish_metadata(item: dict, use_ai: bool = False) -> dict:
-    fallback_title = _default_title_for_clip(item)
-    fallback_tags = _format_tags(_fallback_tags(item))
+    fallback_title = _sanitize_publish_title(_default_title_for_clip(item))
+    fallback_tags = _format_tags(_fallback_tags(item)) or _format_tags(SAFE_TOPIC_FALLBACKS)
     fallback_description = _compose_description(item, fallback_title, fallback_tags)
     metadata = {
         "title": fallback_title,
@@ -572,13 +676,17 @@ def generate_publish_metadata(item: dict, use_ai: bool = False) -> dict:
     try:
         provider = build_provider(settings.ai_default_provider)
         parsed = json.loads(provider.generate_json(_metadata_prompt(item)))
-        ai_title = _truncate(str(parsed.get("title") or fallback_title), 80)
-        ai_tags = _format_tags(parsed.get("tags") or fallback_tags)
-        ai_description = _truncate(str(parsed.get("description") or fallback_description), 700)
+        safe_content = _sanitize_publish_content(
+            parsed.get("title") or fallback_title,
+            parsed.get("tags") or fallback_tags,
+            parsed.get("description") or fallback_description,
+            title_fallback=fallback_title,
+            description_fallback=fallback_description,
+        )
         return {
-            "title": ai_title or fallback_title,
-            "tags": ai_tags or fallback_tags,
-            "description": ai_description or fallback_description,
+            "title": safe_content["title"],
+            "tags": safe_content["tags"],
+            "description": safe_content["description"],
             "source": f"ai:{settings.ai_default_provider}",
             "error": "",
         }
@@ -601,7 +709,20 @@ def _find_opencli_job(output_clip_id: str, platform: str) -> dict | None:
     return _normalize_job(row) if row else None
 
 
-def _insert_opencli_job(item: dict, platform: str, metadata: dict) -> dict:
+def _publish_provider_payload(metadata: dict, cover: dict | None = None) -> str:
+    cover = cover or {}
+    return json.dumps(
+        {
+            "metadata_source": metadata.get("source", ""),
+            "metadata_error": metadata.get("error", ""),
+            "cover_source": "auto_frame" if cover.get("cover_file_path") else "",
+            "cover_error": cover.get("cover_error", ""),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _insert_opencli_job(item: dict, platform: str, metadata: dict, cover: dict | None = None) -> dict:
     raw_video_path, _ = _resolve_publish_video_path(
         {
             **item,
@@ -613,6 +734,10 @@ def _insert_opencli_job(item: dict, platform: str, metadata: dict) -> dict:
     )
     job_id = uuid4().hex[:12]
     now = _now_iso()
+    cover = cover or {}
+    cover_file_path = str(cover.get("cover_file_path") or "")
+    cover_mode = "time" if cover_file_path else "auto"
+    cover_time_seconds = float(cover.get("cover_time_seconds") or 0)
     with get_connection() as connection:
         connection.execute(
             """
@@ -624,7 +749,7 @@ def _insert_opencli_job(item: dict, platform: str, metadata: dict) -> dict:
                 status, audit_status, provider_response, created_at, updated_at
             )
             VALUES (?, ?, ?, '', ?, 'opencli_publish', 'original', ?, ?, ?, ?, 'public',
-                'auto', 0, 1, ?, 'original', '', '', '', 'ready', 'not_submitted', ?, ?, ?)
+                ?, ?, 1, ?, 'original', '', ?, '', 'ready', 'not_submitted', ?, ?, ?)
             """,
             (
                 job_id,
@@ -635,8 +760,11 @@ def _insert_opencli_job(item: dict, platform: str, metadata: dict) -> dict:
                 metadata["title"],
                 metadata["description"],
                 metadata["tags"],
+                cover_mode,
+                cover_time_seconds,
                 DEFAULT_BILIBILI_TID,
-                json.dumps({"metadata_source": metadata["source"], "metadata_error": metadata["error"]}, ensure_ascii=False),
+                cover_file_path,
+                _publish_provider_payload(metadata, cover),
                 now,
                 now,
             ),
@@ -647,25 +775,44 @@ def _insert_opencli_job(item: dict, platform: str, metadata: dict) -> dict:
 
 def refresh_send_queue(use_ai: bool = False) -> dict:
     created: list[dict] = []
+    updated_covers = 0
     skipped = 0
     errors: list[str] = []
     for item in _list_completed_publish_clips():
         item_metadata: dict | None = None
+        cover_state: dict[str, Any] = {"attempted": False, "cover": None}
+
+        def ensure_cover_for_item() -> dict:
+            if not cover_state["attempted"]:
+                cover_state["attempted"] = True
+                try:
+                    cover_state["cover"] = _generate_default_publish_cover(item)
+                except Exception as exc:
+                    cover_state["cover"] = {"cover_error": str(exc)}
+                    errors.append(f"{item.get('output_file_name') or item.get('output_clip_id')} / 自动封面：{exc}")
+            return cover_state["cover"] or {}
+
         for platform in PLATFORM_LABELS:
-            if _find_opencli_job(item["output_clip_id"], platform):
+            existing_job = _find_opencli_job(item["output_clip_id"], platform)
+            if existing_job:
                 skipped += 1
+                if not existing_job.get("cover_file_path"):
+                    cover = ensure_cover_for_item()
+                    if cover.get("cover_file_path"):
+                        _update_job_cover(existing_job["id"], cover)
+                        updated_covers += 1
                 continue
             try:
                 if item_metadata is None:
                     item_metadata = generate_publish_metadata(item, use_ai=use_ai)
-                created.append(_insert_opencli_job(item, platform, item_metadata))
+                created.append(_insert_opencli_job(item, platform, item_metadata, ensure_cover_for_item()))
             except Exception as exc:
                 errors.append(f"{item.get('output_file_name') or item.get('output_clip_id')} / {PLATFORM_LABELS[platform]}：{exc}")
                 if item_metadata is None:
                     item_metadata = {}
     return {
         "status": "ok" if not errors else "partial",
-        "message": f"已新增 {len(created)} 条发送任务，跳过 {skipped} 条已存在任务，{len(errors)} 条未入队。",
+        "message": f"已新增 {len(created)} 条发送任务，自动选择 {len(created) + updated_covers} 张封面帧，跳过 {skipped} 条已存在任务，{len(errors)} 条需要处理。",
         "created": created,
         "errors": errors,
         **get_publish_center_context(),
@@ -673,7 +820,7 @@ def refresh_send_queue(use_ai: bool = False) -> dict:
 
 
 def _wrap_cover_title(title: str) -> str:
-    text = re.sub(r"\s+", " ", (title or "").strip()) or "精彩片段"
+    text = re.sub(r"\s+", " ", _sanitize_publish_title(title or "精彩片段")) or "精彩片段"
     if len(text) > 34:
         text = f"{text[:34]}..."
     if len(text) <= 15:
@@ -790,6 +937,12 @@ def _cover_frame_times(duration: float, frame_count: int) -> list[float]:
     return [max(0, min(duration - 0.1, step * index)) for index in range(1, frame_count + 1)]
 
 
+def _default_cover_time_seconds(duration: float) -> float:
+    if duration <= 1:
+        return 0
+    return max(0, min(duration - 0.1, max(1.0, duration * 0.25)))
+
+
 def _unique_frame_cover_path(task_id: str, output_clip_id: str, video_source: str, seconds: float) -> Path:
     cover_dir = get_artifact_paths(task_id)["covers_dir"]
     cover_dir.mkdir(parents=True, exist_ok=True)
@@ -801,42 +954,81 @@ def _unique_frame_cover_path(task_id: str, output_clip_id: str, video_source: st
     return cover_dir / f"{base_name}_{uuid4().hex[:6]}.jpg"
 
 
+def _write_plain_cover_frame(video_path: Path, cover_path: Path, seconds: float) -> None:
+    ffmpeg_path = ensure_ffmpeg_available()
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-ss",
+        f"{seconds:.3f}",
+        "-i",
+        str(video_path),
+        "-frames:v",
+        "1",
+        "-vf",
+        _plain_cover_filter(),
+        "-q:v",
+        "2",
+        str(cover_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        raise ValueError(f"封面帧生成失败：{summarize_stderr(result.stderr)}")
+    if not cover_path.exists() or cover_path.stat().st_size == 0:
+        raise ValueError("封面帧生成失败：FFmpeg 没有输出有效图片。")
+
+
+def _cover_frame_payload(task_id: str, cover_path: Path, seconds: float) -> dict:
+    return {
+        "cover_file_path": str(cover_path),
+        "cover_media_url": _cover_media_url(task_id, str(cover_path)),
+        "cover_time_seconds": round(seconds, 3),
+    }
+
+
+def _generate_default_publish_cover(item: dict, video_source: str = "original") -> dict:
+    _, video_path = _resolve_publish_video_path(
+        {
+            **item,
+            "output_status": item.get("output_status") or "completed",
+            "subtitle_status": item.get("subtitle_status"),
+            "subtitled_output_file_path": item.get("subtitled_output_file_path"),
+        },
+        video_source,
+    )
+    duration = _get_video_duration_seconds(video_path)
+    seconds = _default_cover_time_seconds(duration)
+    cover_path = _unique_frame_cover_path(item["task_id"], item["output_clip_id"], video_source, seconds)
+    _write_plain_cover_frame(video_path, cover_path, seconds)
+    return _cover_frame_payload(item["task_id"], cover_path, seconds)
+
+
+def _update_job_cover(job_id: str, cover: dict) -> None:
+    if not cover.get("cover_file_path"):
+        return
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE publish_jobs
+            SET cover_mode = 'time', cover_time_seconds = ?, cover_file_path = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (float(cover.get("cover_time_seconds") or 0), str(cover.get("cover_file_path") or ""), _now_iso(), job_id),
+        )
+        connection.commit()
+
+
 def generate_publish_cover_frames(payload: PublishCoverFrameBatchCreate) -> dict:
     output_clip = _get_output_clip_for_publish(payload.task_id, payload.output_clip_id)
     if not output_clip:
         raise ValueError("切片记录不存在。")
     _, video_path = _resolve_publish_video_path(output_clip, payload.video_source)
-    ffmpeg_path = ensure_ffmpeg_available()
     duration = _get_video_duration_seconds(video_path)
     frames = []
     for seconds in _cover_frame_times(duration, payload.frame_count):
         cover_path = _unique_frame_cover_path(payload.task_id, payload.output_clip_id, payload.video_source, seconds)
-        command = [
-            ffmpeg_path,
-            "-y",
-            "-ss",
-            f"{seconds:.3f}",
-            "-i",
-            str(video_path),
-            "-frames:v",
-            "1",
-            "-vf",
-            _plain_cover_filter(),
-            "-q:v",
-            "2",
-            str(cover_path),
-        ]
-        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
-        if result.returncode != 0:
-            raise ValueError(f"封面帧生成失败：{summarize_stderr(result.stderr)}")
-        if cover_path.exists() and cover_path.stat().st_size > 0:
-            frames.append(
-                {
-                    "cover_file_path": str(cover_path),
-                    "cover_media_url": _cover_media_url(payload.task_id, str(cover_path)),
-                    "cover_time_seconds": round(seconds, 3),
-                }
-            )
+        _write_plain_cover_frame(video_path, cover_path, seconds)
+        frames.append(_cover_frame_payload(payload.task_id, cover_path, seconds))
     if not frames:
         raise ValueError("封面帧生成失败：没有得到有效图片。")
     return {"status": "ok", "message": f"已生成 {len(frames)} 张候选封面。", "frames": frames}
@@ -920,6 +1112,28 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
     if not output_clip:
         raise ValueError("切片记录不存在。")
     raw_video_path, resolved_video_path = _resolve_publish_video_path(output_clip, payload.video_source)
+    safe_content = _sanitize_publish_content(payload.title, payload.tags, payload.description, title_fallback="精彩片段")
+    cover_file_path = (payload.cover_file_path or "").strip()
+    cover_time_seconds = float(payload.cover_time_seconds or 0)
+    cover_mode = payload.cover_mode
+    provider_payload = "真实发布任务已创建，等待执行。" if payload.publish_mode == "api_publish" else "本地发布任务已创建，等待人工确认。"
+    if not cover_file_path:
+        try:
+            auto_cover = _generate_default_publish_cover(
+                {
+                    **output_clip,
+                    "task_id": payload.task_id,
+                    "output_clip_id": payload.output_clip_id,
+                    "output_status": output_clip.get("output_status") or "completed",
+                },
+                payload.video_source,
+            )
+            cover_file_path = str(auto_cover.get("cover_file_path") or "")
+            cover_time_seconds = float(auto_cover.get("cover_time_seconds") or 0)
+            cover_mode = "time" if cover_file_path else cover_mode
+            provider_payload = json.dumps({"cover_source": "auto_frame"}, ensure_ascii=False)
+        except Exception as exc:
+            provider_payload = json.dumps({"cover_error": str(exc)}, ensure_ascii=False)
 
     config = None
     account = None
@@ -952,21 +1166,21 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
                 payload.publish_mode,
                 payload.video_source,
                 raw_video_path,
-                payload.title.strip(),
-                (payload.description or "").strip(),
-                (payload.tags or "").strip(),
+                safe_content["title"],
+                safe_content["description"],
+                safe_content["tags"],
                 payload.visibility,
-                payload.cover_mode,
-                float(payload.cover_time_seconds or 0),
+                cover_mode,
+                cover_time_seconds,
                 1 if payload.allow_download else 0,
                 (payload.bilibili_tid or "").strip(),
                 payload.bilibili_copyright,
                 (payload.bilibili_source or "").strip(),
-                (payload.cover_file_path or "").strip(),
+                cover_file_path,
                 (payload.scheduled_at or "").strip(),
                 status,
                 "not_submitted",
-                "真实发布任务已创建，等待执行。" if payload.publish_mode == "api_publish" else "本地发布任务已创建，等待人工确认。",
+                provider_payload,
                 now,
                 now,
             ),
@@ -1066,6 +1280,13 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
         raise ValueError("发送任务不存在。")
     if job.get("publish_mode") != "opencli_publish":
         raise ValueError("只能编辑 opencli 发送任务。")
+    safe_content = _sanitize_publish_content(
+        payload.title,
+        payload.tags,
+        payload.description,
+        title_fallback=job.get("title") or "精彩片段",
+        description_fallback=job.get("description") or "",
+    )
     with get_connection() as connection:
         connection.execute(
             """
@@ -1077,9 +1298,9 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
             WHERE id = ?
             """,
             (
-                payload.title.strip(),
-                (payload.description or "").strip(),
-                _format_tags(payload.tags or ""),
+                safe_content["title"],
+                safe_content["description"],
+                safe_content["tags"],
                 payload.visibility,
                 (payload.cover_file_path or "").strip(),
                 float(payload.cover_time_seconds or 0),
@@ -1114,7 +1335,13 @@ def regenerate_send_job_metadata(job_id: str, use_ai: bool = True) -> dict:
                 metadata["title"],
                 metadata["description"],
                 metadata["tags"],
-                json.dumps({"metadata_source": metadata["source"], "metadata_error": metadata["error"]}, ensure_ascii=False),
+                _publish_provider_payload(
+                    metadata,
+                    {
+                        "cover_file_path": job.get("cover_file_path") or "",
+                        "cover_error": (job.get("provider_payload") or {}).get("cover_error", ""),
+                    },
+                ),
                 _now_iso(),
                 job_id,
             ),
@@ -1140,12 +1367,13 @@ def _default_command_runner(command: list[str]) -> subprocess.CompletedProcess:
 
 
 def _hashtags(tags: str) -> str:
-    return " ".join(f"#{tag.strip().lstrip('#')}" for tag in re.split(r"[,，]+", tags or "") if tag.strip())
+    normalized_tags = _format_tags(tags)
+    return " ".join(f"#{tag.strip().lstrip('#')}" for tag in re.split(r"[,，]+", normalized_tags or "") if tag.strip())
 
 
 def _caption_for_job(job: dict) -> str:
     parts = []
-    description = (job.get("description") or "").strip()
+    description = _sanitize_publish_description(job.get("description") or "")
     if description:
         parts.append(description)
     tag_text = _hashtags(job.get("tags") or "")
@@ -1183,7 +1411,7 @@ def _browser_wait_command(session: str, seconds: int) -> list[str]:
 def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path | None) -> list[list[str]]:
     session = f"send-douyin-{job['id']}"
     opencli = _opencli_command()
-    title = _truncate(job.get("title") or "直播切片", 30)
+    title = _truncate(_sanitize_publish_title(job.get("title") or "直播切片"), 30)
     caption = _caption_for_job(job)
     commands = [
         _browser_open_command(session, "https://creator.douyin.com/creator-micro/content/upload"),
@@ -1215,9 +1443,9 @@ def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path
 def _build_bilibili_browser_commands(job: dict, video_path: Path, cover_path: Path | None) -> list[list[str]]:
     session = f"send-bilibili-{job['id']}"
     opencli = _opencli_command()
-    title = _truncate(job.get("title") or "直播切片", 80)
+    title = _truncate(_sanitize_publish_title(job.get("title") or "直播切片"), 80)
     tags = _format_tags(job.get("tags") or "")
-    description = _truncate(job.get("description") or title, 2000)
+    description = _sanitize_publish_description(job.get("description") or title)
     commands = [
         _browser_open_command(session, "https://member.bilibili.com/platform/upload/video/frame"),
         _browser_wait_command(session, 5),
@@ -1493,13 +1721,13 @@ def get_publish_center_context() -> dict:
     for item in _list_completed_publish_clips():
         original_path = resolve_video_file_path(item.get("output_file_path") or "")
         subtitled_path = resolve_video_file_path(item.get("subtitled_output_file_path") or "")
-        default_title = _default_title_for_clip(item)
+        default_title = _sanitize_publish_title(_default_title_for_clip(item))
         original_available = bool(original_path and original_path.exists() and original_path.is_file())
         subtitled_available = bool(subtitled_path and subtitled_path.exists() and subtitled_path.is_file())
         normalized_item = {
             **item,
             "default_title": default_title,
-            "default_tags": _format_tags(_fallback_tags(item)),
+            "default_tags": _format_tags(_fallback_tags(item)) or _format_tags(SAFE_TOPIC_FALLBACKS),
             "original_available": original_available,
             "subtitled_available": subtitled_available,
             "subtitle_status_label": "已加字幕" if item.get("subtitle_status") == "completed" else "未加字幕",
@@ -1516,9 +1744,9 @@ def get_publish_center_context() -> dict:
                         "job_id": job["id"],
                         "platform": platform,
                         "platform_label": PLATFORM_LABELS[platform],
-                        "title": job.get("title") or default_title,
-                        "description": job.get("description") or "",
-                        "tags": job.get("tags") or normalized_item["default_tags"],
+                        "title": _sanitize_publish_title(job.get("title") or default_title, default_title),
+                        "description": _sanitize_publish_description(job.get("description") or ""),
+                        "tags": _hashtags(job.get("tags") or normalized_item["default_tags"]),
                         "status": job.get("status"),
                         "status_label": job.get("status_label"),
                         "status_tone": job.get("status_tone"),
@@ -1536,9 +1764,9 @@ def get_publish_center_context() -> dict:
                         "job_id": "",
                         "platform": platform,
                         "platform_label": PLATFORM_LABELS[platform],
-                        "title": default_title,
+                        "title": _sanitize_publish_title(default_title),
                         "description": _compose_description(item, default_title, normalized_item["default_tags"]),
-                        "tags": normalized_item["default_tags"],
+                        "tags": _hashtags(normalized_item["default_tags"]),
                         "status": "not_queued",
                         "status_label": "待入队",
                         "status_tone": "amber",

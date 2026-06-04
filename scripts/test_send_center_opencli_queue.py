@@ -74,6 +74,44 @@ def test_fallback_metadata() -> None:
     assert metadata["description"]
 
 
+def test_publish_metadata_sanitizes_sensitive_words() -> None:
+    metadata = publish_service.generate_publish_metadata(
+        {
+            "clip_title": "笑死了这段屎一样的翻车现场",
+            "task_name": "Demo task",
+            "clip_summary": "主播聊到诈骗和加微信的话题，现场笑死。",
+            "highlight_reason": "高能反应。",
+        },
+        use_ai=False,
+    )
+    combined = f"{metadata['title']} {metadata['tags']} {metadata['description']}"
+    for blocked in ("屎", "死", "诈骗", "加微信"):
+        assert blocked not in combined
+    assert metadata["title"]
+    assert metadata["tags"]
+
+
+def test_publish_tags_are_hashtag_topics() -> None:
+    tags = publish_service._format_tags("#高光片段 #直播切片 这是标题解释了一下, 死亡现场")  # noqa: SLF001
+    hashtag_text = publish_service._hashtags(tags)  # noqa: SLF001
+    assert hashtag_text.startswith("#")
+    assert " " in hashtag_text
+    assert "死亡" not in hashtag_text
+    assert "标题解释" not in hashtag_text
+
+
+def test_caption_for_job_sanitizes_existing_dirty_content() -> None:
+    caption = publish_service._caption_for_job(  # noqa: SLF001
+        {
+            "description": "这段笑死了，还有诈骗套路。",
+            "tags": "屎, 高光片段, 加微信",
+        }
+    )
+    for blocked in ("屎", "死", "诈骗", "加微信"):
+        assert blocked not in caption
+    assert "#高光片段" in caption
+
+
 def test_opencli_windows_npm_fallback() -> None:
     original_which = publish_service.shutil.which
     original_appdata = publish_service.os.environ.get("APPDATA")
@@ -109,6 +147,12 @@ def main() -> None:
     print("bilibili browser commands: OK")
     test_fallback_metadata()
     print("fallback metadata: OK")
+    test_publish_metadata_sanitizes_sensitive_words()
+    print("publish metadata safety: OK")
+    test_publish_tags_are_hashtag_topics()
+    print("publish hashtag topics: OK")
+    test_caption_for_job_sanitizes_existing_dirty_content()
+    print("existing dirty caption safety: OK")
     test_opencli_windows_npm_fallback()
     print("opencli windows npm fallback: OK")
 
