@@ -1,10 +1,10 @@
-name: live-streaming-slicing-workflow
+name: niuma-studio
 
 services:
   workflow:
     build: .
-    image: live-streaming-slicing-workflow:latest
-    container_name: live-streaming-slicing-workflow
+    image: niuma-studio:latest
+    container_name: niuma-studio
     command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir /app/app --reload-dir /app/prompts
     ports:
       - "8001:8001"

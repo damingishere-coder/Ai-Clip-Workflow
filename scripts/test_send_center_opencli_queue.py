@@ -1,0 +1,86 @@
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from app.services import publish_service  # noqa: E402
+
+
+def _fake_job(platform: str) -> dict:
+    return {
+        "id": f"job-{platform}",
+        "platform": platform,
+        "title": "High energy clip",
+        "description": "A short live stream highlight.",
+        "tags": "live,highlight",
+        "video_file_path": r"C:\tmp\clip.mp4",
+        "cover_file_path": r"C:\tmp\cover.jpg",
+        "bilibili_tid": "entertainment",
+        "bilibili_copyright": "original",
+    }
+
+
+def _joined(commands: list[list[str]]) -> str:
+    return "\n".join(" ".join(command) for command in commands)
+
+
+def test_douyin_browser_commands() -> None:
+    commands = publish_service._build_douyin_browser_commands(  # noqa: SLF001
+        _fake_job("douyin"),
+        Path(r"C:\tmp\clip.mp4"),
+        Path(r"C:\tmp\cover.jpg"),
+    )
+    text = _joined(commands)
+    assert "creator.douyin.com" in text
+    assert "upload input[type='file']" in text
+    assert "fill input[placeholder*='title']" not in text
+    assert "High energy clip" in text
+    assert "#live #highlight" in text
+    assert "\u53d1\u5e03" in text
+    assert r"C:\tmp\cover.jpg" in text
+
+
+def test_bilibili_browser_commands() -> None:
+    commands = publish_service._build_bilibili_browser_commands(  # noqa: SLF001
+        _fake_job("bilibili"),
+        Path(r"C:\tmp\clip.mp4"),
+        Path(r"C:\tmp\cover.jpg"),
+    )
+    text = _joined(commands)
+    assert "member.bilibili.com/platform/upload/video/frame" in text
+    assert "upload input[type='file']" in text
+    assert "High energy clip" in text
+    assert "live" in text
+    assert "highlight" in text
+    assert "\u7acb\u5373\u6295\u7a3f" in text
+    assert r"C:\tmp\cover.jpg" in text
+
+
+def test_fallback_metadata() -> None:
+    metadata = publish_service.generate_publish_metadata(
+        {
+            "clip_title": "Great live moment",
+            "task_name": "Demo task",
+            "summary": "Funny audience reaction and useful talking point.",
+            "highlight_reason": "High replay value.",
+            "transcript_excerpt": "The host explains the key idea clearly.",
+        },
+        use_ai=False,
+    )
+    assert metadata["title"] == "Great live moment"
+    assert metadata["tags"]
+    assert metadata["description"]
+
+
+def main() -> None:
+    test_douyin_browser_commands()
+    print("douyin browser commands: OK")
+    test_bilibili_browser_commands()
+    print("bilibili browser commands: OK")
+    test_fallback_metadata()
+    print("fallback metadata: OK")
+
+
+if __name__ == "__main__":
+    main()

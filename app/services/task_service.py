@@ -205,6 +205,22 @@ def _is_transcript_progress_stale(progress: dict) -> bool:
     return datetime.now().astimezone() - updated_at > _TRANSCRIPT_STALE_AFTER
 
 
+def _finalize_cancelled_transcript_task(task_id: str, paths: dict[str, Path], progress: dict) -> dict:
+    cancelled_progress = write_transcript_progress(
+        paths["transcript_path"],
+        status="cancelled",
+        current_chunk=int(progress.get("current_chunk") or 0),
+        total_chunks=int(progress.get("total_chunks") or 0),
+        percent=int(progress.get("percent") or 0),
+        message="转写已停止，可以重新生成转写。",
+    )
+    update_task_status(task_id, TaskStatus.pending_processing)
+    _RUNNING_TRANSCRIPT_TASKS.discard(task_id)
+    _CANCEL_TRANSCRIPT_TASKS.discard(task_id)
+    _append_task_log(task_id, "已自动收尾停止转写请求，任务可重新生成转写")
+    return cancelled_progress
+
+
 def _format_datetime(value: str | None) -> str:
     if not value:
         return "未知"
@@ -1259,6 +1275,9 @@ def get_task_transcript_status(task_id: str) -> dict:
     paths = get_artifact_paths(task_id)
     progress = read_transcript_progress(paths["transcript_path"])
     age_seconds = _transcript_progress_age_seconds(progress)
+    if progress.get("status") == "cancelling" and task_id not in _RUNNING_TRANSCRIPT_TASKS:
+        progress = _finalize_cancelled_transcript_task(task_id, paths, progress)
+        task = get_task(task_id)
     is_stale = _is_transcript_progress_stale(progress)
     if is_stale and progress.get("status") == "running":
         progress = {
@@ -1734,6 +1753,13 @@ def cancel_task_transcript(task_id: str) -> dict:
         raise ValueError("任务不存在")
     paths = get_artifact_paths(task_id)
     progress = read_transcript_progress(paths["transcript_path"])
+    if progress.get("status") == "cancelling" and task_id not in _RUNNING_TRANSCRIPT_TASKS:
+        _finalize_cancelled_transcript_task(task_id, paths, progress)
+        return {
+            "status": "cancelled",
+            "message": "转写已停止，可以重新生成转写。",
+            "task": get_task(task_id),
+        }
     if task_id not in _RUNNING_TRANSCRIPT_TASKS and progress.get("status") != "running":
         return {
             "status": "not_running",

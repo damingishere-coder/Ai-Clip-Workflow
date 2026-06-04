@@ -1,6 +1,6 @@
-# Live Streaming Slicing Workflow
+# 牛马片场 / NiuMa Studio
 
-直播切片工作流是一个运行在 Windows 本地的个人后台工具，用来把直播长视频整理成可审核、可切割的短视频候选片段。
+牛马片场是一个运行在 Windows 本地的 AI 高光生产后台，用来把直播录像、综艺访谈、长视频素材整理成可审核、可切割、可继续加字幕和发送的短视频候选片段。
 
 当前 MVP 聚焦本地处理链路：新建任务、上传本地视频、提取音频、生成转写、AI 分析候选片段、人工审核、自动切割输出。
 
@@ -13,6 +13,7 @@
 - 转写：本地 faster-whisper 链路已接入。
 - AI 分析：支持远程 OpenAI-compatible API 和本地 Ollama 风格接口。
 - 配置安全：真实 `.env` 已被 Git 忽略，不会提交真实 API Key。
+- 品牌说明：当前页面主名为“牛马片场”，英文代号为 `NiuMa Studio`，Docker 技术名为 `niuma-studio`。
 
 ## 新手启动方式
 

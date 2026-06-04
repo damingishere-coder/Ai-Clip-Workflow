@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+import base64
 import json
 from pathlib import Path
 import re
@@ -345,20 +346,32 @@ def transcribe_audio_with_volcengine(
 def transcribe_audio_with_volcengine_flash(audio_path: Path, allow_empty: bool = False) -> list[TranscriptSegment]:
     _ensure_volcengine_configured()
     headers = _volcengine_headers()
+    payload = _build_volcengine_flash_payload(audio_path)
     request = Request(
         settings.volcengine_asr_api_url,
-        data=audio_path.read_bytes(),
+        data=json.dumps(payload).encode("utf-8"),
         headers=headers,
         method="POST",
     )
     try:
         with urlopen(request, timeout=settings.volcengine_asr_timeout_seconds) as response:
             response_text = response.read().decode("utf-8", errors="replace")
+            status_code = response.headers.get("X-Api-Status-Code", "")
+            status_message = response.headers.get("X-Api-Message", "")
+            log_id = response.headers.get("X-Tt-Logid", "")
     except HTTPError as exc:
         error_text = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"火山引擎接口返回 HTTP {exc.code}：{error_text[:500]}") from exc
     except URLError as exc:
         raise RuntimeError(f"无法连接火山引擎转写接口：{exc}") from exc
+
+    if status_code and status_code != "20000000":
+        if allow_empty and status_code == "20000003":
+            return []
+        raise RuntimeError(
+            "火山引擎接口返回业务错误："
+            f"code={status_code}, message={status_message or 'unknown'}, logid={log_id or 'unknown'}"
+        )
 
     try:
         payload = json.loads(response_text)
@@ -496,11 +509,17 @@ def _remote_audio_extension() -> str:
     return "mp3"
 
 
-def _remote_audio_content_type() -> str:
-    extension = _remote_audio_extension()
-    if extension == "ogg":
-        return "audio/ogg"
-    return "audio/mpeg"
+def _build_volcengine_flash_payload(audio_path: Path) -> dict:
+    uid = settings.volcengine_asr_api_key or settings.volcengine_asr_app_key or "local-user"
+    return {
+        "user": {"uid": uid},
+        "audio": {
+            "data": base64.b64encode(audio_path.read_bytes()).decode("utf-8"),
+        },
+        "request": {
+            "model_name": "bigmodel",
+        },
+    }
 
 
 def _ensure_volcengine_configured() -> None:
@@ -512,9 +531,10 @@ def _ensure_volcengine_configured() -> None:
 
 def _volcengine_headers() -> dict[str, str]:
     headers = {
-        "Content-Type": _remote_audio_content_type(),
+        "Content-Type": "application/json",
         "X-Api-Resource-Id": settings.volcengine_asr_resource_id,
         "X-Api-Request-Id": uuid4().hex,
+        "X-Api-Sequence": "-1",
     }
     if settings.volcengine_asr_api_key:
         headers["X-Api-Key"] = settings.volcengine_asr_api_key

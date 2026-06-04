@@ -1,5 +1,43 @@
 # Development Log
 
+## 2026-06-04 任务详情日志侧栏精简
+- 按浏览器标注反馈，移除任务详情页右侧“日志 / 元信息”路径清单，避免和基础信息、运行日志重复。
+- 右侧侧栏现在只保留“运行日志”，继续使用原有 `runtime-log-lines` 和 `runtime-log-state` 节点读取并刷新 `logs/process.log`。
+- 同步更新 `docs/UI_REFERENCE.md` 和 `NEXT_STEPS.md`，记录新的页面结构和验收方式。
+
+## 2026-06-04 AI 远程分析旧字段兼容修复
+- 修复远程 AI 返回旧字段导致分析失败的问题：当 AI 输出 `clip_key`、`viral_value`、`reason`、`editing_suggestion` 等旧字段时，程序会在 Pydantic 校验前自动转换为当前需要的 `clip_id`、`spread_value`、`highlight_reason`、`suggested_editing`。
+- 新增 AI 片段字段保底逻辑：缺少 `clip_id` 时自动生成 `clip_001` 这类编号；缺少 `summary`、`spread_value`、`suggested_editing` 时填入可审核的安全默认值；缺少 `duration_seconds` 但有起止时间时自动计算片段时长。
+- `scripts/test_ai_json_validation.py` 新增旧字段回归用例，覆盖本次报错里的 `clip_key` / `viral_value` / `reason` 格式。
+- 本次不调整页面结构、不扩大 Prompt 或模型接入范围，因此不需要同步更新 `docs/UI_REFERENCE.md`。
+
+## 2026-06-02 DeepSeek AI JSON 解析稳定性修复
+- 修复使用 2 号“康熙来了综艺短视频切片专家”Prompt 运行 DeepSeek AI 分析时，AI 返回接近 JSON 但存在尾随逗号、Markdown 代码块、未加双引号字段名或 Python 风格布尔值，导致 `AI 返回非法 JSON，安全重试后仍失败` 的问题。
+- `app/services/ai/ai_clip_analyzer.py` 新增 AI JSON 提取和轻量修复流程：先尝试标准 JSON，再提取正文里的 JSON 主体，并兼容常见 AI 输出瑕疵；修复后仍会继续走 Pydantic 字段校验、时间范围校验和片段时长校验。
+- `app/services/ai/remote_responses_provider.py` 将 DeepSeek Chat Completions 的 `max_tokens` 从 4096 提高到 8192，并加入较低 `temperature`，降低长 Prompt 输出半截 JSON 或格式漂移的概率。
+- `scripts/test_ai_json_validation.py` 新增本地回归测试，覆盖标准 JSON、Markdown fenced JSON、尾随逗号、未加双引号字段名和 Python literal 五种情况。
+- 已验证：`.venv\Scripts\python.exe scripts\test_ai_json_validation.py` 通过；`.venv\Scripts\python.exe -m py_compile app\services\ai\ai_clip_analyzer.py app\services\ai\remote_responses_provider.py scripts\test_ai_json_validation.py` 通过；`.venv\Scripts\python.exe scripts\test_remote_ai_connection.py` 通过。
+
+## 2026-06-02 停止转写卡住修复
+- 修复任务详情页点击“停止转写”后一直停留在“正在停止 / 转写中”的问题。
+- 原因：如果后台服务重启过，内存里的运行中任务标记会丢失，但 `transcript_progress.json` 仍可能停在 `cancelling`，前端会持续轮询并一直显示正在停止。
+- `app/services/task_service.py` 新增停止转写自愈逻辑：当状态查询或再次点击停止时，发现 `cancelling` 进度已经没有真实后台任务承接，会自动写成 `cancelled`，并把任务状态退回可重新处理的 `pending_processing`。
+- `scripts/test_transcript_background_start.py` 新增回归测试，覆盖服务重启后遗留 `cancelling` 进度的自动收尾场景。
+
+## 2026-05-30 火山引擎远程转写请求修复
+- 已定位“测试4”远程转写失败原因：程序把 MP3 二进制直接 POST 到火山引擎接口，服务端按 JSON 解析时遇到 MP3 文件头 `ID3`，返回 HTTP 400：`invalid character 'I' looking for beginning of value`。
+- `app/services/transcript_service.py` 已改为按火山引擎极速版要求发送 JSON 请求体，将音频内容 base64 后放入 `audio.data`，并设置 `Content-Type: application/json`、`X-Api-Sequence: -1`。
+- 新增火山引擎业务状态码检查；当分段转写遇到 `20000003` 无有效人声且当前允许空结果时，会跳过该空白小段继续处理，避免静音片段导致整条视频失败。
+- `scripts/test_volcengine_transcription_connection.py` 已兼容当前 `.env` 中的 `VOLCENGINE_ASR_APP_KEY` / `VOLCENGINE_ASR_ACCESS_KEY` 配置，不再只检查 `VOLCENGINE_ASR_API_KEY`。
+- 已运行 `.venv\Scripts\python.exe scripts\test_volcengine_transcription_provider.py`、`.venv\Scripts\python.exe -m compileall app scripts`。
+- 已用“测试4”的音频做真实火山引擎连通性测试：前 8 秒静音片段按空结果跳过，前 60 秒可成功识别 16 句。
+
+## 2026-05-30 分支合并确认
+- 已检查当前目录为 `C:\Users\10578\Documents\New project 2`，当前分支原本为 `codex/subtitlefunction`，工作区干净，没有未提交改动。
+- 本地没有 `main` 分支，当前项目主分支为 `master`。
+- 已确认 `codex/subtitlefunction` 已经是 `master` 的祖先分支，执行 `git merge codex/subtitlefunction` 后 Git 返回 `Already up to date.`，说明当前分支内容已经合入主分支。
+- 当前已停留在 `master` 分支；本次合并没有产生代码冲突，也没有改动业务文件。
+
 ## 2026-05-27 片段审核功能优化
 - 片段审核页新增候选片段删除能力：每张候选卡片提供“删除”按钮，点击后立即从页面移除，并通过 `DELETE /api/tasks/{task_id}/clips/{clip_id}` 写入数据库隐藏状态。
 - `clip_candidates` 表新增 `is_deleted` 和 `deleted_at` 字段；候选片段列表、启用片段统计和自动切片流程默认排除已删除片段，删除不会影响源视频、转写文件或已生成切片文件。
@@ -366,3 +404,27 @@
 - 新增发布封面接口：`POST /api/publish/covers` 可在创建发布任务前生成封面；`POST /api/publish/jobs/{job_id}/cover` 预留给已有发布任务重新生成封面。
 - 封面文件保存到任务目录 `07_covers/`，并通过 `/media/tasks/{task_id}/covers/{file_name}` 以内联图片方式预览。
 - 发布任务创建时会保存 `cover_file_path`，发布记录里能看到已生成封面缩略图。
+
+## 2026-06-02 发送中心 2.0 版本
+
+- 已把 `/publish` 从“发布中心”改为“发送中心”，页面不再展示抖音 / B站开放平台 API 配置、Client Key、Access Token、OAuth 和账号表单。
+- 新页面以待发送队列为主：从已完成切片读取切好的原片、封面帧、AI 标题、AI 话题和平台状态，默认生成抖音 + B站双平台队列。
+- 新增发送队列接口：`POST /api/publish/queue/refresh` 可从已完成切片生成 opencli 发送任务；`POST /api/publish/send/start` 可按队列逐条发送；`POST /api/publish/jobs/{job_id}/send` 可发送单条任务。
+- 封面逻辑改为“从视频中选一帧”：新增 `POST /api/publish/covers/frames` 生成多张候选帧，页面可手动切换并保存，不再默认叠加标题大字。
+- AI 元数据补齐已接入：优先使用切片标题，话题和简介可由 AI 根据标题、摘要、推荐理由和转写片段生成；缺失时页面可一键重新生成。
+- 自动发送改为 opencli 网页自动化：抖音打开 `creator.douyin.com` 投稿页，B站打开创作中心投稿页；发送批次一次只执行一条，避免平台窗口互相抢焦点。
+- 已新增 `scripts/test_send_center_opencli_queue.py`，验证抖音 / B站 opencli 命令组装和备用元数据生成；已通过页面渲染检查，确认 `/publish` 不再出现 API 配置词。
+
+## 2026-06-04 牛马片场品牌更新
+
+- 项目品牌从“直播切片工作流”更新为“牛马片场 / NiuMa Studio”，副标题为“本地 AI 高光生产后台”。
+- 新增牛马吉祥物 logo：`app/static/img/brand/niuma-studio-logo.png`，使用蓝色片场灯和圆角应用图标风格，页面文字由 HTML 渲染。
+- 左侧导航品牌位已改为吉祥物图标 + `牛马片场`，不再显示 `LS` 文字标。
+- `app/core/config.py` 的应用名改为 `NiuMa Studio` / `牛马片场`，Docker Compose 项目名、镜像名和容器名改为 `niuma-studio`。
+- 暂时保留 E 盘历史存储目录 `E:\直播间切片工作流存储`，避免影响已有任务、数据库记录和视频产物。
+
+## 2026-06-04 浏览器 favicon 更新
+
+- 已基于牛马吉祥物主 logo 生成浏览器图标资源：`niuma-studio-favicon.ico`、`niuma-studio-favicon-32.png`、`niuma-studio-apple-touch-icon.png`、`niuma-studio-icon-192.png` 和 `niuma-studio-icon-512.png`。
+- `base.html` 的 `<head>` 已新增 `rel="icon"`、32x32 PNG、Apple touch icon 和 `theme-color`，用于浏览器标签页、收藏夹和保存快捷方式。
+- `app/main.py` 新增 `/favicon.ico` 路由，兼容浏览器默认请求根路径 favicon 的行为。

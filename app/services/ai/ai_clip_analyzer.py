@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 import math
 import json
@@ -360,12 +361,11 @@ def _dedupe_and_rank_clips(clips: list[Any], target_clip_count: int) -> list[Any
 
 def _parse_and_validate(raw_text: str, task_id: str | None = None) -> AIClipAnalysisResult:
     try:
-        payload = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        raise AIAnalysisError(f"JSON 解析失败：{exc}") from exc
+        payload = _loads_ai_json(raw_text)
+    except AIAnalysisError:
+        raise
 
-    if task_id and isinstance(payload, dict) and not payload.get("task_id"):
-        payload["task_id"] = task_id
+    payload = _normalize_ai_payload(payload, task_id=task_id)
 
     try:
         if hasattr(AIClipAnalysisResult, "model_validate"):
@@ -379,6 +379,345 @@ def _parse_and_validate(raw_text: str, task_id: str | None = None) -> AIClipAnal
     if task_id and not result.task_id:
         result.task_id = task_id
     return result
+
+
+def _normalize_ai_payload(payload: Any, task_id: str | None = None) -> Any:
+    if isinstance(payload, list):
+        payload = {"task_id": task_id or "", "analysis_summary": "", "clips": payload}
+    if not isinstance(payload, dict):
+        return payload
+
+    if task_id and not payload.get("task_id"):
+        payload["task_id"] = task_id
+    if not _has_text(payload.get("analysis_summary")):
+        payload["analysis_summary"] = "AI 已完成候选片段分析。"
+
+    clips = payload.get("clips")
+    if clips is None:
+        for alias in ("clip_candidates", "candidates", "items", "results"):
+            if isinstance(payload.get(alias), list):
+                clips = payload[alias]
+                payload["clips"] = clips
+                break
+    if not isinstance(clips, list):
+        return payload
+
+    payload["clips"] = [
+        _normalize_ai_clip_item(clip, index)
+        if isinstance(clip, dict)
+        else clip
+        for index, clip in enumerate(clips, start=1)
+    ]
+    return payload
+
+
+def _normalize_ai_clip_item(clip: dict[str, Any], index: int) -> dict[str, Any]:
+    item = dict(clip)
+
+    _copy_first_text(item, "clip_id", ("clip_key", "id", "key"))
+    _copy_first_text(item, "title", ("clip_title", "name"))
+    _copy_first_text(item, "summary", ("clip_summary", "description", "desc"))
+    _copy_first_text(item, "highlight_reason", ("reason", "recommend_reason", "highlight", "why"))
+    _copy_first_text(item, "spread_value", ("viral_value", "share_value", "virality", "shareability"))
+    _copy_first_text(item, "suggested_editing", ("editing_suggestion", "edit_suggestion", "suggestion"))
+    _copy_first_text(item, "confidence_score", ("confidence", "score"))
+
+    if not _has_text(item.get("clip_id")):
+        item["clip_id"] = f"clip_{index:03d}"
+    if not _has_text(item.get("title")):
+        item["title"] = f"候选片段 {index:03d}"
+    if not _has_text(item.get("summary")):
+        item["summary"] = _first_text(item, ("title", "highlight_reason")) or "AI 未返回摘要，已使用兼容默认摘要。"
+    if not _has_text(item.get("highlight_reason")):
+        item["highlight_reason"] = _first_text(item, ("summary", "title")) or "AI 未返回推荐理由，已使用兼容默认理由。"
+    if not _has_text(item.get("spread_value")):
+        item["spread_value"] = "中"
+    if not _has_text(item.get("suggested_editing")):
+        item["suggested_editing"] = "保留片段核心内容，剪掉明显停顿和无关转场。"
+    if not _has_text(item.get("confidence_score")):
+        item["confidence_score"] = 0.7
+
+    duration_seconds = _duration_seconds_from_clip(item)
+    if duration_seconds is not None:
+        item["duration_seconds"] = duration_seconds
+
+    item["clip_id"] = _limit_text(item["clip_id"], 80)
+    item["title"] = _limit_text(item["title"], 160)
+    item["summary"] = _limit_text(item["summary"], 1000)
+    item["highlight_reason"] = _limit_text(item["highlight_reason"], 1000)
+    item["spread_value"] = _limit_text(item["spread_value"], 40)
+    item["suggested_editing"] = _limit_text(item["suggested_editing"], 1000)
+    return item
+
+
+def _copy_first_text(item: dict[str, Any], target: str, aliases: tuple[str, ...]) -> None:
+    if _has_text(item.get(target)):
+        return
+    value = _first_text(item, aliases)
+    if value is not None:
+        item[target] = value
+
+
+def _first_text(item: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = item.get(key)
+        if _has_text(value):
+            return str(value).strip()
+    return None
+
+
+def _has_text(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return isinstance(value, (int, float, bool))
+
+
+def _limit_text(value: Any, max_length: int) -> str:
+    text = str(value).strip()
+    if len(text) <= max_length:
+        return text
+    return text[:max_length]
+
+
+def _duration_seconds_from_clip(item: dict[str, Any]) -> int | None:
+    raw_duration = item.get("duration_seconds")
+    try:
+        duration = int(float(raw_duration))
+    except (TypeError, ValueError):
+        duration = 0
+    if duration > 0:
+        return duration
+
+    start_time = item.get("start_time")
+    end_time = item.get("end_time")
+    if not (_has_text(start_time) and _has_text(end_time)):
+        return None
+    try:
+        calculated = _time_to_seconds(str(end_time)) - _time_to_seconds(str(start_time))
+    except (TypeError, ValueError):
+        return None
+    if calculated <= 0:
+        return None
+    return calculated
+
+
+def _loads_ai_json(raw_text: str) -> Any:
+    last_error: Exception | None = None
+    for candidate in _iter_json_candidates(raw_text):
+        for repaired in _iter_repaired_json_candidates(candidate):
+            try:
+                return json.loads(repaired, strict=False)
+            except json.JSONDecodeError as exc:
+                last_error = exc
+            try:
+                literal_payload = ast.literal_eval(repaired)
+            except (SyntaxError, ValueError) as exc:
+                last_error = exc
+            else:
+                if isinstance(literal_payload, (dict, list)):
+                    return literal_payload
+
+    if last_error:
+        raise AIAnalysisError(f"JSON 解析失败：{last_error}") from last_error
+    raise AIAnalysisError("JSON 解析失败：AI 没有返回可识别的 JSON 内容")
+
+
+def _iter_json_candidates(raw_text: str) -> list[str]:
+    cleaned = (raw_text or "").strip().lstrip("\ufeff")
+    candidates: list[str] = []
+
+    def add(value: str | None) -> None:
+        if value:
+            normalized = value.strip().lstrip("\ufeff")
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+
+    add(cleaned)
+    add(_strip_markdown_code_fence(cleaned))
+    add(_extract_first_json_value(cleaned))
+    return candidates
+
+
+def _strip_markdown_code_fence(text: str) -> str | None:
+    match = re.fullmatch(r"```(?:json|JSON)?\s*(.*?)\s*```", text.strip(), flags=re.DOTALL)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _extract_first_json_value(text: str) -> str | None:
+    start = -1
+    for index, char in enumerate(text):
+        if char in "{[":
+            start = index
+            break
+    if start < 0:
+        return None
+
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    quote_char = ""
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == quote_char:
+                in_string = False
+            continue
+
+        if char in {'"', "'"}:
+            in_string = True
+            quote_char = char
+            continue
+        if char == "{":
+            stack.append("}")
+            continue
+        if char == "[":
+            stack.append("]")
+            continue
+        if stack and char == stack[-1]:
+            stack.pop()
+            if not stack:
+                return text[start : index + 1]
+
+    return text[start:].strip()
+
+
+def _iter_repaired_json_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
+
+    def add(value: str) -> None:
+        if value and value not in candidates:
+            candidates.append(value)
+
+    add(text.strip())
+    without_trailing_commas = _remove_trailing_commas(text)
+    add(without_trailing_commas)
+    with_quoted_keys = _quote_unquoted_object_keys(without_trailing_commas)
+    add(with_quoted_keys)
+    add(_replace_python_literals(with_quoted_keys))
+    return candidates
+
+
+def _remove_trailing_commas(text: str) -> str:
+    return re.sub(r",\s*([}\]])", r"\1", text.strip())
+
+
+def _quote_unquoted_object_keys(text: str) -> str:
+    result: list[str] = []
+    index = 0
+    in_string = False
+    escape = False
+    quote_char = ""
+    expecting_key = False
+
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            result.append(char)
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == quote_char:
+                in_string = False
+            index += 1
+            continue
+
+        if char in {'"', "'"}:
+            in_string = True
+            quote_char = char
+            result.append(char)
+            index += 1
+            continue
+
+        if char in "{,":
+            expecting_key = True
+            result.append(char)
+            index += 1
+            continue
+
+        if expecting_key and char.isspace():
+            result.append(char)
+            index += 1
+            continue
+
+        if expecting_key and (char.isalpha() or char == "_"):
+            key_start = index
+            index += 1
+            while index < len(text) and (text[index].isalnum() or text[index] == "_"):
+                index += 1
+            key = text[key_start:index]
+            lookahead = index
+            while lookahead < len(text) and text[lookahead].isspace():
+                lookahead += 1
+            if lookahead < len(text) and text[lookahead] == ":":
+                result.append(f'"{key}"')
+                expecting_key = False
+                continue
+            result.append(key)
+            expecting_key = False
+            continue
+
+        if not char.isspace():
+            expecting_key = False
+        result.append(char)
+        index += 1
+
+    return "".join(result)
+
+
+def _replace_python_literals(text: str) -> str:
+    result: list[str] = []
+    index = 0
+    in_string = False
+    escape = False
+    quote_char = ""
+    replacements = {"True": "true", "False": "false", "None": "null"}
+
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            result.append(char)
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == quote_char:
+                in_string = False
+            index += 1
+            continue
+
+        if char in {'"', "'"}:
+            in_string = True
+            quote_char = char
+            result.append(char)
+            index += 1
+            continue
+
+        replaced = False
+        for source, target in replacements.items():
+            end = index + len(source)
+            before_ok = index == 0 or not (text[index - 1].isalnum() or text[index - 1] == "_")
+            after_ok = end >= len(text) or not (text[end].isalnum() or text[end] == "_")
+            if text.startswith(source, index) and before_ok and after_ok:
+                result.append(target)
+                index = end
+                replaced = True
+                break
+        if replaced:
+            continue
+
+        result.append(char)
+        index += 1
+
+    return "".join(result)
 
 
 _TIME_PATTERN = re.compile(r"\b(?:(\d{2}):)?(\d{2}):(\d{2})\b")

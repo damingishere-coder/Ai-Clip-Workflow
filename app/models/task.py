@@ -105,7 +105,7 @@ class PublishJobCreate(BaseModel):
     output_clip_id: str = Field(..., min_length=1, max_length=80)
     platform: Literal["douyin", "bilibili"]
     account_id: Optional[str] = Field(default="", max_length=80)
-    publish_mode: Literal["draft", "manual_review", "api_publish"] = "manual_review"
+    publish_mode: Literal["draft", "manual_review", "api_publish", "opencli_publish"] = "manual_review"
     video_source: Literal["original", "subtitled"] = "original"
     title: str = Field(..., min_length=1, max_length=120)
     description: Optional[str] = Field(default="", max_length=2000)
@@ -144,6 +144,31 @@ class PublishCoverCreate(BaseModel):
     video_source: Literal["original", "subtitled"] = "original"
     title: str = Field(..., min_length=1, max_length=120)
     cover_time_seconds: float = Field(default=0, ge=0)
+
+
+class PublishSendJobUpdate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = Field(default="", max_length=2000)
+    tags: Optional[str] = Field(default="", max_length=500)
+    visibility: Literal["public", "friends", "private"] = "public"
+    cover_file_path: Optional[str] = Field(default="", max_length=1000)
+    cover_time_seconds: float = Field(default=0, ge=0)
+    allow_download: bool = True
+    bilibili_tid: Optional[str] = Field(default="娱乐", max_length=80)
+    bilibili_copyright: Literal["original", "repost"] = "original"
+    bilibili_source: Optional[str] = Field(default="", max_length=300)
+
+
+class PublishSendStart(BaseModel):
+    job_ids: list[str] = Field(default_factory=list)
+
+
+class PublishCoverFrameBatchCreate(BaseModel):
+    task_id: str = Field(..., min_length=1, max_length=80)
+    output_clip_id: str = Field(..., min_length=1, max_length=80)
+    video_source: Literal["original", "subtitled"] = "original"
+    title: str = Field(default="直播切片", min_length=1, max_length=120)
+    frame_count: int = Field(default=4, ge=1, le=8)
 
 
 class ClipCandidate(BaseModel):

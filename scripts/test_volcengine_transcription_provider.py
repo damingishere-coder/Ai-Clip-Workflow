@@ -9,6 +9,8 @@ if str(PROJECT_ROOT) not in sys.path:
 import app.services.transcript_service as transcript_service
 from app.services.transcript_service import (
     TranscriptSegment,
+    _build_volcengine_flash_payload,
+    _volcengine_headers,
     parse_volcengine_transcript_segments,
     transcribe_audio_with_configured_provider,
 )
@@ -78,9 +80,24 @@ def test_remote_failure_falls_back_to_local() -> None:
         transcript_service.transcribe_audio_in_chunks = original_local
 
 
+def test_volcengine_flash_request_shape() -> None:
+    with TemporaryDirectory() as temp_dir:
+        audio_path = Path(temp_dir) / "sample.mp3"
+        audio_path.write_bytes(b"ID3fake-audio")
+
+        headers = _volcengine_headers()
+        payload = _build_volcengine_flash_payload(audio_path)
+
+    assert headers["Content-Type"] == "application/json"
+    assert headers["X-Api-Sequence"] == "-1"
+    assert payload["request"]["model_name"] == "bigmodel"
+    assert payload["audio"]["data"] == "SUQzZmFrZS1hdWRpbw=="
+
+
 def main() -> None:
     test_parse_volcengine_utterances()
     test_remote_failure_falls_back_to_local()
+    test_volcengine_flash_request_shape()
     print("volcengine transcription provider tests passed")
 
 
