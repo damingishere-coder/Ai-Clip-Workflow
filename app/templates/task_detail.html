@@ -226,37 +226,15 @@
     {% endif %}
   </article>
 
-  <aside class="panel">
-    <div class="panel-header">
+  <aside class="panel runtime-log-card" aria-label="任务运行日志">
+    <div class="panel-header compact">
       <div>
-        <p class="eyebrow">Logs</p>
-        <h2>日志 / 元信息</h2>
+        <p class="eyebrow">Runtime</p>
+        <h2>运行日志</h2>
       </div>
+      <span class="status-pill" id="runtime-log-state">待刷新</span>
     </div>
-    <ul class="compact-list">
-      <li>源视频路径：{{ task.source }}</li>
-      <li>E 盘存储根目录：{{ task.storage_root }}</li>
-      <li>任务目录：{{ task.task_dir }}</li>
-      <li>AI Prompt 方案：{{ task.ai_prompt_preset_id or "preset_001" }}</li>
-      <li>音频文件：{{ task.audio_path }}（{{ "已生成" if task.audio_exists else "待生成" }}）</li>
-      <li>转写 MD：{{ task.transcript_path }}（{{ "已生成" if task.transcript_exists else "待生成" }}）</li>
-      <li>AI 分析文件：{{ task.analysis_path }}（{{ "已生成" if task.analysis_exists else "待生成" }}）</li>
-      <li>切片目录：{{ task.clips_dir }}</li>
-      <li>处理日志：{{ task.log_path }}</li>
-      {% if task.error_message %}
-      <li>异常信息：{{ task.error_message }}</li>
-      {% endif %}
-    </ul>
-    <section class="runtime-log-card" aria-label="AI 分析运行日志">
-      <div class="panel-header compact">
-        <div>
-          <p class="eyebrow">Runtime</p>
-          <h3>运行日志</h3>
-        </div>
-        <span class="status-pill" id="runtime-log-state">待刷新</span>
-      </div>
-      <pre id="runtime-log-lines">点击 AI 分析后，这里会显示最新运行日志。</pre>
-    </section>
+    <pre id="runtime-log-lines">点击 AI 分析后，这里会显示最新运行日志。</pre>
     <p class="form-hint" id="process-result"></p>
   </aside>
 </section>

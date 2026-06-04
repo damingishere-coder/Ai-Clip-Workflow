@@ -119,7 +119,7 @@ docs/DATABASE_SCHEMA.md
 docs/design/live_streaming_slicing_workflow_ui_16x9.png
 ```
 
-视觉方向：Apple 风格、简洁、高级、留白充足、轻量玻璃拟态、卡片式布局、蓝色作为主强调色，适合作为个人本地工作流后台。
+视觉方向：Apple 风格、简洁、高级、留白充足、轻量玻璃拟态、卡片式布局、蓝色作为主强调色，适合作为个人本地 AI 高光生产后台。
 
 ## 8. 自动切割输出
 

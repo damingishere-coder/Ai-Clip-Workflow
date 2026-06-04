@@ -46,9 +46,9 @@ _load_env_file()
 
 @dataclass(frozen=True)
 class Settings:
-    app_name: str = "Live Streaming Slicing Workflow"
-    app_name_cn: str = "直播切片工作流"
-    app_description: str = "Windows 本地直播长视频自动切片工作流系统"
+    app_name: str = "NiuMa Studio"
+    app_name_cn: str = "牛马片场"
+    app_description: str = "Windows 本地 AI 高光生产后台"
     project_root: Path = PROJECT_ROOT
     data_dir: Path = _env_path("DATA_DIR", PROJECT_ROOT / "data")
     storage_root: Path = _env_path("STORAGE_ROOT", EXTERNAL_STORAGE_ROOT)

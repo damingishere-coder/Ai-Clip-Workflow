@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
@@ -40,6 +41,14 @@ app.include_router(files.router)
 app.include_router(media.router)
 app.include_router(publish.router)
 app.include_router(settings_router.router)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> FileResponse:
+    return FileResponse(
+        settings.project_root / "app" / "static" / "img" / "brand" / "niuma-studio-favicon.ico",
+        media_type="image/x-icon",
+    )
 
 
 @app.get("/health")

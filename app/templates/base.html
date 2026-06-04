@@ -4,17 +4,23 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260602-send-center-2">
+    <link rel="icon" href="{{ url_for('static', path='img/brand/niuma-studio-favicon.ico') }}?v=20260604-favicon" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', path='img/brand/niuma-studio-favicon-32.png') }}?v=20260604-favicon">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', path='img/brand/niuma-studio-apple-touch-icon.png') }}?v=20260604-favicon">
+    <meta name="theme-color" content="#256fff">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260604-brand-niuma">
     {% block extra_head %}{% endblock %}
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar">
         <a class="brand" href="/">
-          <span class="brand-mark">LS</span>
+          <span class="brand-mark">
+            <img src="{{ url_for('static', path='img/brand/niuma-studio-logo.png') }}" alt="">
+          </span>
           <span>
-            <strong>直播切片工作流</strong>
-            <small>本地工作流后台</small>
+            <strong>{{ settings.app_name_cn }}</strong>
+            <small>本地 AI 高光生产后台</small>
           </span>
         </a>
         <nav class="side-nav" aria-label="主导航">
@@ -50,6 +56,6 @@
     </div>
 
     {% block extra_scripts %}{% endblock %}
-    <script src="{{ url_for('static', path='js/app.js') }}?v=20260602-send-center-2"></script>
+    <script src="{{ url_for('static', path='js/app.js') }}?v=20260604-brand-niuma"></script>
   </body>
 </html>

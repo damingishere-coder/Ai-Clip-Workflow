@@ -118,7 +118,7 @@ def _write_env_values(values: dict[str, str]) -> None:
     env_file.write_text(
         "\n".join(
             [
-                "# Live Streaming Slicing Workflow local AI config",
+                "# NiuMa Studio local AI config",
                 "# This file is ignored by Git. Do not commit real API keys.",
                 "",
                 f"AI_DEFAULT_PROVIDER={values['AI_DEFAULT_PROVIDER']}",

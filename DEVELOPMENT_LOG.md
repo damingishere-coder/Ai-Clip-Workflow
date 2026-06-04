@@ -1,5 +1,10 @@
 # Development Log
 
+## 2026-06-04 任务详情日志侧栏精简
+- 按浏览器标注反馈，移除任务详情页右侧“日志 / 元信息”路径清单，避免和基础信息、运行日志重复。
+- 右侧侧栏现在只保留“运行日志”，继续使用原有 `runtime-log-lines` 和 `runtime-log-state` 节点读取并刷新 `logs/process.log`。
+- 同步更新 `docs/UI_REFERENCE.md` 和 `NEXT_STEPS.md`，记录新的页面结构和验收方式。
+
 ## 2026-06-04 AI 远程分析旧字段兼容修复
 - 修复远程 AI 返回旧字段导致分析失败的问题：当 AI 输出 `clip_key`、`viral_value`、`reason`、`editing_suggestion` 等旧字段时，程序会在 Pydantic 校验前自动转换为当前需要的 `clip_id`、`spread_value`、`highlight_reason`、`suggested_editing`。
 - 新增 AI 片段字段保底逻辑：缺少 `clip_id` 时自动生成 `clip_001` 这类编号；缺少 `summary`、`spread_value`、`suggested_editing` 时填入可审核的安全默认值；缺少 `duration_seconds` 但有起止时间时自动计算片段时长。
@@ -409,3 +414,17 @@
 - AI 元数据补齐已接入：优先使用切片标题，话题和简介可由 AI 根据标题、摘要、推荐理由和转写片段生成；缺失时页面可一键重新生成。
 - 自动发送改为 opencli 网页自动化：抖音打开 `creator.douyin.com` 投稿页，B站打开创作中心投稿页；发送批次一次只执行一条，避免平台窗口互相抢焦点。
 - 已新增 `scripts/test_send_center_opencli_queue.py`，验证抖音 / B站 opencli 命令组装和备用元数据生成；已通过页面渲染检查，确认 `/publish` 不再出现 API 配置词。
+
+## 2026-06-04 牛马片场品牌更新
+
+- 项目品牌从“直播切片工作流”更新为“牛马片场 / NiuMa Studio”，副标题为“本地 AI 高光生产后台”。
+- 新增牛马吉祥物 logo：`app/static/img/brand/niuma-studio-logo.png`，使用蓝色片场灯和圆角应用图标风格，页面文字由 HTML 渲染。
+- 左侧导航品牌位已改为吉祥物图标 + `牛马片场`，不再显示 `LS` 文字标。
+- `app/core/config.py` 的应用名改为 `NiuMa Studio` / `牛马片场`，Docker Compose 项目名、镜像名和容器名改为 `niuma-studio`。
+- 暂时保留 E 盘历史存储目录 `E:\直播间切片工作流存储`，避免影响已有任务、数据库记录和视频产物。
+
+## 2026-06-04 浏览器 favicon 更新
+
+- 已基于牛马吉祥物主 logo 生成浏览器图标资源：`niuma-studio-favicon.ico`、`niuma-studio-favicon-32.png`、`niuma-studio-apple-touch-icon.png`、`niuma-studio-icon-192.png` 和 `niuma-studio-icon-512.png`。
+- `base.html` 的 `<head>` 已新增 `rel="icon"`、32x32 PNG、Apple touch icon 和 `theme-color`，用于浏览器标签页、收藏夹和保存快捷方式。
+- `app/main.py` 新增 `/favicon.ico` 路由，兼容浏览器默认请求根路径 favicon 的行为。
