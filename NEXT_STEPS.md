@@ -351,6 +351,7 @@
 7. 继续保留转写验证：运行 `.venv\Scripts\python.exe scripts\diagnose_transcription_environment.py`，确认当前使用的是项目虚拟环境。
 8. 使用真实长视频和真实转写文本验证远程 AI / 本地 AI 的候选片段质量；如果摘要仍太短，重新运行 AI 分析让新 Prompt 生效。
 9. 在 Docker Desktop 中确认项目、镜像和容器名称都显示为 `niuma-studio`，并验证容器启动、停止、端口展示和日志查看体验是否足够适合新手使用。
+10. 进入字幕工作台 `/subtitles/{task_id}`，对已经出现小方块字幕的切片重新点击“自动加字幕”，确认新生成的视频中文能正常显示；旧视频不会自动批量重做。
 
 ## P1：随后推进
 

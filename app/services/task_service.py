@@ -50,6 +50,17 @@ WORKFLOW_STEPS = [
     "自动切割",
     "输出完成",
 ]
+
+WINDOWS_FONTS_DIR = Path("C:/Windows/Fonts")
+SUBTITLE_FONT_FILE_CANDIDATES = {
+    "Microsoft YaHei": ("msyh.ttc", "msyhbd.ttc", "msyhl.ttc"),
+    "SimHei": ("simhei.ttf",),
+    "Noto Sans SC": ("NotoSansSC-VF.ttf",),
+    "Source Han Sans CN": ("SourceHanSansCN-Regular.otf", "SourceHanSansCN-Normal.otf", "SourceHanSansCN-Medium.otf"),
+    "SimSun": ("simsun.ttc",),
+    "DengXian": ("Deng.ttf",),
+}
+SUBTITLE_CJK_FONT_FALLBACKS = ("Microsoft YaHei", "SimHei", "Noto Sans SC", "Source Han Sans CN", "SimSun", "DengXian")
 AI_CLIP_MIN_RECOMMENDED_SECONDS = 45
 
 STATUS_LABELS = {
@@ -1138,6 +1149,21 @@ def _escape_ass_text(text: str) -> str:
     return (text or "").replace("\\", "\\\\").replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
 
 
+def _subtitle_font_exists(font_family: str) -> bool:
+    candidates = SUBTITLE_FONT_FILE_CANDIDATES.get(font_family, ())
+    return any((WINDOWS_FONTS_DIR / file_name).exists() for file_name in candidates)
+
+
+def _resolve_subtitle_font_family(requested_font_family: str | None) -> str:
+    font_family = (requested_font_family or "").strip()
+    if font_family and _subtitle_font_exists(font_family):
+        return font_family
+    for fallback_font_family in SUBTITLE_CJK_FONT_FALLBACKS:
+        if _subtitle_font_exists(fallback_font_family):
+            return fallback_font_family
+    return font_family or "Microsoft YaHei"
+
+
 def _build_subtitle_rows(task_id: str, output_clip: dict) -> tuple[int, list[dict[str, Any]]]:
     clip = get_clip_candidate(task_id, output_clip["clip_candidate_id"]) if output_clip.get("clip_candidate_id") else None
     if not clip:
@@ -1172,7 +1198,7 @@ def _write_ass_file(task_id: str, output_clip: dict, style: dict) -> Path:
         margin_v = "70"
     outline = "3" if style.get("shadow_enabled") else "1"
     shadow = "1" if style.get("shadow_enabled") else "0"
-    font_family = style.get("font_family") or "Microsoft YaHei"
+    font_family = _resolve_subtitle_font_family(style.get("font_family"))
     font_size = int(style.get("font_size") or 42)
     primary_color = _hex_to_ass_color(style.get("font_color") or "#ffffff")
     outline_color = _hex_to_ass_color(style.get("stroke_color") or "#111827")
@@ -1203,6 +1229,13 @@ def _ffmpeg_filter_path(path: Path) -> str:
     return normalized.replace(":", r"\:").replace("'", r"\'")
 
 
+def _ffmpeg_subtitles_filter(subtitle_path: Path) -> str:
+    filter_parts = [f"filename='{_ffmpeg_filter_path(subtitle_path)}'"]
+    if WINDOWS_FONTS_DIR.exists():
+        filter_parts.append(f"fontsdir='{_ffmpeg_filter_path(WINDOWS_FONTS_DIR)}'")
+    return f"subtitles={':'.join(filter_parts)}"
+
+
 def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
     task = get_task(task_id, include_video_probe=False)
     if not task:
@@ -1231,7 +1264,7 @@ def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
             "-i",
             str(input_path),
             "-vf",
-            f"subtitles='{_ffmpeg_filter_path(subtitle_path)}'",
+            _ffmpeg_subtitles_filter(subtitle_path),
             "-c:a",
             "copy",
             str(output_path),
