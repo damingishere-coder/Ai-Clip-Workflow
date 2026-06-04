@@ -1408,6 +1408,47 @@ def _browser_wait_command(session: str, seconds: int) -> list[str]:
     return [_opencli_command(), "browser", session, "wait", "time", str(seconds)]
 
 
+def _browser_eval_command(session: str, script: str) -> list[str]:
+    return [_opencli_command(), "browser", session, "eval", script]
+
+
+def _local_media_url(job: dict) -> str:
+    base_url = settings.opencli_local_base_url.rstrip("/")
+    return f"{base_url}{_video_media_url(job['task_id'], job['output_clip_id'], job.get('video_source') or 'original')}"
+
+
+def _douyin_video_upload_script(job: dict, video_path: Path) -> str:
+    media_url = _local_media_url(job)
+    file_name = video_path.name
+    return (
+        "(async()=>{"
+        "const input=document.querySelector('input[type=\"file\"]');"
+        "if(!input){throw new Error('douyin_file_input_not_found');}"
+        f"const response=await fetch({json.dumps(media_url, ensure_ascii=False)});"
+        "if(!response.ok){throw new Error(`local_media_fetch_failed:${response.status}`);}"
+        "const blob=await response.blob();"
+        f"const file=new File([blob],{json.dumps(file_name, ensure_ascii=False)},{{type:blob.type||'video/mp4'}});"
+        "const transfer=new DataTransfer();"
+        "transfer.items.add(file);"
+        "input.files=transfer.files;"
+        "input.dispatchEvent(new Event('input',{bubbles:true}));"
+        "input.dispatchEvent(new Event('change',{bubbles:true}));"
+        "return {uploaded:input.files.length,fileName:input.files[0]?.name||'',size:file.size,type:file.type};"
+        "})()"
+    )
+
+
+def _douyin_close_preview_tip_script() -> str:
+    return (
+        "(()=>{"
+        "const buttons=[...document.querySelectorAll('button')];"
+        "const button=buttons.find((item)=>(item.textContent||'').includes('我知道了'));"
+        "if(button){button.click();return {closed:true};}"
+        "return {closed:false};"
+        "})()"
+    )
+
+
 def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path | None) -> list[list[str]]:
     session = f"send-douyin-{job['id']}"
     opencli = _opencli_command()
@@ -1416,20 +1457,14 @@ def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path
     commands = [
         _browser_open_command(session, "https://creator.douyin.com/creator-micro/content/upload"),
         _browser_wait_command(session, 5),
-        [opencli, "browser", session, "upload", "input[type='file']", str(video_path)],
+        _browser_eval_command(session, _douyin_video_upload_script(job, video_path)),
         _browser_wait_command(session, 8),
+        _browser_eval_command(session, _douyin_close_preview_tip_script()),
         [opencli, "browser", session, "fill", "input[placeholder*='标题'],textarea[placeholder*='标题']", title],
     ]
     if caption:
         commands.append(
             [opencli, "browser", session, "fill", "textarea[placeholder*='简介'],textarea[placeholder*='描述'],div[contenteditable='true']", caption]
-        )
-    if cover_path:
-        commands.extend(
-            [
-                [opencli, "browser", session, "upload", "input[type='file'][accept*='image'],input[type='file'][accept*='.jpg']", str(cover_path)],
-                _browser_wait_command(session, 3),
-            ]
         )
     commands.extend(
         [

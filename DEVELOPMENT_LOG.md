@@ -449,6 +449,13 @@
 - opencli `browser open` 命令已改为 `opencli browser <session> --window foreground open <url>`，不再把 `--window` 放到网址后面。
 - 已补充发送中心测试，确认抖音 / B站打开页面命令里的 `--window` 参数位置正确。
 
+## 2026-06-04 抖音 opencli 上传修复
+
+- 修复抖音上传视频时报错 `{"code":-32000,"message":"Not allowed"}` 的问题：不再使用 OpenCLI 的 `upload input[type='file']` 直接塞文件。
+- 新流程改为抖音页面脚本从本机 `OPENCLI_LOCAL_BASE_URL` 读取 `/media` 视频文件，构造浏览器 File 对象并触发上传控件 change 事件。
+- 本机 `/media` 和 `/static` 响应已增加抖音 / B站页面读取所需的 CORS 响应头，用于 opencli 自动发送时读取本地切片文件。
+- 抖音流程暂时跳过强制封面上传，先使用抖音默认/自动封面，避免封面 input 再次触发浏览器拒绝。
+
 ## 2026-06-04 自动字幕中文方块修复
 
 - 修复自动加字幕后中文显示成小方块的问题：ASS 字幕生成会优先使用已保存的中文字体，并在字体不可用时兜底到 Windows 本机可用中文字体。

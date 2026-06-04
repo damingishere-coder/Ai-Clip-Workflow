@@ -11,7 +11,10 @@ from app.services import publish_service  # noqa: E402
 def _fake_job(platform: str) -> dict:
     return {
         "id": f"job-{platform}",
+        "task_id": f"task-{platform}",
+        "output_clip_id": f"clip-{platform}",
         "platform": platform,
+        "video_source": "original",
         "title": "High energy clip",
         "description": "A short live stream highlight.",
         "tags": "live,highlight",
@@ -34,14 +37,18 @@ def test_douyin_browser_commands() -> None:
     )
     assert commands[0][2:6] == ["send-douyin-job-douyin", "--window", "foreground", "open"]
     assert "--window" not in commands[0][6:]
+    assert commands[2][3] == "eval"
+    assert "(async()=>{" in commands[2][4]
     text = _joined(commands)
     assert "creator.douyin.com" in text
-    assert "upload input[type='file']" in text
+    assert "http://127.0.0.1:8002/media/tasks/task-douyin/output-clips/clip-douyin" in text
+    assert "upload input[type='file']" not in " ".join(commands[2])
     assert "fill input[placeholder*='title']" not in text
     assert "High energy clip" in text
     assert "#live #highlight" in text
     assert "\u53d1\u5e03" in text
-    assert r"C:\tmp\cover.jpg" in text
+    assert "\u6211\u77e5\u9053\u4e86" in text
+    assert r"C:\tmp\cover.jpg" not in text
 
 
 def test_bilibili_browser_commands() -> None:

@@ -82,6 +82,7 @@ class Settings:
     ai_local_protocol: str = _env("AI_LOCAL_PROTOCOL", "chat_completions")
     ai_local_fallback_protocol: str = _env("AI_LOCAL_FALLBACK_PROTOCOL", "")
     ai_local_health_timeout_seconds: int = int(_env("AI_LOCAL_HEALTH_TIMEOUT_SECONDS", "30"))
+    opencli_local_base_url: str = _env("OPENCLI_LOCAL_BASE_URL", "http://127.0.0.1:8002")
     ai_network_access: str = _env("AI_NETWORK_ACCESS", "enabled")
     ai_windows_wsl_setup_acknowledged: str = _env("AI_WINDOWS_WSL_SETUP_ACKNOWLEDGED", "true")
     ai_model_context_window: int = int(_env("AI_MODEL_CONTEXT_WINDOW", "1000000"))
