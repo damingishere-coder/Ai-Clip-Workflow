@@ -1412,6 +1412,51 @@ def _browser_eval_command(session: str, script: str) -> list[str]:
     return [_opencli_command(), "browser", session, "eval", script]
 
 
+_TITLE_FIELD_SELECTOR = ",".join(
+    [
+        "input[placeholder*='标题']",
+        "textarea[placeholder*='标题']",
+        "[contenteditable='true'][aria-label*='标题']",
+        "[contenteditable='true'][data-placeholder*='标题']",
+    ]
+)
+
+
+def _fill_visible_field_script(selector: str, value: str, field_name: str) -> str:
+    return (
+        "(()=>{"
+        f"const selector={json.dumps(selector, ensure_ascii=False)};"
+        f"const value={json.dumps(value, ensure_ascii=False)};"
+        f"const fieldName={json.dumps(field_name, ensure_ascii=False)};"
+        f"const missingError={json.dumps(field_name + '_field_not_found', ensure_ascii=False)};"
+        "const all=[...document.querySelectorAll(selector)];"
+        "const usable=(el)=>!el.disabled&&!el.readOnly;"
+        "const visible=(el)=>{"
+        "const style=window.getComputedStyle(el);"
+        "const rect=el.getBoundingClientRect();"
+        "return usable(el)&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;"
+        "};"
+        "const el=all.find(visible)||all.find(usable);"
+        "if(!el){throw new Error(missingError);}"
+        "el.scrollIntoView({block:'center',inline:'center'});"
+        "el.focus();"
+        "if(el.isContentEditable){el.textContent=value;}"
+        "else{"
+        "const proto=el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;"
+        "const setter=Object.getOwnPropertyDescriptor(proto,'value')?.set;"
+        "if(setter){setter.call(el,value);}else{el.value=value;}"
+        "}"
+        "el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));"
+        "el.dispatchEvent(new Event('change',{bubbles:true}));"
+        "return {filled:true,fieldName,tagName:el.tagName,placeholder:el.getAttribute('placeholder')||'',value:el.isContentEditable?el.textContent:el.value};"
+        "})()"
+    )
+
+
+def _browser_fill_title_command(session: str, title: str) -> list[str]:
+    return _browser_eval_command(session, _fill_visible_field_script(_TITLE_FIELD_SELECTOR, title, "title"))
+
+
 def _local_media_url(job: dict) -> str:
     base_url = settings.opencli_local_base_url.rstrip("/")
     return f"{base_url}{_video_media_url(job['task_id'], job['output_clip_id'], job.get('video_source') or 'original')}"
@@ -1460,7 +1505,7 @@ def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path
         _browser_eval_command(session, _douyin_video_upload_script(job, video_path)),
         _browser_wait_command(session, 8),
         _browser_eval_command(session, _douyin_close_preview_tip_script()),
-        [opencli, "browser", session, "fill", "input[placeholder*='标题'],textarea[placeholder*='标题']", title],
+        _browser_fill_title_command(session, title),
     ]
     if caption:
         commands.append(
@@ -1486,7 +1531,7 @@ def _build_bilibili_browser_commands(job: dict, video_path: Path, cover_path: Pa
         _browser_wait_command(session, 5),
         [opencli, "browser", session, "upload", "input[type='file']", str(video_path)],
         _browser_wait_command(session, 8),
-        [opencli, "browser", session, "fill", "input[placeholder*='标题'],textarea[placeholder*='标题']", title],
+        _browser_fill_title_command(session, title),
     ]
     if tags:
         commands.append([opencli, "browser", session, "fill", "input[placeholder*='标签'],input[placeholder*='tag']", tags])

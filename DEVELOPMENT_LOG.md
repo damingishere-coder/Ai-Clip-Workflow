@@ -471,3 +471,10 @@
 - 保留“更换封面帧”能力：需要人工挑图时仍可生成多张候选帧并切换。
 - 已补充 `scripts/test_send_center_opencli_queue.py` 测试，覆盖敏感词清洗、平台 #话题格式和旧脏数据发送前清洗。
 - 已验证：`python -m compileall app`、`python scripts/test_send_center_opencli_queue.py` 通过。
+
+## 2026-06-04 发送中心标题选择器修复
+
+- 修复 opencli 上传视频后填写标题时报错 `selector_ambiguous` 的问题：不再使用 `input[placeholder*='标题'],textarea[placeholder*='标题']` 这种容易匹配多个元素的直接 `fill` 命令。
+- 抖音和 B站标题填写改为浏览器脚本：自动寻找当前页面里可见、可编辑的标题输入框，并触发 `input` / `change` 事件，让平台页面能正常感知标题变化。
+- 已补充 `scripts/test_send_center_opencli_queue.py` 测试，确认抖音 / B站发送命令不会再生成模糊标题选择器。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。

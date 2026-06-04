@@ -44,6 +44,8 @@ def test_douyin_browser_commands() -> None:
     assert "http://127.0.0.1:8002/media/tasks/task-douyin/output-clips/clip-douyin" in text
     assert "upload input[type='file']" not in " ".join(commands[2])
     assert "fill input[placeholder*='title']" not in text
+    assert "fill input[placeholder*='\u6807\u9898'],textarea[placeholder*='\u6807\u9898']" not in text
+    assert "title_field_not_found" in text
     assert "High energy clip" in text
     assert "#live #highlight" in text
     assert "\u53d1\u5e03" in text
@@ -62,6 +64,8 @@ def test_bilibili_browser_commands() -> None:
     text = _joined(commands)
     assert "member.bilibili.com/platform/upload/video/frame" in text
     assert "upload input[type='file']" in text
+    assert "fill input[placeholder*='\u6807\u9898'],textarea[placeholder*='\u6807\u9898']" not in text
+    assert "title_field_not_found" in text
     assert "High energy clip" in text
     assert "live" in text
     assert "highlight" in text
