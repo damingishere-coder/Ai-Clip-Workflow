@@ -478,3 +478,10 @@
 - 抖音和 B站标题填写改为浏览器脚本：自动寻找当前页面里可见、可编辑的标题输入框，并触发 `input` / `change` 事件，让平台页面能正常感知标题变化。
 - 已补充 `scripts/test_send_center_opencli_queue.py` 测试，确认抖音 / B站发送命令不会再生成模糊标题选择器。
 - 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。
+
+## 2026-06-04 发送中心本机服务重启确认
+
+- 用户再次遇到旧报错后，检查确认代码里已经没有旧的直接 `fill input[placeholder*='标题'],textarea[placeholder*='标题']` 命令。
+- 发现 `127.0.0.1:8002` 仍由旧 Python 后台进程监听，因此浏览器实际调用的还是修复前的运行态代码。
+- 已停止旧的 `8002` uvicorn 进程，并用当前项目代码重新启动本机服务；`http://127.0.0.1:8002/publish` 已返回 HTTP 200。
+- 后续如果再次看到完全相同的旧 CSS selector 报错，优先确认是否访问的是 Windows 本机 `8002`，并重启后台服务后再测。
