@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -77,6 +78,33 @@ CommandRunner = Callable[[list[str]], subprocess.CompletedProcess]
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _opencli_executable() -> str | None:
+    candidates = ["opencli.cmd", "opencli.exe", "opencli", "opencli.ps1"]
+    for candidate in candidates:
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+
+    search_dirs = []
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        search_dirs.append(Path(appdata) / "npm")
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile:
+        search_dirs.append(Path(user_profile) / "AppData" / "Roaming" / "npm")
+
+    for directory in search_dirs:
+        for candidate in candidates:
+            path = directory / candidate
+            if path.exists():
+                return str(path)
+    return None
+
+
+def _opencli_command() -> str:
+    return _opencli_executable() or "opencli"
 
 
 def _row_to_dict(row) -> dict | None:
@@ -1145,38 +1173,39 @@ def _job_cover_path(job: dict) -> Path | None:
 
 
 def _browser_open_command(session: str, url: str) -> list[str]:
-    return ["opencli", "browser", session, "open", url, "--window", "foreground"]
+    return [_opencli_command(), "browser", session, "open", url, "--window", "foreground"]
 
 
 def _browser_wait_command(session: str, seconds: int) -> list[str]:
-    return ["opencli", "browser", session, "wait", "time", str(seconds)]
+    return [_opencli_command(), "browser", session, "wait", "time", str(seconds)]
 
 
 def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path | None) -> list[list[str]]:
     session = f"send-douyin-{job['id']}"
+    opencli = _opencli_command()
     title = _truncate(job.get("title") or "直播切片", 30)
     caption = _caption_for_job(job)
     commands = [
         _browser_open_command(session, "https://creator.douyin.com/creator-micro/content/upload"),
         _browser_wait_command(session, 5),
-        ["opencli", "browser", session, "upload", "input[type='file']", str(video_path)],
+        [opencli, "browser", session, "upload", "input[type='file']", str(video_path)],
         _browser_wait_command(session, 8),
-        ["opencli", "browser", session, "fill", "input[placeholder*='标题'],textarea[placeholder*='标题']", title],
+        [opencli, "browser", session, "fill", "input[placeholder*='标题'],textarea[placeholder*='标题']", title],
     ]
     if caption:
         commands.append(
-            ["opencli", "browser", session, "fill", "textarea[placeholder*='简介'],textarea[placeholder*='描述'],div[contenteditable='true']", caption]
+            [opencli, "browser", session, "fill", "textarea[placeholder*='简介'],textarea[placeholder*='描述'],div[contenteditable='true']", caption]
         )
     if cover_path:
         commands.extend(
             [
-                ["opencli", "browser", session, "upload", "input[type='file'][accept*='image'],input[type='file'][accept*='.jpg']", str(cover_path)],
+                [opencli, "browser", session, "upload", "input[type='file'][accept*='image'],input[type='file'][accept*='.jpg']", str(cover_path)],
                 _browser_wait_command(session, 3),
             ]
         )
     commands.extend(
         [
-            ["opencli", "browser", session, "click", "--role", "button", "--name", "发布"],
+            [opencli, "browser", session, "click", "--role", "button", "--name", "发布"],
             _browser_wait_command(session, 5),
         ]
     )
@@ -1185,30 +1214,31 @@ def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path
 
 def _build_bilibili_browser_commands(job: dict, video_path: Path, cover_path: Path | None) -> list[list[str]]:
     session = f"send-bilibili-{job['id']}"
+    opencli = _opencli_command()
     title = _truncate(job.get("title") or "直播切片", 80)
     tags = _format_tags(job.get("tags") or "")
     description = _truncate(job.get("description") or title, 2000)
     commands = [
         _browser_open_command(session, "https://member.bilibili.com/platform/upload/video/frame"),
         _browser_wait_command(session, 5),
-        ["opencli", "browser", session, "upload", "input[type='file']", str(video_path)],
+        [opencli, "browser", session, "upload", "input[type='file']", str(video_path)],
         _browser_wait_command(session, 8),
-        ["opencli", "browser", session, "fill", "input[placeholder*='标题'],textarea[placeholder*='标题']", title],
+        [opencli, "browser", session, "fill", "input[placeholder*='标题'],textarea[placeholder*='标题']", title],
     ]
     if tags:
-        commands.append(["opencli", "browser", session, "fill", "input[placeholder*='标签'],input[placeholder*='tag']", tags])
+        commands.append([opencli, "browser", session, "fill", "input[placeholder*='标签'],input[placeholder*='tag']", tags])
     if description:
-        commands.append(["opencli", "browser", session, "fill", "textarea[placeholder*='简介'],textarea[placeholder*='介绍'],textarea", description])
+        commands.append([opencli, "browser", session, "fill", "textarea[placeholder*='简介'],textarea[placeholder*='介绍'],textarea", description])
     if cover_path:
         commands.extend(
             [
-                ["opencli", "browser", session, "upload", "input[type='file'][accept*='image'],input[type='file'][accept*='.jpg']", str(cover_path)],
+                [opencli, "browser", session, "upload", "input[type='file'][accept*='image'],input[type='file'][accept*='.jpg']", str(cover_path)],
                 _browser_wait_command(session, 3),
             ]
         )
     commands.extend(
         [
-            ["opencli", "browser", session, "click", "--role", "button", "--name", "立即投稿"],
+            [opencli, "browser", session, "click", "--role", "button", "--name", "立即投稿"],
             _browser_wait_command(session, 5),
         ]
     )
@@ -1534,7 +1564,7 @@ def get_publish_center_context() -> dict:
         "publish_jobs": jobs,
         "jobs_by_platform": jobs_by_platform,
         "platforms": [{"id": platform, "label": label} for platform, label in PLATFORM_LABELS.items()],
-        "opencli_available": bool(shutil.which("opencli")),
+        "opencli_available": bool(_opencli_executable()),
         "stats": [
             {"label": "可入队切片", "value": len(publish_items), "tone": "green"},
             {"label": "待发送", "value": ready_count, "tone": "blue"},

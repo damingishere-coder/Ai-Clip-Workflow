@@ -435,3 +435,10 @@
 - 已基于牛马吉祥物主 logo 生成浏览器图标资源：`niuma-studio-favicon.ico`、`niuma-studio-favicon-32.png`、`niuma-studio-apple-touch-icon.png`、`niuma-studio-icon-192.png` 和 `niuma-studio-icon-512.png`。
 - `base.html` 的 `<head>` 已新增 `rel="icon"`、32x32 PNG、Apple touch icon 和 `theme-color`，用于浏览器标签页、收藏夹和保存快捷方式。
 - `app/main.py` 新增 `/favicon.ico` 路由，兼容浏览器默认请求根路径 favicon 的行为。
+
+## 2026-06-04 发送中心 opencli 检测修复
+
+- 修复 Windows 本地环境下发送中心误判“没有检测到 opencli”的问题：检测逻辑现在会优先识别 `opencli.cmd`、`opencli.exe`、`opencli` 和 `opencli.ps1`。
+- 当普通 PATH 检测不到时，会额外检查 npm 全局安装目录：`%APPDATA%\npm` 和 `%USERPROFILE%\AppData\Roaming\npm`。
+- opencli 自动发送命令现在会使用检测到的完整可执行文件路径，避免后台服务环境变量不完整时启动失败。
+- 已补充 `scripts/test_send_center_opencli_queue.py` 测试，覆盖 Windows npm 目录里的 `opencli.cmd` 备用检测。

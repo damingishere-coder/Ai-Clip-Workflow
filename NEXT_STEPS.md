@@ -316,6 +316,11 @@
 - 自动发送依赖 Chrome 已登录状态 + opencli 网页自动化；如果遇到验证码、登录失效或平台风控，任务会失败并等待人工处理，不绕过平台限制。
 - 下一步建议先打开 `http://127.0.0.1:8001/publish` 或本轮测试地址 `http://127.0.0.1:8002/publish`，点击“刷新发送队列”，确认视频、标题、话题和平台卡片正常显示。
 
+## 2026-06-04 本次小改动：修复 opencli 检测
+- 发送中心现在可以识别 Windows npm 全局安装目录里的 `opencli.cmd`，当前本机检测结果为 `C:\Users\10578\AppData\Roaming\npm\opencli.cmd`。
+- 如果页面还显示“没有检测到 opencli”，优先重启项目后台服务并刷新 `/publish`；如果仍然出现，再检查服务是否运行在 Docker 容器里，因为 Docker 容器内看不到 Windows 主机的 opencli。
+- 下一步建议在 Windows 本机启动项目后进入 `/publish`，确认顶部 opencli 提示消失，再勾选一条任务测试“发送此条”。
+
 ## 当前已处理
 
 - 已新增 Docker 一键启动方式：`docker compose up --build`，固定访问 `http://127.0.0.1:8001`。

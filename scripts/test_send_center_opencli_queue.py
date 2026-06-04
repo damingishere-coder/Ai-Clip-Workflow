@@ -1,4 +1,5 @@
 import sys
+import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -73,6 +74,34 @@ def test_fallback_metadata() -> None:
     assert metadata["description"]
 
 
+def test_opencli_windows_npm_fallback() -> None:
+    original_which = publish_service.shutil.which
+    original_appdata = publish_service.os.environ.get("APPDATA")
+    original_userprofile = publish_service.os.environ.get("USERPROFILE")
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            npm_dir = Path(temp_dir) / "npm"
+            npm_dir.mkdir()
+            expected = npm_dir / "opencli.cmd"
+            expected.write_text("@echo off\n", encoding="utf-8")
+
+            publish_service.shutil.which = lambda _candidate: None
+            publish_service.os.environ["APPDATA"] = temp_dir
+            publish_service.os.environ.pop("USERPROFILE", None)
+
+            assert publish_service._opencli_executable() == str(expected)  # noqa: SLF001
+    finally:
+        publish_service.shutil.which = original_which
+        if original_appdata is None:
+            publish_service.os.environ.pop("APPDATA", None)
+        else:
+            publish_service.os.environ["APPDATA"] = original_appdata
+        if original_userprofile is None:
+            publish_service.os.environ.pop("USERPROFILE", None)
+        else:
+            publish_service.os.environ["USERPROFILE"] = original_userprofile
+
+
 def main() -> None:
     test_douyin_browser_commands()
     print("douyin browser commands: OK")
@@ -80,6 +109,8 @@ def main() -> None:
     print("bilibili browser commands: OK")
     test_fallback_metadata()
     print("fallback metadata: OK")
+    test_opencli_windows_npm_fallback()
+    print("opencli windows npm fallback: OK")
 
 
 if __name__ == "__main__":
