@@ -1,5 +1,12 @@
 # Development Log
 
+## 2026-06-04 AI 置信度分数兼容修复
+- 修复远程 AI 返回 `confidence_score` 为 8.9、7.8 这类十分制分数时，Pydantic 校验要求 0 到 1 导致 `AI 返回非法 JSON，安全重试后仍失败` 的问题。
+- `app/services/ai/ai_clip_analyzer.py` 在 AI JSON 进入字段校验前会统一规范化置信度：0 到 1 原样保留，1 到 10 自动除以 10，10 到 100 自动除以 100，非法值兜底为 0.7，最终夹在 0 到 1 范围内。
+- `scripts/test_ai_json_validation.py` 新增十分制和百分比格式回归测试，覆盖 `8.9 -> 0.89` 和 `92% -> 0.92`，避免后续远程 AI 再因同类分数字段失败。
+- 已验证：`.venv\Scripts\python.exe scripts\test_ai_json_validation.py` 通过；`.venv\Scripts\python.exe -m py_compile app\services\ai\ai_clip_analyzer.py scripts\test_ai_json_validation.py` 通过。
+- 本次不调整页面结构，因此不需要同步更新 `docs/UI_REFERENCE.md`。
+
 ## 2026-06-04 任务详情日志侧栏精简
 - 按浏览器标注反馈，移除任务详情页右侧“日志 / 元信息”路径清单，避免和基础信息、运行日志重复。
 - 右侧侧栏现在只保留“运行日志”，继续使用原有 `runtime-log-lines` 和 `runtime-log-state` 节点读取并刷新 `logs/process.log`。

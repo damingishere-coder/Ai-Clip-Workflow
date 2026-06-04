@@ -436,6 +436,7 @@ def _normalize_ai_clip_item(clip: dict[str, Any], index: int) -> dict[str, Any]:
         item["suggested_editing"] = "保留片段核心内容，剪掉明显停顿和无关转场。"
     if not _has_text(item.get("confidence_score")):
         item["confidence_score"] = 0.7
+    item["confidence_score"] = _normalize_confidence_score(item.get("confidence_score"))
 
     duration_seconds = _duration_seconds_from_clip(item)
     if duration_seconds is not None:
@@ -472,6 +473,21 @@ def _has_text(value: Any) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
     return isinstance(value, (int, float, bool))
+
+
+def _normalize_confidence_score(value: Any) -> float:
+    try:
+        score = float(str(value).strip().rstrip("%"))
+    except (TypeError, ValueError):
+        return 0.7
+
+    if math.isnan(score) or math.isinf(score):
+        return 0.7
+    if 1 < score <= 10:
+        score = score / 10
+    elif 10 < score <= 100:
+        score = score / 100
+    return min(1, max(0, score))
 
 
 def _limit_text(value: Any, max_length: int) -> str:
