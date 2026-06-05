@@ -508,3 +508,12 @@
 - 右侧预览栏现在保持 sticky 固定在视口内，向下审核候选片段时播放器、时间提示和审核操作按钮会一直留在当前画面附近。
 - “保存修改”“生成切片”“去字幕推送”改成更醒目的审核操作按钮，其中“生成切片”保持主按钮视觉。
 - 小屏或窄窗口下仍然上下堆叠；点击列表下方片段的“播放预览”时，如果播放器不在可视区域，会自动平滑滚到播放器。
+
+## 2026-06-05 抖音 opencli 话题封面发送链路修复
+
+- 修复抖音发送到“插入话题”步骤时报 `SyntaxError: Unexpected token ')'`、`gt 不是命令` 的问题：Windows npm 的 `opencli.cmd` 会通过 `%*` 拼接参数，导致 JS 里的 `&`、`<`、`>` 被 `cmd.exe` 当成命令符号。
+- opencli 执行入口现在会优先改为 `node ...\node_modules\@jackwener\opencli\dist\src\main.js`，避免复杂浏览器脚本再被 Windows 批处理拆坏。
+- 抖音话题脚本改为用 DOM API 创建 `data-mention="#"` 话题节点，不再拼接包含 HTML 实体的大段字符串。
+- 抖音 AI 推荐封面选择脚本增强为按“AI智能推荐封面 / 智能推荐封面 / 推荐封面”文案和可见图片兜底查找，减少页面 class 变化导致选封面失败。
+- 已补充 `scripts/test_send_center_opencli_queue.py` 测试，覆盖 `.cmd` 改走 Node 入口、话题脚本不再含 `&gt;`、AI 推荐封面文案兜底。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。

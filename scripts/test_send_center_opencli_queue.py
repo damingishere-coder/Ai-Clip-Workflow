@@ -29,16 +29,21 @@ def _joined(commands: list[list[str]]) -> str:
     return "\n".join(" ".join(command) for command in commands)
 
 
+def _browser_args(command: list[str]) -> list[str]:
+    browser_index = command.index("browser")
+    return command[browser_index:]
+
+
 def test_douyin_browser_commands() -> None:
     commands = publish_service._build_douyin_browser_commands(  # noqa: SLF001
         _fake_job("douyin"),
         Path(r"C:\tmp\clip.mp4"),
         Path(r"C:\tmp\cover.jpg"),
     )
-    assert commands[0][2:6] == ["send-douyin-job-douyin", "--window", "foreground", "open"]
-    assert "--window" not in commands[0][6:]
-    assert commands[2][3] == "eval"
-    assert "(async()=>{" in commands[2][4]
+    assert _browser_args(commands[0])[1:5] == ["send-douyin-job-douyin", "--window", "foreground", "open"]
+    assert "--window" not in _browser_args(commands[0])[5:]
+    assert _browser_args(commands[2])[2] == "eval"
+    assert "(async()=>{" in _browser_args(commands[2])[3]
     text = _joined(commands)
     assert "creator.douyin.com" in text
     assert "http://127.0.0.1:8002/media/tasks/task-douyin/output-clips/clip-douyin" in text
@@ -53,7 +58,10 @@ def test_douyin_browser_commands() -> None:
     assert "duplicate_removed" in text
     assert "data-mention" in text
     assert "douyin_topic_insert_failed" in text
+    assert "replaceChildren" in text
+    assert "&gt;" not in text
     assert "douyin_ai_cover_not_ready" in text
+    assert "AI智能推荐封面" in text
     assert "douyin_publish_button_not_found" in text
     assert "ai_cover_selected" in text
     assert "High energy clip" in text
@@ -70,8 +78,8 @@ def test_bilibili_browser_commands() -> None:
         Path(r"C:\tmp\clip.mp4"),
         Path(r"C:\tmp\cover.jpg"),
     )
-    assert commands[0][2:6] == ["send-bilibili-job-bilibili", "--window", "foreground", "open"]
-    assert "--window" not in commands[0][6:]
+    assert _browser_args(commands[0])[1:5] == ["send-bilibili-job-bilibili", "--window", "foreground", "open"]
+    assert "--window" not in _browser_args(commands[0])[5:]
     text = _joined(commands)
     assert "member.bilibili.com/platform/upload/video/frame" in text
     assert "upload input[type='file']" in text
@@ -177,6 +185,29 @@ def test_opencli_windows_npm_fallback() -> None:
             publish_service.os.environ["USERPROFILE"] = original_userprofile
 
 
+def test_opencli_cmd_uses_node_entrypoint() -> None:
+    original_opencli_executable = publish_service._opencli_executable
+    original_which = publish_service.shutil.which
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            npm_dir = Path(temp_dir) / "npm"
+            main_js = npm_dir / "node_modules" / "@jackwener" / "opencli" / "dist" / "src" / "main.js"
+            main_js.parent.mkdir(parents=True)
+            main_js.write_text("console.log('opencli')\n", encoding="utf-8")
+            wrapper = npm_dir / "opencli.cmd"
+            wrapper.write_text("@echo off\n", encoding="utf-8")
+            publish_service._opencli_executable = lambda: str(wrapper)
+            publish_service.shutil.which = lambda candidate: r"C:\Program Files\nodejs\node.exe" if candidate == "node" else None
+
+            command = publish_service._opencli_command()  # noqa: SLF001
+
+            assert command == [r"C:\Program Files\nodejs\node.exe", str(main_js)]
+            assert "opencli.cmd" not in command
+    finally:
+        publish_service._opencli_executable = original_opencli_executable
+        publish_service.shutil.which = original_which
+
+
 def main() -> None:
     test_douyin_browser_commands()
     print("douyin browser commands: OK")
@@ -194,6 +225,8 @@ def main() -> None:
     print("existing dirty caption safety: OK")
     test_opencli_windows_npm_fallback()
     print("opencli windows npm fallback: OK")
+    test_opencli_cmd_uses_node_entrypoint()
+    print("opencli cmd node entrypoint: OK")
 
 
 if __name__ == "__main__":

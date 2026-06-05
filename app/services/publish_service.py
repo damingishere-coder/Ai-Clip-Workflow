@@ -161,8 +161,26 @@ def _opencli_executable() -> str | None:
     return None
 
 
-def _opencli_command() -> str:
-    return _opencli_executable() or "opencli"
+def _opencli_node_command(executable: str) -> list[str] | None:
+    wrapper_path = Path(executable)
+    main_js = wrapper_path.parent / "node_modules" / "@jackwener" / "opencli" / "dist" / "src" / "main.js"
+    if not main_js.exists():
+        return None
+    local_node = wrapper_path.parent / "node.exe"
+    node = str(local_node) if local_node.exists() else (shutil.which("node") or "node")
+    return [node, str(main_js)]
+
+
+def _opencli_command() -> list[str]:
+    executable = _opencli_executable()
+    if not executable:
+        return ["opencli"]
+    path = Path(executable)
+    if path.suffix.lower() in {".cmd", ".ps1"} or path.name.lower() == "opencli":
+        node_command = _opencli_node_command(executable)
+        if node_command:
+            return node_command
+    return [executable]
 
 
 def _row_to_dict(row) -> dict | None:
@@ -1416,15 +1434,15 @@ def _job_cover_path(job: dict) -> Path | None:
 
 
 def _browser_open_command(session: str, url: str) -> list[str]:
-    return [_opencli_command(), "browser", session, "--window", "foreground", "open", url]
+    return [*_opencli_command(), "browser", session, "--window", "foreground", "open", url]
 
 
 def _browser_wait_command(session: str, seconds: int) -> list[str]:
-    return [_opencli_command(), "browser", session, "wait", "time", str(seconds)]
+    return [*_opencli_command(), "browser", session, "wait", "time", str(seconds)]
 
 
 def _browser_eval_command(session: str, script: str) -> list[str]:
-    return [_opencli_command(), "browser", session, "eval", script]
+    return [*_opencli_command(), "browser", session, "eval", script]
 
 
 _TITLE_FIELD_SELECTOR = ",".join(
@@ -1528,17 +1546,15 @@ def _douyin_insert_topics_script(description: str, topics: list[str]) -> str:
         f"const description={json.dumps(description, ensure_ascii=False)};"
         f"const topics={json.dumps(topics, ensure_ascii=False)};"
         "const normalize=(text)=>String(text||'').replace(/[\\u200B-\\u200D\\uFEFF\\u00A0]/g,'').replace(/\\s+/g,' ').trim();"
-        "const escapeHtml=(text)=>String(text||'').replace(/[&<>\"']/g,(ch)=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[ch]));"
         "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
         "const editor=[...document.querySelectorAll('div[contenteditable=\"true\"]')].find(visible);"
         "if(!editor){throw new Error('douyin_topic_editor_not_found');}"
         "const cleanTopics=[...new Set((topics||[]).map((item)=>String(item||'').replace(/^#+/,'').trim()).filter(Boolean))].slice(0,5);"
-        "const line=(content)=>`<div class=\"ace-line\" data-node=\"true\"><div data-line-wrapper=\"true\" dir=\"auto\">${content}<span class=\"\" data-leaf=\"true\"><span data-string=\"true\" data-enter=\"true\">​</span></span></div></div>`;"
-        "const textLeaf=(text)=>`<span class=\"\" data-leaf=\"true\"><span data-string=\"true\">${escapeHtml(text)}</span></span>`;"
-        "const mention=(topic)=>`<span class=\"\" data-leaf=\"true\"><span data-rect-container=\"true\"><span data-zero-space=\"true\">​</span><span data-fake-text=\" \" contenteditable=\"false\"><div data-mention=\"#\" style=\"display: inline;\">&nbsp;<span style=\"background: rgba(1, 118, 247, 0.12); cursor: pointer;\">#${escapeHtml(topic)}</span>&nbsp;</div></span></span></span><span class=\"\" data-leaf=\"true\"><span data-string=\"true\"> </span></span>`;"
-        "const topicHtml=cleanTopics.map(mention).join('');"
-        "editor.innerHTML=line(textLeaf(description));"
-        "if(topicHtml){editor.innerHTML+=line(topicHtml);}"
+        "const leaf=(attr,text)=>{const outer=document.createElement('span');outer.className='';outer.setAttribute('data-leaf','true');const inner=document.createElement('span');inner.setAttribute(attr,'true');inner.textContent=text;outer.appendChild(inner);return outer;};"
+        "const line=(children)=>{const row=document.createElement('div');row.className='ace-line';row.setAttribute('data-node','true');const wrap=document.createElement('div');wrap.setAttribute('data-line-wrapper','true');wrap.setAttribute('dir','auto');children.forEach((child)=>wrap.appendChild(child));wrap.appendChild(leaf('data-enter',''));row.appendChild(wrap);return row;};"
+        "const mention=(topic)=>{const outer=document.createElement('span');outer.className='';outer.setAttribute('data-leaf','true');const rect=document.createElement('span');rect.setAttribute('data-rect-container','true');const zero=document.createElement('span');zero.setAttribute('data-zero-space','true');zero.textContent='';const fake=document.createElement('span');fake.setAttribute('data-fake-text',' ');fake.setAttribute('contenteditable','false');const block=document.createElement('div');block.setAttribute('data-mention','#');block.style.display='inline';block.appendChild(document.createTextNode(' '));const label=document.createElement('span');label.style.background='rgba(1, 118, 247, 0.12)';label.style.cursor='pointer';label.textContent='#'+topic;block.appendChild(label);block.appendChild(document.createTextNode(' '));fake.appendChild(block);rect.appendChild(zero);rect.appendChild(fake);outer.appendChild(rect);return outer;};"
+        "editor.replaceChildren(line([leaf('data-string',description)]));"
+        "if(cleanTopics.length){editor.appendChild(line(cleanTopics.flatMap((topic)=>[mention(topic),leaf('data-string',' ')])));}"
         "editor.scrollIntoView({block:'center',inline:'center'});"
         "editor.focus();"
         "editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:description}));"
@@ -1546,7 +1562,7 @@ def _douyin_insert_topics_script(description: str, topics: list[str]) -> str:
         "const html=editor.innerHTML;"
         "const actual=normalize(editor.innerText||editor.textContent||'');"
         "const expected=normalize(description);"
-        "const inserted=cleanTopics.filter((topic)=>html.includes(`>${escapeHtml('#'+topic)}<`)||html.includes(`#${escapeHtml(topic)}`));"
+        "const inserted=cleanTopics.filter((topic)=>html.includes('#'+topic)||(editor.innerText||editor.textContent||'').includes('#'+topic));"
         "if(expected&&actual.split(expected).length-1!==1){throw new Error('douyin_topic_description_duplicate');}"
         "if(cleanTopics.length&&(!html.includes('data-mention=\"#\"')||inserted.length!==cleanTopics.length)){throw new Error('douyin_topic_insert_failed');}"
         "return {topics_inserted:inserted.length,topics:inserted,blue_topic_blocks:inserted.length,description_preserved:true};"
@@ -1560,16 +1576,23 @@ def _douyin_select_ai_cover_script(timeout_seconds: int = 60) -> str:
         f"const timeoutMs={int(timeout_seconds) * 1000};"
         "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
         "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const labels=['AI智能推荐封面','智能推荐封面','推荐封面'];"
+        "const clickLabel=()=>{const target=[...document.querySelectorAll('button,div,span')].find((el)=>visible(el)&&labels.some((label)=>textOf(el).includes(label)));if(target){target.scrollIntoView({block:'center',inline:'center'});target.click();return true;}return false;};"
+        "const nearestSection=(el)=>{let node=el;for(let i=0;i<6&&node;i+=1){if((node.querySelectorAll?.('img')||[]).length){return node;}node=node.parentElement;}return el;};"
+        "const candidateSections=()=>{const classSections=[...document.querySelectorAll('[class*=\"recommendCoverContainer\"],.recommendCoverContainer-S5XRoQ')];const textSections=[...document.querySelectorAll('button,div,section')].filter((el)=>visible(el)&&labels.some((label)=>textOf(el).includes(label))).map(nearestSection);return [...new Set([...classSections,...textSections,document.body])];};"
         "const started=Date.now();"
         "while(Date.now()-started<timeoutMs){"
-        "const containers=[...document.querySelectorAll('[class*=\"recommendCoverContainer\"],.recommendCoverContainer-S5XRoQ')];"
+        "clickLabel();"
+        "const containers=candidateSections();"
         "for(const container of containers){"
-        "const cards=[...container.querySelectorAll('[class*=\"recommendCover\"]')].filter((item)=>visible(item)&&!(item.textContent||'').includes('暂无更多推荐')&&!(item.textContent||'').includes('生成中'));"
+        "const cards=[...container.querySelectorAll('[class*=\"recommendCover\"],img')].filter((item)=>visible(item)&&!(item.textContent||'').includes('暂无更多推荐')&&!(item.textContent||'').includes('生成中'));"
         "for(const card of cards){"
-        "const img=card.querySelector('img');"
+        "const img=card.matches?.('img')?card:card.querySelector('img');"
         "if(!img||!img.getAttribute('src')){continue;}"
-        "card.scrollIntoView({block:'center',inline:'center'});"
-        "card.click();"
+        "const clickable=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],div')||img;"
+        "clickable.scrollIntoView({block:'center',inline:'center'});"
+        "clickable.click();"
         "img.click();"
         "await sleep(300);"
         "return {ai_cover_selected:true,src:img.getAttribute('src'),waited_ms:Date.now()-started};"
@@ -1691,24 +1714,24 @@ def _build_bilibili_browser_commands(job: dict, video_path: Path, cover_path: Pa
     commands = [
         _browser_open_command(session, "https://member.bilibili.com/platform/upload/video/frame"),
         _browser_wait_command(session, 5),
-        [opencli, "browser", session, "upload", "input[type='file']", str(video_path)],
+        [*opencli, "browser", session, "upload", "input[type='file']", str(video_path)],
         _browser_wait_command(session, 8),
         _browser_fill_title_command(session, title),
     ]
     if tags:
-        commands.append([opencli, "browser", session, "fill", "input[placeholder*='标签'],input[placeholder*='tag']", tags])
+        commands.append([*opencli, "browser", session, "fill", "input[placeholder*='标签'],input[placeholder*='tag']", tags])
     if description:
         commands.append(_browser_fill_bilibili_description_command(session, description))
     if cover_path:
         commands.extend(
             [
-                [opencli, "browser", session, "upload", "input[type='file'][accept*='image'],input[type='file'][accept*='.jpg']", str(cover_path)],
+                [*opencli, "browser", session, "upload", "input[type='file'][accept*='image'],input[type='file'][accept*='.jpg']", str(cover_path)],
                 _browser_wait_command(session, 3),
             ]
         )
     commands.extend(
         [
-            [opencli, "browser", session, "click", "--role", "button", "--name", "立即投稿"],
+            [*opencli, "browser", session, "click", "--role", "button", "--name", "立即投稿"],
             _browser_wait_command(session, 5),
         ]
     )
