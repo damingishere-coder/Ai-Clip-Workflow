@@ -652,6 +652,7 @@ const saveClipsButton = document.querySelector("#save-clips-button");
 const generateClipsButton = document.querySelector("#generate-clips-button");
 const clipReviewMessage = document.querySelector("#clip-review-message");
 const clipPreviewVideo = document.querySelector("#clip-preview-video");
+const clipPreviewDock = document.querySelector("#clip-preview-dock");
 const clipPreviewCaption = document.querySelector("#clip-preview-caption");
 const clipTranscriptDrawer = document.querySelector("#clip-transcript-drawer");
 const clipTranscriptTitle = document.querySelector("#clip-transcript-title");
@@ -1069,6 +1070,17 @@ function playClipPreview(card) {
     const title = card.dataset.title || "当前片段";
     clipPreviewCaption.textContent = `${title}：从 ${card.querySelector("[name='start_time']")?.value || ""} 播放到 ${card.querySelector("[name='end_time']")?.value || ""}`;
   }
+  ensureClipPreviewVisible();
+}
+
+function ensureClipPreviewVisible() {
+  const previewTarget = clipPreviewDock || clipPreviewVideo;
+  if (!previewTarget) return;
+  const rect = previewTarget.getBoundingClientRect();
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  const isVisible = rect.top >= 0 && rect.top < viewportHeight * 0.72 && rect.bottom > Math.min(120, viewportHeight);
+  if (isVisible) return;
+  previewTarget.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
 }
 
 function closeTranscriptDrawer() {
