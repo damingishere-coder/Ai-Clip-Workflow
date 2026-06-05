@@ -56,17 +56,19 @@ def test_douyin_browser_commands() -> None:
     assert "description_set:true" in text
     assert "plain_hashtags_removed:true" in text
     assert "duplicate_removed" in text
-    assert "data-mention" in text
-    assert "douyin_topic_insert_failed" in text
-    assert "replaceChildren" in text
+    assert "data-mention" not in text
+    assert "douyin_topic_insert_failed" not in text
+    assert "replaceChildren" not in text
     assert "&gt;" not in text
     assert "douyin_ai_cover_not_ready" in text
     assert "AI智能推荐封面" in text
+    assert "cover_confirmed" in text
+    assert "确定" in text
     assert "douyin_publish_button_not_found" in text
     assert "ai_cover_selected" in text
     assert "High energy clip" in text
-    assert "#live #highlight" not in text
-    assert '"live", "highlight"' in text
+    assert "#live #highlight" in text
+    assert '"live", "highlight"' not in text
     assert "\u53d1\u5e03" in text
     assert "\u6211\u77e5\u9053\u4e86" in text
     assert r"C:\tmp\cover.jpg" not in text
@@ -134,15 +136,16 @@ def test_publish_tags_are_hashtag_topics() -> None:
     assert " " in hashtag_text
     assert "死亡" not in hashtag_text
     assert "标题解释" not in hashtag_text
+    direct_hashtags = publish_service._format_tags("#小S自夸 #美国往事 #陈亦飞爆料 #姐妹情深 #可爱自恋")  # noqa: SLF001
+    assert direct_hashtags == "小S自夸, 美国往事, 陈亦飞爆料, 姐妹情深, 可爱自恋"
+    assert publish_service._hashtags(direct_hashtags) == "#小S自夸 #美国往事 #陈亦飞爆料 #姐妹情深 #可爱自恋"  # noqa: SLF001
 
 
-def test_douyin_description_and_topics_are_separate() -> None:
+def test_douyin_description_includes_hashtag_topics() -> None:
     job = _fake_job("douyin")
     description = publish_service._douyin_description_for_job(job, "Fallback title")  # noqa: SLF001
-    topics = publish_service._douyin_topic_list_for_job(job)  # noqa: SLF001
     assert "A short live stream highlight" in description
-    assert "#live" not in description
-    assert topics == ["live", "highlight"]
+    assert "#live #highlight" in description
 
 
 def test_caption_for_job_sanitizes_existing_dirty_content() -> None:
@@ -219,8 +222,8 @@ def main() -> None:
     print("publish metadata safety: OK")
     test_publish_tags_are_hashtag_topics()
     print("publish hashtag topics: OK")
-    test_douyin_description_and_topics_are_separate()
-    print("douyin description/topics split: OK")
+    test_douyin_description_includes_hashtag_topics()
+    print("douyin description hashtags: OK")
     test_caption_for_job_sanitizes_existing_dirty_content()
     print("existing dirty caption safety: OK")
     test_opencli_windows_npm_fallback()

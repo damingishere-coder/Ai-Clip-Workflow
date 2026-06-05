@@ -517,3 +517,10 @@
 - 抖音 AI 推荐封面选择脚本增强为按“AI智能推荐封面 / 智能推荐封面 / 推荐封面”文案和可见图片兜底查找，减少页面 class 变化导致选封面失败。
 - 已补充 `scripts/test_send_center_opencli_queue.py` 测试，覆盖 `.cmd` 改走 Node 入口、话题脚本不再含 `&gt;`、AI 推荐封面文案兜底。
 - 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。
+
+## 2026-06-05 抖音封面确认与话题简化
+
+- 抖音发送链路暂时取消单独插入蓝色话题块，改为把发送中心的 `#话题` 文本直接追加到作品简介中，例如 `#小S自夸 #美国往事 #陈亦飞爆料 #姐妹情深 #可爱自恋`。
+- 发送中心的话题格式化现在支持空格分隔的 `#话题` 字符串，不会再把中文话题拆坏。
+- 抖音 AI 推荐封面选择后会继续查找并点击“确定 / 确认 / 应用”按钮，处理“是否确认应用此封面？”弹窗，然后再进入最后的发布按钮步骤。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。

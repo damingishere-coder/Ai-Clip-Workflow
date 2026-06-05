@@ -633,7 +633,8 @@ def _fallback_tags(item: dict) -> list[str]:
 
 def _format_tags(tags: list[str] | str | None) -> str:
     if isinstance(tags, str):
-        raw_tags = re.split(r"[,，#\s]+", tags)
+        hashtag_tags = re.findall(r"[#＃]\s*([^#＃,，\s]+)", tags)
+        raw_tags = hashtag_tags if hashtag_tags else re.split(r"[,，#＃\s]+", tags)
     else:
         raw_tags = tags or []
     cleaned: list[str] = []
@@ -1401,7 +1402,12 @@ def _douyin_topic_list_for_job(job: dict) -> list[str]:
 
 
 def _douyin_description_for_job(job: dict, fallback_title: str) -> str:
-    return _sanitize_publish_description(job.get("description") or fallback_title, fallback_title)
+    description = _sanitize_publish_description(job.get("description") or fallback_title, fallback_title)
+    tag_text = _hashtags(job.get("tags") or "")
+    parts = [description] if description else []
+    if tag_text:
+        parts.append(tag_text)
+    return "\n".join(parts).strip()[:1000]
 
 
 def _caption_for_job(job: dict) -> str:
@@ -1578,6 +1584,7 @@ def _douyin_select_ai_cover_script(timeout_seconds: int = 60) -> str:
         "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
         "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
         "const labels=['AI智能推荐封面','智能推荐封面','推荐封面'];"
+        "const confirmCover=async()=>{const startedConfirm=Date.now();while(Date.now()-startedConfirm<8000){const buttons=[...document.querySelectorAll('button,[role=\"button\"]')].filter(visible);const button=buttons.find((item)=>['确定','确认','应用'].includes(textOf(item)));if(button){button.scrollIntoView({block:'center',inline:'center'});button.click();await sleep(500);return true;}await sleep(300);}return false;};"
         "const clickLabel=()=>{const target=[...document.querySelectorAll('button,div,span')].find((el)=>visible(el)&&labels.some((label)=>textOf(el).includes(label)));if(target){target.scrollIntoView({block:'center',inline:'center'});target.click();return true;}return false;};"
         "const nearestSection=(el)=>{let node=el;for(let i=0;i<6&&node;i+=1){if((node.querySelectorAll?.('img')||[]).length){return node;}node=node.parentElement;}return el;};"
         "const candidateSections=()=>{const classSections=[...document.querySelectorAll('[class*=\"recommendCoverContainer\"],.recommendCoverContainer-S5XRoQ')];const textSections=[...document.querySelectorAll('button,div,section')].filter((el)=>visible(el)&&labels.some((label)=>textOf(el).includes(label))).map(nearestSection);return [...new Set([...classSections,...textSections,document.body])];};"
@@ -1595,7 +1602,8 @@ def _douyin_select_ai_cover_script(timeout_seconds: int = 60) -> str:
         "clickable.click();"
         "img.click();"
         "await sleep(300);"
-        "return {ai_cover_selected:true,src:img.getAttribute('src'),waited_ms:Date.now()-started};"
+        "const confirmed=await confirmCover();"
+        "return {ai_cover_selected:true,cover_confirmed:confirmed,src:img.getAttribute('src'),waited_ms:Date.now()-started};"
         "}"
         "}"
         "await sleep(1000);"
@@ -1609,7 +1617,7 @@ def _douyin_click_publish_script() -> str:
     return (
         "(()=>{"
         "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
-        "const buttons=[...document.querySelectorAll('button')].filter(visible);"
+        "const buttons=[...document.querySelectorAll('button,[role=\"button\"]')].filter(visible);"
         "const button=buttons.find((item)=>(item.textContent||'').trim()==='发布');"
         "if(!button){throw new Error('douyin_publish_button_not_found');}"
         "button.scrollIntoView({block:'center',inline:'center'});"
@@ -1683,7 +1691,6 @@ def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path
     session = f"send-douyin-{job['id']}"
     title = _truncate(_sanitize_publish_title(job.get("title") or "直播切片"), 30)
     description = _douyin_description_for_job(job, title)
-    topics = _douyin_topic_list_for_job(job)
     commands = [
         _browser_open_command(session, "https://creator.douyin.com/creator-micro/content/upload"),
         _browser_wait_command(session, 5),
@@ -1693,8 +1700,6 @@ def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path
         _browser_fill_title_command(session, title),
         _browser_set_douyin_description_command(session, description),
     ]
-    if topics:
-        commands.append(_browser_insert_douyin_topics_command(session, description, topics))
     commands.extend(
         [
             _browser_select_douyin_ai_cover_command(session),
