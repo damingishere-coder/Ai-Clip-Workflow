@@ -46,10 +46,19 @@ def test_douyin_browser_commands() -> None:
     assert "fill input[placeholder*='title']" not in text
     assert "fill input[placeholder*='\u6807\u9898'],textarea[placeholder*='\u6807\u9898']" not in text
     assert "fill textarea[placeholder*='\u7b80\u4ecb'],textarea[placeholder*='\u63cf\u8ff0'],div[contenteditable='true']" not in text
+    assert "click --role button --name \u53d1\u5e03" not in text
     assert "title_field_not_found" in text
-    assert "caption_field_not_found" in text
+    assert "description_set:true" in text
+    assert "plain_hashtags_removed:true" in text
+    assert "duplicate_removed" in text
+    assert "data-mention" in text
+    assert "douyin_topic_insert_failed" in text
+    assert "douyin_ai_cover_not_ready" in text
+    assert "douyin_publish_button_not_found" in text
+    assert "ai_cover_selected" in text
     assert "High energy clip" in text
-    assert "#live #highlight" in text
+    assert "#live #highlight" not in text
+    assert '"live", "highlight"' in text
     assert "\u53d1\u5e03" in text
     assert "\u6211\u77e5\u9053\u4e86" in text
     assert r"C:\tmp\cover.jpg" not in text
@@ -119,6 +128,15 @@ def test_publish_tags_are_hashtag_topics() -> None:
     assert "标题解释" not in hashtag_text
 
 
+def test_douyin_description_and_topics_are_separate() -> None:
+    job = _fake_job("douyin")
+    description = publish_service._douyin_description_for_job(job, "Fallback title")  # noqa: SLF001
+    topics = publish_service._douyin_topic_list_for_job(job)  # noqa: SLF001
+    assert "A short live stream highlight" in description
+    assert "#live" not in description
+    assert topics == ["live", "highlight"]
+
+
 def test_caption_for_job_sanitizes_existing_dirty_content() -> None:
     caption = publish_service._caption_for_job(  # noqa: SLF001
         {
@@ -170,6 +188,8 @@ def main() -> None:
     print("publish metadata safety: OK")
     test_publish_tags_are_hashtag_topics()
     print("publish hashtag topics: OK")
+    test_douyin_description_and_topics_are_separate()
+    print("douyin description/topics split: OK")
     test_caption_for_job_sanitizes_existing_dirty_content()
     print("existing dirty caption safety: OK")
     test_opencli_windows_npm_fallback()

@@ -1371,6 +1371,21 @@ def _hashtags(tags: str) -> str:
     return " ".join(f"#{tag.strip().lstrip('#')}" for tag in re.split(r"[,，]+", normalized_tags or "") if tag.strip())
 
 
+def _douyin_topic_list_for_job(job: dict) -> list[str]:
+    topics: list[str] = []
+    for tag in re.split(r"[,，]+", _format_tags(job.get("tags") or "")):
+        value = tag.strip().lstrip("#")
+        if value and value not in topics:
+            topics.append(value)
+        if len(topics) >= 5:
+            break
+    return topics
+
+
+def _douyin_description_for_job(job: dict, fallback_title: str) -> str:
+    return _sanitize_publish_description(job.get("description") or fallback_title, fallback_title)
+
+
 def _caption_for_job(job: dict) -> str:
     parts = []
     description = _sanitize_publish_description(job.get("description") or "")
@@ -1418,19 +1433,6 @@ _TITLE_FIELD_SELECTOR = ",".join(
         "textarea[placeholder*='标题']",
         "[contenteditable='true'][aria-label*='标题']",
         "[contenteditable='true'][data-placeholder*='标题']",
-    ]
-)
-
-
-_DOUYIN_CAPTION_FIELD_SELECTOR = ",".join(
-    [
-        "textarea[placeholder*='简介']",
-        "textarea[placeholder*='描述']",
-        "[contenteditable='true'][aria-label*='简介']",
-        "[contenteditable='true'][aria-label*='描述']",
-        "[contenteditable='true'][data-placeholder*='简介']",
-        "[contenteditable='true'][data-placeholder*='描述']",
-        "div[contenteditable='true']",
     ]
 )
 
@@ -1488,8 +1490,126 @@ def _browser_fill_title_command(session: str, title: str) -> list[str]:
     return _browser_eval_command(session, _fill_visible_field_script(_TITLE_FIELD_SELECTOR, title, "title"))
 
 
-def _browser_fill_douyin_caption_command(session: str, caption: str) -> list[str]:
-    return _browser_eval_command(session, _fill_visible_field_script(_DOUYIN_CAPTION_FIELD_SELECTOR, caption, "caption"))
+def _douyin_set_description_script(description: str) -> str:
+    return (
+        "(()=>{"
+        f"const value={json.dumps(description, ensure_ascii=False)};"
+        "const normalize=(text)=>String(text||'').replace(/[\\u200B-\\u200D\\uFEFF\\u00A0]/g,'').replace(/\\s+/g,' ').trim();"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&!el.readOnly&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const editor=[...document.querySelectorAll('div[contenteditable=\"true\"]')].find(visible);"
+        "if(!editor){throw new Error('douyin_description_editor_not_found');}"
+        "const before=normalize(editor.innerText||editor.textContent||'');"
+        "const expected=normalize(value);"
+        "const beforeCount=expected?before.split(expected).length-1:0;"
+        "editor.scrollIntoView({block:'center',inline:'center'});"
+        "editor.focus();"
+        "const selection=window.getSelection();"
+        "const range=document.createRange();"
+        "range.selectNodeContents(editor);"
+        "selection.removeAllRanges();"
+        "selection.addRange(range);"
+        "document.execCommand?.('delete',false,null);"
+        "editor.innerHTML='';"
+        "editor.textContent='';"
+        "if(value){document.execCommand?.('insertText',false,value);}"
+        "if(value&&normalize(editor.innerText||editor.textContent||'')!==expected){editor.textContent=value;}"
+        "editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));"
+        "editor.dispatchEvent(new Event('change',{bubbles:true}));"
+        "const actual=normalize(editor.innerText||editor.textContent||'');"
+        "if(actual!==expected){throw new Error('douyin_description_set_failed');}"
+        "return {description_set:true,plain_hashtags_removed:true,duplicate_removed:beforeCount>1||before!==actual,actual};"
+        "})()"
+    )
+
+
+def _douyin_insert_topics_script(description: str, topics: list[str]) -> str:
+    return (
+        "(()=>{"
+        f"const description={json.dumps(description, ensure_ascii=False)};"
+        f"const topics={json.dumps(topics, ensure_ascii=False)};"
+        "const normalize=(text)=>String(text||'').replace(/[\\u200B-\\u200D\\uFEFF\\u00A0]/g,'').replace(/\\s+/g,' ').trim();"
+        "const escapeHtml=(text)=>String(text||'').replace(/[&<>\"']/g,(ch)=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[ch]));"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const editor=[...document.querySelectorAll('div[contenteditable=\"true\"]')].find(visible);"
+        "if(!editor){throw new Error('douyin_topic_editor_not_found');}"
+        "const cleanTopics=[...new Set((topics||[]).map((item)=>String(item||'').replace(/^#+/,'').trim()).filter(Boolean))].slice(0,5);"
+        "const line=(content)=>`<div class=\"ace-line\" data-node=\"true\"><div data-line-wrapper=\"true\" dir=\"auto\">${content}<span class=\"\" data-leaf=\"true\"><span data-string=\"true\" data-enter=\"true\">​</span></span></div></div>`;"
+        "const textLeaf=(text)=>`<span class=\"\" data-leaf=\"true\"><span data-string=\"true\">${escapeHtml(text)}</span></span>`;"
+        "const mention=(topic)=>`<span class=\"\" data-leaf=\"true\"><span data-rect-container=\"true\"><span data-zero-space=\"true\">​</span><span data-fake-text=\" \" contenteditable=\"false\"><div data-mention=\"#\" style=\"display: inline;\">&nbsp;<span style=\"background: rgba(1, 118, 247, 0.12); cursor: pointer;\">#${escapeHtml(topic)}</span>&nbsp;</div></span></span></span><span class=\"\" data-leaf=\"true\"><span data-string=\"true\"> </span></span>`;"
+        "const topicHtml=cleanTopics.map(mention).join('');"
+        "editor.innerHTML=line(textLeaf(description));"
+        "if(topicHtml){editor.innerHTML+=line(topicHtml);}"
+        "editor.scrollIntoView({block:'center',inline:'center'});"
+        "editor.focus();"
+        "editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:description}));"
+        "editor.dispatchEvent(new Event('change',{bubbles:true}));"
+        "const html=editor.innerHTML;"
+        "const actual=normalize(editor.innerText||editor.textContent||'');"
+        "const expected=normalize(description);"
+        "const inserted=cleanTopics.filter((topic)=>html.includes(`>${escapeHtml('#'+topic)}<`)||html.includes(`#${escapeHtml(topic)}`));"
+        "if(expected&&actual.split(expected).length-1!==1){throw new Error('douyin_topic_description_duplicate');}"
+        "if(cleanTopics.length&&(!html.includes('data-mention=\"#\"')||inserted.length!==cleanTopics.length)){throw new Error('douyin_topic_insert_failed');}"
+        "return {topics_inserted:inserted.length,topics:inserted,blue_topic_blocks:inserted.length,description_preserved:true};"
+        "})()"
+    )
+
+
+def _douyin_select_ai_cover_script(timeout_seconds: int = 60) -> str:
+    return (
+        "(async()=>{"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const started=Date.now();"
+        "while(Date.now()-started<timeoutMs){"
+        "const containers=[...document.querySelectorAll('[class*=\"recommendCoverContainer\"],.recommendCoverContainer-S5XRoQ')];"
+        "for(const container of containers){"
+        "const cards=[...container.querySelectorAll('[class*=\"recommendCover\"]')].filter((item)=>visible(item)&&!(item.textContent||'').includes('暂无更多推荐')&&!(item.textContent||'').includes('生成中'));"
+        "for(const card of cards){"
+        "const img=card.querySelector('img');"
+        "if(!img||!img.getAttribute('src')){continue;}"
+        "card.scrollIntoView({block:'center',inline:'center'});"
+        "card.click();"
+        "img.click();"
+        "await sleep(300);"
+        "return {ai_cover_selected:true,src:img.getAttribute('src'),waited_ms:Date.now()-started};"
+        "}"
+        "}"
+        "await sleep(1000);"
+        "}"
+        "throw new Error('douyin_ai_cover_not_ready');"
+        "})()"
+    )
+
+
+def _douyin_click_publish_script() -> str:
+    return (
+        "(()=>{"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const buttons=[...document.querySelectorAll('button')].filter(visible);"
+        "const button=buttons.find((item)=>(item.textContent||'').trim()==='发布');"
+        "if(!button){throw new Error('douyin_publish_button_not_found');}"
+        "button.scrollIntoView({block:'center',inline:'center'});"
+        "button.click();"
+        "return {clicked:true,text:(button.textContent||'').trim()};"
+        "})()"
+    )
+
+
+def _browser_set_douyin_description_command(session: str, description: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_set_description_script(description))
+
+
+def _browser_insert_douyin_topics_command(session: str, description: str, topics: list[str]) -> list[str]:
+    return _browser_eval_command(session, _douyin_insert_topics_script(description, topics))
+
+
+def _browser_select_douyin_ai_cover_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_select_ai_cover_script())
+
+
+def _browser_click_douyin_publish_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_click_publish_script())
 
 
 def _browser_fill_bilibili_description_command(session: str, description: str) -> list[str]:
@@ -1538,9 +1658,9 @@ def _douyin_close_preview_tip_script() -> str:
 
 def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path | None) -> list[list[str]]:
     session = f"send-douyin-{job['id']}"
-    opencli = _opencli_command()
     title = _truncate(_sanitize_publish_title(job.get("title") or "直播切片"), 30)
-    caption = _caption_for_job(job)
+    description = _douyin_description_for_job(job, title)
+    topics = _douyin_topic_list_for_job(job)
     commands = [
         _browser_open_command(session, "https://creator.douyin.com/creator-micro/content/upload"),
         _browser_wait_command(session, 5),
@@ -1548,12 +1668,14 @@ def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path
         _browser_wait_command(session, 8),
         _browser_eval_command(session, _douyin_close_preview_tip_script()),
         _browser_fill_title_command(session, title),
+        _browser_set_douyin_description_command(session, description),
     ]
-    if caption:
-        commands.append(_browser_fill_douyin_caption_command(session, caption))
+    if topics:
+        commands.append(_browser_insert_douyin_topics_command(session, description, topics))
     commands.extend(
         [
-            [opencli, "browser", session, "click", "--role", "button", "--name", "发布"],
+            _browser_select_douyin_ai_cover_command(session),
+            _browser_click_douyin_publish_command(session),
             _browser_wait_command(session, 5),
         ]
     )

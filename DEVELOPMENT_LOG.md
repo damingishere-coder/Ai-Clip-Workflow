@@ -492,3 +492,12 @@
 - 抖音简介和 B站简介都改为浏览器脚本填写，会优先选择可见、可编辑输入框，并对 `contenteditable` 输入框模拟插入文本，必要时再写入完整文本。
 - 已补充 `scripts/test_send_center_opencli_queue.py` 测试，确认抖音 / B站简介不会再生成容易被严格校验卡住的直接 `fill` 命令。
 - 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。
+
+## 2026-06-05 抖音话题封面和发布按钮修复
+
+- 抖音作品描述改为只填写发送中心的“正文 / 简介”，不再把平台 `#话题` 直接拼成普通文本塞进描述框。
+- 抖音话题改为单独写入编辑器的 `data-mention="#"` 话题块结构，目标是在抖音页面显示为蓝色话题块；写入失败会返回 `douyin_topic_insert_failed`。
+- 抖音封面改为等待并选择“AI智能推荐封面”区域第一个可用推荐图；如果 60 秒内没有可选推荐图，会返回 `douyin_ai_cover_not_ready`，不再使用发送中心封面兜底。
+- 抖音发布按钮改为脚本精确点击文本等于“发布”的底部按钮，避免 `--name 发布` 同时匹配“高清发布”和“发布”导致 `semantic_ambiguous`。
+- 已补充 `scripts/test_send_center_opencli_queue.py` 测试，覆盖描述/话题分离、AI 推荐封面命令和精确发布按钮命令。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。
