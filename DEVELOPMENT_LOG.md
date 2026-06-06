@@ -1,5 +1,15 @@
 # Development Log
 
+## 2026-06-06 远程转写与 DeepSeek 失败确认机制
+- 调整转写 Provider 逻辑：任务详情点击“开始处理 / 继续处理”后默认走远程转写；远程不可用时任务会暂停并展示失败原因，不再自动切到本地 faster-whisper。
+- 任务详情页新增“改用本地模型转写”按钮，只在远程转写失败且未生成转写文件时显示；点击前会二次确认，确认后才会以 `provider=local` 重新执行转写。
+- 转写状态接口新增 `local_retry_available` 标记，前端据此控制本地重试按钮；动态恢复的“重新远程转写”按钮也会补绑定点击事件。
+- 任务列表的“当前状态”列会在失败任务下方显示简短失败原因，避免只看到“失败”但不知道远程服务哪里不可用。
+- DeepSeek AI 分析也取消自动降级本地 Ollama：远程 DeepSeek 报错时会暂停 AI 分析并提示原因，用户需要手动点击“本地 AI 分析”才会使用本地模型。
+- `.env.example` 和默认配置已同步：`TRANSCRIPTION_FALLBACK_PROVIDER` 默认留空，避免新环境默认自动本地兜底。
+- 已更新 `docs/UI_REFERENCE.md`、`docs/TASK_FLOW.md` 和 `NEXT_STEPS.md`，记录新的确认式本地模型流程。
+- 已验证：`.venv\Scripts\python.exe -m py_compile app\services\transcript_service.py app\services\task_service.py app\routers\tasks.py scripts\test_volcengine_transcription_provider.py`、`.venv\Scripts\python.exe scripts\test_volcengine_transcription_provider.py`、`.venv\Scripts\python.exe scripts\test_transcript_background_start.py`、`node --check app\static\js\app.js` 均通过。
+
 ## 2026-06-04 AI 置信度分数兼容修复
 - 修复远程 AI 返回 `confidence_score` 为 8.9、7.8 这类十分制分数时，Pydantic 校验要求 0 到 1 导致 `AI 返回非法 JSON，安全重试后仍失败` 的问题。
 - `app/services/ai/ai_clip_analyzer.py` 在 AI JSON 进入字段校验前会统一规范化置信度：0 到 1 原样保留，1 到 10 自动除以 10，10 到 100 自动除以 100，非法值兜底为 0.7，最终夹在 0 到 1 范围内。

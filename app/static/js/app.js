@@ -52,8 +52,7 @@ if (videoFileInput && videoFileName) {
   });
 }
 
-document.querySelectorAll(".js-process-action").forEach((button) => {
-  button.addEventListener("click", async () => {
+async function handleProcessAction(button) {
     if (button.dataset.confirm && !window.confirm(button.dataset.confirm)) {
       return;
     }
@@ -84,7 +83,16 @@ document.querySelectorAll(".js-process-action").forEach((button) => {
       button.disabled = false;
       button.textContent = originalText;
     }
-  });
+}
+
+function bindProcessActionButton(button) {
+  if (!button || button.dataset.processActionBound === "true") return;
+  button.dataset.processActionBound = "true";
+  button.addEventListener("click", () => handleProcessAction(button));
+}
+
+document.querySelectorAll(".js-process-action").forEach((button) => {
+  bindProcessActionButton(button);
 });
 
 const transcriptPanel = document.querySelector("#transcript-panel");
@@ -96,6 +104,7 @@ const transcriptProgressDetail = document.querySelector("#transcript-progress-de
 const transcriptProgressRuntime = document.querySelector("#transcript-progress-runtime");
 const transcriptPreviewBox = document.querySelector("#transcript-preview-box");
 const cancelTranscriptButtons = document.querySelectorAll(".js-cancel-transcript");
+const localTranscriptButton = document.querySelector("#local-transcript-button");
 let transcriptPollingTimer = null;
 let transcriptPollingStartedFromRunning = false;
 
@@ -189,23 +198,40 @@ if (transcriptPanel) {
 function updateWorkflowButtons(data) {
   const startButton = document.querySelector("#start-workflow-button");
   if (!startButton) return;
+  const progressStatus = data.progress?.status || "";
+  const canRetryWithLocal = Boolean(data.local_retry_available);
+  if (localTranscriptButton) {
+    localTranscriptButton.hidden = !canRetryWithLocal;
+  }
   if (data.transcript_exists) {
     startButton.textContent = "转写已完成";
     startButton.disabled = true;
+    if (localTranscriptButton) localTranscriptButton.hidden = true;
     return;
   }
-  if (data.progress?.status === "running" || data.task_status === "transcribing") {
+  if (progressStatus === "running" || data.task_status === "transcribing") {
     startButton.textContent = "转写处理中";
     startButton.disabled = true;
-    updateCancelTranscriptButtons(data.progress?.status || "running");
+    if (localTranscriptButton) localTranscriptButton.hidden = true;
+    updateCancelTranscriptButtons(progressStatus || "running");
     return;
   }
-  if (data.progress?.status === "cancelled") {
-    startButton.textContent = "重新生成转写";
+  if (progressStatus === "failed") {
+    startButton.textContent = "重新远程转写";
     startButton.disabled = false;
     startButton.classList.add("js-process-action");
     startButton.dataset.endpoint = `/api/tasks/${transcriptPanel?.dataset.taskId}/process/transcript-workflow?force=true`;
-    updateCancelTranscriptButtons("cancelled");
+    bindProcessActionButton(startButton);
+    updateCancelTranscriptButtons("failed");
+    return;
+  }
+  if (progressStatus === "cancelled" || progressStatus === "stale") {
+    startButton.textContent = progressStatus === "stale" ? "重新远程转写" : "重新生成转写";
+    startButton.disabled = false;
+    startButton.classList.add("js-process-action");
+    startButton.dataset.endpoint = `/api/tasks/${transcriptPanel?.dataset.taskId}/process/transcript-workflow?force=true`;
+    bindProcessActionButton(startButton);
+    updateCancelTranscriptButtons(progressStatus);
   }
 }
 

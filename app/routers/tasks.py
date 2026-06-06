@@ -141,9 +141,13 @@ async def process_audio(task_id: str) -> dict:
 
 
 @router.post("/{task_id}/process/transcript")
-async def process_transcript(task_id: str, background_tasks: BackgroundTasks) -> dict:
+async def process_transcript(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    provider: str | None = Query(default=None, pattern="^(remote|local)$"),
+) -> dict:
     try:
-        return task_service.process_task_transcript(task_id, background_tasks=background_tasks)
+        return task_service.process_task_transcript(task_id, background_tasks=background_tasks, provider=provider)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -155,12 +159,14 @@ async def process_transcript_workflow(
     task_id: str,
     background_tasks: BackgroundTasks,
     force: bool = Query(default=False),
+    provider: str | None = Query(default=None, pattern="^(remote|local)$"),
 ) -> dict:
     try:
         return task_service.process_task_transcript_workflow(
             task_id,
             background_tasks=background_tasks,
             force=force,
+            provider=provider,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

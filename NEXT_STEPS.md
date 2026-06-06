@@ -1,5 +1,18 @@
 # Next Steps
 
+## 2026-06-06 远程失败不自动本地怎么测试
+1. 先重启本地后台服务，确保运行的是这次修改后的代码。
+2. 打开任意一个还没有完成转写的任务详情页。
+3. 临时让远程转写不可用，例如先把 `.env` 里的火山引擎 Key 改成错误值，或断开远程转写配置后再点“开始处理 / 继续处理”。
+4. 正常情况：音频提取完成后，转写会失败并停住；页面会显示失败原因，不会自动开始本地 faster-whisper。
+5. 此时页面顶部会出现“改用本地模型转写”按钮。点击后会先弹确认框；确认后才会开始本地转写。
+6. 如果你修好了远程配置，也可以点“重新远程转写”，它会继续优先走远程。
+
+## 远程失败确认机制下一步我建议你做什么
+1. 先用一个很短的视频做测试，不要拿 40 分钟长视频验证按钮逻辑。
+2. 确认远程失败时不会自动吃电脑性能跑本地模型后，再把 `.env` 里的远程 Key 改回真实值。
+3. 后续如果 DeepSeek AI 分析失败，页面也会停住并提示原因；需要本地模型时再手动点“本地 AI 分析”。
+
 ## 2026-06-04 AI 置信度分数修复后怎么测试
 1. 先重启本地后端服务，确保运行的是这次修复后的代码。
 2. 打开刚才报错的任务详情页。
@@ -232,8 +245,8 @@
 4. 如果 40 分钟任务稳定，再上传或选择 1 小时以上视频，按同样流程验证转写完成后的 AI 分析。
 
 ## 2026-05-24 国内远程转写接入后
-- 已把转写默认方案改为“火山引擎远程转写优先，本地 faster-whisper 兜底”。
-- 已新增 `.env` 配置项：`TRANSCRIPTION_PROVIDER=volcengine`、`TRANSCRIPTION_FALLBACK_PROVIDER=local`、`VOLCENGINE_ASR_API_KEY`、`VOLCENGINE_ASR_RESOURCE_ID=volc.bigasr.auc_turbo`。
+- 已把转写默认方案改为“火山引擎远程转写优先，远程失败后暂停并等待用户确认本地 faster-whisper”。
+- 已新增 `.env` 配置项：`TRANSCRIPTION_PROVIDER=volcengine`、`TRANSCRIPTION_FALLBACK_PROVIDER=`、`VOLCENGINE_ASR_API_KEY`、`VOLCENGINE_ASR_RESOURCE_ID=volc.bigasr.auc_turbo`。
 - 已新增火山引擎连通性测试脚本：`scripts/test_volcengine_transcription_connection.py`。
 - 已新增“停止转写”按钮；如果误用本地模型开始转写，可以先停止，再重启服务后重新生成。
 - 下一步先在火山引擎控制台开通豆包语音相关权限，拿到 App Key 后填入 `.env` 的 `VOLCENGINE_ASR_API_KEY`。
@@ -241,7 +254,7 @@
 ## 国内转写下一步优先做
 1. 用真实任务音频运行 `.venv\Scripts\python.exe scripts\test_volcengine_transcription_connection.py "音频路径"`，确认火山引擎能返回中文转写。
 2. 修改 `.env` 后先重启 FastAPI / Docker 服务，再对 40 分钟视频点击“重新生成转写”，观察速度是否明显快于本地 CPU。
-3. 如果火山引擎 Key、余额或权限异常，先看页面错误；系统会按配置尝试退回本地转写。
+3. 如果火山引擎 Key、余额或权限异常，先看页面错误；系统会暂停转写并显示“改用本地模型转写”，确认后才会使用本地模型。
 4. 后续再按同一 Provider 接口接阿里云、腾讯云或讯飞，实现真正多家切换。
 
 ## 2026-05-24 自动加字幕功能完善后
@@ -387,7 +400,7 @@
 - 已新增转写环境检查脚本和真实短音频冒烟测试脚本。
 - 任务详情顶部已改为“开始处理 / 继续处理”，会自动完成“提取音频 → 转写”；生成切片只保留在片段审核页。
 - 已增加完整转写原文页面，转写预览处可以直接打开完整 `transcript.md`。
-- 远程 AI 失败时会自动尝试本地 AI，并把两边错误写清楚。
+- 远程 AI 失败时会暂停并写清楚原因；需要本地 Ollama 时，用户手动点击“本地 AI 分析”。
 - AI 配置已修正：远程 Key 兼容 `OPENAI_API_KEY`，URL 拼接增加防呆，本地默认模型改为当前机器更容易跑通的 `qwen3:8b`。
 - 已新增 `.venv\Scripts\python.exe scripts\diagnose_ai_environment.py`，用于检查远程中转站和本地 Ollama 是否真的可用。
 - 本地 AI 片段审核已改为分段分析，当前 `测试2 - 19min` 已用 `qwen3:8b` 生成 5 条候选片段并进入待审核。

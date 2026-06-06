@@ -596,6 +596,23 @@ tbody tr:last-child td {
   color: var(--purple);
 }
 
+.task-status-cell {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  max-width: 280px;
+}
+
+.task-status-cell small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .progress,
 .large-progress {
   overflow: hidden;

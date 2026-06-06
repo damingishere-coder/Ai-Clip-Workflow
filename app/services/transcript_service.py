@@ -97,13 +97,14 @@ def write_transcript_markdown(
     audio_path: Path,
     transcript_path: Path,
     progress_callback: Callable[[dict], None] | None = None,
+    provider: str | None = None,
 ) -> dict[str, str]:
     if not audio_path.exists():
         raise RuntimeError("未找到音频文件，请先提取音频")
 
     transcript_path.parent.mkdir(parents=True, exist_ok=True)
     progress_path = get_transcript_progress_path(transcript_path)
-    _set_configured_transcription_runtime()
+    _set_configured_transcription_runtime(provider)
     _emit_transcript_progress(
         progress_path,
         progress_callback,
@@ -118,6 +119,7 @@ def write_transcript_markdown(
         transcript_path.parent,
         progress_path,
         progress_callback,
+        provider=provider,
     )
     content = build_transcript_markdown(task, audio_path, segments)
     temp_path = transcript_path.with_name(f"{transcript_path.name}.tmp")
@@ -148,13 +150,15 @@ def transcribe_audio_with_configured_provider(
     working_dir: Path,
     progress_path: Path,
     progress_callback: Callable[[dict], None] | None = None,
+    provider: str | None = None,
+    allow_fallback: bool = False,
 ) -> list[TranscriptSegment]:
-    provider = _normalize_provider_name(settings.transcription_provider)
+    provider = _normalize_provider_name(provider or settings.transcription_provider)
     fallback_provider = _normalize_provider_name(settings.transcription_fallback_provider)
     try:
         return transcribe_audio_with_provider(audio_path, working_dir, progress_path, provider, progress_callback)
     except Exception as exc:
-        if fallback_provider and fallback_provider != provider:
+        if allow_fallback and fallback_provider and fallback_provider != provider:
             _emit_transcript_progress(
                 progress_path,
                 progress_callback,
@@ -177,7 +181,7 @@ def transcribe_audio_with_configured_provider(
                     f"{_provider_label(provider)} 转写失败：{exc}；"
                     f"{_provider_label(fallback_provider)} 兜底也失败：{fallback_exc}"
                 ) from fallback_exc
-        raise
+        raise RuntimeError(f"{_provider_label(provider)} 转写失败：{exc}") from exc
 
 
 def transcribe_audio_with_provider(
@@ -846,8 +850,8 @@ def _set_active_transcription_runtime(
     _ACTIVE_TRANSCRIPTION_COMPUTE_TYPE = compute_type
 
 
-def _set_configured_transcription_runtime() -> None:
-    provider = _normalize_provider_name(settings.transcription_provider)
+def _set_configured_transcription_runtime(provider: str | None = None) -> None:
+    provider = _normalize_provider_name(provider or settings.transcription_provider)
     if provider == "volcengine":
         _set_active_transcription_runtime(
             provider="volcengine",

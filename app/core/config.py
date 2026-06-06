@@ -88,7 +88,7 @@ class Settings:
     ai_model_context_window: int = int(_env("AI_MODEL_CONTEXT_WINDOW", "1000000"))
     ai_model_auto_compact_token_limit: int = int(_env("AI_MODEL_AUTO_COMPACT_TOKEN_LIMIT", "900000"))
     transcription_provider: str = _env("TRANSCRIPTION_PROVIDER", "volcengine")
-    transcription_fallback_provider: str = _env("TRANSCRIPTION_FALLBACK_PROVIDER", "local")
+    transcription_fallback_provider: str = _env("TRANSCRIPTION_FALLBACK_PROVIDER", "")
     transcription_model: str = _env("TRANSCRIPTION_MODEL", "medium")
     transcription_language: str = _env("TRANSCRIPTION_LANGUAGE", "zh")
     transcription_device: str = _env("TRANSCRIPTION_DEVICE", "cpu")
