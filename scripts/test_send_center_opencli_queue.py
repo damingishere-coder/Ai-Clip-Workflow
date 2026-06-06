@@ -63,7 +63,13 @@ def test_douyin_browser_commands() -> None:
     assert "douyin_ai_cover_not_ready" in text
     assert "AI智能推荐封面" in text
     assert "cover_confirmed" in text
+    assert "horizontal_cover_selected" in text
+    assert "vertical_cover_selected" in text
+    assert "cover_finished" in text
+    assert "设置横封面" in text
+    assert "设置竖封面" in text
     assert "确定" in text
+    assert "完成" in text
     assert "douyin_publish_button_not_found" in text
     assert "ai_cover_selected" in text
     assert "High energy clip" in text
@@ -72,6 +78,31 @@ def test_douyin_browser_commands() -> None:
     assert "\u53d1\u5e03" in text
     assert "\u6211\u77e5\u9053\u4e86" in text
     assert r"C:\tmp\cover.jpg" not in text
+
+
+def test_douyin_description_copies_body_and_platform_topics_directly() -> None:
+    body = "陈亦飞回忆当年在美国陪S姐妹游玩，目睹小S在雨中打电话给妈妈，回房间后对着镜子自信爆棚，大喊“我真的超正的！”，真实又可爱，满满青春回忆"
+    topics = "#小S自恋名场面 #青春回忆杀 #明星搞笑日常 #反差萌瞬间 #姐妹花趣事"
+    job = _fake_job("douyin")
+    job["description"] = body
+    job["tags"] = topics
+
+    description = publish_service._douyin_description_for_job(job, "Fallback title")  # noqa: SLF001
+
+    assert description == f"{body}\n{topics}"
+    commands = publish_service._build_douyin_browser_commands(  # noqa: SLF001
+        job,
+        Path(r"C:\tmp\clip.mp4"),
+        Path(r"C:\tmp\cover.jpg"),
+    )
+    text = _joined(commands)
+    assert body in text
+    assert topics in text
+    assert "data-mention" not in text
+    assert "douyin_topic_insert_failed" not in text
+    assert "replaceChildren" not in text
+    assert not hasattr(publish_service, "_douyin_insert_topics_script")
+    assert not hasattr(publish_service, "_browser_insert_douyin_topics_command")
 
 
 def test_bilibili_browser_commands() -> None:
@@ -214,6 +245,8 @@ def test_opencli_cmd_uses_node_entrypoint() -> None:
 def main() -> None:
     test_douyin_browser_commands()
     print("douyin browser commands: OK")
+    test_douyin_description_copies_body_and_platform_topics_directly()
+    print("douyin direct description topics: OK")
     test_bilibili_browser_commands()
     print("bilibili browser commands: OK")
     test_fallback_metadata()

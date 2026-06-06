@@ -534,3 +534,11 @@
 - 发送中心的话题格式化现在支持空格分隔的 `#话题` 字符串，不会再把中文话题拆坏。
 - 抖音 AI 推荐封面选择后会继续查找并点击“确定 / 确认 / 应用”按钮，处理“是否确认应用此封面？”弹窗，然后再进入最后的发布按钮步骤。
 - 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。
+
+## 2026-06-06 抖音发送简介话题和 AI 推荐封面流程修复
+
+- 抖音发送链路彻底移除残留的“蓝色话题块”插入脚本，不再生成 `data-mention="#"` 结构，避免复杂 JS 在 Windows / opencli 命令链路里再次触发 `SyntaxError: Unexpected token ')'` 或 `gt 不是命令`。
+- 作品描述现在只走一次填写：把发送中心的“正文 / 简介”和平台 `#话题` 合并后直接写入抖音简介框，支持类似 `#小S自恋名场面 #青春回忆杀 #明星搞笑日常` 的空格分隔话题。
+- 抖音 AI 推荐封面流程增强为先选择横封面，再点击“设置竖封面”并选择竖封面，最后点击“完成”后再继续发布。
+- 已补充 `scripts/test_send_center_opencli_queue.py`，覆盖用户提供的真实正文 + 话题格式，并确认发送命令里不再包含话题块插入痕迹。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。

@@ -1390,17 +1390,6 @@ def _hashtags(tags: str) -> str:
     return " ".join(f"#{tag.strip().lstrip('#')}" for tag in re.split(r"[,，]+", normalized_tags or "") if tag.strip())
 
 
-def _douyin_topic_list_for_job(job: dict) -> list[str]:
-    topics: list[str] = []
-    for tag in re.split(r"[,，]+", _format_tags(job.get("tags") or "")):
-        value = tag.strip().lstrip("#")
-        if value and value not in topics:
-            topics.append(value)
-        if len(topics) >= 5:
-            break
-    return topics
-
-
 def _douyin_description_for_job(job: dict, fallback_title: str) -> str:
     description = _sanitize_publish_description(job.get("description") or fallback_title, fallback_title)
     tag_text = _hashtags(job.get("tags") or "")
@@ -1546,69 +1535,27 @@ def _douyin_set_description_script(description: str) -> str:
     )
 
 
-def _douyin_insert_topics_script(description: str, topics: list[str]) -> str:
-    return (
-        "(()=>{"
-        f"const description={json.dumps(description, ensure_ascii=False)};"
-        f"const topics={json.dumps(topics, ensure_ascii=False)};"
-        "const normalize=(text)=>String(text||'').replace(/[\\u200B-\\u200D\\uFEFF\\u00A0]/g,'').replace(/\\s+/g,' ').trim();"
-        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
-        "const editor=[...document.querySelectorAll('div[contenteditable=\"true\"]')].find(visible);"
-        "if(!editor){throw new Error('douyin_topic_editor_not_found');}"
-        "const cleanTopics=[...new Set((topics||[]).map((item)=>String(item||'').replace(/^#+/,'').trim()).filter(Boolean))].slice(0,5);"
-        "const leaf=(attr,text)=>{const outer=document.createElement('span');outer.className='';outer.setAttribute('data-leaf','true');const inner=document.createElement('span');inner.setAttribute(attr,'true');inner.textContent=text;outer.appendChild(inner);return outer;};"
-        "const line=(children)=>{const row=document.createElement('div');row.className='ace-line';row.setAttribute('data-node','true');const wrap=document.createElement('div');wrap.setAttribute('data-line-wrapper','true');wrap.setAttribute('dir','auto');children.forEach((child)=>wrap.appendChild(child));wrap.appendChild(leaf('data-enter',''));row.appendChild(wrap);return row;};"
-        "const mention=(topic)=>{const outer=document.createElement('span');outer.className='';outer.setAttribute('data-leaf','true');const rect=document.createElement('span');rect.setAttribute('data-rect-container','true');const zero=document.createElement('span');zero.setAttribute('data-zero-space','true');zero.textContent='';const fake=document.createElement('span');fake.setAttribute('data-fake-text',' ');fake.setAttribute('contenteditable','false');const block=document.createElement('div');block.setAttribute('data-mention','#');block.style.display='inline';block.appendChild(document.createTextNode(' '));const label=document.createElement('span');label.style.background='rgba(1, 118, 247, 0.12)';label.style.cursor='pointer';label.textContent='#'+topic;block.appendChild(label);block.appendChild(document.createTextNode(' '));fake.appendChild(block);rect.appendChild(zero);rect.appendChild(fake);outer.appendChild(rect);return outer;};"
-        "editor.replaceChildren(line([leaf('data-string',description)]));"
-        "if(cleanTopics.length){editor.appendChild(line(cleanTopics.flatMap((topic)=>[mention(topic),leaf('data-string',' ')])));}"
-        "editor.scrollIntoView({block:'center',inline:'center'});"
-        "editor.focus();"
-        "editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:description}));"
-        "editor.dispatchEvent(new Event('change',{bubbles:true}));"
-        "const html=editor.innerHTML;"
-        "const actual=normalize(editor.innerText||editor.textContent||'');"
-        "const expected=normalize(description);"
-        "const inserted=cleanTopics.filter((topic)=>html.includes('#'+topic)||(editor.innerText||editor.textContent||'').includes('#'+topic));"
-        "if(expected&&actual.split(expected).length-1!==1){throw new Error('douyin_topic_description_duplicate');}"
-        "if(cleanTopics.length&&(!html.includes('data-mention=\"#\"')||inserted.length!==cleanTopics.length)){throw new Error('douyin_topic_insert_failed');}"
-        "return {topics_inserted:inserted.length,topics:inserted,blue_topic_blocks:inserted.length,description_preserved:true};"
-        "})()"
-    )
-
-
 def _douyin_select_ai_cover_script(timeout_seconds: int = 60) -> str:
     return (
         "(async()=>{"
         f"const timeoutMs={int(timeout_seconds) * 1000};"
         "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
-        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&el.getAttribute('aria-disabled')!=='true'&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
         "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
         "const labels=['AI智能推荐封面','智能推荐封面','推荐封面'];"
-        "const confirmCover=async()=>{const startedConfirm=Date.now();while(Date.now()-startedConfirm<8000){const buttons=[...document.querySelectorAll('button,[role=\"button\"]')].filter(visible);const button=buttons.find((item)=>['确定','确认','应用'].includes(textOf(item)));if(button){button.scrollIntoView({block:'center',inline:'center'});button.click();await sleep(500);return true;}await sleep(300);}return false;};"
+        "const buttonTexts=['确定','确认','应用'];"
+        "const clickText=async(names,required=false)=>{const pick=(items)=>items.map((el)=>({el,text:textOf(el)})).filter((item)=>names.some((name)=>item.text===name||item.text.includes(name))).sort((a,b)=>a.text.length-b.text.length)[0]?.el;const startedClick=Date.now();while(Date.now()-startedClick<8000){const primary=[...document.querySelectorAll('button,[role=\"button\"]')].filter(visible);const fallback=[...document.querySelectorAll('div,span')].filter(visible);const button=pick(primary)||pick(fallback);if(button){button.scrollIntoView({block:'center',inline:'center'});button.click();await sleep(600);return true;}await sleep(300);}if(required){throw new Error('douyin_cover_button_not_found:'+names.join('/'));}return false;};"
+        "const confirmCover=async()=>clickText(buttonTexts,false);"
         "const clickLabel=()=>{const target=[...document.querySelectorAll('button,div,span')].find((el)=>visible(el)&&labels.some((label)=>textOf(el).includes(label)));if(target){target.scrollIntoView({block:'center',inline:'center'});target.click();return true;}return false;};"
         "const nearestSection=(el)=>{let node=el;for(let i=0;i<6&&node;i+=1){if((node.querySelectorAll?.('img')||[]).length){return node;}node=node.parentElement;}return el;};"
-        "const candidateSections=()=>{const classSections=[...document.querySelectorAll('[class*=\"recommendCoverContainer\"],.recommendCoverContainer-S5XRoQ')];const textSections=[...document.querySelectorAll('button,div,section')].filter((el)=>visible(el)&&labels.some((label)=>textOf(el).includes(label))).map(nearestSection);return [...new Set([...classSections,...textSections,document.body])];};"
-        "const started=Date.now();"
-        "while(Date.now()-started<timeoutMs){"
-        "clickLabel();"
-        "const containers=candidateSections();"
-        "for(const container of containers){"
-        "const cards=[...container.querySelectorAll('[class*=\"recommendCover\"],img')].filter((item)=>visible(item)&&!(item.textContent||'').includes('暂无更多推荐')&&!(item.textContent||'').includes('生成中'));"
-        "for(const card of cards){"
-        "const img=card.matches?.('img')?card:card.querySelector('img');"
-        "if(!img||!img.getAttribute('src')){continue;}"
-        "const clickable=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],div')||img;"
-        "clickable.scrollIntoView({block:'center',inline:'center'});"
-        "clickable.click();"
-        "img.click();"
-        "await sleep(300);"
-        "const confirmed=await confirmCover();"
-        "return {ai_cover_selected:true,cover_confirmed:confirmed,src:img.getAttribute('src'),waited_ms:Date.now()-started};"
-        "}"
-        "}"
-        "await sleep(1000);"
-        "}"
-        "throw new Error('douyin_ai_cover_not_ready');"
+        "const candidateSections=()=>{const classSections=[...document.querySelectorAll('[class*=\"recommendCoverContainer\"],.recommendCoverContainer-S5XRoQ')].filter(visible);const textSections=[...document.querySelectorAll('button,div,section')].filter((el)=>visible(el)&&labels.some((label)=>textOf(el).includes(label))).map(nearestSection);const sections=[...new Set([...classSections,...textSections])];return sections.length?sections:[document.body];};"
+        "const chooseRecommended=async(orientation)=>{const started=Date.now();while(Date.now()-started<timeoutMs){clickLabel();const containers=candidateSections();for(const container of containers){const cards=[...container.querySelectorAll('[class*=\"recommendCover\"],img')].filter((item)=>visible(item)&&!textOf(item).includes('暂无更多推荐')&&!textOf(item).includes('生成中'));for(const card of cards){const img=card.matches?.('img')?card:card.querySelector('img');if(!img||!img.getAttribute('src')){continue;}const clickable=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],div')||img;clickable.scrollIntoView({block:'center',inline:'center'});clickable.click();img.click();await sleep(500);const confirmed=await confirmCover();return {orientation,selected:true,confirmed,src:img.getAttribute('src'),waited_ms:Date.now()-started};}}await sleep(1000);}throw new Error('douyin_ai_cover_not_ready:'+orientation);};"
+        "const horizontal=await chooseRecommended('horizontal');"
+        "await clickText(['设置竖封面','竖封面'],true);"
+        "const vertical=await chooseRecommended('vertical');"
+        "const coverFinished=await clickText(['完成'],false)||await clickText(['设置横封面'],false);"
+        "if(!coverFinished){throw new Error('douyin_cover_finish_not_found');}"
+        "return {ai_cover_selected:true,horizontal_cover_selected:horizontal.selected,vertical_cover_selected:vertical.selected,cover_confirmed:horizontal.confirmed||vertical.confirmed||coverFinished,cover_finished:coverFinished,horizontal,vertical};"
         "})()"
     )
 
@@ -1629,10 +1576,6 @@ def _douyin_click_publish_script() -> str:
 
 def _browser_set_douyin_description_command(session: str, description: str) -> list[str]:
     return _browser_eval_command(session, _douyin_set_description_script(description))
-
-
-def _browser_insert_douyin_topics_command(session: str, description: str, topics: list[str]) -> list[str]:
-    return _browser_eval_command(session, _douyin_insert_topics_script(description, topics))
 
 
 def _browser_select_douyin_ai_cover_command(session: str) -> list[str]:
