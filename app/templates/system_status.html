@@ -92,7 +92,7 @@
       <li>任务资料根目录：{{ storage_root }}</li>
       <li>数据库文件：{{ database_path }}（{{ "已存在" if database_exists else "尚未创建" }}）</li>
       <li>AI 配置文件：{{ ai_config.env_path }}（{{ "已存在" if ai_config.env_exists else "尚未创建" }}）</li>
-      <li>远程 AI：{{ ai_config['values']['AI_REMOTE_BASE_URL'] }} · {{ ai_config['values']['AI_REMOTE_PROTOCOL'] }} · {{ ai_config['values']['AI_REMOTE_REVIEW_MODEL'] or ai_config['values']['AI_REMOTE_MODEL'] }} · Key {{ "有效" if ai_config.remote_key_valid else "异常" }}</li>
+      <li>远程 AI：{{ ai_config['values']['AI_REMOTE_BASE_URL'] }} · {{ ai_config['values']['AI_REMOTE_PROTOCOL'] }} · 分析 {{ ai_config['values']['AI_REMOTE_REVIEW_MODEL'] or ai_config['values']['AI_REMOTE_MODEL'] }} · 发布文案 {{ ai_config['values']['AI_REMOTE_PUBLISH_MODEL'] }} · Key {{ "有效" if ai_config.remote_key_valid else "异常" }}</li>
       <li>本地 AI：{{ ai_config['values']['AI_LOCAL_BASE_URL'] }} · {{ ai_config['values']['AI_LOCAL_MODEL'] }} · Ollama {{ "在线" if ai_config.local_ollama_online else "离线" }}</li>
       {% if ai_config.local_ollama_models %}
       <li>本地已安装模型：{{ ai_config.local_ollama_models | join(", ") }}</li>
@@ -171,6 +171,17 @@
               {% endif %}
               {% for model_name in ai_config['remote_model_options'] %}
               <option value="{{ model_name }}" {{ "selected" if ai_config['values']['AI_REMOTE_MODEL'] == model_name else "" }}>{{ model_name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            <span>发布文案模型</span>
+            <select name="ai_remote_publish_model">
+              {% if ai_config['values']['AI_REMOTE_PUBLISH_MODEL'] not in ai_config['remote_model_options'] %}
+              <option value="{{ ai_config['values']['AI_REMOTE_PUBLISH_MODEL'] }}" selected>{{ ai_config['values']['AI_REMOTE_PUBLISH_MODEL'] }}</option>
+              {% endif %}
+              {% for model_name in ai_config['remote_model_options'] %}
+              <option value="{{ model_name }}" {{ "selected" if ai_config['values']['AI_REMOTE_PUBLISH_MODEL'] == model_name else "" }}>{{ model_name }}</option>
               {% endfor %}
             </select>
           </label>

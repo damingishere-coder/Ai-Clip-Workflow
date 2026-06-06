@@ -8,6 +8,7 @@ class AIConfigUpdate(BaseModel):
     ai_remote_api_key: str = Field(default="")
     ai_remote_model: str = Field(default="deepseek-v4-flash")
     ai_remote_review_model: str = Field(default="deepseek-v4-flash")
+    ai_remote_publish_model: str = Field(default="deepseek-v4-flash")
     ai_remote_protocol: str = Field(default="chat_completions")
     ai_remote_reasoning_effort: str = Field(default="")
     ai_remote_responses_path: str = Field(default="/v1/responses")

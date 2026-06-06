@@ -143,6 +143,48 @@ def test_fallback_metadata() -> None:
     assert metadata["description"]
 
 
+def test_publish_metadata_ai_uses_deepseek_publish_model_even_when_default_local() -> None:
+    captured: dict[str, str] = {}
+
+    class FakeProvider:
+        def generate_json(self, prompt: str, retry_instruction: str | None = None) -> str:
+            captured["prompt"] = prompt
+            return '{"title":"AI发布标题","tags":["综艺片段","高光时刻"],"description":"适合发布的简介"}'
+
+    original_builder = publish_service.build_remote_provider
+    original_default_provider = publish_service.settings.ai_default_provider
+    original_publish_model = publish_service.settings.ai_remote_publish_model
+    try:
+        object.__setattr__(publish_service.settings, "ai_default_provider", "local")
+        object.__setattr__(publish_service.settings, "ai_remote_publish_model", "deepseek-chat")
+
+        def fake_build_remote_provider(model: str | None = None) -> FakeProvider:
+            captured["model"] = model or ""
+            return FakeProvider()
+
+        publish_service.build_remote_provider = fake_build_remote_provider
+        metadata = publish_service.generate_publish_metadata(
+            {
+                "clip_title": "Great live moment",
+                "task_name": "Demo task",
+                "clip_summary": "Funny audience reaction and useful talking point.",
+                "highlight_reason": "High replay value.",
+            },
+            use_ai=True,
+        )
+    finally:
+        publish_service.build_remote_provider = original_builder
+        object.__setattr__(publish_service.settings, "ai_default_provider", original_default_provider)
+        object.__setattr__(publish_service.settings, "ai_remote_publish_model", original_publish_model)
+
+    assert captured["model"] == "deepseek-chat"
+    assert "原标题" in captured["prompt"]
+    assert metadata["source"] == "ai:deepseek:deepseek-chat"
+    assert metadata["title"] == "AI发布标题"
+    assert metadata["tags"]
+    assert metadata["description"]
+
+
 def test_publish_metadata_sanitizes_sensitive_words() -> None:
     metadata = publish_service.generate_publish_metadata(
         {
@@ -251,6 +293,8 @@ def main() -> None:
     print("bilibili browser commands: OK")
     test_fallback_metadata()
     print("fallback metadata: OK")
+    test_publish_metadata_ai_uses_deepseek_publish_model_even_when_default_local()
+    print("publish metadata DeepSeek model routing: OK")
     test_publish_metadata_sanitizes_sensitive_words()
     print("publish metadata safety: OK")
     test_publish_tags_are_hashtag_topics()

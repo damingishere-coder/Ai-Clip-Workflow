@@ -173,18 +173,7 @@ def build_provider(provider_name: str | None = None) -> AIProvider:
         remote_model = settings.ai_remote_review_model or settings.ai_remote_model
         if settings.ai_remote_model.startswith("deepseek") and not remote_model.startswith("deepseek"):
             remote_model = settings.ai_remote_model
-        return RemoteResponsesProvider(
-            ProviderConfig(
-                base_url=settings.ai_remote_base_url,
-                api_key=settings.ai_remote_api_key,
-                model=remote_model,
-                protocol=settings.ai_remote_protocol,
-                timeout_seconds=settings.ai_request_timeout_seconds,
-                responses_path=settings.ai_remote_responses_path,
-                reasoning_effort=settings.ai_remote_reasoning_effort,
-                disable_response_storage=settings.ai_remote_disable_response_storage.lower() == "true",
-            )
-        )
+        return build_remote_provider(remote_model)
     if resolved == "local":
         return LocalModelProvider(
             ProviderConfig(
@@ -197,6 +186,21 @@ def build_provider(provider_name: str | None = None) -> AIProvider:
             )
         )
     raise AIAnalysisError("AI provider 只能是 remote 或 local")
+
+
+def build_remote_provider(model: str | None = None) -> AIProvider:
+    return RemoteResponsesProvider(
+        ProviderConfig(
+            base_url=settings.ai_remote_base_url,
+            api_key=settings.ai_remote_api_key,
+            model=(model or settings.ai_remote_model or "deepseek-v4-flash"),
+            protocol=settings.ai_remote_protocol,
+            timeout_seconds=settings.ai_request_timeout_seconds,
+            responses_path=settings.ai_remote_responses_path,
+            reasoning_effort=settings.ai_remote_reasoning_effort,
+            disable_response_storage=settings.ai_remote_disable_response_storage.lower() == "true",
+        )
+    )
 
 
 def _read_transcript(transcript_path: Path) -> str:
@@ -798,6 +802,7 @@ __all__ = [
     "AnalysisRequest",
     "analyze_task_transcript",
     "build_provider",
+    "build_remote_provider",
     "inspect_local_analysis_plan",
     "result_to_jsonable",
 ]

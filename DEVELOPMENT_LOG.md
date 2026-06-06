@@ -1,5 +1,12 @@
 # Development Log
 
+## 2026-06-06 发送中心 DeepSeek 发布文案模型配置
+- 新增 `AI_REMOTE_PUBLISH_MODEL` 配置，默认 `deepseek-v4-flash`，用于发送中心 AI 标题、话题和简介生成。
+- 发送中心点击“AI 补齐标题/话题”或“重新生成标题/话题”时固定使用远程 DeepSeek 发布文案模型，不再跟随 `AI_DEFAULT_PROVIDER` 切到本地 Ollama。
+- 系统状态页的“AI 配置”弹窗新增“发布文案模型”下拉框，保存后会写入 `.env` 并立即应用到当前运行服务。
+- 保留失败回退：DeepSeek Key 缺失、接口失败或返回异常时，发送中心继续使用本地规则生成发布文案，并把错误记录到 metadata。
+- 新增 `scripts/test_send_center_opencli_queue.py` 回归用例，确认默认 Provider 为 local 时发送中心 AI 文案仍走 DeepSeek 发布文案模型。
+
 ## 2026-06-06 远程转写与 DeepSeek 失败确认机制
 - 调整转写 Provider 逻辑：任务详情点击“开始处理 / 继续处理”后默认走远程转写；远程不可用时任务会暂停并展示失败原因，不再自动切到本地 faster-whisper。
 - 任务详情页新增“改用本地模型转写”按钮，只在远程转写失败且未生成转写文件时显示；点击前会二次确认，确认后才会以 `provider=local` 重新执行转写。

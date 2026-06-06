@@ -13,6 +13,7 @@ AI_ENV_KEYS = [
     "AI_REMOTE_API_KEY",
     "AI_REMOTE_MODEL",
     "AI_REMOTE_REVIEW_MODEL",
+    "AI_REMOTE_PUBLISH_MODEL",
     "AI_REMOTE_PROTOCOL",
     "AI_REMOTE_REASONING_EFFORT",
     "AI_REMOTE_RESPONSES_PATH",
@@ -36,6 +37,7 @@ SETTING_ATTRS = {
     "AI_REMOTE_API_KEY": "ai_remote_api_key",
     "AI_REMOTE_MODEL": "ai_remote_model",
     "AI_REMOTE_REVIEW_MODEL": "ai_remote_review_model",
+    "AI_REMOTE_PUBLISH_MODEL": "ai_remote_publish_model",
     "AI_REMOTE_PROTOCOL": "ai_remote_protocol",
     "AI_REMOTE_REASONING_EFFORT": "ai_remote_reasoning_effort",
     "AI_REMOTE_RESPONSES_PATH": "ai_remote_responses_path",
@@ -129,6 +131,7 @@ def _write_env_values(values: dict[str, str]) -> None:
                 f"AI_REMOTE_API_KEY={values['AI_REMOTE_API_KEY']}",
                 f"AI_REMOTE_MODEL={values['AI_REMOTE_MODEL']}",
                 f"AI_REMOTE_REVIEW_MODEL={values['AI_REMOTE_REVIEW_MODEL']}",
+                f"AI_REMOTE_PUBLISH_MODEL={values['AI_REMOTE_PUBLISH_MODEL']}",
                 f"AI_REMOTE_PROTOCOL={values['AI_REMOTE_PROTOCOL']}",
                 f"AI_REMOTE_REASONING_EFFORT={values['AI_REMOTE_REASONING_EFFORT']}",
                 f"AI_REMOTE_RESPONSES_PATH={values['AI_REMOTE_RESPONSES_PATH']}",
@@ -195,6 +198,7 @@ def save_ai_config(payload: AIConfigUpdate) -> dict:
     current_values = _current_config_values()
     remote_base_url = payload.ai_remote_base_url.strip() or "https://api.deepseek.com"
     remote_model = payload.ai_remote_model.strip() or "deepseek-v4-flash"
+    remote_publish_model = payload.ai_remote_publish_model.strip() or "deepseek-v4-flash"
     remote_protocol = payload.ai_remote_protocol.strip() or "chat_completions"
     if "deepseek" in remote_base_url.lower() and remote_protocol == "responses":
         remote_protocol = "chat_completions"
@@ -212,6 +216,7 @@ def save_ai_config(payload: AIConfigUpdate) -> dict:
         "AI_REMOTE_API_KEY": payload.ai_remote_api_key.strip() or current_values.get("AI_REMOTE_API_KEY", ""),
         "AI_REMOTE_MODEL": remote_model,
         "AI_REMOTE_REVIEW_MODEL": remote_review_model,
+        "AI_REMOTE_PUBLISH_MODEL": remote_publish_model,
         "AI_REMOTE_PROTOCOL": remote_protocol,
         "AI_REMOTE_REASONING_EFFORT": remote_reasoning_effort,
         "AI_REMOTE_RESPONSES_PATH": payload.ai_remote_responses_path.strip() or "/v1/responses",

@@ -72,6 +72,7 @@ class Settings:
     ai_remote_api_key: str = _env_first(("AI_REMOTE_API_KEY", "OPENAI_API_KEY"), "")
     ai_remote_model: str = _env("AI_REMOTE_MODEL", "deepseek-v4-flash")
     ai_remote_review_model: str = _env("AI_REMOTE_REVIEW_MODEL", "deepseek-v4-flash")
+    ai_remote_publish_model: str = _env("AI_REMOTE_PUBLISH_MODEL", "deepseek-v4-flash")
     ai_remote_protocol: str = _env("AI_REMOTE_PROTOCOL", "chat_completions")
     ai_remote_reasoning_effort: str = _env("AI_REMOTE_REASONING_EFFORT", "")
     ai_remote_responses_path: str = _env("AI_REMOTE_RESPONSES_PATH", "/v1/responses")
