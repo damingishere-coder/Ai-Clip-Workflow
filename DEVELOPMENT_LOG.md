@@ -1,5 +1,13 @@
 # Development Log
 
+## 2026-06-06 三类 AI 接口配置拆分
+- 系统状态页的 AI 配置从弹窗改为页面内直接编辑，按 `1. 音频转写`、`2. 分析文字稿，生成候选切片`、`3. 发送中心生成发布文案` 三块展示。
+- API Key 输入框改为普通文本框，页面会完整回显当前 `.env` 中的 Key，适合本机个人使用。
+- `.env` 保存逻辑改为按键更新并保留原文件内容，避免保存 AI 配置时误删 `VOLCENGINE_ASR_API_KEY`、存储路径或其他本地配置。
+- 新增 `AI_ANALYSIS_REMOTE_*` 和 `AI_PUBLISH_REMOTE_*` 独立远程接口配置；旧 `AI_REMOTE_*`、`AI_REMOTE_PUBLISH_MODEL` 仍作为兼容默认值读取。
+- 任务详情页远程按钮文案统一为“远程 AI 分析”，发送中心发布文案固定使用 `AI_PUBLISH_REMOTE_*` 接口。
+- 新增 `scripts/test_ai_config_service.py`，验证保存配置不会删除火山转写 Key 和其他无关 `.env` 内容。
+
 ## 2026-06-06 发送中心 DeepSeek 发布文案模型配置
 - 新增 `AI_REMOTE_PUBLISH_MODEL` 配置，默认 `deepseek-v4-flash`，用于发送中心 AI 标题、话题和简介生成。
 - 发送中心点击“AI 补齐标题/话题”或“重新生成标题/话题”时固定使用远程 DeepSeek 发布文案模型，不再跟随 `AI_DEFAULT_PROVIDER` 切到本地 Ollama。

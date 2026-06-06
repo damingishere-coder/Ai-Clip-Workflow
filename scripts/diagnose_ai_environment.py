@@ -55,28 +55,28 @@ def _task_prompt_check(task_id: str) -> bool:
 def main() -> int:
     failures = 0
     task_id = sys.argv[1] if len(sys.argv) > 1 else ""
-    remote_path = settings.ai_remote_responses_path
-    if settings.ai_remote_protocol == "chat_completions":
-        remote_path = "/chat/completions" if settings.ai_remote_base_url.rstrip("/").endswith("/v1") or "deepseek" in settings.ai_remote_base_url.lower() else "/v1/chat/completions"
-    remote_url = build_url(settings.ai_remote_base_url, remote_path)
+    remote_path = settings.ai_analysis_remote_responses_path
+    if settings.ai_analysis_remote_protocol == "chat_completions":
+        remote_path = "/chat/completions" if settings.ai_analysis_remote_base_url.rstrip("/").endswith("/v1") or "deepseek" in settings.ai_analysis_remote_base_url.lower() else "/v1/chat/completions"
+    remote_url = build_url(settings.ai_analysis_remote_base_url, remote_path)
     local_url = build_url(settings.ai_local_base_url, "/chat/completions")
 
     print("AI environment diagnostics")
     print(f"Remote URL: {remote_url}")
-    print(f"Remote model: {settings.ai_remote_review_model or settings.ai_remote_model}")
-    print(f"Remote protocol: {settings.ai_remote_protocol}")
-    print(f"Remote key length: {len(settings.ai_remote_api_key or '')}")
+    print(f"Analysis remote model: {settings.ai_analysis_remote_model}")
+    print(f"Analysis remote protocol: {settings.ai_analysis_remote_protocol}")
+    print(f"Analysis remote key length: {len(settings.ai_analysis_remote_api_key or '')}")
     print(f"Local URL: {local_url}")
     print(f"Local model: {settings.ai_local_model}")
 
     if remote_key_looks_valid():
-        print_result("Remote key shape", True, "AI_REMOTE_API_KEY / OPENAI_API_KEY looks present.")
+        print_result("Analysis remote key shape", True, "AI_ANALYSIS_REMOTE_API_KEY looks present.")
     else:
         failures += 1
         print_result(
             "Remote key shape",
             False,
-            "Remote key looks missing or invalid. Set AI_REMOTE_API_KEY, or OPENAI_API_KEY as a fallback.",
+            "Analysis remote key looks missing or invalid. Set AI_ANALYSIS_REMOTE_API_KEY.",
         )
 
     try:

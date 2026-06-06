@@ -693,8 +693,8 @@ def generate_publish_metadata(item: dict, use_ai: bool = False) -> dict:
         return metadata
 
     try:
-        publish_model = settings.ai_remote_publish_model or "deepseek-v4-flash"
-        provider = build_remote_provider(publish_model)
+        publish_model = settings.ai_publish_remote_model or "deepseek-v4-flash"
+        provider = build_remote_provider(publish_model, purpose="publish")
         parsed = json.loads(provider.generate_json(_metadata_prompt(item)))
         safe_content = _sanitize_publish_content(
             parsed.get("title") or fallback_title,
@@ -707,7 +707,7 @@ def generate_publish_metadata(item: dict, use_ai: bool = False) -> dict:
             "title": safe_content["title"],
             "tags": safe_content["tags"],
             "description": safe_content["description"],
-            "source": f"ai:deepseek:{publish_model}",
+            "source": f"ai:remote-publish:{publish_model}",
             "error": "",
         }
     except (AIProviderError, json.JSONDecodeError, TypeError, ValueError) as exc:

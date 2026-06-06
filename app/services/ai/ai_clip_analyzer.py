@@ -170,10 +170,7 @@ def _analyze_task_transcript_in_local_chunks(
 def build_provider(provider_name: str | None = None) -> AIProvider:
     resolved = (provider_name or settings.ai_default_provider).lower()
     if resolved == "remote":
-        remote_model = settings.ai_remote_review_model or settings.ai_remote_model
-        if settings.ai_remote_model.startswith("deepseek") and not remote_model.startswith("deepseek"):
-            remote_model = settings.ai_remote_model
-        return build_remote_provider(remote_model)
+        return build_remote_provider(settings.ai_analysis_remote_model)
     if resolved == "local":
         return LocalModelProvider(
             ProviderConfig(
@@ -188,17 +185,32 @@ def build_provider(provider_name: str | None = None) -> AIProvider:
     raise AIAnalysisError("AI provider 只能是 remote 或 local")
 
 
-def build_remote_provider(model: str | None = None) -> AIProvider:
+def build_remote_provider(model: str | None = None, purpose: str = "analysis") -> AIProvider:
+    if purpose == "publish":
+        return RemoteResponsesProvider(
+            ProviderConfig(
+                base_url=settings.ai_publish_remote_base_url,
+                api_key=settings.ai_publish_remote_api_key,
+                model=(model or settings.ai_publish_remote_model or "deepseek-v4-flash"),
+                protocol=settings.ai_publish_remote_protocol,
+                timeout_seconds=settings.ai_publish_request_timeout_seconds,
+                responses_path=settings.ai_publish_remote_responses_path,
+                reasoning_effort=settings.ai_publish_remote_reasoning_effort,
+                disable_response_storage=settings.ai_publish_remote_disable_response_storage.lower() == "true",
+                api_key_name="AI_PUBLISH_REMOTE_API_KEY",
+            )
+        )
     return RemoteResponsesProvider(
         ProviderConfig(
-            base_url=settings.ai_remote_base_url,
-            api_key=settings.ai_remote_api_key,
-            model=(model or settings.ai_remote_model or "deepseek-v4-flash"),
-            protocol=settings.ai_remote_protocol,
-            timeout_seconds=settings.ai_request_timeout_seconds,
-            responses_path=settings.ai_remote_responses_path,
-            reasoning_effort=settings.ai_remote_reasoning_effort,
-            disable_response_storage=settings.ai_remote_disable_response_storage.lower() == "true",
+            base_url=settings.ai_analysis_remote_base_url,
+            api_key=settings.ai_analysis_remote_api_key,
+            model=(model or settings.ai_analysis_remote_model or "deepseek-v4-flash"),
+            protocol=settings.ai_analysis_remote_protocol,
+            timeout_seconds=settings.ai_analysis_request_timeout_seconds,
+            responses_path=settings.ai_analysis_remote_responses_path,
+            reasoning_effort=settings.ai_analysis_remote_reasoning_effort,
+            disable_response_storage=settings.ai_analysis_remote_disable_response_storage.lower() == "true",
+            api_key_name="AI_ANALYSIS_REMOTE_API_KEY",
         )
     )
 

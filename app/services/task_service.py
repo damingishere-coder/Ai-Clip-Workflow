@@ -501,8 +501,8 @@ def _ai_model_name(provider_name: str) -> str:
     if provider_name == "local":
         return settings.ai_local_model
     if provider_name == "remote":
-        return settings.ai_remote_review_model or settings.ai_remote_model
-    return settings.ai_remote_model
+        return settings.ai_analysis_remote_model
+    return settings.ai_analysis_remote_model
 
 
 def _ai_provider_label(provider_name: str) -> str:
@@ -1388,9 +1388,9 @@ def get_task_ai_analysis_status(task_id: str) -> dict:
         if any("将使用分段分析" in line for line in log_lines):
             percent = 62
             message = "AI 已读取 Prompt 和转写文本，正在分段生成候选片段。"
-        if any("远程 AI 不可用" in line for line in log_lines):
+        if any("远程 AI 分析接口不可用" in line for line in log_lines):
             percent = 72
-            message = "远程 AI 暂不可用，系统正在尝试本地 AI。"
+            message = "远程 AI 分析接口暂不可用，已暂停等待你确认下一步。"
     elif task.get("status") == TaskStatus.pending_review.value and has_analysis:
         status = "completed"
         percent = 100
@@ -2335,7 +2335,7 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             provider_error = str(provider_exc)
             if provider_name == "remote":
                 raise AIAnalysisError(
-                    "DeepSeek 远程 AI 不可用，已暂停 AI 分析："
+                    "远程 AI 分析接口不可用，已暂停 AI 分析："
                     f"{provider_error}。如需使用本地模型，请点击“本地 AI 分析”。"
                 ) from provider_exc
             raise

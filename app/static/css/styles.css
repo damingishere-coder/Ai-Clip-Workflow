@@ -1602,6 +1602,41 @@ button:disabled {
   line-height: 1.5;
 }
 
+.ai-config-panel {
+  margin-top: 22px;
+}
+
+.ai-interface-form {
+  overflow: visible;
+}
+
+.ai-interface-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.ai-interface-section {
+  align-content: start;
+}
+
+.ai-interface-section input,
+.ai-interface-section select {
+  min-width: 0;
+}
+
+.inline-actions {
+  position: static;
+  padding-top: 2px;
+}
+
+@media (max-width: 1180px) {
+  .ai-interface-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;

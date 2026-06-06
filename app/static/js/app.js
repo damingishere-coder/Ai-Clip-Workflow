@@ -403,7 +403,7 @@ function renderAiAnalysisHistory(runs) {
   if (!aiAnalysisRuns.length) {
     const empty = document.createElement("p");
     empty.className = "empty-note";
-    empty.textContent = "还没有历史分析结果。完成一次 DeepSeek AI 分析或本地 AI 分析后，这里会自动出现记录。";
+    empty.textContent = "还没有历史分析结果。完成一次远程 AI 分析或本地 AI 分析后，这里会自动出现记录。";
     aiAnalysisHistoryList.append(empty);
     return;
   }
@@ -553,7 +553,7 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
       return;
     }
     if (provider === "remote") {
-      const confirmed = window.confirm(`确认使用“${selectedName}”发起 DeepSeek AI 分析吗？\n\n这会重新生成候选片段，并覆盖当前已有的 AI 候选结果。`);
+      const confirmed = window.confirm(`确认使用“${selectedName}”发起远程 AI 分析吗？\n\n这会重新生成候选片段，并覆盖当前已有的 AI 候选结果。`);
       if (!confirmed) return;
     }
     button.disabled = true;
@@ -1851,10 +1851,13 @@ if (aiConfigForm) {
     const formData = new FormData(aiConfigForm);
     const payload = Object.fromEntries(formData.entries());
     payload.ai_request_timeout_seconds = Number(payload.ai_request_timeout_seconds || 120);
+    payload.volcengine_asr_timeout_seconds = Number(payload.volcengine_asr_timeout_seconds || 300);
+    payload.ai_analysis_request_timeout_seconds = Number(payload.ai_analysis_request_timeout_seconds || 120);
+    payload.ai_publish_request_timeout_seconds = Number(payload.ai_publish_request_timeout_seconds || 120);
     payload.ai_local_health_timeout_seconds = Number(payload.ai_local_health_timeout_seconds || 30);
 
     submitButton.disabled = true;
-    if (aiConfigResult) aiConfigResult.textContent = "正在保存 AI 配置...";
+    if (aiConfigResult) aiConfigResult.textContent = "正在保存三类 AI 接口配置...";
 
     try {
       const response = await fetch("/api/settings/ai", {

@@ -528,9 +528,9 @@ def _build_volcengine_flash_payload(audio_path: Path) -> dict:
 
 def _ensure_volcengine_configured() -> None:
     if not settings.volcengine_asr_api_key and not settings.volcengine_asr_app_key:
-        raise RuntimeError("缺少火山引擎转写密钥，请在 .env 中填写 VOLCENGINE_ASR_API_KEY")
+        raise RuntimeError("缺少火山引擎转写密钥，请在系统状态页的“1. 音频转写”填写 API Key")
     if not settings.volcengine_asr_resource_id:
-        raise RuntimeError("缺少火山引擎资源 ID，请在 .env 中填写 VOLCENGINE_ASR_RESOURCE_ID")
+        raise RuntimeError("缺少火山引擎资源 ID，请在系统状态页的“1. 音频转写”填写资源 ID")
 
 
 def _volcengine_headers() -> dict[str, str]:

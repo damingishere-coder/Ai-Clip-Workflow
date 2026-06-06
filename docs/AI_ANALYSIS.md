@@ -15,26 +15,26 @@
 
 项目根目录新增 `.env.example`。第一次使用时，把它复制为 `.env`，再填写真实配置。
 
-也可以在页面中配置：打开 `http://127.0.0.1:8001/system`，点击右上角“AI 配置”，在弹窗里填写远程 AI 或本地 AI 信息后保存。页面会把配置写入项目根目录 `.env`，真实 API Key 不会提交到 Git。
+也可以在页面中配置：打开 `http://127.0.0.1:8001/system`，在“三类 AI 接口配置”里填写 `2. 分析文字稿，生成候选切片` 后保存。页面会把配置写入项目根目录 `.env`，真实 API Key 不会提交到 Git。
 
 页面保存规则：
 
-- API Key 输入框默认不回显明文，只显示脱敏占位。
-- 如果保存时 API Key 留空，会保留 `.env` 里原来的密钥。
+- API Key 输入框会完整回显当前值，方便本机个人使用。
+- 保存时只更新页面相关配置键，会保留 `.env` 里的火山转写 Key、存储路径和其他无关配置。
 - 保存后当前运行中的服务会立即使用新配置；如果后续手动改 `.env`，建议重启服务。
 
-远程中转站配置：
+远程文字稿分析接口配置：
 
 ```text
 AI_DEFAULT_PROVIDER=remote
-AI_REMOTE_BASE_URL=https://api.deepseek.com
-AI_REMOTE_API_KEY=你的 DeepSeek API Key
-AI_REMOTE_MODEL=deepseek-v4-flash
-AI_REMOTE_REVIEW_MODEL=deepseek-v4-flash
-AI_REMOTE_PROTOCOL=chat_completions
-AI_REMOTE_REASONING_EFFORT=
-AI_REMOTE_RESPONSES_PATH=/v1/responses
-AI_REMOTE_DISABLE_RESPONSE_STORAGE=true
+AI_ANALYSIS_REMOTE_BASE_URL=https://api.deepseek.com
+AI_ANALYSIS_REMOTE_API_KEY=你的文字稿分析 API Key
+AI_ANALYSIS_REMOTE_MODEL=deepseek-v4-flash
+AI_ANALYSIS_REMOTE_PROTOCOL=chat_completions
+AI_ANALYSIS_REMOTE_REASONING_EFFORT=
+AI_ANALYSIS_REMOTE_RESPONSES_PATH=/v1/responses
+AI_ANALYSIS_REMOTE_DISABLE_RESPONSE_STORAGE=true
+AI_ANALYSIS_REQUEST_TIMEOUT_SECONDS=120
 ```
 
 本地 Ollama 配置：

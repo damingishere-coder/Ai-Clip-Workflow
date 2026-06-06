@@ -104,7 +104,7 @@
     <article class="panel empty-state">
       <p class="eyebrow">Empty</p>
       <h2>暂无候选片段</h2>
-      <p>请先完成转写和 AI 片段分析。远程 AI 会使用完整转写；如果远程不可用，系统会自动切到本地分段分析，避免 Ollama 一次性处理过长文本。</p>
+      <p>请先完成转写和 AI 片段分析。远程 AI 会使用完整转写；如果远程不可用，系统会暂停并显示原因，需要你手动回到任务详情页选择本地 AI 分析。</p>
       <div class="button-row empty-actions">
         <a class="secondary-button" href="/tasks/{{ task.id }}">返回任务详情</a>
         <button class="secondary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow" {{ "disabled" if task.transcript_exists else "" }}>先生成转写</button>

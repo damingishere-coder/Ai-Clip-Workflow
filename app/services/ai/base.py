@@ -31,6 +31,7 @@ class ProviderConfig:
     reasoning_effort: str | None = None
     fallback_protocol: str | None = None
     disable_response_storage: bool = True
+    api_key_name: str = "远程接口 API Key"
 
 
 def build_url(base_url: str, path: str) -> str:
