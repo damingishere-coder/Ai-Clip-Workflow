@@ -1,5 +1,14 @@
 # Development Log
 
+## 2026-06-07 DeepSeek Pro 整集分析空正文修复
+- 修复远程 DeepSeek Pro 分析长视频时返回空 `message.content`，导致页面报“AI Chat Completions 响应中没有文本内容”的问题。
+- `app/services/ai/remote_responses_provider.py` 对 DeepSeek Chat Completions 请求显式加入 `thinking: {"type": "disabled"}`，让整集切片分析直接输出严格 JSON，不把输出预算消耗在推理内容上；非 DeepSeek 的 OpenAI-compatible 接口不加该专属字段。
+- `app/services/ai/base.py` 增强 Chat Completions 空正文报错信息，会带上 `finish_reason`、返回字段和推理内容长度，后续如果接口异常能更快定位。
+- 新增 `scripts/test_remote_ai_chat_payload.py`，离线验证 DeepSeek 请求会关闭 thinking、普通接口 payload 不受影响、空正文错误包含诊断信息。
+- 已验证真实 DeepSeek 连通测试通过，并对任务 `d38b9158aba1`（测试5 - 康熙来了）重新执行远程 AI 分析，成功生成 12 条候选片段，任务已进入片段审核流程。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_remote_ai_chat_payload.py`、`.venv\Scripts\python.exe scripts\test_remote_ai_transcript_input.py`、`.venv\Scripts\python.exe scripts\test_ai_json_validation.py`、`.venv\Scripts\python.exe scripts\test_transcript_markdown_format.py`、`.venv\Scripts\python.exe scripts\test_remote_ai_connection.py` 均通过。
+- 本次不调整页面结构，因此不需要同步更新 `docs/UI_REFERENCE.md`。
+
 ## 2026-06-06 三类 AI 接口配置拆分
 - 系统状态页的 AI 配置从弹窗改为页面内直接编辑，按 `1. 音频转写`、`2. 分析文字稿，生成候选切片`、`3. 发送中心生成发布文案` 三块展示。
 - API Key 输入框改为普通文本框，页面会完整回显当前 `.env` 中的 Key，适合本机个人使用。
