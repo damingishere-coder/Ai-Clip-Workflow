@@ -73,6 +73,9 @@ def test_douyin_browser_commands() -> None:
     assert "leftmost_ai_cover_selected" in text
     assert "cover_success_detected" in text
     assert "cover_applied" in text
+    assert "badImage" in text
+    assert "douyin-creator-logo" in text
+    assert "douyin_cover_click_navigated" in text
     assert "douyin_cover_retryable:true" in text
     assert "是否确认应用此封面" in text
     assert "douyin_cover_confirm_dialog_not_clicked" in text

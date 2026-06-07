@@ -1553,10 +1553,11 @@ def _douyin_cover_helpers_script() -> str:
         "const successTexts=['封面效果检测通过','封面检测通过','检测通过'];"
         "const successDetected=()=>successTexts.some((item)=>textOf(document.body).includes(item));"
         "const hover=(el)=>{['mouseover','mouseenter','mousemove'].forEach((type)=>el.dispatchEvent(new MouseEvent(type,{bubbles:true,view:window})));};"
-        "const labelNodes=()=>[...document.querySelectorAll('button,div,span,section')].filter((el)=>visible(el)&&labels.some((label)=>textOf(el).includes(label)));"
+        "const labelNodes=()=>[...document.querySelectorAll('button,div,span,section')].filter((el)=>{if(!visible(el)){return false;}const rect=el.getBoundingClientRect();const text=textOf(el);return labels.some((label)=>text.includes(label))&&text.length<=80&&rect.width>0&&rect.height>0&&rect.width<720&&rect.height<220;});"
         "const nearLabel=(img,labelRect)=>{const rect=img.getBoundingClientRect();return rect.left>=labelRect.left-30&&rect.top>=labelRect.top-20&&rect.top<=labelRect.top+300;};"
         "const candidateSections=()=>{const entries=[];for(const label of labelNodes()){let best=null;let node=label;const labelRect=label.getBoundingClientRect();for(let i=0;i<9&&node;i+=1){const rect=node.getBoundingClientRect();const imgs=[...node.querySelectorAll('img')].filter((img)=>visible(img)&&nearLabel(img,labelRect));if(imgs.length&&rect.width>0&&rect.height>0){const area=rect.width*rect.height;if(!best||area<best.area){best={section:node,label,area};}}node=node.parentElement;}if(best){entries.push(best);}}const seen=new Set();return entries.filter((item)=>{if(seen.has(item.section)){return false;}seen.add(item.section);return true;});};"
-        "const realImages=()=>candidateSections().flatMap((entry)=>[...entry.section.querySelectorAll('img')].filter((img)=>{const rect=img.getBoundingClientRect();const src=img.currentSrc||img.src||img.getAttribute('src')||'';const owner=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;const context=textOf(owner);return visible(img)&&nearLabel(img,entry.label.getBoundingClientRect())&&src&&img.complete!==false&&img.naturalWidth>40&&img.naturalHeight>40&&rect.width>24&&rect.height>24&&!context.includes('暂无更多推荐')&&!context.includes('生成中');}).map((img)=>({img,rect:img.getBoundingClientRect()}))).sort((a,b)=>a.rect.left-b.rect.left||a.rect.top-b.rect.top);"
+        "const badImage=(src)=>/logo|avatar|favicon|icon|douyin-creator-logo|static\\/image/i.test(src||'');"
+        "const realImages=()=>candidateSections().flatMap((entry)=>[...entry.section.querySelectorAll('img')].filter((img)=>{const rect=img.getBoundingClientRect();const src=img.currentSrc||img.src||img.getAttribute('src')||'';const owner=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;const context=textOf(owner);const ratio=rect.width/Math.max(rect.height,1);return visible(img)&&nearLabel(img,entry.label.getBoundingClientRect())&&src&&!badImage(src)&&img.complete!==false&&img.naturalWidth>60&&img.naturalHeight>60&&rect.width>=48&&rect.height>=48&&ratio>0.55&&ratio<2.4&&rect.top>80&&!context.includes('暂无更多推荐')&&!context.includes('生成中');}).map((img)=>({img,rect:img.getBoundingClientRect()}))).sort((a,b)=>a.rect.left-b.rect.left||a.rect.top-b.rect.top);"
         "const clickText=async(names,timeoutMs=12000)=>{const started=Date.now();let sawDialog=false;while(Date.now()-started<timeoutMs){const bodyText=textOf(document.body);sawDialog=sawDialog||bodyText.includes('是否确认应用此封面')||bodyText.includes('确认应用此封面');const candidates=[...document.querySelectorAll('button,[role=\"button\"],div,span')].filter(visible).map((el)=>({el,text:textOf(el)})).filter((item)=>names.some((name)=>item.text===name||item.text.includes(name))).sort((a,b)=>a.text.length-b.text.length);const target=candidates[0]?.el;if(target){target.scrollIntoView({block:'center',inline:'center'});target.click();await sleep(900);return {clicked:true,text:textOf(target),saw_dialog:sawDialog};}if(successDetected()){return {clicked:false,success_detected:true,saw_dialog:sawDialog};}await sleep(350);}return {clicked:false,saw_dialog:sawDialog};};"
     )
 
@@ -1578,9 +1579,12 @@ def _douyin_click_ai_cover_script() -> str:
         f"{_douyin_cover_helpers_script()}"
         "const images=realImages();"
         "if(!images.length){throw new Error('douyin_ai_cover_not_ready:0');}"
+        "const beforeUrl=location.href;"
         "const img=images[0].img;"
         "const clickable=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;"
         "clickable.scrollIntoView({block:'center',inline:'center'});hover(clickable);hover(img);await sleep(350);clickable.click();img.click();"
+        "await sleep(900);"
+        "if(location.href!==beforeUrl&&/content\\/manage|manage/.test(location.href)){throw new Error('douyin_cover_click_navigated:'+location.href);}"
         "return {ai_cover_clicked:true,leftmost_ai_cover_selected:true,src:img.currentSrc||img.src||img.getAttribute('src')||'',retryMarker};"
         "})()"
     )
