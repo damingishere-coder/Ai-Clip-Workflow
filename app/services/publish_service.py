@@ -1536,7 +1536,7 @@ def _douyin_set_description_script(description: str) -> str:
     )
 
 
-def _douyin_select_ai_cover_script(timeout_seconds: int = 60) -> str:
+def _douyin_select_ai_cover_script(timeout_seconds: int = 150) -> str:
     return (
         "(async()=>{"
         f"const timeoutMs={int(timeout_seconds) * 1000};"
@@ -1544,19 +1544,20 @@ def _douyin_select_ai_cover_script(timeout_seconds: int = 60) -> str:
         "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&el.getAttribute('aria-disabled')!=='true'&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
         "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
         "const labels=['AI智能推荐封面','智能推荐封面','推荐封面'];"
-        "const buttonTexts=['确定','确认','应用'];"
-        "const clickText=async(names,required=false)=>{const pick=(items)=>items.map((el)=>({el,text:textOf(el)})).filter((item)=>names.some((name)=>item.text===name||item.text.includes(name))).sort((a,b)=>a.text.length-b.text.length)[0]?.el;const startedClick=Date.now();while(Date.now()-startedClick<8000){const primary=[...document.querySelectorAll('button,[role=\"button\"]')].filter(visible);const fallback=[...document.querySelectorAll('div,span')].filter(visible);const button=pick(primary)||pick(fallback);if(button){button.scrollIntoView({block:'center',inline:'center'});button.click();await sleep(600);return true;}await sleep(300);}if(required){throw new Error('douyin_cover_button_not_found:'+names.join('/'));}return false;};"
-        "const confirmCover=async()=>clickText(buttonTexts,false);"
-        "const clickLabel=()=>{const target=[...document.querySelectorAll('button,div,span')].find((el)=>visible(el)&&labels.some((label)=>textOf(el).includes(label)));if(target){target.scrollIntoView({block:'center',inline:'center'});target.click();return true;}return false;};"
-        "const nearestSection=(el)=>{let node=el;for(let i=0;i<6&&node;i+=1){if((node.querySelectorAll?.('img')||[]).length){return node;}node=node.parentElement;}return el;};"
-        "const candidateSections=()=>{const classSections=[...document.querySelectorAll('[class*=\"recommendCoverContainer\"],.recommendCoverContainer-S5XRoQ')].filter(visible);const textSections=[...document.querySelectorAll('button,div,section')].filter((el)=>visible(el)&&labels.some((label)=>textOf(el).includes(label))).map(nearestSection);const sections=[...new Set([...classSections,...textSections])];return sections.length?sections:[document.body];};"
-        "const chooseRecommended=async(orientation)=>{const started=Date.now();while(Date.now()-started<timeoutMs){clickLabel();const containers=candidateSections();for(const container of containers){const cards=[...container.querySelectorAll('[class*=\"recommendCover\"],img')].filter((item)=>visible(item)&&!textOf(item).includes('暂无更多推荐')&&!textOf(item).includes('生成中'));for(const card of cards){const img=card.matches?.('img')?card:card.querySelector('img');if(!img||!img.getAttribute('src')){continue;}const clickable=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],div')||img;clickable.scrollIntoView({block:'center',inline:'center'});clickable.click();img.click();await sleep(500);const confirmed=await confirmCover();return {orientation,selected:true,confirmed,src:img.getAttribute('src'),waited_ms:Date.now()-started};}}await sleep(1000);}throw new Error('douyin_ai_cover_not_ready:'+orientation);};"
-        "const horizontal=await chooseRecommended('horizontal');"
-        "await clickText(['设置竖封面','竖封面'],true);"
-        "const vertical=await chooseRecommended('vertical');"
-        "const coverFinished=await clickText(['完成'],false)||await clickText(['设置横封面'],false);"
-        "if(!coverFinished){throw new Error('douyin_cover_finish_not_found');}"
-        "return {ai_cover_selected:true,horizontal_cover_selected:horizontal.selected,vertical_cover_selected:vertical.selected,cover_confirmed:horizontal.confirmed||vertical.confirmed||coverFinished,cover_finished:coverFinished,horizontal,vertical};"
+        "const confirmTexts=['设为封面','设置为封面','使用封面','确认使用','确定','确认','应用'];"
+        "const successTexts=['封面效果检测通过','检测通过'];"
+        "const successDetected=()=>successTexts.some((item)=>textOf(document.body).includes(item));"
+        "const clickText=async(names)=>{const startedClick=Date.now();while(Date.now()-startedClick<10000){const candidates=[...document.querySelectorAll('button,[role=\"button\"],div,span')].filter(visible).map((el)=>({el,text:textOf(el)})).filter((item)=>names.some((name)=>item.text===name||item.text.includes(name))).sort((a,b)=>a.text.length-b.text.length);const target=candidates[0]?.el;if(target){target.scrollIntoView({block:'center',inline:'center'});target.click();await sleep(800);return {clicked:true,text:textOf(target)};}if(successDetected()){return {clicked:false,success_detected:true};}await sleep(300);}return {clicked:false};};"
+        "const labelNodes=()=>[...document.querySelectorAll('button,div,span,section')].filter((el)=>visible(el)&&labels.some((label)=>textOf(el).includes(label)));"
+        "const nearLabel=(img,labelRect)=>{const rect=img.getBoundingClientRect();return rect.left>=labelRect.left-30&&rect.top>=labelRect.top-20&&rect.top<=labelRect.top+260;};"
+        "const candidateSections=()=>{const entries=[];for(const label of labelNodes()){let best=null;let node=label;const labelRect=label.getBoundingClientRect();for(let i=0;i<9&&node;i+=1){const rect=node.getBoundingClientRect();const imgs=[...node.querySelectorAll('img')].filter((img)=>visible(img)&&nearLabel(img,labelRect));if(imgs.length&&rect.width>0&&rect.height>0){const area=rect.width*rect.height;if(!best||area<best.area){best={section:node,label,area};}}node=node.parentElement;}if(best){entries.push(best);}}const seen=new Set();return entries.filter((item)=>{if(seen.has(item.section)){return false;}seen.add(item.section);return true;});};"
+        "const realImages=(entry)=>[...entry.section.querySelectorAll('img')].filter((img)=>{const rect=img.getBoundingClientRect();const src=img.currentSrc||img.src||img.getAttribute('src')||'';const owner=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;const context=textOf(owner);return visible(img)&&nearLabel(img,entry.label.getBoundingClientRect())&&src&&img.complete!==false&&img.naturalWidth>40&&img.naturalHeight>40&&rect.width>24&&rect.height>24&&!context.includes('暂无更多推荐')&&!context.includes('生成中');}).map((img)=>({img,rect:img.getBoundingClientRect()})).sort((a,b)=>a.rect.left-b.rect.left||a.rect.top-b.rect.top);"
+        "const selectedState=(img)=>{const owner=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;const className=(owner.className||'').toString();const text=textOf(owner);return /selected|active|checked|current/i.test(className)||text.includes('已选择')||text.includes('已选');};"
+        "const chooseLeftmostAiCover=async()=>{const started=Date.now();while(Date.now()-started<timeoutMs){const entries=candidateSections();for(const entry of entries){entry.section.scrollIntoView({block:'center',inline:'center'});const images=realImages(entry);if(images.length){const img=images[0].img;const src=img.currentSrc||img.src||img.getAttribute('src');const clickable=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;clickable.scrollIntoView({block:'center',inline:'center'});clickable.click();img.click();await sleep(1000);const confirm=await clickText(confirmTexts);const selectedAfterClick=selectedState(img);return {selected:true,selected_after_click:selectedAfterClick,confirmed:confirm,success_detected:successDetected(),src,waited_ms:Date.now()-started};}}await sleep(1000);}throw new Error('douyin_ai_cover_not_ready');};"
+        "const selected=await chooseLeftmostAiCover();"
+        "if(!selected.confirmed.clicked&&!selected.success_detected){selected.confirm_retry=await clickText(confirmTexts);selected.success_detected=successDetected();}"
+        "const coverConfirmed=Boolean(selected.confirmed.clicked||selected.confirm_retry?.clicked||selected.success_detected||selected.selected_after_click||selected.selected);"
+        "return {ai_cover_selected:true,leftmost_ai_cover_selected:selected.selected,cover_confirmed:coverConfirmed,cover_success_detected:selected.success_detected,cover_wait_timeout_ms:timeoutMs,selected};"
         "})()"
     )
 

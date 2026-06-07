@@ -63,13 +63,19 @@ def test_douyin_browser_commands() -> None:
     assert "douyin_ai_cover_not_ready" in text
     assert "AI智能推荐封面" in text
     assert "cover_confirmed" in text
-    assert "horizontal_cover_selected" in text
-    assert "vertical_cover_selected" in text
-    assert "cover_finished" in text
-    assert "设置横封面" in text
-    assert "设置竖封面" in text
+    assert "leftmost_ai_cover_selected" in text
+    assert "cover_success_detected" in text
+    assert "cover_wait_timeout_ms" in text
+    assert "150000" in text
+    assert "设为封面" in text
+    assert "使用封面" in text
+    assert "封面效果检测通过" in text
+    assert "douyin_cover_finish_not_found" not in text
+    assert "horizontal_cover_selected" not in text
+    assert "vertical_cover_selected" not in text
+    assert "设置横封面" not in text
+    assert "设置竖封面" not in text
     assert "确定" in text
-    assert "完成" in text
     assert "douyin_publish_button_not_found" in text
     assert "ai_cover_selected" in text
     assert "High energy clip" in text
