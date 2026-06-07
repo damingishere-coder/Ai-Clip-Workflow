@@ -557,3 +557,11 @@
 - 抖音 AI 推荐封面流程增强为先选择横封面，再点击“设置竖封面”并选择竖封面，最后点击“完成”后再继续发布。
 - 已补充 `scripts/test_send_center_opencli_queue.py`，覆盖用户提供的真实正文 + 话题格式，并确认发送命令里不再包含话题块插入痕迹。
 - 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。
+
+## 2026-06-07 AI 接口配置落地
+
+- 已把本地 `.env` 配置切换为三段式远程接口：音频转写使用火山引擎远程转写，文字稿分析使用 DeepSeek Pro，发送中心发布文案使用 DeepSeek Flash。
+- 本次只在 `.env` 写入真实 API Key；`.env` 已被 `.gitignore` 忽略，不会提交到 Git。项目文档只记录配置结果，不记录密钥明文。
+- 已备份修改前的 `.env` 到本地 `.env.backup_20260607_122557`，方便需要时恢复。
+- 已重启 Windows 本地 `8002` 后台服务，让当前运行页面和后台任务重新读取最新配置。
+- 已验证：`python -m compileall app`、`scripts/test_ai_config_service.py`、`scripts/test_volcengine_transcription_provider.py` 均通过；DeepSeek 分析接口和发送中心文案接口均完成远程 JSON 连通性测试。
