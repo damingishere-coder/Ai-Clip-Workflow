@@ -483,7 +483,7 @@
 
 ## 2026-06-07 当前配置状态
 
-- 音频转写已配置为火山引擎远程转写，默认资源 ID 为 `volc.bigasr.auc_turbo`，音频格式为 `mp3`。
+- 音频转写已配置为火山引擎远程转写，默认资源 ID 为 `volc.bigasr.auc_turbo`，音频格式为 `mp3`；2026-06-07 已更换为豆包语音新版控制台 API Key，并通过静音音频烟测。
 - 文字稿分析候选切片已配置为 DeepSeek Pro：`AI_ANALYSIS_REMOTE_MODEL=deepseek-v4-pro`。
 - 发送中心生成发布文案已配置为 DeepSeek Flash：`AI_PUBLISH_REMOTE_MODEL=deepseek-v4-flash`。
 - Windows 本地 `8002` 后台已重启，当前服务已经能读取最新 `.env`。
@@ -491,6 +491,6 @@
 ## 2026-06-07 下一步测试
 
 1. 打开 `http://127.0.0.1:8002`，进入“系统状态”或相关配置入口，确认三类接口都显示为已配置。
-2. 用一条真实视频跑完整流程：上传视频 -> 开始处理 -> 火山引擎生成转写 -> DeepSeek Pro 分析候选切片。
+2. 用一条真实有声视频重新跑完整流程：上传视频 -> 开始处理 -> 火山引擎生成转写 -> DeepSeek Pro 分析候选切片；重点确认不再出现 `Invalid X-Api-Key`。
 3. 切片生成后进入发送中心 `/publish`，点击刷新发送队列，再测试“AI 补齐标题/话题/简介”，确认 DeepSeek Flash 能生成发布文案。
 4. 如果火山引擎转写失败，优先记录页面错误信息和任务日志；如果 DeepSeek 生成失败，记录失败提示和使用的是 Pro 还是 Flash。

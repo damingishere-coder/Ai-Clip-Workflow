@@ -565,3 +565,10 @@
 - 已备份修改前的 `.env` 到本地 `.env.backup_20260607_122557`，方便需要时恢复。
 - 已重启 Windows 本地 `8002` 后台服务，让当前运行页面和后台任务重新读取最新配置。
 - 已验证：`python -m compileall app`、`scripts/test_ai_config_service.py`、`scripts/test_volcengine_transcription_provider.py` 均通过；DeepSeek 分析接口和发送中心文案接口均完成远程 JSON 连通性测试。
+
+## 2026-06-07 火山引擎 API Key 修正
+
+- 用户真实任务转写时报错 `Invalid X-Api-Key`，确认原先填入的不是豆包语音控制台生成的新版 API Key。
+- 已把 `.env` 中的 `VOLCENGINE_ASR_API_KEY` 替换为新版控制台 API Key，并清空旧版 `VOLCENGINE_ASR_APP_KEY` / `VOLCENGINE_ASR_ACCESS_KEY`。
+- 项目当前接入的是火山引擎极速版 `recognize/flash` 接口，因此继续使用 `VOLCENGINE_ASR_RESOURCE_ID=volc.bigasr.auc_turbo`，不切换到标准版 `submit/query` 文档里的 `volc.seedasr.auc`。
+- 已重启 Windows 本地 `8002` 后台服务，并用 1 秒静音 mp3 做远程烟测；接口不再返回 401，静音音频返回 0 句属于预期。
