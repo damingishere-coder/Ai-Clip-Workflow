@@ -129,6 +129,21 @@ def test_opencli_detached_retry_is_limited_to_cover_steps() -> None:
     assert not publish_service._should_retry_opencli_detached(["opencli", "browser", "eval", "no marker"], result, 1)  # noqa: SLF001
 
 
+def test_opencli_cleanup_closes_browser_session_after_success() -> None:
+    douyin_cleanup = publish_service._opencli_cleanup_commands_for_job(_fake_job("douyin"))  # noqa: SLF001
+    bilibili_cleanup = publish_service._opencli_cleanup_commands_for_job(_fake_job("bilibili"))  # noqa: SLF001
+
+    assert _browser_args(douyin_cleanup[0])[1:] == ["send-douyin-job-douyin", "close"]
+    assert _browser_args(bilibili_cleanup[0])[1:] == ["send-bilibili-job-bilibili", "close"]
+    assert " close" not in _joined(
+        publish_service._build_douyin_browser_commands(  # noqa: SLF001
+            _fake_job("douyin"),
+            Path(r"C:\tmp\clip.mp4"),
+            Path(r"C:\tmp\cover.jpg"),
+        )
+    )
+
+
 def test_send_center_frontend_publishing_overlay_resources() -> None:
     html = (PROJECT_ROOT / "app" / "templates" / "publish.html").read_text(encoding="utf-8")
     js = (PROJECT_ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
@@ -354,6 +369,8 @@ def main() -> None:
     print("douyin browser commands: OK")
     test_opencli_detached_retry_is_limited_to_cover_steps()
     print("opencli detached retry: OK")
+    test_opencli_cleanup_closes_browser_session_after_success()
+    print("opencli cleanup close: OK")
     test_send_center_frontend_publishing_overlay_resources()
     print("send center frontend publishing overlay: OK")
     test_douyin_description_copies_body_and_platform_topics_directly()

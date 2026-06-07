@@ -1451,6 +1451,10 @@ def _browser_eval_command(session: str, script: str) -> list[str]:
     return [*_opencli_command(), "browser", session, "eval", script]
 
 
+def _browser_close_command(session: str) -> list[str]:
+    return [*_opencli_command(), "browser", session, "close"]
+
+
 _TITLE_FIELD_SELECTOR = ",".join(
     [
         "input[placeholder*='标题']",
@@ -1844,6 +1848,14 @@ def _opencli_commands_for_job(job: dict) -> list[list[str]]:
     raise ValueError("暂不支持这个发送平台。")
 
 
+def _opencli_cleanup_commands_for_job(job: dict) -> list[list[str]]:
+    if job["platform"] == "douyin":
+        return [_browser_close_command(f"send-douyin-{job['id']}")]
+    if job["platform"] == "bilibili":
+        return [_browser_close_command(f"send-bilibili-{job['id']}")]
+    return []
+
+
 def _command_summary(command: list[str]) -> str:
     hidden = []
     for part in command:
@@ -1937,11 +1949,34 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
             failed_job = _mark_job_failed(job_id, "opencli_failed", message[:1000], {"outputs": outputs})
             return {"status": "failed", "message": message, "job": failed_job}
 
+    cleanup_outputs: list[dict[str, Any]] = []
+    for command in _opencli_cleanup_commands_for_job(get_publish_job(job_id)):
+        try:
+            result = runner(command)
+            cleanup_outputs.append(
+                {
+                    "command": _command_summary(command),
+                    "returncode": result.returncode,
+                    "stdout": (result.stdout or "")[-2000:],
+                    "stderr": (result.stderr or "")[-2000:],
+                }
+            )
+        except Exception as exc:
+            cleanup_outputs.append(
+                {
+                    "command": _command_summary(command),
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(exc),
+                }
+            )
+
     now = _now_iso()
     response = {
         "opencli": "completed",
         "platform_url": "",
         "outputs": outputs,
+        "cleanup_outputs": cleanup_outputs,
         "completed_at": now,
     }
     with get_connection() as connection:
