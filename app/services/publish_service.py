@@ -1510,28 +1510,25 @@ def _douyin_set_description_script(description: str) -> str:
         f"const value={json.dumps(description, ensure_ascii=False)};"
         "const normalize=(text)=>String(text||'').replace(/[\\u200B-\\u200D\\uFEFF\\u00A0]/g,'').replace(/\\s+/g,' ').trim();"
         "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&!el.readOnly&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
-        "const editor=[...document.querySelectorAll('div[contenteditable=\"true\"]')].find(visible);"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const fieldScore=(el)=>{const rect=el.getBoundingClientRect();let score=rect.height>70?20:0;const attrs=[el.getAttribute('placeholder'),el.getAttribute('aria-label'),el.getAttribute('data-placeholder')].filter(Boolean).join('');if(attrs.includes('作品描述')||attrs.includes('简介')||attrs.includes('描述')){score+=120;}if(attrs.includes('标题')){score-=120;}let node=el;for(let i=0;i<7&&node;i+=1){const context=textOf(node);if(context.includes('作品描述')){score+=100-i*5;}if(context.includes('简介')||context.includes('描述')){score+=35-i*3;}if(context.includes('作品标题')||context.includes('标题')){score-=80-i*3;}if(context.includes('添加话题')||context.includes('@好友')){score-=20;}node=node.parentElement;}return score;};"
+        "const candidates=[...document.querySelectorAll('div[contenteditable=\"true\"],textarea')].filter(visible).map((el)=>({el,score:fieldScore(el)})).sort((a,b)=>b.score-a.score);"
+        "const editor=candidates[0]?.el;"
         "if(!editor){throw new Error('douyin_description_editor_not_found');}"
         "const before=normalize(editor.innerText||editor.textContent||'');"
         "const expected=normalize(value);"
         "const beforeCount=expected?before.split(expected).length-1:0;"
         "editor.scrollIntoView({block:'center',inline:'center'});"
         "editor.focus();"
-        "const selection=window.getSelection();"
-        "const range=document.createRange();"
-        "range.selectNodeContents(editor);"
-        "selection.removeAllRanges();"
-        "selection.addRange(range);"
-        "document.execCommand?.('delete',false,null);"
-        "editor.innerHTML='';"
-        "editor.textContent='';"
-        "if(value){document.execCommand?.('insertText',false,value);}"
-        "if(value&&normalize(editor.innerText||editor.textContent||'')!==expected){editor.textContent=value;}"
-        "editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));"
+        "if(editor.tagName==='TEXTAREA'){const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')?.set;setter?setter.call(editor,value):(editor.value=value);}else{const selection=window.getSelection();const range=document.createRange();range.selectNodeContents(editor);selection.removeAllRanges();selection.addRange(range);document.execCommand?.('delete',false,null);editor.innerHTML='';const lines=String(value||'').split('\\n');lines.forEach((line,index)=>{if(index){editor.appendChild(document.createElement('br'));}editor.appendChild(document.createTextNode(line));});}"
+        "editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value||''}));"
         "editor.dispatchEvent(new Event('change',{bubbles:true}));"
-        "const actual=normalize(editor.innerText||editor.textContent||'');"
+        "editor.dispatchEvent(new Event('blur',{bubbles:true}));"
+        "const actual=normalize(editor.tagName==='TEXTAREA'?editor.value:(editor.innerText||editor.textContent||''));"
         "if(actual!==expected){throw new Error('douyin_description_set_failed');}"
-        "return {description_set:true,plain_hashtags_removed:true,duplicate_removed:beforeCount>1||before!==actual,actual};"
+        "const actualCount=expected?actual.split(expected).length-1:0;"
+        "if(actualCount>1){throw new Error('douyin_description_duplicated');}"
+        "return {description_set:true,plain_hashtags_removed:true,duplicate_removed:beforeCount>1||before!==actual,editor_score:candidates[0]?.score||0,actual};"
         "})()"
     )
 
@@ -1575,8 +1572,30 @@ def _douyin_click_publish_script() -> str:
         "const isMatch=(text)=>names.some((name)=>text===name||(text.includes(name)&&text.length<=12))&&!blocked.some((name)=>text.includes(name));"
         "const clickKnownTip=()=>{const tip=[...document.querySelectorAll('button,[role=\"button\"],div,span')].filter(visible).find((el)=>['我知道了','知道了'].includes(textOf(el)));if(tip){tip.click();return true;}return false;};"
         "const findButton=()=>{const seen=new Set();const candidates=[];for(const el of [...document.querySelectorAll('button,[role=\"button\"],a,div,span')]){const text=textOf(el);if(!text||!isMatch(text)){continue;}const clickable=el.closest('button,[role=\"button\"],a')||el;if(seen.has(clickable)||!visible(clickable)){continue;}seen.add(clickable);const rect=clickable.getBoundingClientRect();if(rect.left<180&&text.includes('发布')){continue;}const exact=text==='发布'?0:1;const tag=clickable.tagName==='BUTTON'?0:1;candidates.push({el:clickable,text,rect,score:exact*10+tag});}return candidates.sort((a,b)=>a.score-b.score||b.rect.top-a.rect.top||b.rect.left-a.rect.left)[0];};"
-        "const started=Date.now();let lastTexts=[];while(Date.now()-started<45000){clickKnownTip();let found=findButton();if(found){found.el.scrollIntoView({block:'center',inline:'center'});await sleep(500);found=findButton()||found;found.el.click();return {clicked:true,text:found.text,waited_ms:Date.now()-started};}lastTexts=[...document.querySelectorAll('button,[role=\"button\"],a')].filter(visible).map(textOf).filter(Boolean).slice(-20);window.scrollTo({top:document.documentElement.scrollHeight||document.body.scrollHeight,behavior:'instant'});await sleep(1000);}"
+        "const started=Date.now();let lastTexts=[];while(Date.now()-started<45000){clickKnownTip();let found=findButton();if(found){found.el.scrollIntoView({block:'center',inline:'center'});await sleep(500);found=findButton()||found;setTimeout(()=>found.el.click(),50);return {click_scheduled:true,text:found.text,waited_ms:Date.now()-started};}lastTexts=[...document.querySelectorAll('button,[role=\"button\"],a')].filter(visible).map(textOf).filter(Boolean).slice(-20);window.scrollTo({top:document.documentElement.scrollHeight||document.body.scrollHeight,behavior:'instant'});await sleep(1000);}"
         "throw new Error('douyin_publish_button_not_found:'+lastTexts.join('|'));"
+        "})()"
+    )
+
+
+def _douyin_wait_publish_result_script(title: str, timeout_seconds: int = 120) -> str:
+    return (
+        "(async()=>{"
+        f"const expectedTitle=String({json.dumps(_truncate(title, 30), ensure_ascii=False)}||'').replace(/\\s+/g,'').trim();"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&el.getAttribute('aria-disabled')!=='true'&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const pageText=()=>textOf(document.body);"
+        "const successTexts=['发布成功','作品发布成功','发布完成','提交成功','已提交审核','审核中','投稿成功','发布已提交'];"
+        "const blockedTexts=['验证码','安全验证','登录失效','请先登录','未登录','发布失败','提交失败','内容违规','无法发布','风控','频繁'];"
+        "const confirmTexts=['确认发布','立即发布','继续发布','仍要发布','同意并发布','确认','确定'];"
+        "const hasSuccess=()=>successTexts.find((item)=>pageText().includes(item));"
+        "const hasBlock=()=>blockedTexts.find((item)=>pageText().includes(item));"
+        "const clickConfirm=()=>{const candidates=[...document.querySelectorAll('button,[role=\"button\"],div,span')].filter(visible).map((el)=>({el,text:textOf(el)})).filter((item)=>confirmTexts.some((name)=>item.text===name||item.text.includes(name))).sort((a,b)=>a.text.length-b.text.length);const target=candidates[0]?.el;if(target){target.scrollIntoView({block:'center',inline:'center'});target.click();return {clicked:true,text:textOf(target)};}return {clicked:false};};"
+        "const titleVisible=()=>{const text=pageText();return expectedTitle&&expectedTitle.length>=4&&text.includes(expectedTitle)&&!/共0个作品|共0件作品/.test(text);};"
+        "const started=Date.now();let confirms=[];let last='';while(Date.now()-started<timeoutMs){const success=hasSuccess();if(success){return {publish_confirmed:true,success_text:success,url:location.href,waited_ms:Date.now()-started,confirms};}if(titleVisible()&&/content\\/manage|manage/.test(location.href)){return {publish_confirmed:true,success_text:'作品管理出现标题',url:location.href,waited_ms:Date.now()-started,confirms};}const blocked=hasBlock();if(blocked){throw new Error('douyin_publish_blocked:'+blocked);}const confirm=clickConfirm();if(confirm.clicked){confirms.push(confirm);await sleep(2000);continue;}last=[...document.querySelectorAll('button,[role=\"button\"],a')].filter(visible).map(textOf).filter(Boolean).slice(-20).join('|');await sleep(1500);}"
+        "throw new Error('douyin_publish_not_confirmed:'+location.href+'|'+last);"
         "})()"
     )
 
@@ -1591,6 +1610,10 @@ def _browser_select_douyin_ai_cover_command(session: str) -> list[str]:
 
 def _browser_click_douyin_publish_command(session: str) -> list[str]:
     return _browser_eval_command(session, _douyin_click_publish_script())
+
+
+def _browser_wait_douyin_publish_result_command(session: str, title: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_wait_publish_result_script(title))
 
 
 def _browser_fill_bilibili_description_command(session: str, description: str) -> list[str]:
@@ -1654,7 +1677,8 @@ def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path
         [
             _browser_select_douyin_ai_cover_command(session),
             _browser_click_douyin_publish_command(session),
-            _browser_wait_command(session, 5),
+            _browser_wait_command(session, 2),
+            _browser_wait_douyin_publish_result_command(session, title),
         ]
     )
     return commands

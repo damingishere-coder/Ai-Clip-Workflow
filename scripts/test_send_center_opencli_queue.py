@@ -54,6 +54,8 @@ def test_douyin_browser_commands() -> None:
     assert "click --role button --name \u53d1\u5e03" not in text
     assert "title_field_not_found" in text
     assert "description_set:true" in text
+    assert "作品描述" in text
+    assert "douyin_description_duplicated" in text
     assert "plain_hashtags_removed:true" in text
     assert "duplicate_removed" in text
     assert "data-mention" not in text
@@ -78,6 +80,12 @@ def test_douyin_browser_commands() -> None:
     assert "设置竖封面" not in text
     assert "确定" in text
     assert "douyin_publish_button_not_found" in text
+    assert "click_scheduled" in text
+    assert "publish_confirmed" in text
+    assert "douyin_publish_not_confirmed" in text
+    assert "douyin_publish_blocked" in text
+    assert "已提交审核" in text
+    assert "审核中" in text
     assert "立即发布" in text
     assert "确认发布" in text
     assert "发布作品" in text
