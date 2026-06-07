@@ -572,3 +572,10 @@
 - 已把 `.env` 中的 `VOLCENGINE_ASR_API_KEY` 替换为新版控制台 API Key，并清空旧版 `VOLCENGINE_ASR_APP_KEY` / `VOLCENGINE_ASR_ACCESS_KEY`。
 - 项目当前接入的是火山引擎极速版 `recognize/flash` 接口，因此继续使用 `VOLCENGINE_ASR_RESOURCE_ID=volc.bigasr.auc_turbo`，不切换到标准版 `submit/query` 文档里的 `volc.seedasr.auc`。
 - 已重启 Windows 本地 `8002` 后台服务，并用 1 秒静音 mp3 做远程烟测；接口不再返回 401，静音音频返回 0 句属于预期。
+
+## 2026-06-07 转写原文结构与 DeepSeek 分析输入调整
+
+- 新生成的 `transcripts/transcript.md` 不再写入本地拼接的“分钟级转写”，只保留“逐句时间戳原文”作为唯一权威原文。
+- 远程 DeepSeek 分析继续整集一次提交，但提交内容改为只取逐句时间戳原文；旧任务文件如果仍有分钟级章节，分析时会自动忽略分钟级重复内容。
+- 本地 AI 分析仍保留分段策略，继续按逐句时间戳原文拆成小段后合并候选片段。
+- 任务详情页转写预览也优先读取逐句时间戳原文，避免旧文件先显示分钟级聚合文本。

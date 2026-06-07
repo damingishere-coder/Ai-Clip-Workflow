@@ -221,9 +221,30 @@ def _read_transcript(transcript_path: Path) -> str:
     transcript_text = transcript_path.read_text(encoding="utf-8", errors="replace").strip()
     if not transcript_text:
         raise AIAnalysisError("转写文本为空，无法进行 AI 分析")
+    sentence_text = _extract_sentence_transcript_section(transcript_text)
+    if sentence_text:
+        transcript_text = sentence_text
     if not _TIME_PATTERN.search(transcript_text):
         raise AIAnalysisError("转写文本里没有可识别时间戳，请先生成带时间戳的转写文本")
     return transcript_text
+
+
+def _extract_sentence_transcript_section(transcript_text: str) -> str:
+    lines = transcript_text.splitlines()
+    section_lines: list[str] = []
+    in_sentence_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if in_sentence_section:
+                break
+            in_sentence_section = "逐句时间戳原文" in stripped
+            if in_sentence_section:
+                section_lines.append(stripped)
+            continue
+        if in_sentence_section:
+            section_lines.append(line)
+    return "\n".join(section_lines).strip()
 
 
 def _render_prompt(

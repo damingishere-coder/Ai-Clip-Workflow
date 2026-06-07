@@ -927,12 +927,7 @@ def build_transcript_markdown(
 ) -> str:
     source_path = task.get("source")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    minute_rows = build_minute_rows(segments)
 
-    minute_table = "\n".join(
-        f"| {format_seconds(start)} | {format_seconds(end)} | {escape_markdown_table_text(text)} |"
-        for start, end, text in minute_rows
-    )
     segment_table = "\n".join(
         "| "
         f"{format_seconds(segment.start_seconds)} | "
@@ -954,33 +949,12 @@ def build_transcript_markdown(
 - 转写语言：`{settings.transcription_language or "auto"}`
 - 转写设备：`{_transcription_runtime_label()}`
 
-## 分钟级转写
-
-| 开始 | 结束 | 文本 |
-| --- | --- | --- |
-{minute_table}
-
 ## 逐句时间戳原文
 
 | 开始 | 结束 | 文本 |
 | --- | --- | --- |
 {segment_table}
 """
-
-
-def build_minute_rows(segments: list[TranscriptSegment]) -> list[tuple[float, float, str]]:
-    grouped: dict[int, list[str]] = {}
-    for segment in segments:
-        minute_index = max(0, int(segment.start_seconds // 60))
-        grouped.setdefault(minute_index, []).append(segment.text)
-
-    rows = []
-    for minute_index in sorted(grouped):
-        start = minute_index * 60
-        end = start + 60
-        text = normalize_transcript_text(" ".join(grouped[minute_index]))
-        rows.append((start, end, text))
-    return rows
 
 
 def normalize_transcript_text(text: str) -> str:
@@ -1003,6 +977,9 @@ def read_transcript_preview(transcript_path: Path, max_lines: int = 8) -> list[d
         return []
 
     lines = transcript_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    sentence_lines = _extract_sentence_section_lines(lines)
+    if sentence_lines:
+        lines = sentence_lines
     preview = []
     for line in lines:
         stripped = line.strip()
@@ -1035,6 +1012,21 @@ def read_transcript_preview(transcript_path: Path, max_lines: int = 8) -> list[d
         if len(preview) >= max_lines:
             break
     return preview
+
+
+def _extract_sentence_section_lines(lines: list[str]) -> list[str]:
+    section_lines: list[str] = []
+    in_sentence_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if in_sentence_section:
+                break
+            in_sentence_section = "逐句时间戳原文" in stripped
+            continue
+        if in_sentence_section:
+            section_lines.append(line)
+    return section_lines
 
 
 def _time_text_to_seconds(value: str) -> int:
