@@ -1,4 +1,5 @@
 import sys
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -40,6 +41,7 @@ def test_douyin_browser_commands() -> None:
         Path(r"C:\tmp\clip.mp4"),
         Path(r"C:\tmp\cover.jpg"),
     )
+    assert len(commands) >= 16
     assert _browser_args(commands[0])[1:5] == ["send-douyin-job-douyin", "--window", "foreground", "open"]
     assert "--window" not in _browser_args(commands[0])[5:]
     assert _browser_args(commands[2])[2] == "eval"
@@ -64,10 +66,19 @@ def test_douyin_browser_commands() -> None:
     assert "&gt;" not in text
     assert "douyin_ai_cover_not_ready" in text
     assert "AI智能推荐封面" in text
+    assert "ai_cover_ready" in text
+    assert "ai_cover_clicked" in text
+    assert "cover_confirm_clicked" in text
     assert "cover_confirmed" in text
     assert "leftmost_ai_cover_selected" in text
     assert "cover_success_detected" in text
-    assert "cover_wait_timeout_ms" in text
+    assert "cover_applied" in text
+    assert "douyin_cover_retryable:true" in text
+    assert "是否确认应用此封面" in text
+    assert "douyin_cover_confirm_dialog_not_clicked" in text
+    assert "douyin_description_missing_after_set" in text
+    assert "douyin_preview_not_ready" in text
+    assert "publish_ready:true" in text
     assert "150000" in text
     assert "设为封面" in text
     assert "使用封面" in text
@@ -91,13 +102,42 @@ def test_douyin_browser_commands() -> None:
     assert "发布作品" in text
     assert "高清发布" in text
     assert "publish_button_not_found:'+lastTexts" in text
-    assert "ai_cover_selected" in text
     assert "High energy clip" in text
     assert "#live #highlight" in text
     assert '"live", "highlight"' not in text
     assert "\u53d1\u5e03" in text
     assert "\u6211\u77e5\u9053\u4e86" in text
     assert r"C:\tmp\cover.jpg" not in text
+
+
+def test_opencli_detached_retry_is_limited_to_cover_steps() -> None:
+    retryable = [
+        "opencli",
+        "browser",
+        "session",
+        "eval",
+        "const retryMarker='douyin_cover_retryable:true';",
+    ]
+    result = subprocess.CompletedProcess(retryable, 1, "", "✖  Detached while handling command.")
+
+    assert publish_service._should_retry_opencli_detached(retryable, result, 1)  # noqa: SLF001
+    assert publish_service._should_retry_opencli_detached(retryable, result, 2)  # noqa: SLF001
+    assert not publish_service._should_retry_opencli_detached(retryable, result, 3)  # noqa: SLF001
+    assert not publish_service._should_retry_opencli_detached(["opencli", "browser", "eval", "no marker"], result, 1)  # noqa: SLF001
+
+
+def test_send_center_frontend_publishing_overlay_resources() -> None:
+    html = (PROJECT_ROOT / "app" / "templates" / "publish.html").read_text(encoding="utf-8")
+    js = (PROJECT_ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "app" / "static" / "css" / "styles.css").read_text(encoding="utf-8")
+
+    assert "data-send-publishing-overlay" in html
+    assert "data-send-publishing-overlay" in js
+    assert ".send-publishing-overlay" in css
+    assert "showSendPublishingOverlay" in js
+    assert "updateSendPreviewFromForm" in js
+    assert "data-send-preview-description" in html
+    assert "is-previewing" in css
 
 
 def test_douyin_description_copies_body_and_platform_topics_directly() -> None:
@@ -309,6 +349,10 @@ def test_opencli_cmd_uses_node_entrypoint() -> None:
 def main() -> None:
     test_douyin_browser_commands()
     print("douyin browser commands: OK")
+    test_opencli_detached_retry_is_limited_to_cover_steps()
+    print("opencli detached retry: OK")
+    test_send_center_frontend_publishing_overlay_resources()
+    print("send center frontend publishing overlay: OK")
     test_douyin_description_copies_body_and_platform_topics_directly()
     print("douyin direct description topics: OK")
     test_bilibili_browser_commands()

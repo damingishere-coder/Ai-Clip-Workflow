@@ -28,6 +28,14 @@
 
 <section id="send-center-message" class="inline-alert tone-blue" hidden></section>
 
+<section class="send-publishing-overlay" data-send-publishing-overlay hidden>
+  <div class="send-publishing-box" role="status" aria-live="polite">
+    <span class="send-publishing-spinner"></span>
+    <strong data-send-publishing-title>正在发布</strong>
+    <p data-send-publishing-text>opencli 正在操作平台页面，请不要关闭 Chrome 或本地后台。</p>
+  </div>
+</section>
+
 <section class="stat-grid send-stat-grid">
   {% for stat in stats %}
   <article class="stat-card tone-{{ stat.tone }}">
@@ -172,7 +180,7 @@
     </div>
   </section>
 
-  <aside class="panel send-preview-panel">
+  <aside class="panel send-preview-panel" data-send-preview-panel>
     <div class="panel-header">
       <div>
         <p class="eyebrow">平台投稿预览</p>
@@ -184,18 +192,16 @@
     {% if preview %}
     <div class="phone-preview">
       <div class="phone-screen">
-        {% if preview.cover_media_url %}
-        <img src="{{ preview.cover_media_url }}" alt="封面预览">
-        {% else %}
-        <video muted loop playsinline preload="metadata" src="{{ preview.video_media_url }}"></video>
-        {% endif %}
+        <img data-send-preview-image src="{{ preview.cover_media_url }}" alt="封面预览" {% if not preview.cover_media_url %}hidden{% endif %}>
+        <video data-send-preview-video muted loop playsinline preload="metadata" src="{{ preview.video_media_url }}" {% if preview.cover_media_url %}hidden{% endif %}></video>
         <div class="phone-caption">
-          <strong>{{ preview.title }}</strong>
-          <span>{{ preview.tags }}</span>
+          <strong data-send-preview-title>{{ preview.title }}</strong>
+          <span data-send-preview-tags>{{ preview.tags }}</span>
         </div>
       </div>
     </div>
     <div class="send-preview-copy">
+      <p data-send-preview-description>{{ preview.description }}</p>
       <p><strong>抖音：</strong>上传视频，填写标题/正文 #话题，设置封面，点击发布。</p>
       <p><strong>B站：</strong>上传视频，填写封面、标题、分区、标签、简介，点击立即投稿。</p>
       <p>遇到验证码、登录失效或风控弹窗时，任务会进入失败，等待人工处理。</p>

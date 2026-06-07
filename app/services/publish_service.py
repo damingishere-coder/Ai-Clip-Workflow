@@ -1386,6 +1386,16 @@ def _default_command_runner(command: list[str]) -> subprocess.CompletedProcess:
     )
 
 
+def _should_retry_opencli_detached(command: list[str], result: subprocess.CompletedProcess, attempt: int) -> bool:
+    if attempt >= 3:
+        return False
+    output_text = f"{result.stdout or ''}\n{result.stderr or ''}"
+    if "Detached while handling command" not in output_text:
+        return False
+    script = str(command[-1]) if command else ""
+    return "douyin_cover_retryable:true" in script
+
+
 def _hashtags(tags: str) -> str:
     normalized_tags = _format_tags(tags)
     return " ".join(f"#{tag.strip().lstrip('#')}" for tag in re.split(r"[,，]+", normalized_tags or "") if tag.strip())
@@ -1533,30 +1543,108 @@ def _douyin_set_description_script(description: str) -> str:
     )
 
 
-def _douyin_select_ai_cover_script(timeout_seconds: int = 150) -> str:
+def _douyin_cover_helpers_script() -> str:
     return (
-        "(async()=>{"
-        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        "const retryMarker='douyin_cover_retryable:true';"
         "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
         "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&el.getAttribute('aria-disabled')!=='true'&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
         "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
         "const labels=['AI智能推荐封面','智能推荐封面','推荐封面'];"
-        "const confirmTexts=['设为封面','设置为封面','使用封面','确认使用','确定','确认','应用'];"
-        "const successTexts=['封面效果检测通过','检测通过'];"
+        "const successTexts=['封面效果检测通过','封面检测通过','检测通过'];"
         "const successDetected=()=>successTexts.some((item)=>textOf(document.body).includes(item));"
         "const hover=(el)=>{['mouseover','mouseenter','mousemove'].forEach((type)=>el.dispatchEvent(new MouseEvent(type,{bubbles:true,view:window})));};"
-        "const clickText=async(names)=>{const startedClick=Date.now();while(Date.now()-startedClick<10000){const candidates=[...document.querySelectorAll('button,[role=\"button\"],div,span')].filter(visible).map((el)=>({el,text:textOf(el)})).filter((item)=>names.some((name)=>item.text===name||item.text.includes(name))).sort((a,b)=>a.text.length-b.text.length);const target=candidates[0]?.el;if(target){target.scrollIntoView({block:'center',inline:'center'});target.click();await sleep(800);return {clicked:true,text:textOf(target)};}if(successDetected()){return {clicked:false,success_detected:true};}await sleep(300);}return {clicked:false};};"
         "const labelNodes=()=>[...document.querySelectorAll('button,div,span,section')].filter((el)=>visible(el)&&labels.some((label)=>textOf(el).includes(label)));"
-        "const nearLabel=(img,labelRect)=>{const rect=img.getBoundingClientRect();return rect.left>=labelRect.left-30&&rect.top>=labelRect.top-20&&rect.top<=labelRect.top+260;};"
+        "const nearLabel=(img,labelRect)=>{const rect=img.getBoundingClientRect();return rect.left>=labelRect.left-30&&rect.top>=labelRect.top-20&&rect.top<=labelRect.top+300;};"
         "const candidateSections=()=>{const entries=[];for(const label of labelNodes()){let best=null;let node=label;const labelRect=label.getBoundingClientRect();for(let i=0;i<9&&node;i+=1){const rect=node.getBoundingClientRect();const imgs=[...node.querySelectorAll('img')].filter((img)=>visible(img)&&nearLabel(img,labelRect));if(imgs.length&&rect.width>0&&rect.height>0){const area=rect.width*rect.height;if(!best||area<best.area){best={section:node,label,area};}}node=node.parentElement;}if(best){entries.push(best);}}const seen=new Set();return entries.filter((item)=>{if(seen.has(item.section)){return false;}seen.add(item.section);return true;});};"
-        "const realImages=(entry)=>[...entry.section.querySelectorAll('img')].filter((img)=>{const rect=img.getBoundingClientRect();const src=img.currentSrc||img.src||img.getAttribute('src')||'';const owner=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;const context=textOf(owner);return visible(img)&&nearLabel(img,entry.label.getBoundingClientRect())&&src&&img.complete!==false&&img.naturalWidth>40&&img.naturalHeight>40&&rect.width>24&&rect.height>24&&!context.includes('暂无更多推荐')&&!context.includes('生成中');}).map((img)=>({img,rect:img.getBoundingClientRect()})).sort((a,b)=>a.rect.left-b.rect.left||a.rect.top-b.rect.top);"
-        "const selectedState=(img)=>{const owner=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;const className=(owner.className||'').toString();const text=textOf(owner);return /selected|active|checked|current/i.test(className)||text.includes('已选择')||text.includes('已选');};"
-        "const chooseLeftmostAiCover=async()=>{const started=Date.now();let lastSeen=null;while(Date.now()-started<timeoutMs){const entries=candidateSections();for(const entry of entries){entry.section.scrollIntoView({block:'center',inline:'center'});const images=realImages(entry);if(images.length){const img=images[0].img;const src=img.currentSrc||img.src||img.getAttribute('src');const clickable=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;lastSeen={selected:true,src,waited_ms:Date.now()-started};clickable.scrollIntoView({block:'center',inline:'center'});hover(clickable);hover(img);await sleep(300);clickable.click();img.click();await sleep(1000);hover(clickable);hover(img);const confirm=await clickText(confirmTexts);const selectedAfterClick=selectedState(img);const success=successDetected();if(confirm.clicked||success){return {selected:true,selected_after_click:selectedAfterClick,confirmed:confirm,success_detected:success,src,waited_ms:Date.now()-started};}lastSeen={selected:true,selected_after_click:selectedAfterClick,confirmed:confirm,success_detected:success,src,waited_ms:Date.now()-started};}}await sleep(1000);}if(lastSeen){throw new Error('douyin_cover_confirm_not_found');}throw new Error('douyin_ai_cover_not_ready');};"
-        "const selected=await chooseLeftmostAiCover();"
-        "if(!selected.confirmed.clicked&&!selected.success_detected){selected.confirm_retry=await clickText(confirmTexts);selected.success_detected=successDetected();}"
-        "const coverConfirmed=Boolean(selected.confirmed.clicked||selected.confirm_retry?.clicked||selected.success_detected);"
-        "if(!coverConfirmed){throw new Error('douyin_cover_confirm_not_found');}"
-        "return {ai_cover_selected:true,leftmost_ai_cover_selected:selected.selected,cover_confirmed:coverConfirmed,cover_success_detected:selected.success_detected,cover_wait_timeout_ms:timeoutMs,selected};"
+        "const realImages=()=>candidateSections().flatMap((entry)=>[...entry.section.querySelectorAll('img')].filter((img)=>{const rect=img.getBoundingClientRect();const src=img.currentSrc||img.src||img.getAttribute('src')||'';const owner=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;const context=textOf(owner);return visible(img)&&nearLabel(img,entry.label.getBoundingClientRect())&&src&&img.complete!==false&&img.naturalWidth>40&&img.naturalHeight>40&&rect.width>24&&rect.height>24&&!context.includes('暂无更多推荐')&&!context.includes('生成中');}).map((img)=>({img,rect:img.getBoundingClientRect()}))).sort((a,b)=>a.rect.left-b.rect.left||a.rect.top-b.rect.top);"
+        "const clickText=async(names,timeoutMs=12000)=>{const started=Date.now();let sawDialog=false;while(Date.now()-started<timeoutMs){const bodyText=textOf(document.body);sawDialog=sawDialog||bodyText.includes('是否确认应用此封面')||bodyText.includes('确认应用此封面');const candidates=[...document.querySelectorAll('button,[role=\"button\"],div,span')].filter(visible).map((el)=>({el,text:textOf(el)})).filter((item)=>names.some((name)=>item.text===name||item.text.includes(name))).sort((a,b)=>a.text.length-b.text.length);const target=candidates[0]?.el;if(target){target.scrollIntoView({block:'center',inline:'center'});target.click();await sleep(900);return {clicked:true,text:textOf(target),saw_dialog:sawDialog};}if(successDetected()){return {clicked:false,success_detected:true,saw_dialog:sawDialog};}await sleep(350);}return {clicked:false,saw_dialog:sawDialog};};"
+    )
+
+
+def _douyin_wait_ai_cover_script(timeout_seconds: int = 150) -> str:
+    return (
+        "(async()=>{"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        f"{_douyin_cover_helpers_script()}"
+        "const started=Date.now();let lastCount=0;while(Date.now()-started<timeoutMs){const images=realImages();lastCount=images.length;if(images.length){images[0].img.scrollIntoView({block:'center',inline:'center'});return {ai_cover_ready:true,leftmost_ai_cover_found:true,image_count:images.length,waited_ms:Date.now()-started,retryMarker};}await sleep(1000);}"
+        "throw new Error('douyin_ai_cover_not_ready:'+lastCount);"
+        "})()"
+    )
+
+
+def _douyin_click_ai_cover_script() -> str:
+    return (
+        "(async()=>{"
+        f"{_douyin_cover_helpers_script()}"
+        "const images=realImages();"
+        "if(!images.length){throw new Error('douyin_ai_cover_not_ready:0');}"
+        "const img=images[0].img;"
+        "const clickable=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;"
+        "clickable.scrollIntoView({block:'center',inline:'center'});hover(clickable);hover(img);await sleep(350);clickable.click();img.click();"
+        "return {ai_cover_clicked:true,leftmost_ai_cover_selected:true,src:img.currentSrc||img.src||img.getAttribute('src')||'',retryMarker};"
+        "})()"
+    )
+
+
+def _douyin_confirm_cover_script(timeout_seconds: int = 20) -> str:
+    return (
+        "(async()=>{"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        f"{_douyin_cover_helpers_script()}"
+        "const confirmTexts=['设为封面','设置为封面','使用封面','确认使用','确定','确认','应用'];"
+        "const result=await clickText(confirmTexts,timeoutMs);"
+        "if(result.clicked||result.success_detected){return {cover_confirm_clicked:result.clicked,cover_confirmed:true,cover_confirm_text:result.text||'',cover_dialog_seen:result.saw_dialog,cover_success_detected:successDetected(),retryMarker};}"
+        "if(result.saw_dialog){throw new Error('douyin_cover_confirm_dialog_not_clicked');}"
+        "throw new Error('douyin_cover_confirm_not_found');"
+        "})()"
+    )
+
+
+def _douyin_verify_cover_applied_script(timeout_seconds: int = 45) -> str:
+    return (
+        "(async()=>{"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        f"{_douyin_cover_helpers_script()}"
+        "const started=Date.now();let lastText='';while(Date.now()-started<timeoutMs){lastText=textOf(document.body).slice(-300);if(successDetected()){return {cover_applied:true,cover_success_detected:true,waited_ms:Date.now()-started,retryMarker};}const selected=[...document.querySelectorAll('button,[role=\"button\"],[class*=\"cover\"],div')].filter(visible).find((el)=>/selected|active|checked|current/i.test((el.className||'').toString())||textOf(el).includes('已选择')||textOf(el).includes('已选'));if(selected){return {cover_applied:true,selected_state:true,waited_ms:Date.now()-started,retryMarker};}await sleep(800);}"
+        "throw new Error('douyin_cover_not_applied:'+lastText);"
+        "})()"
+    )
+
+
+def _douyin_verify_publish_ready_script(title: str, description: str) -> str:
+    return (
+        "(()=>{"
+        f"const expectedTitle=String({json.dumps(_truncate(title, 30), ensure_ascii=False)}||'');"
+        f"const expectedDescription=String({json.dumps(description, ensure_ascii=False)}||'');"
+        "const normalize=(text)=>String(text||'').replace(/[\\u200B-\\u200D\\uFEFF\\u00A0]/g,'').replace(/\\s+/g,' ').trim();"
+        "const compact=(text)=>normalize(text).replace(/\\s/g,'');"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&!el.readOnly&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const titleValue=()=>{const fields=[...document.querySelectorAll('input,textarea,[contenteditable=\"true\"]')].filter(visible);for(const el of fields){const attrs=[el.getAttribute('placeholder'),el.getAttribute('aria-label'),el.getAttribute('data-placeholder')].filter(Boolean).join('');const value=el.isContentEditable?el.textContent:el.value;if(attrs.includes('标题')&&normalize(value)){return normalize(value);}}return '';};"
+        "const descriptionFields=[...document.querySelectorAll('div[contenteditable=\"true\"],textarea')].filter(visible).map((el)=>{let score=0;const attrs=[el.getAttribute('placeholder'),el.getAttribute('aria-label'),el.getAttribute('data-placeholder')].filter(Boolean).join('');if(attrs.includes('作品描述')||attrs.includes('简介')||attrs.includes('描述')){score+=120;}if(attrs.includes('标题')){score-=120;}let node=el;for(let i=0;i<7&&node;i+=1){const context=textOf(node);if(context.includes('作品描述')){score+=100-i*5;}if(context.includes('简介')||context.includes('描述')){score+=35-i*3;}if(context.includes('作品标题')||context.includes('标题')){score-=80-i*3;}node=node.parentElement;}return {el,score};}).sort((a,b)=>b.score-a.score);"
+        "const editor=descriptionFields[0]?.el;"
+        "const actualDescription=normalize(editor?(editor.tagName==='TEXTAREA'?editor.value:(editor.innerText||editor.textContent||'')):'');"
+        "const expectedCompact=compact(expectedDescription);"
+        "const actualCompact=compact(actualDescription);"
+        "const bodyPiece=compact(expectedDescription.split('\\n')[0]||'').slice(0,16);"
+        "if(expectedCompact&&(!actualCompact||(!actualCompact.includes(expectedCompact)&&!(bodyPiece&&actualCompact.includes(bodyPiece))))){throw new Error('douyin_description_missing_after_set');}"
+        "const titleActual=titleValue();"
+        "if(compact(expectedTitle)&&!compact(titleActual).includes(compact(expectedTitle).slice(0,12))){throw new Error('douyin_title_missing_after_set');}"
+        "const previewLabels=['预览视频','预览封面/标题','预览封面','平台投稿预览'];"
+        "const previewRoots=[...document.querySelectorAll('section,aside,div')].filter((el)=>visible(el)&&previewLabels.some((label)=>textOf(el).includes(label)));"
+        "const previewReady=previewRoots.some((root)=>[...root.querySelectorAll('img,video,canvas')].some(visible));"
+        "if(!previewReady){throw new Error('douyin_preview_not_ready');}"
+        "return {publish_ready:true,title_checked:true,description_checked:true,preview_checked:true,description_length:actualDescription.length,preview_roots:previewRoots.length};"
+        "})()"
+    )
+
+
+def _douyin_select_ai_cover_script(timeout_seconds: int = 150) -> str:
+    return (
+        "(async()=>{"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        f"{_douyin_cover_helpers_script()}"
+        "const started=Date.now();let lastSeen=null;while(Date.now()-started<timeoutMs){const images=realImages();if(images.length){const img=images[0].img;const clickable=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;lastSeen={selected:true,src:img.currentSrc||img.src||img.getAttribute('src'),waited_ms:Date.now()-started};clickable.scrollIntoView({block:'center',inline:'center'});hover(clickable);hover(img);await sleep(300);clickable.click();img.click();await sleep(800);const confirm=await clickText(['设为封面','设置为封面','使用封面','确认使用','确定','确认','应用']);const success=successDetected();if(confirm.clicked||success){return {ai_cover_selected:true,leftmost_ai_cover_selected:true,cover_confirmed:true,cover_success_detected:success,cover_wait_timeout_ms:timeoutMs,selected:lastSeen,confirmed:confirm,retryMarker};}}await sleep(1000);}if(lastSeen){throw new Error('douyin_cover_confirm_not_found');}throw new Error('douyin_ai_cover_not_ready');"
         "})()"
     )
 
@@ -1606,6 +1694,26 @@ def _browser_set_douyin_description_command(session: str, description: str) -> l
 
 def _browser_select_douyin_ai_cover_command(session: str) -> list[str]:
     return _browser_eval_command(session, _douyin_select_ai_cover_script())
+
+
+def _browser_wait_douyin_ai_cover_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_wait_ai_cover_script())
+
+
+def _browser_click_douyin_ai_cover_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_click_ai_cover_script())
+
+
+def _browser_confirm_douyin_cover_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_confirm_cover_script())
+
+
+def _browser_verify_douyin_cover_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_verify_cover_applied_script())
+
+
+def _browser_verify_douyin_publish_ready_command(session: str, title: str, description: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_verify_publish_ready_script(title, description))
 
 
 def _browser_click_douyin_publish_command(session: str) -> list[str]:
@@ -1672,10 +1780,15 @@ def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path
         _browser_eval_command(session, _douyin_close_preview_tip_script()),
         _browser_fill_title_command(session, title),
         _browser_set_douyin_description_command(session, description),
+        _browser_verify_douyin_publish_ready_command(session, title, description),
     ]
     commands.extend(
         [
-            _browser_select_douyin_ai_cover_command(session),
+            _browser_wait_douyin_ai_cover_command(session),
+            _browser_click_douyin_ai_cover_command(session),
+            _browser_confirm_douyin_cover_command(session),
+            _browser_verify_douyin_cover_command(session),
+            _browser_verify_douyin_publish_ready_command(session, title, description),
             _browser_click_douyin_publish_command(session),
             _browser_wait_command(session, 2),
             _browser_wait_douyin_publish_result_command(session, title),
@@ -1788,26 +1901,34 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
 
     outputs: list[dict[str, Any]] = []
     for index, command in enumerate(commands, start=1):
-        try:
-            result = runner(command)
-        except subprocess.TimeoutExpired as exc:
-            message = f"opencli 第 {index} 步超时：{_command_summary(command)}"
-            failed_job = _mark_job_failed(job_id, "opencli_timeout", message, {"outputs": outputs})
-            return {"status": "failed", "message": message, "job": failed_job}
-        except Exception as exc:
-            message = f"opencli 第 {index} 步启动失败：{exc}"
-            failed_job = _mark_job_failed(job_id, "opencli_start_failed", message, {"outputs": outputs})
-            return {"status": "failed", "message": message, "job": failed_job}
+        attempt = 1
+        while True:
+            try:
+                result = runner(command)
+            except subprocess.TimeoutExpired as exc:
+                message = f"opencli 第 {index} 步超时：{_command_summary(command)}"
+                failed_job = _mark_job_failed(job_id, "opencli_timeout", message, {"outputs": outputs})
+                return {"status": "failed", "message": message, "job": failed_job}
+            except Exception as exc:
+                message = f"opencli 第 {index} 步启动失败：{exc}"
+                failed_job = _mark_job_failed(job_id, "opencli_start_failed", message, {"outputs": outputs})
+                return {"status": "failed", "message": message, "job": failed_job}
 
-        output = {
-            "step": index,
-            "command": _command_summary(command),
-            "returncode": result.returncode,
-            "stdout": (result.stdout or "")[-2000:],
-            "stderr": (result.stderr or "")[-2000:],
-        }
-        outputs.append(output)
-        if result.returncode != 0:
+            output = {
+                "step": index,
+                "attempt": attempt,
+                "command": _command_summary(command),
+                "returncode": result.returncode,
+                "stdout": (result.stdout or "")[-2000:],
+                "stderr": (result.stderr or "")[-2000:],
+            }
+            outputs.append(output)
+            if result.returncode == 0:
+                break
+            if _should_retry_opencli_detached(command, result, attempt):
+                output["retry_reason"] = "opencli_detached"
+                attempt += 1
+                continue
             message = output["stderr"] or output["stdout"] or f"opencli 第 {index} 步失败"
             failed_job = _mark_job_failed(job_id, "opencli_failed", message[:1000], {"outputs": outputs})
             return {"status": "failed", "message": message, "job": failed_job}

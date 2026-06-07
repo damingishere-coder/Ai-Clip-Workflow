@@ -2216,6 +2216,8 @@ document.querySelectorAll("[data-publish-job-action]").forEach((button) => {
 });
 
 const sendCenterMessage = document.querySelector("#send-center-message");
+const sendPublishingOverlay = document.querySelector("[data-send-publishing-overlay]");
+const sendPreviewPanel = document.querySelector("[data-send-preview-panel]");
 
 function setSendCenterMessage(message, tone = "info") {
   if (!sendCenterMessage) return;
@@ -2223,6 +2225,19 @@ function setSendCenterMessage(message, tone = "info") {
   sendCenterMessage.textContent = message;
   sendCenterMessage.classList.toggle("tone-red", tone === "error");
   sendCenterMessage.classList.toggle("tone-blue", tone !== "error");
+}
+
+function showSendPublishingOverlay(title = "正在发布", text = "opencli 正在操作平台页面，请不要关闭 Chrome 或本地后台。") {
+  if (!sendPublishingOverlay) return;
+  const titleNode = sendPublishingOverlay.querySelector("[data-send-publishing-title]");
+  const textNode = sendPublishingOverlay.querySelector("[data-send-publishing-text]");
+  if (titleNode) titleNode.textContent = title;
+  if (textNode) textNode.textContent = text;
+  sendPublishingOverlay.hidden = false;
+}
+
+function hideSendPublishingOverlay() {
+  if (sendPublishingOverlay) sendPublishingOverlay.hidden = true;
 }
 
 function sendJobPayload(form) {
@@ -2239,6 +2254,41 @@ function sendJobPayload(form) {
     bilibili_copyright: String(formData.get("bilibili_copyright") || "original"),
     bilibili_source: String(formData.get("bilibili_source") || "").trim(),
   };
+}
+
+function previewValue(value, fallback = "") {
+  return String(value || fallback || "").trim();
+}
+
+function updateSendPreviewFromForm(form) {
+  if (!sendPreviewPanel || !form) return;
+  const card = form.closest("[data-send-card]");
+  const previewImage = sendPreviewPanel.querySelector("[data-send-preview-image]");
+  const previewVideo = sendPreviewPanel.querySelector("[data-send-preview-video]");
+  const previewTitle = sendPreviewPanel.querySelector("[data-send-preview-title]");
+  const previewTags = sendPreviewPanel.querySelector("[data-send-preview-tags]");
+  const previewDescription = sendPreviewPanel.querySelector("[data-send-preview-description]");
+  const coverImage = card?.querySelector("[data-cover-preview] img:not([hidden])");
+  const video = card?.querySelector(".send-card-media video");
+  const coverUrl = coverImage?.getAttribute("src") || "";
+  const videoUrl = video?.getAttribute("src") || "";
+  if (previewImage && previewVideo) {
+    if (coverUrl) {
+      previewImage.src = coverUrl;
+      previewImage.hidden = false;
+      previewVideo.hidden = true;
+    } else if (videoUrl) {
+      previewVideo.src = videoUrl;
+      previewVideo.hidden = false;
+      previewImage.hidden = true;
+    }
+  }
+  if (previewTitle) previewTitle.textContent = previewValue(form.elements.title?.value, "未填写标题");
+  if (previewTags) previewTags.textContent = previewValue(form.elements.tags?.value, "未填写 #话题");
+  if (previewDescription) {
+    previewDescription.textContent = previewValue(form.elements.description?.value, "未填写正文 / 简介");
+  }
+  document.querySelectorAll("[data-send-card]").forEach((item) => item.classList.toggle("is-previewing", item === card));
 }
 
 function reloadSendCenter(delay = 900) {
@@ -2291,6 +2341,11 @@ document.querySelectorAll("[data-refresh-send-queue]").forEach((button) => {
 });
 
 document.querySelectorAll("[data-send-job-form]").forEach((form) => {
+  form.addEventListener("focusin", () => updateSendPreviewFromForm(form));
+  form.addEventListener("input", () => updateSendPreviewFromForm(form));
+  form.addEventListener("change", () => updateSendPreviewFromForm(form));
+  form.closest("[data-send-card]")?.addEventListener("click", () => updateSendPreviewFromForm(form));
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const jobId = form.dataset.jobId;
@@ -2318,6 +2373,7 @@ document.querySelectorAll("[data-send-job-form]").forEach((form) => {
       if (!response.ok) {
         throw new Error(data.detail || data.message || "保存失败");
       }
+      updateSendPreviewFromForm(form);
       setPublishMessage(resultNode, data.message || "发送内容已保存。", "success");
     } catch (error) {
       setPublishMessage(resultNode, `保存失败：${error.message}`, "error");
@@ -2335,6 +2391,7 @@ function applyCoverFrame(form, frame, button = null) {
   form.elements.cover_time_seconds.value = Number(frame.cover_time_seconds || 0);
   setCoverPreview(form, frame.cover_media_url || "");
   form.querySelectorAll("[data-cover-frame-option]").forEach((item) => item.classList.toggle("active", item === button));
+  updateSendPreviewFromForm(form);
 }
 
 function renderCoverFrames(form, frames) {
@@ -2413,6 +2470,7 @@ document.querySelectorAll("[data-regenerate-send-metadata]").forEach((button) =>
       if (form.elements.title) form.elements.title.value = job.title || form.elements.title.value;
       if (form.elements.tags) form.elements.tags.value = job.tags || "";
       if (form.elements.description) form.elements.description.value = job.description || "";
+      updateSendPreviewFromForm(form);
       setPublishMessage(resultNode, data.message || "AI 元数据已更新。", "success");
     } catch (error) {
       setPublishMessage(resultNode, `重新生成失败：${error.message}`, "error");
@@ -2432,6 +2490,8 @@ document.querySelectorAll("[data-send-single-job]").forEach((button) => {
     const originalText = button.textContent;
     button.disabled = true;
     button.textContent = "发送中...";
+    updateSendPreviewFromForm(form);
+    showSendPublishingOverlay("正在发布", "正在发送这一条，opencli 会打开平台页面并自动填写内容。");
     setSendCenterMessage("已提交单条发送任务，opencli 会使用 Chrome 登录态打开平台页面。");
 
     try {
@@ -2440,9 +2500,13 @@ document.querySelectorAll("[data-send-single-job]").forEach((button) => {
       if (!response.ok) {
         throw new Error(data.detail || data.message || "发送启动失败");
       }
+      if (data.status === "empty") {
+        hideSendPublishingOverlay();
+      }
       setSendCenterMessage(data.message || "发送任务已开始。", "success");
       reloadSendCenter(1400);
     } catch (error) {
+      hideSendPublishingOverlay();
       setSendCenterMessage(`发送启动失败：${error.message}`, "error");
       button.disabled = false;
       button.textContent = originalText;
@@ -2458,6 +2522,7 @@ document.querySelectorAll("[data-start-send-queue]").forEach((button) => {
     const originalText = button.textContent;
     button.disabled = true;
     button.textContent = "启动中...";
+    showSendPublishingOverlay("正在发布", selectedIds.length ? `正在发送 ${selectedIds.length} 条已勾选任务，一次只会执行一条。` : "正在发送全部待发送任务，一次只会执行一条。");
     setSendCenterMessage("正在启动发送队列，一次只会执行一条任务。");
 
     try {
@@ -2470,9 +2535,13 @@ document.querySelectorAll("[data-start-send-queue]").forEach((button) => {
       if (!response.ok) {
         throw new Error(data.detail || data.message || "启动队列失败");
       }
+      if (data.status === "empty") {
+        hideSendPublishingOverlay();
+      }
       setSendCenterMessage(data.message || "发送队列已启动。", data.status === "busy" ? "error" : "success");
       reloadSendCenter(1400);
     } catch (error) {
+      hideSendPublishingOverlay();
       setSendCenterMessage(`启动队列失败：${error.message}`, "error");
       button.disabled = false;
       button.textContent = originalText;
@@ -2493,5 +2562,11 @@ document.querySelectorAll("[data-send-select-all]").forEach((checkbox) => {
 });
 
 if (document.querySelector("[data-send-card][data-status='publishing']")) {
+  showSendPublishingOverlay("正在发布", "已有任务正在发布中，页面会自动刷新状态。");
   window.setTimeout(() => window.location.reload(), 5000);
+}
+
+const firstSendForm = document.querySelector("[data-send-job-form]");
+if (firstSendForm) {
+  updateSendPreviewFromForm(firstSendForm);
 }

@@ -1,5 +1,13 @@
 # Development Log
 
+## 2026-06-07 抖音发送封面确认和发布状态修复
+- 抖音 opencli 发送链路把“AI 推荐封面”从单个长脚本拆成等待推荐图、点击推荐图、确认“是否确认应用此封面？”弹窗、验证封面已应用四步，减少页面弹窗或重绘导致的 `Detached while handling command`。
+- 新增发布前校验：点击最终发布前会检查标题、作品描述、右侧投稿预览和封面状态；描述未写入、预览未出现或封面未确认时会返回明确错误码。
+- 封面相关步骤增加最多 2 次自动重试，只处理 opencli 页面断开的瞬时错误，不绕过验证码、登录失效、风控或平台人工确认。
+- 发送中心新增居中的“正在发布”状态框；点击单条发送或批量发送后立即显示，已有 `publishing` 任务时页面也会显示并自动刷新。
+- 右侧手机投稿预览改为跟随当前卡片编辑内容实时更新，包括标题、平台话题、正文简介和封面帧。
+- 已更新 `docs/UI_REFERENCE.md` 和 `NEXT_STEPS.md`；已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。
+
 ## 2026-06-07 DeepSeek Pro 整集分析空正文修复
 - 修复远程 DeepSeek Pro 分析长视频时返回空 `message.content`，导致页面报“AI Chat Completions 响应中没有文本内容”的问题。
 - `app/services/ai/remote_responses_provider.py` 对 DeepSeek Chat Completions 请求显式加入 `thinking: {"type": "disabled"}`，让整集切片分析直接输出严格 JSON，不把输出预算消耗在推理内容上；非 DeepSeek 的 OpenAI-compatible 接口不加该专属字段。
