@@ -70,6 +70,7 @@ def test_douyin_browser_commands() -> None:
     assert "设为封面" in text
     assert "使用封面" in text
     assert "封面效果检测通过" in text
+    assert "douyin_cover_confirm_not_found" in text
     assert "douyin_cover_finish_not_found" not in text
     assert "horizontal_cover_selected" not in text
     assert "vertical_cover_selected" not in text
@@ -77,6 +78,11 @@ def test_douyin_browser_commands() -> None:
     assert "设置竖封面" not in text
     assert "确定" in text
     assert "douyin_publish_button_not_found" in text
+    assert "立即发布" in text
+    assert "确认发布" in text
+    assert "发布作品" in text
+    assert "高清发布" in text
+    assert "publish_button_not_found:'+lastTexts" in text
     assert "ai_cover_selected" in text
     assert "High energy clip" in text
     assert "#live #highlight" in text
