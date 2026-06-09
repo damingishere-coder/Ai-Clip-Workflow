@@ -3,6 +3,8 @@ import os
 import re
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
@@ -230,6 +232,53 @@ def _opencli_command() -> list[str]:
     return [executable]
 
 
+def _opencli_bridge_url() -> str:
+    return settings.opencli_host_bridge_url.rstrip("/")
+
+
+def _opencli_bridge_health() -> dict:
+    bridge_url = _opencli_bridge_url()
+    if not bridge_url:
+        return {"available": False, "message": "未配置 Windows opencli 辅助服务。"}
+    try:
+        with urllib.request.urlopen(f"{bridge_url}/health", timeout=1) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except (OSError, TimeoutError, ValueError, urllib.error.URLError) as exc:
+        return {"available": False, "message": f"Windows opencli 辅助服务未连接：{exc}"}
+    return {
+        "available": bool(payload.get("opencli_available")),
+        "message": payload.get("message") or "Windows opencli 辅助服务已连接。",
+        "executable": payload.get("opencli_executable") or "",
+        "url": bridge_url,
+    }
+
+
+def _opencli_bridge_command_runner(command: list[str]) -> subprocess.CompletedProcess:
+    bridge_url = _opencli_bridge_url()
+    if not bridge_url:
+        return subprocess.CompletedProcess(command, 127, "", "未配置 Windows opencli 辅助服务。")
+    request = urllib.request.Request(
+        f"{bridge_url}/run",
+        data=json.dumps(
+            {"command": command, "timeout": OPENCLI_TIMEOUT_SECONDS},
+            ensure_ascii=False,
+        ).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=OPENCLI_TIMEOUT_SECONDS + 10) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except (OSError, TimeoutError, ValueError, urllib.error.URLError) as exc:
+        return subprocess.CompletedProcess(command, 127, "", f"Windows opencli 辅助服务调用失败：{exc}")
+    return subprocess.CompletedProcess(
+        command,
+        int(payload.get("returncode", 1)),
+        payload.get("stdout") or "",
+        payload.get("stderr") or "",
+    )
+
+
 def _opencli_local_port() -> int:
     parsed = urlsplit(settings.opencli_local_base_url)
     if parsed.port:
@@ -238,25 +287,29 @@ def _opencli_local_port() -> int:
 
 
 def _opencli_restart_command() -> str:
-    return f".\\scripts\\restart_opencli_local_server.ps1 -Port {_opencli_local_port()}"
+    return ".\\scripts\\start_docker_opencli.ps1"
 
 
 def _opencli_status() -> dict:
     executable = _opencli_executable()
+    bridge = _opencli_bridge_health() if not executable else {"available": False}
     base_url = settings.opencli_local_base_url.rstrip("/")
     status = {
-        "available": bool(executable),
-        "executable": executable or "",
+        "available": bool(executable) or bool(bridge.get("available")),
+        "executable": executable or str(bridge.get("executable") or ""),
         "command": " ".join(_opencli_command()) if executable else "",
         "restart_command": _opencli_restart_command(),
         "publish_url": f"{base_url}/publish",
         "manual_check_command": "where opencli",
+        "mode": "local" if executable else ("host_bridge" if bridge.get("available") else "missing"),
         "message": "",
     }
     if executable:
         status["message"] = "已检测到 opencli，可以使用发送中心自动发送。"
+    elif bridge.get("available"):
+        status["message"] = "Docker 8001 已连接 Windows opencli 辅助服务，可以使用发送中心自动发送。"
     else:
-        status["message"] = "当前没有检测到 opencli。发送中心可以先整理队列，但自动发送需要先安装并能在终端运行 opencli。"
+        status["message"] = "Docker 页面已启动，但还没有连接到 Windows opencli 辅助服务。发送中心可以先整理队列，自动发送需要先启动辅助服务。"
     return status
 
 
@@ -1453,6 +1506,8 @@ def regenerate_send_job_metadata(job_id: str, use_ai: bool = True) -> dict:
 
 
 def _default_command_runner(command: list[str]) -> subprocess.CompletedProcess:
+    if not _opencli_executable() and _opencli_bridge_url():
+        return _opencli_bridge_command_runner(command)
     return subprocess.run(
         command,
         capture_output=True,

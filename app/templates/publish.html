@@ -23,9 +23,9 @@
 {% if not opencli_available %}
 <section class="inline-alert tone-red">
   <strong>{{ opencli_status.message }}</strong>
-  <p>这台机器如果已经安装过 opencli，通常只需要重启 Windows 本地后台，让后台重新读取终端环境。</p>
-  <p>推荐处理：在项目目录运行 <code>{{ opencli_status.restart_command }}</code>，然后打开 <code>{{ opencli_status.publish_url }}</code> 并按 <code>Ctrl + F5</code> 强制刷新。</p>
-  <p>不要用 Docker 页面测试自动发送；Docker 容器通常看不到 Windows 主机里的 Chrome 登录态和 opencli。</p>
+  <p>请继续使用 Docker 主页面 <code>http://127.0.0.1:8001</code>，不要切到第二个网页。</p>
+  <p>推荐处理：在项目目录运行 <code>{{ opencli_status.restart_command }}</code>，脚本会启动 Windows opencli 辅助服务、刷新 Docker，并打开 <code>{{ opencli_status.publish_url }}</code>。</p>
+  <p>页面打开后按 <code>Ctrl + F5</code> 强制刷新，再回到发送中心测试自动发送。</p>
 </section>
 {% endif %}
 

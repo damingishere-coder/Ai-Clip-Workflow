@@ -1,3 +1,4 @@
+import json
 import sys
 import subprocess
 import tempfile
@@ -148,6 +149,8 @@ def test_send_center_frontend_publishing_overlay_resources() -> None:
     html = (PROJECT_ROOT / "app" / "templates" / "publish.html").read_text(encoding="utf-8")
     js = (PROJECT_ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "app" / "static" / "css" / "styles.css").read_text(encoding="utf-8")
+    compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    env_example = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
 
     assert "data-send-publishing-overlay" in html
     assert "data-send-publishing-overlay" in js
@@ -157,7 +160,12 @@ def test_send_center_frontend_publishing_overlay_resources() -> None:
     assert "data-send-preview-description" in html
     assert "is-previewing" in css
     assert "opencli_status.restart_command" in html
-    assert "不要用 Docker 页面测试自动发送" in html
+    assert "请继续使用 Docker 主页面" in html
+    assert "http://127.0.0.1:8001" in html
+    assert "OPENCLI_LOCAL_BASE_URL: http://127.0.0.1:8001" in compose
+    assert "OPENCLI_HOST_BRIDGE_URL: http://host.docker.internal:8765" in compose
+    assert "OPENCLI_LOCAL_BASE_URL=http://127.0.0.1:8001" in env_example
+    assert "OPENCLI_HOST_BRIDGE_URL=http://host.docker.internal:8765" in env_example
 
 
 def test_douyin_description_copies_body_and_platform_topics_directly() -> None:
@@ -385,17 +393,71 @@ def test_opencli_npm_root_fallback_when_environment_is_incomplete() -> None:
 
 def test_opencli_missing_status_tells_user_how_to_restart() -> None:
     original_opencli_executable = publish_service._opencli_executable
+    original_bridge_health = publish_service._opencli_bridge_health
     try:
         publish_service._opencli_executable = lambda: None
+        publish_service._opencli_bridge_health = lambda: {"available": False, "message": "missing"}
 
         status = publish_service._opencli_status()  # noqa: SLF001
 
         assert not status["available"]
-        assert "restart_opencli_local_server.ps1" in status["restart_command"]
+        assert "start_docker_opencli.ps1" in status["restart_command"]
         assert status["publish_url"].endswith("/publish")
-        assert "没有检测到 opencli" in status["message"]
+        assert "Docker 页面已启动" in status["message"]
     finally:
         publish_service._opencli_executable = original_opencli_executable
+        publish_service._opencli_bridge_health = original_bridge_health
+
+
+def test_opencli_bridge_status_supports_docker_page() -> None:
+    original_opencli_executable = publish_service._opencli_executable
+    original_bridge_health = publish_service._opencli_bridge_health
+    try:
+        publish_service._opencli_executable = lambda: None
+        publish_service._opencli_bridge_health = lambda: {
+            "available": True,
+            "message": "bridge ok",
+            "executable": r"C:\Users\demo\AppData\Roaming\npm\opencli.cmd",
+        }
+
+        status = publish_service._opencli_status()  # noqa: SLF001
+
+        assert status["available"]
+        assert status["mode"] == "host_bridge"
+        assert "Docker 8001" in status["message"]
+    finally:
+        publish_service._opencli_executable = original_opencli_executable
+        publish_service._opencli_bridge_health = original_bridge_health
+
+
+def test_opencli_bridge_runner_executes_commands_from_docker() -> None:
+    original_opencli_executable = publish_service._opencli_executable
+    original_bridge_url = publish_service._opencli_bridge_url
+    original_urlopen = publish_service.urllib.request.urlopen
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps({"returncode": 0, "stdout": "bridge ok", "stderr": ""}).encode("utf-8")
+
+    try:
+        publish_service._opencli_executable = lambda: None
+        publish_service._opencli_bridge_url = lambda: "http://host.docker.internal:8765"
+        publish_service.urllib.request.urlopen = lambda *_args, **_kwargs: FakeResponse()
+
+        result = publish_service._default_command_runner(["opencli", "browser", "demo", "close"])  # noqa: SLF001
+
+        assert result.returncode == 0
+        assert result.stdout == "bridge ok"
+    finally:
+        publish_service._opencli_executable = original_opencli_executable
+        publish_service._opencli_bridge_url = original_bridge_url
+        publish_service.urllib.request.urlopen = original_urlopen
 
 
 def test_opencli_cmd_uses_node_entrypoint() -> None:
@@ -452,6 +514,10 @@ def main() -> None:
     print("opencli npm root fallback: OK")
     test_opencli_missing_status_tells_user_how_to_restart()
     print("opencli missing status restart hint: OK")
+    test_opencli_bridge_status_supports_docker_page()
+    print("opencli docker bridge status: OK")
+    test_opencli_bridge_runner_executes_commands_from_docker()
+    print("opencli docker bridge runner: OK")
     test_opencli_cmd_uses_node_entrypoint()
     print("opencli cmd node entrypoint: OK")
 

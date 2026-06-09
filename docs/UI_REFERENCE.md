@@ -1,10 +1,10 @@
 # UI 参考说明
 
-## 2026-06-09 更新：发送中心 opencli 自检提示
-- 发送中心顶部的 opencli 缺失提示从单句报错改为可执行说明：先解释队列仍可整理，再提示重启 Windows 本地后台、打开本地发送中心并强制刷新。
-- 提示中直接展示 `.\scripts\restart_opencli_local_server.ps1 -Port 8002`，方便新手按文档或页面照做。
-- 页面明确说明不要用 Docker 页面测试自动发送，因为 Docker 容器通常看不到 Windows 主机里的 Chrome 登录态和 opencli。
-- 本次只调整提示内容和后台自检，不改变发送队列卡片、投稿预览、发布中浮层和整体 Apple 风格视觉布局。
+## 2026-06-09 更新：发送中心 Docker opencli 辅助服务提示
+- 发送中心继续以 Docker 主页面 `http://127.0.0.1:8001` 为唯一操作入口，不再要求用户打开 `8002` 本地页面。
+- 顶部 opencli 缺失提示会说明需要运行 `.\scripts\start_docker_opencli.ps1`，该脚本负责启动 Windows opencli 辅助服务并刷新 Docker。
+- Docker 后台如果检测不到容器内 opencli，会通过 Windows 辅助服务调用主机 opencli，从而保留 Chrome 登录态和平台投稿自动化能力。
+- 本次只调整提示内容、后台自检和启动方式，不改变发送队列卡片、投稿预览、发布中浮层和整体 Apple 风格视觉布局。
 
 ## 2026-06-08 更新：全页面 Apple 风格视觉美化
 - 本轮对所有现有后台页面做统一视觉升级，不新增 React / Vue，也不改变后端处理链路。

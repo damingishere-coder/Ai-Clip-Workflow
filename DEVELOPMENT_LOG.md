@@ -1,6 +1,15 @@
 # Development Log
 
-## 2026-06-09 发送中心 opencli 自检和本地重启脚本
+## 2026-06-09 Docker 8001 opencli 辅助服务
+- 根据使用方式调整：Docker `http://127.0.0.1:8001` 继续作为唯一页面入口，不再要求打开 Windows 本地 `8002` 页面。
+- 新增 `scripts/opencli_host_bridge.py`，在 Windows 主机上提供 opencli 辅助服务；Docker 后台找不到容器内 opencli 时，会通过 `OPENCLI_HOST_BRIDGE_URL` 把 opencli 命令交给 Windows 执行。
+- 新增 `scripts/start_docker_opencli.ps1`，一键完成检查 opencli、启动辅助服务、`docker compose up -d --build` 刷新 Docker，并打开 `http://127.0.0.1:8001/publish`。
+- `docker-compose.yml` 固定 `OPENCLI_LOCAL_BASE_URL=http://127.0.0.1:8001`，并配置 `OPENCLI_HOST_BRIDGE_URL=http://host.docker.internal:8765`；`.env.example` 同步更新。
+- 发送中心顶部提示改为 Docker 8001 语义：继续使用 Docker 主页面，如果自动发送不可用，运行 `.\scripts\start_docker_opencli.ps1`。
+- 已更新 `docs/PROJECT_GUIDE.md`、`docs/UI_REFERENCE.md` 和 `NEXT_STEPS.md`；已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py`、PowerShell 脚本语法检查通过；已运行 `.\scripts\start_docker_opencli.ps1 -NoBrowser`，确认 `http://127.0.0.1:8001/health`、`http://127.0.0.1:8765/health` 正常，并用浏览器打开 `http://127.0.0.1:8001/publish`。
+
+## 2026-06-09 发送中心 opencli 自检和本地重启脚本（已被 Docker 8001 辅助服务替代）
+- 说明：这一版曾尝试用 Windows 本地 `8002` 页面解决 opencli 检测问题；随后已按实际使用方式改为上一节的 Docker `8001` 主页面 + Windows opencli 辅助服务。
 - 发送中心 opencli 检测增加 npm 全局目录兜底：当后台 PATH 不完整时，会继续读取 `APPDATA\npm`、用户 npm 目录、`npm root -g` 和 `npm config get prefix`，减少 Windows 本地服务误判“没有检测到 opencli”的情况。
 - `/publish` 顶部错误提示改为新手可执行说明：如果已经安装 opencli，优先运行 `.\scripts\restart_opencli_local_server.ps1 -Port 8002` 重启 Windows 本地后台，再打开本地发送中心并按 `Ctrl + F5`。
 - 新增 `scripts/restart_opencli_local_server.ps1`：脚本会确认 opencli 可用、停止指定端口旧后台、用 `.venv` 重新启动 FastAPI，并打开发送中心页面；默认端口为 `8002`。
