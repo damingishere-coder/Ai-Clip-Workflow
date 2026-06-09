@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from app.core.config import settings
@@ -138,6 +139,60 @@ def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths:
+        key = str(path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def _npm_global_opencli_dirs() -> list[Path]:
+    npm = shutil.which("npm.cmd") or shutil.which("npm")
+    if not npm:
+        return []
+
+    directories: list[Path] = []
+    for command in ([npm, "root", "-g"], [npm, "config", "get", "prefix"]):
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode != 0:
+            continue
+        lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+        if not lines:
+            continue
+        directory = Path(lines[-1])
+        if directory.name.lower() == "node_modules":
+            directory = directory.parent
+        directories.append(directory)
+    return _unique_paths(directories)
+
+
+def _opencli_search_dirs() -> list[Path]:
+    search_dirs: list[Path] = []
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        search_dirs.append(Path(appdata) / "npm")
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile:
+        search_dirs.append(Path(user_profile) / "AppData" / "Roaming" / "npm")
+    search_dirs.extend(_npm_global_opencli_dirs())
+    return _unique_paths(search_dirs)
+
+
 def _opencli_executable() -> str | None:
     candidates = ["opencli.cmd", "opencli.exe", "opencli", "opencli.ps1"]
     for candidate in candidates:
@@ -145,15 +200,7 @@ def _opencli_executable() -> str | None:
         if resolved:
             return resolved
 
-    search_dirs = []
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        search_dirs.append(Path(appdata) / "npm")
-    user_profile = os.environ.get("USERPROFILE")
-    if user_profile:
-        search_dirs.append(Path(user_profile) / "AppData" / "Roaming" / "npm")
-
-    for directory in search_dirs:
+    for directory in _opencli_search_dirs():
         for candidate in candidates:
             path = directory / candidate
             if path.exists():
@@ -181,6 +228,36 @@ def _opencli_command() -> list[str]:
         if node_command:
             return node_command
     return [executable]
+
+
+def _opencli_local_port() -> int:
+    parsed = urlsplit(settings.opencli_local_base_url)
+    if parsed.port:
+        return parsed.port
+    return 443 if parsed.scheme == "https" else 80
+
+
+def _opencli_restart_command() -> str:
+    return f".\\scripts\\restart_opencli_local_server.ps1 -Port {_opencli_local_port()}"
+
+
+def _opencli_status() -> dict:
+    executable = _opencli_executable()
+    base_url = settings.opencli_local_base_url.rstrip("/")
+    status = {
+        "available": bool(executable),
+        "executable": executable or "",
+        "command": " ".join(_opencli_command()) if executable else "",
+        "restart_command": _opencli_restart_command(),
+        "publish_url": f"{base_url}/publish",
+        "manual_check_command": "where opencli",
+        "message": "",
+    }
+    if executable:
+        status["message"] = "已检测到 opencli，可以使用发送中心自动发送。"
+    else:
+        status["message"] = "当前没有检测到 opencli。发送中心可以先整理队列，但自动发送需要先安装并能在终端运行 opencli。"
+    return status
 
 
 def _row_to_dict(row) -> dict | None:
@@ -2025,6 +2102,16 @@ def start_opencli_send_batch(payload: PublishSendStart, background_tasks: Any | 
         return {"status": "empty", "message": "当前没有待发送或失败可重试的任务。", **get_publish_center_context()}
     if _SEND_LOCK.locked():
         return {"status": "busy", "message": "发送队列正在运行，请稍后刷新查看进度。", **get_publish_center_context()}
+    opencli_status = _opencli_status()
+    if not opencli_status["available"]:
+        return {
+            "status": "missing_opencli",
+            "message": (
+                f"{opencli_status['message']} 如果你刚安装或更新过 opencli，"
+                f"请运行 {opencli_status['restart_command']} 重启 Windows 本地后台后再试。"
+            ),
+            **get_publish_center_context(),
+        }
     if background_tasks is not None:
         background_tasks.add_task(run_opencli_send_batch, ids)
         return {"status": "started", "message": f"已开始后台发送 {len(ids)} 条任务。", **get_publish_center_context()}
@@ -2190,13 +2277,15 @@ def get_publish_center_context() -> dict:
     sending_count = sum(1 for job in jobs if job.get("status") == "publishing")
     published_count = sum(1 for job in jobs if job.get("status") == "published")
     failed_count = sum(1 for job in jobs if job.get("status") == "failed")
+    opencli_status = _opencli_status()
     return {
         "publish_items": publish_items,
         "send_queue_items": queue_items,
         "publish_jobs": jobs,
         "jobs_by_platform": jobs_by_platform,
         "platforms": [{"id": platform, "label": label} for platform, label in PLATFORM_LABELS.items()],
-        "opencli_available": bool(_opencli_executable()),
+        "opencli_available": opencli_status["available"],
+        "opencli_status": opencli_status,
         "stats": [
             {"label": "可入队切片", "value": len(publish_items), "tone": "green"},
             {"label": "待发送", "value": ready_count, "tone": "blue"},

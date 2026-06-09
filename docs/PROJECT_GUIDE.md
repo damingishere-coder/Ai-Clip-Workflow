@@ -203,6 +203,21 @@ http://127.0.0.1:8001
 
 如果 AI 提示缺少 Key，先到系统状态页检查对应的三类接口：音频转写看火山引擎 Key，文字稿分析看 `AI_ANALYSIS_REMOTE_API_KEY`，发送中心文案看 `AI_PUBLISH_REMOTE_API_KEY`。
 
+如果发送中心提示“当前没有检测到 opencli”，先不要点“开始发送全部”。自动发送需要 Windows 本地后台，不建议用 Docker 页面测试。按下面顺序处理：
+
+```powershell
+cd "C:\Users\10578\Documents\New project 2"
+.\scripts\restart_opencli_local_server.ps1 -Port 8002
+```
+
+脚本会自动检查 opencli、重启 `8002` 本地后台，并打开发送中心。页面打开后按 `Ctrl + F5` 强制刷新。如果脚本提示“没有检测到 opencli”，再执行：
+
+```powershell
+where opencli
+```
+
+如果 `where opencli` 没有显示路径，说明 opencli 还没装好或没有加入 Windows PATH；如果能显示路径但页面仍报错，把页面红色提示和 `where opencli` 输出发给开发助手继续排查。
+
 如果转写速度很慢，可能是没有使用 NVIDIA 显卡。可以在 `.env` 中把转写配置改成 CPU 模式，但速度会慢一些。
 
 如果 Docker 启动后本地 Ollama 不通，确认 Ollama 已经在 Windows 里启动。Docker 容器内会通过 `host.docker.internal:11434` 访问 Windows 本机的 Ollama。

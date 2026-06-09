@@ -1,5 +1,12 @@
 # Development Log
 
+## 2026-06-09 发送中心 opencli 自检和本地重启脚本
+- 发送中心 opencli 检测增加 npm 全局目录兜底：当后台 PATH 不完整时，会继续读取 `APPDATA\npm`、用户 npm 目录、`npm root -g` 和 `npm config get prefix`，减少 Windows 本地服务误判“没有检测到 opencli”的情况。
+- `/publish` 顶部错误提示改为新手可执行说明：如果已经安装 opencli，优先运行 `.\scripts\restart_opencli_local_server.ps1 -Port 8002` 重启 Windows 本地后台，再打开本地发送中心并按 `Ctrl + F5`。
+- 新增 `scripts/restart_opencli_local_server.ps1`：脚本会确认 opencli 可用、停止指定端口旧后台、用 `.venv` 重新启动 FastAPI，并打开发送中心页面；默认端口为 `8002`。
+- 点击“发送此条”或“开始发送全部”时，如果后台仍检测不到 opencli，会直接返回带重启脚本的清晰错误，不再让任务进入一串模糊启动失败。
+- 已更新 `docs/PROJECT_GUIDE.md`、`docs/UI_REFERENCE.md` 和 `NEXT_STEPS.md`；已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py`、PowerShell 脚本语法检查通过。
+
 ## 2026-06-08 全页面 Apple 风格视觉美化
 - 设计前已确认 Git 保存点：`2e055bd56acf3499f95c323a7646188b7c3ec133`，并在 `codex/feature-apple-ui-redesign` 分支继续页面美化。
 - `app/templates/base.html` 更新全局应用骨架：左侧导航改为更紧凑的图标式导航项，顶部栏增加 `Local Studio` 状态、Windows 本地后台标识和个人工作区提示，静态资源版本号同步升级，方便浏览器刷新到新样式。

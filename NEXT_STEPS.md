@@ -1,5 +1,19 @@
 # Next Steps
 
+## 2026-06-09 opencli 提示修复后怎么测试
+1. 先确认不要用 Docker 页面测试自动发送；自动发送要用 Windows 本地后台，因为它需要看到 Windows 里的 Chrome 登录态和 opencli。
+2. 在项目目录运行：`.\scripts\restart_opencli_local_server.ps1 -Port 8002`。
+3. 脚本正常时会自动打开 `http://127.0.0.1:8002/publish`；如果浏览器没自动打开，就手动打开这个地址。
+4. 在发送中心按 `Ctrl + F5` 强制刷新。
+5. 正常情况：顶部不再出现“当前没有检测到 opencli”的红色提示。
+6. 如果红色提示还在，先在 PowerShell 里执行 `where opencli`；如果没有路径，说明 opencli 没安装好；如果有路径，把页面红色提示和 `where opencli` 的输出发给我。
+7. 只勾选一条任务，点击“发送此条”，确认页面出现“正在发布”状态框，Chrome 会打开对应平台投稿页。
+
+## opencli 提示修复后下一步我建议做什么
+1. 先只测一条抖音任务，不要一次发送全部。
+2. 如果这次能打开平台页，说明问题只是后台环境没刷新；后续再遇到同样红色提示，直接运行 `.\scripts\restart_opencli_local_server.ps1 -Port 8002`。
+3. 如果脚本提示“没有检测到 opencli”，再补安装 opencli；这一步不要和发布链路问题混在一起排查。
+
 ## 2026-06-08 全页面美化后怎么测试
 1. 启动本地后台。推荐先继续用你平时的 Windows 本机服务端口，如果没有启动，可以在项目目录运行 `.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8010` 临时预览。
 2. 打开 `http://127.0.0.1:8010`，如果你用的是 8001 或 8002，就把地址里的端口换成自己的。

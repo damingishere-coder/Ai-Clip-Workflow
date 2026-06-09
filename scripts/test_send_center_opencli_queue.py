@@ -156,6 +156,8 @@ def test_send_center_frontend_publishing_overlay_resources() -> None:
     assert "updateSendPreviewFromForm" in js
     assert "data-send-preview-description" in html
     assert "is-previewing" in css
+    assert "opencli_status.restart_command" in html
+    assert "不要用 Docker 页面测试自动发送" in html
 
 
 def test_douyin_description_copies_body_and_platform_topics_directly() -> None:
@@ -341,6 +343,61 @@ def test_opencli_windows_npm_fallback() -> None:
             publish_service.os.environ["USERPROFILE"] = original_userprofile
 
 
+def test_opencli_npm_root_fallback_when_environment_is_incomplete() -> None:
+    original_which = publish_service.shutil.which
+    original_run = publish_service.subprocess.run
+    original_appdata = publish_service.os.environ.get("APPDATA")
+    original_userprofile = publish_service.os.environ.get("USERPROFILE")
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            npm_dir = Path(temp_dir) / "npm"
+            node_modules = npm_dir / "node_modules"
+            node_modules.mkdir(parents=True)
+            expected = npm_dir / "opencli.cmd"
+            expected.write_text("@echo off\n", encoding="utf-8")
+
+            def fake_which(candidate: str) -> str | None:
+                return str(npm_dir / "npm.cmd") if candidate == "npm.cmd" else None
+
+            def fake_run(command, **_kwargs):
+                if command[1:3] == ["root", "-g"]:
+                    return subprocess.CompletedProcess(command, 0, f"{node_modules}\n", "")
+                return subprocess.CompletedProcess(command, 0, f"{npm_dir}\n", "")
+
+            publish_service.shutil.which = fake_which
+            publish_service.subprocess.run = fake_run
+            publish_service.os.environ.pop("APPDATA", None)
+            publish_service.os.environ.pop("USERPROFILE", None)
+
+            assert publish_service._opencli_executable() == str(expected)  # noqa: SLF001
+    finally:
+        publish_service.shutil.which = original_which
+        publish_service.subprocess.run = original_run
+        if original_appdata is None:
+            publish_service.os.environ.pop("APPDATA", None)
+        else:
+            publish_service.os.environ["APPDATA"] = original_appdata
+        if original_userprofile is None:
+            publish_service.os.environ.pop("USERPROFILE", None)
+        else:
+            publish_service.os.environ["USERPROFILE"] = original_userprofile
+
+
+def test_opencli_missing_status_tells_user_how_to_restart() -> None:
+    original_opencli_executable = publish_service._opencli_executable
+    try:
+        publish_service._opencli_executable = lambda: None
+
+        status = publish_service._opencli_status()  # noqa: SLF001
+
+        assert not status["available"]
+        assert "restart_opencli_local_server.ps1" in status["restart_command"]
+        assert status["publish_url"].endswith("/publish")
+        assert "没有检测到 opencli" in status["message"]
+    finally:
+        publish_service._opencli_executable = original_opencli_executable
+
+
 def test_opencli_cmd_uses_node_entrypoint() -> None:
     original_opencli_executable = publish_service._opencli_executable
     original_which = publish_service.shutil.which
@@ -391,6 +448,10 @@ def main() -> None:
     print("existing dirty caption safety: OK")
     test_opencli_windows_npm_fallback()
     print("opencli windows npm fallback: OK")
+    test_opencli_npm_root_fallback_when_environment_is_incomplete()
+    print("opencli npm root fallback: OK")
+    test_opencli_missing_status_tells_user_how_to_restart()
+    print("opencli missing status restart hint: OK")
     test_opencli_cmd_uses_node_entrypoint()
     print("opencli cmd node entrypoint: OK")
 
