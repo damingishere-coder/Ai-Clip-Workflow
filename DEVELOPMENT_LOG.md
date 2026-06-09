@@ -1,5 +1,12 @@
 # Development Log
 
+## 2026-06-08 B站发送流程和投稿页面保留
+- 发送成功后不再执行 `opencli browser <session> close`，抖音和 B站自动投稿完成后都会保留 OpenCLI Browser 页面，方便继续查看平台结果。
+- B站 opencli 发送链路不再使用 `upload input[type='file']` 这类模糊选择器，改为页面脚本读取本地 `/media` 视频并注入视频上传控件，避开页面中多个 file input 导致的 `selector_ambiguous`。
+- B站流程新增自动处理本地未提交草稿提示、等待上传完成、选择页面推荐封面、固定选择“内容无需标注”、按需保留/补充分区、填写发送中心简介、点击“立即投稿”并等待投稿成功信号。
+- B站标签不再由发送中心强行写入，保持 B站页面默认/推荐标签；封面不再上传本地封面文件，改用 B站页面生成的推荐封面。
+- 已更新 `docs/UI_REFERENCE.md` 和 `NEXT_STEPS.md`；已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py`、`node --check app\static\js\app.js` 通过。
+
 ## 2026-06-07 抖音发送封面确认和发布状态修复
 - 抖音 opencli 发送链路把“AI 推荐封面”从单个长脚本拆成等待推荐图、点击推荐图、确认“是否确认应用此封面？”弹窗、验证封面已应用四步，减少页面弹窗或重绘导致的 `Detached while handling command`。
 - 新增发布前校验：点击最终发布前会检查标题、作品描述、右侧投稿预览和封面状态；描述未写入、预览未出现或封面未确认时会返回明确错误码。

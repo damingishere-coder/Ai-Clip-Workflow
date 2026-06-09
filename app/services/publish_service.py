@@ -1776,6 +1776,224 @@ def _douyin_close_preview_tip_script() -> str:
     )
 
 
+def _bilibili_dismiss_local_draft_script() -> str:
+    return (
+        "(()=>{"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const pageText=textOf(document.body);"
+        "if(!pageText.includes('未提交的视频')&&!pageText.includes('未提交视频')){return {bilibili_local_draft_prompt:false};}"
+        "const target=[...document.querySelectorAll('button,[role=\"button\"],a,div,span')].filter(visible).find((el)=>textOf(el)==='不用了'||textOf(el).includes('不用了'));"
+        "if(target){target.click();return {bilibili_local_draft_prompt:true,dismissed:true,text:textOf(target)};}"
+        "return {bilibili_local_draft_prompt:true,dismissed:false};"
+        "})()"
+    )
+
+
+def _bilibili_video_upload_script(job: dict, video_path: Path) -> str:
+    media_url = _local_media_url(job)
+    file_name = video_path.name
+    return (
+        "(async()=>{"
+        "const inputs=[...document.querySelectorAll('input[type=\"file\"]')];"
+        "const contextText=(el)=>{let node=el;const parts=[];for(let i=0;i<6&&node;i+=1){parts.push(node.textContent||'');node=node.parentElement;}return parts.join('').replace(/\\s+/g,'');};"
+        "const scored=inputs.map((input,index)=>{const accept=(input.getAttribute('accept')||'').toLowerCase();const context=contextText(input);let score=0;if(/video|mp4|mov|mkv|avi|flv|wmv/.test(accept)){score+=120;}if(/image|jpg|jpeg|png|webp/.test(accept)){score-=160;}if(context.includes('上传视频')||context.includes('点击上传')||context.includes('拖拽到此区域')){score+=40;}if(context.includes('封面')){score-=80;}return {input,index,accept,score,context:context.slice(0,120)};}).sort((a,b)=>b.score-a.score||a.index-b.index);"
+        "const picked=scored.find((item)=>item.score>=0)||scored[0];"
+        "if(!picked?.input){throw new Error('bilibili_video_file_input_not_found:'+inputs.length);}"
+        f"const response=await fetch({json.dumps(media_url, ensure_ascii=False)});"
+        "if(!response.ok){throw new Error(`local_media_fetch_failed:${response.status}`);}"
+        "const blob=await response.blob();"
+        f"const file=new File([blob],{json.dumps(file_name, ensure_ascii=False)},{{type:blob.type||'video/mp4'}});"
+        "const transfer=new DataTransfer();"
+        "transfer.items.add(file);"
+        "picked.input.files=transfer.files;"
+        "picked.input.dispatchEvent(new Event('input',{bubbles:true}));"
+        "picked.input.dispatchEvent(new Event('change',{bubbles:true}));"
+        "return {bilibili_video_uploaded:true,matched_file_inputs:inputs.length,picked_index:picked.index,picked_accept:picked.accept,fileName:picked.input.files[0]?.name||'',size:file.size,type:file.type};"
+        "})()"
+    )
+
+
+def _bilibili_wait_video_uploaded_script(timeout_seconds: int = 180) -> str:
+    return (
+        "(async()=>{"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const pageText=()=>textOf(document.body);"
+        "const started=Date.now();let last='';while(Date.now()-started<timeoutMs){last=pageText();if(last.includes('上传完成')||last.includes('上传成功')||last.includes('基本设置')||last.includes('发布视频')){return {bilibili_video_upload_complete:true,waited_ms:Date.now()-started};}if(last.includes('上传失败')||last.includes('文件格式错误')||last.includes('视频处理失败')){throw new Error('bilibili_video_upload_failed:'+last.slice(-200));}await sleep(1500);}"
+        "throw new Error('bilibili_video_upload_not_complete:'+last.slice(-200));"
+        "})()"
+    )
+
+
+def _bilibili_select_recommended_cover_script(timeout_seconds: int = 120) -> str:
+    return (
+        "(async()=>{"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const badImage=(src)=>/logo|avatar|favicon|icon|bili-avatar|emoji/i.test(src||'');"
+        "const imageCandidates=()=>[...document.querySelectorAll('img,canvas,video')].filter((el)=>{const rect=el.getBoundingClientRect();const src=el.currentSrc||el.src||el.getAttribute('src')||'';return visible(el)&&rect.width>=50&&rect.height>=40&&!badImage(src);}).map((el)=>({el,rect:el.getBoundingClientRect(),text:textOf(el.closest('div,button,[role=\"button\"]')||el)})).filter((item)=>!item.text.includes('花生创作')&&!item.text.includes('首页')).sort((a,b)=>a.rect.top-b.rect.top||a.rect.left-b.rect.left);"
+        "const clickConfirm=()=>{const target=[...document.querySelectorAll('button,[role=\"button\"],div,span')].filter(visible).find((el)=>['确定','确认','完成','使用','设为封面'].some((name)=>textOf(el)===name||textOf(el).includes(name)));if(target){target.click();return textOf(target);}return '';};"
+        "const started=Date.now();let count=0;while(Date.now()-started<timeoutMs){const images=imageCandidates();count=images.length;if(images.length){const preferred=images.find((item)=>item.rect.top>260)||images[0];const clickable=preferred.el.closest('button,[role=\"button\"],div')||preferred.el;clickable.scrollIntoView({block:'center',inline:'center'});clickable.click();preferred.el.click?.();await sleep(700);const confirmText=clickConfirm();return {bilibili_cover_ready:true,bilibili_cover_selected:true,image_count:images.length,confirm_text:confirmText,waited_ms:Date.now()-started};}await sleep(1200);}"
+        "throw new Error('bilibili_cover_not_ready:'+count);"
+        "})()"
+    )
+
+
+def _bilibili_select_declaration_script() -> str:
+    return (
+        "(async()=>{"
+        "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&el.getAttribute('aria-disabled')!=='true'&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const hasSelected=()=>textOf(document.body).includes('内容无需标注')&&!textOf(document.body).includes('请选择符合您视频内容的创作声明');"
+        "const clickOption=()=>{const option=[...document.querySelectorAll('li,button,[role=\"option\"],[role=\"button\"],div,span')].filter(visible).map((el)=>({el,text:textOf(el)})).filter((item)=>item.text==='内容无需标注'||item.text.includes('内容无需标注')).sort((a,b)=>a.text.length-b.text.length)[0];if(option){option.el.scrollIntoView({block:'center',inline:'center'});option.el.click();return option.text;}return '';};"
+        "if(hasSelected()){return {bilibili_declaration_selected:true,already_selected:true,value:'内容无需标注'};}"
+        "const triggers=[...document.querySelectorAll('input,button,[role=\"button\"],[role=\"combobox\"],div,span')].filter(visible).map((el)=>({el,text:textOf(el),placeholder:el.getAttribute('placeholder')||''})).filter((item)=>item.text.includes('创作声明')||item.placeholder.includes('创作声明')||item.placeholder.includes('请选择符合您视频内容')).sort((a,b)=>a.text.length-b.text.length);"
+        "for(const item of triggers){(item.el.closest('button,[role=\"button\"],[role=\"combobox\"],div')||item.el).click();await sleep(500);const optionText=clickOption();if(optionText||hasSelected()){return {bilibili_declaration_selected:true,value:'内容无需标注',option_text:optionText,trigger_text:item.text||item.placeholder};}}"
+        "const optionText=clickOption();if(optionText||hasSelected()){return {bilibili_declaration_selected:true,value:'内容无需标注',option_text:optionText};}"
+        "throw new Error('bilibili_declaration_option_not_found');"
+        "})()"
+    )
+
+
+def _bilibili_select_category_if_empty_script(category: str) -> str:
+    return (
+        "(async()=>{"
+        f"const category={json.dumps(category or DEFAULT_BILIBILI_TID, ensure_ascii=False)};"
+        "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&el.getAttribute('aria-disabled')!=='true'&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const bodyText=()=>textOf(document.body);"
+        "if(bodyText().includes(category)&&bodyText().includes('分区')){return {bilibili_category_ready:true,already_selected:true,value:category};}"
+        "const clickOption=()=>{const target=[...document.querySelectorAll('li,button,[role=\"option\"],[role=\"button\"],div,span')].filter(visible).map((el)=>({el,text:textOf(el)})).filter((item)=>item.text===category||item.text.includes(category)).sort((a,b)=>a.text.length-b.text.length)[0];if(target){target.el.scrollIntoView({block:'center',inline:'center'});target.el.click();return target.text;}return '';};"
+        "const triggers=[...document.querySelectorAll('input,button,[role=\"button\"],[role=\"combobox\"],div,span')].filter(visible).map((el)=>({el,text:textOf(el),placeholder:el.getAttribute('placeholder')||''})).filter((item)=>item.text.includes('分区')||item.placeholder.includes('分区')||item.placeholder.includes('请选择')).sort((a,b)=>a.text.length-b.text.length);"
+        "for(const item of triggers){(item.el.closest('button,[role=\"button\"],[role=\"combobox\"],div')||item.el).click();await sleep(500);const optionText=clickOption();if(optionText||bodyText().includes(category)){return {bilibili_category_ready:true,value:category,option_text:optionText,trigger_text:item.text||item.placeholder};}}"
+        "return {bilibili_category_ready:false,kept_default:true,value:category};"
+        "})()"
+    )
+
+
+def _bilibili_set_description_script(description: str) -> str:
+    return (
+        "(()=>{"
+        f"const value=String({json.dumps(description, ensure_ascii=False)}||'');"
+        "const normalize=(text)=>String(text||'').replace(/[\\u200B-\\u200D\\uFEFF\\u00A0]/g,'').replace(/\\s+/g,' ').trim();"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&!el.readOnly&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const score=(el)=>{let score=0;const attrs=[el.getAttribute('placeholder'),el.getAttribute('aria-label'),el.getAttribute('data-placeholder')].filter(Boolean).join('');if(attrs.includes('简介')||attrs.includes('相关信息')){score+=100;}if(attrs.includes('标题')){score-=120;}const rect=el.getBoundingClientRect();if(rect.height>100){score+=30;}let node=el;for(let i=0;i<5&&node;i+=1){const text=(node.textContent||'').replace(/\\s+/g,'');if(text.includes('简介')){score+=40-i*4;}if(text.includes('标题')){score-=50-i*3;}node=node.parentElement;}return score;};"
+        "const candidates=[...document.querySelectorAll('textarea,div[contenteditable=\"true\"]')].filter(visible).map((el)=>({el,score:score(el)})).sort((a,b)=>b.score-a.score);"
+        "const editor=candidates[0]?.el;if(!editor){throw new Error('bilibili_description_field_not_found');}"
+        "editor.scrollIntoView({block:'center',inline:'center'});editor.focus();"
+        "if(editor.tagName==='TEXTAREA'){const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')?.set;setter?setter.call(editor,value):(editor.value=value);}else{editor.textContent=value;}"
+        "editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));"
+        "editor.dispatchEvent(new Event('change',{bubbles:true}));"
+        "const actual=normalize(editor.tagName==='TEXTAREA'?editor.value:(editor.innerText||editor.textContent||''));"
+        "const expected=normalize(value);if(expected&&actual!==expected){throw new Error('bilibili_description_set_failed');}"
+        "return {bilibili_description_set:true,description_set:true,score:candidates[0].score,length:actual.length};"
+        "})()"
+    )
+
+
+def _bilibili_verify_publish_ready_script(title: str, description: str) -> str:
+    return (
+        "(()=>{"
+        f"const expectedTitle=String({json.dumps(_truncate(title, 80), ensure_ascii=False)}||'');"
+        f"const expectedDescription=String({json.dumps(description, ensure_ascii=False)}||'');"
+        "const normalize=(text)=>String(text||'').replace(/[\\u200B-\\u200D\\uFEFF\\u00A0]/g,'').replace(/\\s+/g,' ').trim();"
+        "const compact=(text)=>normalize(text).replace(/\\s/g,'');"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&!el.readOnly&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const fields=[...document.querySelectorAll('input,textarea,div[contenteditable=\"true\"]')].filter(visible);"
+        "const titleActual=fields.map((el)=>el.isContentEditable?el.textContent:el.value).map(normalize).find((value)=>value&&compact(value).includes(compact(expectedTitle).slice(0,12)))||'';"
+        "if(compact(expectedTitle)&&!titleActual){throw new Error('bilibili_title_missing_after_set');}"
+        "const expectedBody=compact(expectedDescription).slice(0,16);"
+        "const fieldText=fields.map((el)=>el.isContentEditable?el.textContent:el.value).join('');"
+        "const bodyText=compact((document.body.textContent||'')+fieldText);"
+        "if(expectedBody&&!bodyText.includes(expectedBody)){throw new Error('bilibili_description_missing_after_set');}"
+        "if(!bodyText.includes('内容无需标注')){throw new Error('bilibili_declaration_missing_after_set');}"
+        "const coverReady=[...document.querySelectorAll('img,canvas,video')].filter(visible).some((el)=>{const rect=el.getBoundingClientRect();const src=el.currentSrc||el.src||'';return rect.width>=50&&rect.height>=40&&!/logo|avatar|favicon|icon/i.test(src);});"
+        "if(!coverReady){throw new Error('bilibili_cover_missing_after_select');}"
+        "return {bilibili_publish_ready:true,title_checked:true,description_checked:Boolean(expectedBody),declaration_checked:true,cover_checked:true,bilibili_default_tags_kept:true};"
+        "})()"
+    )
+
+
+def _bilibili_click_publish_script() -> str:
+    return (
+        "(async()=>{"
+        "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&el.getAttribute('aria-disabled')!=='true'&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const names=['立即投稿','投稿','确认投稿'];"
+        "const blocked=['存草稿','批量操作','添加视频','更换视频','投稿管理'];"
+        "const findButton=()=>[...document.querySelectorAll('button,[role=\"button\"],a,div,span')].filter(visible).map((el)=>({el:el.closest('button,[role=\"button\"],a')||el,text:textOf(el)})).filter((item)=>names.some((name)=>item.text===name||item.text.includes(name))&&!blocked.some((name)=>item.text.includes(name))).sort((a,b)=>a.text.length-b.text.length)[0];"
+        "const started=Date.now();let last='';while(Date.now()-started<60000){const found=findButton();if(found){found.el.scrollIntoView({block:'center',inline:'center'});await sleep(500);found.el.click();return {bilibili_publish_click_scheduled:true,text:found.text,waited_ms:Date.now()-started};}last=[...document.querySelectorAll('button,[role=\"button\"],a')].filter(visible).map(textOf).filter(Boolean).slice(-20).join('|');window.scrollTo({top:document.documentElement.scrollHeight||document.body.scrollHeight,behavior:'instant'});await sleep(1000);}"
+        "throw new Error('bilibili_publish_button_not_found:'+last);"
+        "})()"
+    )
+
+
+def _bilibili_wait_publish_result_script(title: str, timeout_seconds: int = 180) -> str:
+    return (
+        "(async()=>{"
+        f"const expectedTitle=String({json.dumps(_truncate(title, 30), ensure_ascii=False)}||'').replace(/\\s+/g,'').trim();"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&el.getAttribute('aria-disabled')!=='true'&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const pageText=()=>textOf(document.body);"
+        "const successTexts=['投稿成功','提交成功','已提交审核','审核中','发布成功','稿件已提交','稿件提交成功'];"
+        "const blockedTexts=['验证码','安全验证','登录失效','请先登录','未登录','投稿失败','提交失败','内容违规','无法投稿','风控','频繁','请填写标题','请填写标签','请选择分区','请选择创作声明','请选择符合您视频内容的创作声明','标题不能为空','分区不能为空'];"
+        "const confirmTexts=['确认投稿','继续投稿','仍要投稿','同意并投稿','确认','确定'];"
+        "const hasSuccess=()=>successTexts.find((item)=>pageText().includes(item));"
+        "const hasBlock=()=>blockedTexts.find((item)=>pageText().includes(item));"
+        "const clickConfirm=()=>{const target=[...document.querySelectorAll('button,[role=\"button\"],div,span')].filter(visible).map((el)=>({el,text:textOf(el)})).filter((item)=>confirmTexts.some((name)=>item.text===name||item.text.includes(name))).sort((a,b)=>a.text.length-b.text.length)[0];if(target){target.el.scrollIntoView({block:'center',inline:'center'});target.el.click();return {clicked:true,text:target.text};}return {clicked:false};};"
+        "const titleVisible=()=>{const text=pageText();return expectedTitle&&expectedTitle.length>=4&&text.includes(expectedTitle)&&/content|manager|platform/.test(location.href);};"
+        "const started=Date.now();let confirms=[];let last='';while(Date.now()-started<timeoutMs){const success=hasSuccess();if(success){return {bilibili_publish_confirmed:true,success_text:success,url:location.href,waited_ms:Date.now()-started,confirms};}if(titleVisible()&&/archive|content|manage/.test(location.href)){return {bilibili_publish_confirmed:true,success_text:'页面出现标题',url:location.href,waited_ms:Date.now()-started,confirms};}const blocked=hasBlock();if(blocked){throw new Error('bilibili_publish_blocked:'+blocked);}const confirm=clickConfirm();if(confirm.clicked){confirms.push(confirm);await sleep(2000);continue;}last=[...document.querySelectorAll('button,[role=\"button\"],a')].filter(visible).map(textOf).filter(Boolean).slice(-20).join('|');await sleep(1500);}"
+        "throw new Error('bilibili_publish_not_confirmed:'+location.href+'|'+last);"
+        "})()"
+    )
+
+
+def _browser_bilibili_video_upload_command(session: str, job: dict, video_path: Path) -> list[str]:
+    return _browser_eval_command(session, _bilibili_video_upload_script(job, video_path))
+
+
+def _browser_wait_bilibili_video_uploaded_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _bilibili_wait_video_uploaded_script())
+
+
+def _browser_select_bilibili_cover_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _bilibili_select_recommended_cover_script())
+
+
+def _browser_select_bilibili_declaration_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _bilibili_select_declaration_script())
+
+
+def _browser_select_bilibili_category_command(session: str, category: str) -> list[str]:
+    return _browser_eval_command(session, _bilibili_select_category_if_empty_script(category))
+
+
+def _browser_set_bilibili_description_command(session: str, description: str) -> list[str]:
+    return _browser_eval_command(session, _bilibili_set_description_script(description))
+
+
+def _browser_verify_bilibili_publish_ready_command(session: str, title: str, description: str) -> list[str]:
+    return _browser_eval_command(session, _bilibili_verify_publish_ready_script(title, description))
+
+
+def _browser_click_bilibili_publish_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _bilibili_click_publish_script())
+
+
+def _browser_wait_bilibili_publish_result_command(session: str, title: str) -> list[str]:
+    return _browser_eval_command(session, _bilibili_wait_publish_result_script(title))
+
+
 def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path | None) -> list[list[str]]:
     session = f"send-douyin-{job['id']}"
     title = _truncate(_sanitize_publish_title(job.get("title") or "直播切片"), 30)
@@ -1807,32 +2025,29 @@ def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path
 
 def _build_bilibili_browser_commands(job: dict, video_path: Path, cover_path: Path | None) -> list[list[str]]:
     session = f"send-bilibili-{job['id']}"
-    opencli = _opencli_command()
     title = _truncate(_sanitize_publish_title(job.get("title") or "直播切片"), 80)
-    tags = _format_tags(job.get("tags") or "")
     description = _sanitize_publish_description(job.get("description") or title)
+    category = (job.get("bilibili_tid") or DEFAULT_BILIBILI_TID).strip() or DEFAULT_BILIBILI_TID
     commands = [
         _browser_open_command(session, "https://member.bilibili.com/platform/upload/video/frame"),
         _browser_wait_command(session, 5),
-        [*opencli, "browser", session, "upload", "input[type='file']", str(video_path)],
-        _browser_wait_command(session, 8),
+        _browser_eval_command(session, _bilibili_dismiss_local_draft_script()),
+        _browser_wait_command(session, 2),
+        _browser_bilibili_video_upload_command(session, job, video_path),
+        _browser_wait_bilibili_video_uploaded_command(session),
+        _browser_select_bilibili_cover_command(session),
         _browser_fill_title_command(session, title),
+        _browser_select_bilibili_declaration_command(session),
+        _browser_select_bilibili_category_command(session, category),
     ]
-    if tags:
-        commands.append([*opencli, "browser", session, "fill", "input[placeholder*='标签'],input[placeholder*='tag']", tags])
     if description:
-        commands.append(_browser_fill_bilibili_description_command(session, description))
-    if cover_path:
-        commands.extend(
-            [
-                [*opencli, "browser", session, "upload", "input[type='file'][accept*='image'],input[type='file'][accept*='.jpg']", str(cover_path)],
-                _browser_wait_command(session, 3),
-            ]
-        )
+        commands.append(_browser_set_bilibili_description_command(session, description))
     commands.extend(
         [
-            [*opencli, "browser", session, "click", "--role", "button", "--name", "立即投稿"],
-            _browser_wait_command(session, 5),
+            _browser_verify_bilibili_publish_ready_command(session, title, description),
+            _browser_click_bilibili_publish_command(session),
+            _browser_wait_command(session, 2),
+            _browser_wait_bilibili_publish_result_command(session, title),
         ]
     )
     return commands
@@ -1849,10 +2064,6 @@ def _opencli_commands_for_job(job: dict) -> list[list[str]]:
 
 
 def _opencli_cleanup_commands_for_job(job: dict) -> list[list[str]]:
-    if job["platform"] == "douyin":
-        return [_browser_close_command(f"send-douyin-{job['id']}")]
-    if job["platform"] == "bilibili":
-        return [_browser_close_command(f"send-bilibili-{job['id']}")]
     return []
 
 

@@ -21,7 +21,7 @@ def _fake_job(platform: str) -> dict:
         "tags": "live,highlight",
         "video_file_path": r"C:\tmp\clip.mp4",
         "cover_file_path": r"C:\tmp\cover.jpg",
-        "bilibili_tid": "entertainment",
+        "bilibili_tid": "娱乐",
         "bilibili_copyright": "original",
     }
 
@@ -129,15 +129,22 @@ def test_opencli_detached_retry_is_limited_to_cover_steps() -> None:
     assert not publish_service._should_retry_opencli_detached(["opencli", "browser", "eval", "no marker"], result, 1)  # noqa: SLF001
 
 
-def test_opencli_cleanup_closes_browser_session_after_success() -> None:
+def test_opencli_cleanup_leaves_browser_session_after_success() -> None:
     douyin_cleanup = publish_service._opencli_cleanup_commands_for_job(_fake_job("douyin"))  # noqa: SLF001
     bilibili_cleanup = publish_service._opencli_cleanup_commands_for_job(_fake_job("bilibili"))  # noqa: SLF001
 
-    assert _browser_args(douyin_cleanup[0])[1:] == ["send-douyin-job-douyin", "close"]
-    assert _browser_args(bilibili_cleanup[0])[1:] == ["send-bilibili-job-bilibili", "close"]
+    assert douyin_cleanup == []
+    assert bilibili_cleanup == []
     assert " close" not in _joined(
         publish_service._build_douyin_browser_commands(  # noqa: SLF001
             _fake_job("douyin"),
+            Path(r"C:\tmp\clip.mp4"),
+            Path(r"C:\tmp\cover.jpg"),
+        )
+    )
+    assert " close" not in _joined(
+        publish_service._build_bilibili_browser_commands(  # noqa: SLF001
+            _fake_job("bilibili"),
             Path(r"C:\tmp\clip.mp4"),
             Path(r"C:\tmp\cover.jpg"),
         )
@@ -193,16 +200,30 @@ def test_bilibili_browser_commands() -> None:
     assert "--window" not in _browser_args(commands[0])[5:]
     text = _joined(commands)
     assert "member.bilibili.com/platform/upload/video/frame" in text
-    assert "upload input[type='file']" in text
+    assert not any("browser" in command and _browser_args(command)[2] == "upload" for command in commands)
+    assert "upload input[type='file']" not in text
     assert "fill input[placeholder*='\u6807\u9898'],textarea[placeholder*='\u6807\u9898']" not in text
+    assert "input[placeholder*='\u6807\u7b7e']" not in text
     assert "fill textarea[placeholder*='\u7b80\u4ecb'],textarea[placeholder*='\u4ecb\u7ecd'],textarea" not in text
     assert "title_field_not_found" in text
-    assert "description_field_not_found" in text
+    assert "bilibili_video_file_input_not_found" in text
+    assert "local_media_fetch_failed" in text
+    assert "bilibili_video_upload_complete" in text
+    assert "bilibili_cover_ready" in text
+    assert "bilibili_declaration_selected" in text
+    assert "\u5185\u5bb9\u65e0\u9700\u6807\u6ce8" in text
+    assert "\u5a31\u4e50" in text
+    assert "bilibili_description_field_not_found" in text
+    assert "bilibili_description_set" in text
+    assert "bilibili_default_tags_kept" in text
+    assert "bilibili_publish_ready" in text
+    assert "bilibili_publish_click_scheduled" in text
+    assert "bilibili_publish_confirmed" in text
+    assert "bilibili_publish_blocked" in text
+    assert "bilibili_publish_not_confirmed" in text
     assert "High energy clip" in text
-    assert "live" in text
-    assert "highlight" in text
     assert "\u7acb\u5373\u6295\u7a3f" in text
-    assert r"C:\tmp\cover.jpg" in text
+    assert r"C:\tmp\cover.jpg" not in text
 
 
 def test_fallback_metadata() -> None:
@@ -369,8 +390,8 @@ def main() -> None:
     print("douyin browser commands: OK")
     test_opencli_detached_retry_is_limited_to_cover_steps()
     print("opencli detached retry: OK")
-    test_opencli_cleanup_closes_browser_session_after_success()
-    print("opencli cleanup close: OK")
+    test_opencli_cleanup_leaves_browser_session_after_success()
+    print("opencli cleanup leaves browser: OK")
     test_send_center_frontend_publishing_overlay_resources()
     print("send center frontend publishing overlay: OK")
     test_douyin_description_copies_body_and_platform_topics_directly()
