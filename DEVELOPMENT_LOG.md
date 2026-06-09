@@ -1,5 +1,30 @@
 # Development Log
 
+## 2026-06-09 Docker 8001 opencli 辅助服务
+- 根据使用方式调整：Docker `http://127.0.0.1:8001` 继续作为唯一页面入口，不再要求打开 Windows 本地 `8002` 页面。
+- 新增 `scripts/opencli_host_bridge.py`，在 Windows 主机上提供 opencli 辅助服务；Docker 后台找不到容器内 opencli 时，会通过 `OPENCLI_HOST_BRIDGE_URL` 把 opencli 命令交给 Windows 执行。
+- 新增 `scripts/start_docker_opencli.ps1`，一键完成检查 opencli、启动辅助服务、`docker compose up -d --build` 刷新 Docker，并打开 `http://127.0.0.1:8001/publish`。
+- `docker-compose.yml` 固定 `OPENCLI_LOCAL_BASE_URL=http://127.0.0.1:8001`，并配置 `OPENCLI_HOST_BRIDGE_URL=http://host.docker.internal:8765`；`.env.example` 同步更新。
+- 发送中心顶部提示改为 Docker 8001 语义：继续使用 Docker 主页面，如果自动发送不可用，运行 `.\scripts\start_docker_opencli.ps1`。
+- 已更新 `docs/PROJECT_GUIDE.md`、`docs/UI_REFERENCE.md` 和 `NEXT_STEPS.md`；已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py`、PowerShell 脚本语法检查通过；已运行 `.\scripts\start_docker_opencli.ps1 -NoBrowser`，确认 `http://127.0.0.1:8001/health`、`http://127.0.0.1:8765/health` 正常，并用浏览器打开 `http://127.0.0.1:8001/publish`。
+
+## 2026-06-09 发送中心 opencli 自检和本地重启脚本（已被 Docker 8001 辅助服务替代）
+- 说明：这一版曾尝试用 Windows 本地 `8002` 页面解决 opencli 检测问题；随后已按实际使用方式改为上一节的 Docker `8001` 主页面 + Windows opencli 辅助服务。
+- 发送中心 opencli 检测增加 npm 全局目录兜底：当后台 PATH 不完整时，会继续读取 `APPDATA\npm`、用户 npm 目录、`npm root -g` 和 `npm config get prefix`，减少 Windows 本地服务误判“没有检测到 opencli”的情况。
+- `/publish` 顶部错误提示改为新手可执行说明：如果已经安装 opencli，优先运行 `.\scripts\restart_opencli_local_server.ps1 -Port 8002` 重启 Windows 本地后台，再打开本地发送中心并按 `Ctrl + F5`。
+- 新增 `scripts/restart_opencli_local_server.ps1`：脚本会确认 opencli 可用、停止指定端口旧后台、用 `.venv` 重新启动 FastAPI，并打开发送中心页面；默认端口为 `8002`。
+- 点击“发送此条”或“开始发送全部”时，如果后台仍检测不到 opencli，会直接返回带重启脚本的清晰错误，不再让任务进入一串模糊启动失败。
+- 已更新 `docs/PROJECT_GUIDE.md`、`docs/UI_REFERENCE.md` 和 `NEXT_STEPS.md`；已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py`、PowerShell 脚本语法检查通过。
+
+## 2026-06-08 全页面 Apple 风格视觉美化
+- 设计前已确认 Git 保存点：`2e055bd56acf3499f95c323a7646188b7c3ec133`，并在 `codex/feature-apple-ui-redesign` 分支继续页面美化。
+- `app/templates/base.html` 更新全局应用骨架：左侧导航改为更紧凑的图标式导航项，顶部栏增加 `Local Studio` 状态、Windows 本地后台标识和个人工作区提示，静态资源版本号同步升级，方便浏览器刷新到新样式。
+- `app/static/css/styles.css` 新增 2026-06-08 视觉层：统一浅色玻璃拟态背景、白色卡片、蓝色主按钮、柔和阴影、表格/表单/状态标签/审核页播放器/发送中心卡片等组件质感。
+- 移动端导航改为横向紧凑条，并隐藏侧边栏说明卡；手机首屏能更快看到页面标题和主要操作，不再被长侧边栏占满。
+- 片段审核页桌面断点已校正，默认桌面宽度保持左侧候选列表 + 右侧视频预览双栏，不提前折叠为上下布局。
+- 已更新 `docs/UI_REFERENCE.md`、`NEXT_STEPS.md`，并新增 `design-qa.md` 记录本轮设计验收。
+- 已验证：`.venv\Scripts\python.exe -m compileall app` 通过；临时启动 `http://127.0.0.1:8010` 后，用浏览器检查 `/`、`/tasks`、`/tasks/new`、`/system`、`/publish`、任务详情、片段审核和 `/subtitles`，桌面与手机宽度均无横向溢出。
+
 ## 2026-06-08 B站发送流程和投稿页面保留
 - 发送成功后不再执行 `opencli browser <session> close`，抖音和 B站自动投稿完成后都会保留 OpenCLI Browser 页面，方便继续查看平台结果。
 - B站 opencli 发送链路不再使用 `upload input[type='file']` 这类模糊选择器，改为页面脚本读取本地 `/media` 视频并注入视频上传控件，避开页面中多个 file input 导致的 `selector_ambiguous`。

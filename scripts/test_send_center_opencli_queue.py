@@ -1,3 +1,4 @@
+import json
 import sys
 import subprocess
 import tempfile
@@ -155,6 +156,8 @@ def test_send_center_frontend_publishing_overlay_resources() -> None:
     html = (PROJECT_ROOT / "app" / "templates" / "publish.html").read_text(encoding="utf-8")
     js = (PROJECT_ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "app" / "static" / "css" / "styles.css").read_text(encoding="utf-8")
+    compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    env_example = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
 
     assert "data-send-publishing-overlay" in html
     assert "data-send-publishing-overlay" in js
@@ -163,6 +166,13 @@ def test_send_center_frontend_publishing_overlay_resources() -> None:
     assert "updateSendPreviewFromForm" in js
     assert "data-send-preview-description" in html
     assert "is-previewing" in css
+    assert "opencli_status.restart_command" in html
+    assert "请继续使用 Docker 主页面" in html
+    assert "http://127.0.0.1:8001" in html
+    assert "OPENCLI_LOCAL_BASE_URL: http://127.0.0.1:8001" in compose
+    assert "OPENCLI_HOST_BRIDGE_URL: http://host.docker.internal:8765" in compose
+    assert "OPENCLI_LOCAL_BASE_URL=http://127.0.0.1:8001" in env_example
+    assert "OPENCLI_HOST_BRIDGE_URL=http://host.docker.internal:8765" in env_example
 
 
 def test_douyin_description_copies_body_and_platform_topics_directly() -> None:
@@ -362,6 +372,115 @@ def test_opencli_windows_npm_fallback() -> None:
             publish_service.os.environ["USERPROFILE"] = original_userprofile
 
 
+def test_opencli_npm_root_fallback_when_environment_is_incomplete() -> None:
+    original_which = publish_service.shutil.which
+    original_run = publish_service.subprocess.run
+    original_appdata = publish_service.os.environ.get("APPDATA")
+    original_userprofile = publish_service.os.environ.get("USERPROFILE")
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            npm_dir = Path(temp_dir) / "npm"
+            node_modules = npm_dir / "node_modules"
+            node_modules.mkdir(parents=True)
+            expected = npm_dir / "opencli.cmd"
+            expected.write_text("@echo off\n", encoding="utf-8")
+
+            def fake_which(candidate: str) -> str | None:
+                return str(npm_dir / "npm.cmd") if candidate == "npm.cmd" else None
+
+            def fake_run(command, **_kwargs):
+                if command[1:3] == ["root", "-g"]:
+                    return subprocess.CompletedProcess(command, 0, f"{node_modules}\n", "")
+                return subprocess.CompletedProcess(command, 0, f"{npm_dir}\n", "")
+
+            publish_service.shutil.which = fake_which
+            publish_service.subprocess.run = fake_run
+            publish_service.os.environ.pop("APPDATA", None)
+            publish_service.os.environ.pop("USERPROFILE", None)
+
+            assert publish_service._opencli_executable() == str(expected)  # noqa: SLF001
+    finally:
+        publish_service.shutil.which = original_which
+        publish_service.subprocess.run = original_run
+        if original_appdata is None:
+            publish_service.os.environ.pop("APPDATA", None)
+        else:
+            publish_service.os.environ["APPDATA"] = original_appdata
+        if original_userprofile is None:
+            publish_service.os.environ.pop("USERPROFILE", None)
+        else:
+            publish_service.os.environ["USERPROFILE"] = original_userprofile
+
+
+def test_opencli_missing_status_tells_user_how_to_restart() -> None:
+    original_opencli_executable = publish_service._opencli_executable
+    original_bridge_health = publish_service._opencli_bridge_health
+    try:
+        publish_service._opencli_executable = lambda: None
+        publish_service._opencli_bridge_health = lambda: {"available": False, "message": "missing"}
+
+        status = publish_service._opencli_status()  # noqa: SLF001
+
+        assert not status["available"]
+        assert "start_docker_opencli.ps1" in status["restart_command"]
+        assert status["publish_url"].endswith("/publish")
+        assert "Docker 页面已启动" in status["message"]
+    finally:
+        publish_service._opencli_executable = original_opencli_executable
+        publish_service._opencli_bridge_health = original_bridge_health
+
+
+def test_opencli_bridge_status_supports_docker_page() -> None:
+    original_opencli_executable = publish_service._opencli_executable
+    original_bridge_health = publish_service._opencli_bridge_health
+    try:
+        publish_service._opencli_executable = lambda: None
+        publish_service._opencli_bridge_health = lambda: {
+            "available": True,
+            "message": "bridge ok",
+            "executable": r"C:\Users\demo\AppData\Roaming\npm\opencli.cmd",
+        }
+
+        status = publish_service._opencli_status()  # noqa: SLF001
+
+        assert status["available"]
+        assert status["mode"] == "host_bridge"
+        assert "Docker 8001" in status["message"]
+    finally:
+        publish_service._opencli_executable = original_opencli_executable
+        publish_service._opencli_bridge_health = original_bridge_health
+
+
+def test_opencli_bridge_runner_executes_commands_from_docker() -> None:
+    original_opencli_executable = publish_service._opencli_executable
+    original_bridge_url = publish_service._opencli_bridge_url
+    original_urlopen = publish_service.urllib.request.urlopen
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps({"returncode": 0, "stdout": "bridge ok", "stderr": ""}).encode("utf-8")
+
+    try:
+        publish_service._opencli_executable = lambda: None
+        publish_service._opencli_bridge_url = lambda: "http://host.docker.internal:8765"
+        publish_service.urllib.request.urlopen = lambda *_args, **_kwargs: FakeResponse()
+
+        result = publish_service._default_command_runner(["opencli", "browser", "demo", "close"])  # noqa: SLF001
+
+        assert result.returncode == 0
+        assert result.stdout == "bridge ok"
+    finally:
+        publish_service._opencli_executable = original_opencli_executable
+        publish_service._opencli_bridge_url = original_bridge_url
+        publish_service.urllib.request.urlopen = original_urlopen
+
+
 def test_opencli_cmd_uses_node_entrypoint() -> None:
     original_opencli_executable = publish_service._opencli_executable
     original_which = publish_service.shutil.which
@@ -412,6 +531,14 @@ def main() -> None:
     print("existing dirty caption safety: OK")
     test_opencli_windows_npm_fallback()
     print("opencli windows npm fallback: OK")
+    test_opencli_npm_root_fallback_when_environment_is_incomplete()
+    print("opencli npm root fallback: OK")
+    test_opencli_missing_status_tells_user_how_to_restart()
+    print("opencli missing status restart hint: OK")
+    test_opencli_bridge_status_supports_docker_page()
+    print("opencli docker bridge status: OK")
+    test_opencli_bridge_runner_executes_commands_from_docker()
+    print("opencli docker bridge runner: OK")
     test_opencli_cmd_uses_node_entrypoint()
     print("opencli cmd node entrypoint: OK")
 

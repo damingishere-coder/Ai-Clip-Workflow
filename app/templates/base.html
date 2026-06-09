@@ -7,8 +7,8 @@
     <link rel="icon" href="{{ url_for('static', path='img/brand/niuma-studio-favicon.ico') }}?v=20260604-favicon" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', path='img/brand/niuma-studio-favicon-32.png') }}?v=20260604-favicon">
     <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', path='img/brand/niuma-studio-apple-touch-icon.png') }}?v=20260604-favicon">
-    <meta name="theme-color" content="#256fff">
-    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260606-ai-interface">
+    <meta name="theme-color" content="#f6f9ff">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260608-apple-redesign">
     {% block extra_head %}{% endblock %}
   </head>
   <body>
@@ -24,29 +24,34 @@
           </span>
         </a>
         <nav class="side-nav" aria-label="主导航">
-          <a class="{{ 'active' if active_page == 'dashboard' else '' }}" href="/"><span class="nav-dot"></span>工作台</a>
-          <a class="{{ 'active' if active_page == 'new_task' else '' }}" href="/tasks/new"><span class="nav-dot"></span>新建任务</a>
-          <a class="{{ 'active' if active_page == 'tasks' else '' }}" href="/tasks"><span class="nav-dot"></span>任务列表</a>
-          <a class="{{ 'active' if active_page == 'clips' else '' }}" href="/clips"><span class="nav-dot"></span>片段审核</a>
-          <a class="{{ 'active' if active_page == 'subtitles' else '' }}" href="/subtitles"><span class="nav-dot"></span>字幕推送</a>
-          <a class="{{ 'active' if active_page == 'publish' else '' }}" href="/publish"><span class="nav-dot"></span>发送中心</a>
-          <a class="{{ 'active' if active_page == 'system' else '' }}" href="/system"><span class="nav-dot"></span>系统状态</a>
+          <a class="{{ 'active' if active_page == 'dashboard' else '' }}" href="/"><span class="nav-icon">台</span><span>工作台</span></a>
+          <a class="{{ 'active' if active_page == 'new_task' else '' }}" href="/tasks/new"><span class="nav-icon">建</span><span>新建任务</span></a>
+          <a class="{{ 'active' if active_page == 'tasks' else '' }}" href="/tasks"><span class="nav-icon">列</span><span>任务列表</span></a>
+          <a class="{{ 'active' if active_page == 'clips' else '' }}" href="/clips"><span class="nav-icon">审</span><span>片段审核</span></a>
+          <a class="{{ 'active' if active_page == 'subtitles' else '' }}" href="/subtitles"><span class="nav-icon">字</span><span>字幕推送</span></a>
+          <a class="{{ 'active' if active_page == 'publish' else '' }}" href="/publish"><span class="nav-icon">发</span><span>发送中心</span></a>
+          <a class="{{ 'active' if active_page == 'system' else '' }}" href="/system"><span class="nav-icon">设</span><span>系统状态</span></a>
         </nav>
         <div class="sidebar-note">
           <strong>v1.1 本地切片全流程</strong>
-        <span>上传、转写、AI 分析、人工审核和自动切片已走通；发送中心使用 opencli 逐条投稿到抖音和 B站。</span>
+          <span>上传、转写、AI 分析、人工审核、自动切片和发送中心已经串联，适合个人本地高光生产。</span>
         </div>
       </aside>
 
       <main class="main-panel">
         <header class="topbar">
+          <div class="topbar-title">
+            <span>Local Studio</span>
+            <strong>{{ settings.app_name_cn }}</strong>
+          </div>
           <div class="search-box">
             <span class="search-mark"></span>
             <input type="search" placeholder="任务名称、平台、状态">
           </div>
           <div class="topbar-actions">
+            <span class="system-chip">Windows 本地后台</span>
             <span class="notice-dot" aria-label="通知"></span>
-            <span class="user-chip">张小明</span>
+            <span class="user-chip">个人工作区</span>
             <a class="primary-button" href="/tasks/new">新建任务</a>
           </div>
         </header>
@@ -56,6 +61,6 @@
     </div>
 
     {% block extra_scripts %}{% endblock %}
-    <script src="{{ url_for('static', path='js/app.js') }}?v=20260606-ai-interface"></script>
+    <script src="{{ url_for('static', path='js/app.js') }}?v=20260608-apple-redesign"></script>
   </body>
 </html>

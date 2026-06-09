@@ -22,7 +22,10 @@
 
 {% if not opencli_available %}
 <section class="inline-alert tone-red">
-  当前没有检测到 opencli。发送中心可以先整理队列，但自动发送需要先安装并能在终端运行 opencli。
+  <strong>{{ opencli_status.message }}</strong>
+  <p>请继续使用 Docker 主页面 <code>http://127.0.0.1:8001</code>，不要切到第二个网页。</p>
+  <p>推荐处理：在项目目录运行 <code>{{ opencli_status.restart_command }}</code>，脚本会启动 Windows opencli 辅助服务、刷新 Docker，并打开 <code>{{ opencli_status.publish_url }}</code>。</p>
+  <p>页面打开后按 <code>Ctrl + F5</code> 强制刷新，再回到发送中心测试自动发送。</p>
 </section>
 {% endif %}
 
