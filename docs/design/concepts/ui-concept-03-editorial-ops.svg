@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1024" viewBox="0 0 1440 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbf6ec"/>
+      <stop offset=".56" stop-color="#f5ecdd"/>
+      <stop offset="1" stop-color="#efe3d0"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1f2937"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#402f1e" flood-opacity=".14"/>
+    </filter>
+    <style>
+      .title{font:700 44px Georgia,"Times New Roman","Microsoft YaHei",serif;fill:#1e232b}
+      .h2{font:850 24px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;fill:#1e232b}
+      .body{font:500 15px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;fill:#6f6254}
+      .small{font:700 13px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;fill:#6f6254}
+      .tiny{font:900 12px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;fill:#2f5c4f;letter-spacing:.1em}
+      .num{font:850 34px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;fill:#1e232b}
+    </style>
+  </defs>
+  <rect width="1440" height="1024" fill="url(#bg)"/>
+  <rect x="28" y="28" width="238" height="968" rx="24" fill="#fffaf1" stroke="#eadfce" filter="url(#shadow)"/>
+  <rect x="52" y="56" width="44" height="44" rx="14" fill="url(#ink)"/>
+  <text x="74" y="85" text-anchor="middle" font-size="20" font-weight="900" fill="#fff6df">牛</text>
+  <text x="110" y="76" font-size="20" font-weight="850" fill="#1e232b">牛马片场</text>
+  <text x="110" y="96" class="small">内容运营编辑台</text>
+  <g transform="translate(50 140)">
+    <rect width="188" height="42" rx="14" fill="#111827"/>
+    <text x="22" y="27" class="small" fill="#fff6df">发</text><text x="58" y="27" font-size="15" font-weight="850" fill="#fff6df">发送中心</text>
+    <text x="22" y="82" class="small">台</text><text x="58" y="82" font-size="15" font-weight="760" fill="#3b342d">工作台</text>
+    <text x="22" y="137" class="small">列</text><text x="58" y="137" font-size="15" font-weight="760" fill="#3b342d">任务列表</text>
+    <text x="22" y="192" class="small">审</text><text x="58" y="192" font-size="15" font-weight="760" fill="#3b342d">片段审核</text>
+    <text x="22" y="247" class="small">字</text><text x="58" y="247" font-size="15" font-weight="760" fill="#3b342d">字幕推送</text>
+    <text x="22" y="302" class="small">设</text><text x="58" y="302" font-size="15" font-weight="760" fill="#3b342d">系统状态</text>
+  </g>
+  <rect x="50" y="832" width="190" height="128" rx="18" fill="#f1e6d5" stroke="#eadfce"/>
+  <text x="70" y="870" font-size="15" font-weight="850" fill="#1e232b">编辑部式运营</text>
+  <text x="70" y="900" class="small">更重视标题、封面、</text>
+  <text x="70" y="922" class="small">话题、平台状态。</text>
+
+  <rect x="294" y="28" width="1118" height="64" rx="22" fill="#fffaf1" stroke="#eadfce" filter="url(#shadow)"/>
+  <rect x="330" y="40" width="430" height="40" rx="15" fill="#f1e6d5" stroke="#eadfce"/>
+  <text x="358" y="65" class="body">搜索标题、话题、封面、平台状态</text>
+  <rect x="976" y="40" width="142" height="40" rx="14" fill="#111827"/>
+  <text x="1047" y="66" text-anchor="middle" font-size="15" font-weight="900" fill="#fff6df">AI 补齐文案</text>
+  <rect x="1130" y="40" width="142" height="40" rx="14" fill="#2f5c4f"/>
+  <text x="1201" y="66" text-anchor="middle" font-size="15" font-weight="900" fill="#fffaf1">开始发送</text>
+
+  <text x="294" y="150" class="tiny">PUBLISHING BOARD</text>
+  <text x="294" y="202" class="title">内容运营编辑台</text>
+  <text x="294" y="235" class="body">把切片当成内容资产管理：封面、标题、话题、简介和平台状态一起进入发送队列。</text>
+
+  <g transform="translate(294 282)">
+    <rect width="204" height="128" rx="22" fill="#fffaf1" stroke="#eadfce" filter="url(#shadow)"/>
+    <text x="22" y="50" class="small">可入队切片</text><text x="22" y="92" class="num">26</text>
+    <rect x="222" width="204" height="128" rx="22" fill="#fffaf1" stroke="#eadfce" filter="url(#shadow)"/>
+    <text x="244" y="50" class="small">待发送</text><text x="244" y="92" class="num">72</text>
+    <rect x="444" width="204" height="128" rx="22" fill="#fffaf1" stroke="#eadfce" filter="url(#shadow)"/>
+    <text x="466" y="50" class="small">已发布</text><text x="466" y="92" class="num">3</text>
+    <rect x="666" width="204" height="128" rx="22" fill="#fffaf1" stroke="#eadfce" filter="url(#shadow)"/>
+    <text x="688" y="50" class="small">失败任务</text><text x="688" y="92" class="num">1</text>
+    <rect x="888" width="204" height="128" rx="22" fill="#fffaf1" stroke="#eadfce" filter="url(#shadow)"/>
+    <text x="910" y="50" class="small">今日标题</text><text x="910" y="92" class="num">18</text>
+  </g>
+
+  <rect x="294" y="438" width="710" height="512" rx="24" fill="#fffaf1" stroke="#eadfce" filter="url(#shadow)"/>
+  <text x="326" y="486" class="h2">待发送内容资产</text>
+  <rect x="326" y="518" width="646" height="54" rx="18" fill="#f1e6d5"/>
+  <text x="352" y="552" font-size="15" font-weight="850" fill="#2f5c4f">全部</text>
+  <text x="430" y="552" class="small">抖音</text>
+  <text x="510" y="552" class="small">B站</text>
+  <text x="590" y="552" class="small">待发送</text>
+  <text x="690" y="552" class="small">已发布</text>
+  <g transform="translate(326 596)">
+    <rect width="646" height="72" rx="18" fill="#fffdf8" stroke="#eadfce"/>
+    <rect x="18" y="14" width="72" height="44" rx="12" fill="#c8a46b"/>
+    <text x="110" y="31" font-size="16" font-weight="850" fill="#1e232b">姐妹互怼综艺高光</text>
+    <text x="110" y="55" class="small">#综艺高光 #康熙来了 #短视频</text>
+    <rect x="514" y="22" width="84" height="28" rx="14" fill="#2f5c4f"/><text x="556" y="41" text-anchor="middle" font-size="12" font-weight="900" fill="#fffaf1">待发送</text>
+    <rect y="88" width="646" height="72" rx="18" fill="#fffdf8" stroke="#eadfce"/>
+    <rect x="18" y="102" width="72" height="44" rx="12" fill="#8f7051"/>
+    <text x="110" y="119" font-size="16" font-weight="850" fill="#1e232b">新品直播转化片段</text>
+    <text x="110" y="143" class="small">封面已选帧 · 简介已生成</text>
+    <rect x="514" y="110" width="84" height="28" rx="14" fill="#111827"/><text x="556" y="129" text-anchor="middle" font-size="12" font-weight="900" fill="#fff6df">草稿</text>
+    <rect y="176" width="646" height="72" rx="18" fill="#fffdf8" stroke="#eadfce"/>
+    <rect x="18" y="190" width="72" height="44" rx="12" fill="#2f5c4f"/>
+    <text x="110" y="207" font-size="16" font-weight="850" fill="#1e232b">访谈金句短视频</text>
+    <text x="110" y="231" class="small">B站分区 · 标签 · 简介待确认</text>
+    <rect x="514" y="198" width="84" height="28" rx="14" fill="#2f5c4f"/><text x="556" y="217" text-anchor="middle" font-size="12" font-weight="900" fill="#fffaf1">待发送</text>
+  </g>
+
+  <rect x="1030" y="438" width="382" height="512" rx="24" fill="#fffaf1" stroke="#eadfce" filter="url(#shadow)"/>
+  <text x="1062" y="486" class="h2">手机投稿预览</text>
+  <rect x="1120" y="528" width="202" height="360" rx="34" fill="#111827"/>
+  <rect x="1138" y="548" width="166" height="320" rx="24" fill="#2f5c4f"/>
+  <rect x="1138" y="548" width="166" height="320" rx="24" fill="#c8a46b" opacity=".38"/>
+  <rect x="1138" y="762" width="166" height="106" rx="0" fill="#111827" opacity=".76"/>
+  <text x="1158" y="804" font-size="16" font-weight="850" fill="#fffaf1">姐妹互怼名场面</text>
+  <text x="1158" y="832" font-size="11" font-weight="700" fill="#fff6df">#综艺高光 #康熙来了</text>
+  <text x="1220" y="1000" class="small">Option 3 · Editorial Ops</text>
+</svg>

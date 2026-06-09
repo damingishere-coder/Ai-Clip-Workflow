@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1024" viewBox="0 0 1440 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f9fbff"/>
+      <stop offset="0.55" stop-color="#eef5ff"/>
+      <stop offset="1" stop-color="#e8f0fb"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5c9cff"/>
+      <stop offset="1" stop-color="#1f6fff"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#203a5f" flood-opacity="0.14"/>
+    </filter>
+    <style>
+      .title{font:800 42px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;fill:#111827}
+      .h2{font:800 24px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;fill:#111827}
+      .body{font:500 15px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;fill:#667085}
+      .small{font:700 13px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;fill:#667085}
+      .tiny{font:800 12px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;fill:#1f6fff;letter-spacing:.08em}
+      .num{font:850 34px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;fill:#111827}
+      .label{font:800 12px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;fill:#7a8699}
+    </style>
+  </defs>
+  <rect width="1440" height="1024" fill="url(#bg)"/>
+  <g opacity=".22" stroke="#1f6fff" stroke-width="1">
+    <path d="M0 96H1440M0 192H1440M0 288H1440M0 384H1440M0 480H1440M0 576H1440M0 672H1440M0 768H1440M0 864H1440"/>
+    <path d="M96 0V1024M192 0V1024M288 0V1024M384 0V1024M480 0V1024M576 0V1024M672 0V1024M768 0V1024M864 0V1024M960 0V1024M1056 0V1024M1152 0V1024M1248 0V1024M1344 0V1024"/>
+  </g>
+
+  <rect x="28" y="28" width="238" height="968" rx="24" fill="#ffffff" opacity=".78" filter="url(#shadow)"/>
+  <rect x="52" y="56" width="44" height="44" rx="14" fill="url(#blue)"/>
+  <text x="74" y="85" text-anchor="middle" font-size="20" font-weight="900" fill="#fff">牛</text>
+  <text x="110" y="76" font-size="20" font-weight="850" fill="#111827">牛马片场</text>
+  <text x="110" y="96" class="small">本地 AI 高光生产后台</text>
+  <g transform="translate(50 140)">
+    <rect width="188" height="42" rx="14" fill="#e7f0ff" stroke="#c9ddff"/>
+    <text x="22" y="27" class="small" fill="#1f6fff">台</text><text x="58" y="27" font-size="15" font-weight="800" fill="#1f6fff">工作台</text>
+    <text x="22" y="82" class="small">建</text><text x="58" y="82" font-size="15" font-weight="760" fill="#344054">新建任务</text>
+    <text x="22" y="137" class="small">列</text><text x="58" y="137" font-size="15" font-weight="760" fill="#344054">任务列表</text>
+    <text x="22" y="192" class="small">审</text><text x="58" y="192" font-size="15" font-weight="760" fill="#344054">片段审核</text>
+    <text x="22" y="247" class="small">字</text><text x="58" y="247" font-size="15" font-weight="760" fill="#344054">字幕推送</text>
+    <text x="22" y="302" class="small">发</text><text x="58" y="302" font-size="15" font-weight="760" fill="#344054">发送中心</text>
+    <text x="22" y="357" class="small">设</text><text x="58" y="357" font-size="15" font-weight="760" fill="#344054">系统状态</text>
+  </g>
+  <rect x="50" y="832" width="190" height="128" rx="18" fill="#f3f7fd" stroke="#e2eaf5"/>
+  <text x="70" y="870" font-size="15" font-weight="850" fill="#111827">本地全流程</text>
+  <text x="70" y="900" class="small">转写、AI 分析、审核</text>
+  <text x="70" y="922" class="small">切片、字幕和发送</text>
+
+  <rect x="294" y="28" width="1118" height="64" rx="22" fill="#ffffff" opacity=".82" filter="url(#shadow)"/>
+  <rect x="330" y="40" width="430" height="40" rx="15" fill="#f4f8fd" stroke="#e2eaf5"/>
+  <text x="358" y="65" class="body">搜索任务、视频、片段、状态</text>
+  <rect x="968" y="42" width="124" height="36" rx="18" fill="#f4f8fd"/>
+  <text x="1030" y="65" text-anchor="middle" class="small">Windows 本地</text>
+  <rect x="1102" y="42" width="104" height="36" rx="18" fill="#f4f8fd"/>
+  <text x="1154" y="65" text-anchor="middle" class="small">个人工作区</text>
+  <rect x="1218" y="40" width="166" height="40" rx="14" fill="url(#blue)"/>
+  <text x="1301" y="66" text-anchor="middle" font-size="15" font-weight="900" fill="#fff">开始处理新视频</text>
+
+  <text x="294" y="150" class="tiny">DASHBOARD</text>
+  <text x="294" y="200" class="title">明亮专业工作台</text>
+  <text x="294" y="232" class="body">清爽 SaaS 后台方向，适合每天快速查看任务状态、候选片段、异常和后续字幕发送。</text>
+
+  <g transform="translate(294 278)">
+    <g>
+      <rect width="204" height="128" rx="22" fill="#fff" filter="url(#shadow)"/>
+      <rect x="22" y="22" width="30" height="30" rx="10" fill="#eaf2ff"/><text x="22" y="70" class="small">今日新增任务</text><text x="22" y="108" class="num">6</text>
+    </g>
+    <g transform="translate(222 0)">
+      <rect width="204" height="128" rx="22" fill="#fff" filter="url(#shadow)"/>
+      <rect x="22" y="22" width="30" height="30" rx="10" fill="#fff2dd"/><text x="22" y="70" class="small">待 AI 分析</text><text x="22" y="108" class="num">12</text>
+    </g>
+    <g transform="translate(444 0)">
+      <rect width="204" height="128" rx="22" fill="#fff" filter="url(#shadow)"/>
+      <rect x="22" y="22" width="30" height="30" rx="10" fill="#eeeaff"/><text x="22" y="70" class="small">待人工审核</text><text x="22" y="108" class="num">8</text>
+    </g>
+    <g transform="translate(666 0)">
+      <rect width="204" height="128" rx="22" fill="#fff" filter="url(#shadow)"/>
+      <rect x="22" y="22" width="30" height="30" rx="10" fill="#e5f8f0"/><text x="22" y="70" class="small">已生成切片</text><text x="22" y="108" class="num">42</text>
+    </g>
+    <g transform="translate(888 0)">
+      <rect width="204" height="128" rx="22" fill="#fff" filter="url(#shadow)"/>
+      <rect x="22" y="22" width="30" height="30" rx="10" fill="#fff0f2"/><text x="22" y="70" class="small">异常任务</text><text x="22" y="108" class="num">1</text>
+    </g>
+  </g>
+
+  <rect x="294" y="430" width="698" height="520" rx="24" fill="#fff" filter="url(#shadow)"/>
+  <text x="326" y="478" class="h2">最近任务</text>
+  <text x="326" y="520" class="label">任务名称</text><text x="560" y="520" class="label">平台</text><text x="682" y="520" class="label">状态</text><text x="820" y="520" class="label">候选</text>
+  <g class="body">
+    <path d="M326 542H960" stroke="#edf1f7"/>
+    <text x="326" y="578">康熙来了 2016 高光</text><text x="560" y="578">通用</text><rect x="682" y="556" width="74" height="28" rx="14" fill="#eaf2ff"/><text x="719" y="575" text-anchor="middle" font-size="12" font-weight="800" fill="#1f6fff">待审核</text><text x="820" y="578">12 条</text>
+    <path d="M326 606H960" stroke="#edf1f7"/>
+    <text x="326" y="642">新品直播复盘 0612</text><text x="560" y="642">抖音</text><rect x="682" y="620" width="74" height="28" rx="14" fill="#fff2dd"/><text x="719" y="639" text-anchor="middle" font-size="12" font-weight="800" fill="#d98724">处理中</text><text x="820" y="642">8 条</text>
+    <path d="M326 670H960" stroke="#edf1f7"/>
+    <text x="326" y="706">访谈长视频切片</text><text x="560" y="706">B站</text><rect x="682" y="684" width="74" height="28" rx="14" fill="#e5f8f0"/><text x="719" y="703" text-anchor="middle" font-size="12" font-weight="800" fill="#20a06b">已切片</text><text x="820" y="706">6 条</text>
+  </g>
+
+  <rect x="1016" y="430" width="396" height="520" rx="24" fill="#fff" filter="url(#shadow)"/>
+  <text x="1048" y="478" class="h2">工作流状态</text>
+  <g transform="translate(1060 540)">
+    <path d="M22 18H300" stroke="#dbe5f2" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="22" cy="18" r="18" fill="#20a06b"/><text x="22" y="24" text-anchor="middle" font-size="13" font-weight="900" fill="#fff">1</text>
+    <circle cx="92" cy="18" r="18" fill="#20a06b"/><text x="92" y="24" text-anchor="middle" font-size="13" font-weight="900" fill="#fff">2</text>
+    <circle cx="162" cy="18" r="18" fill="#1f6fff"/><text x="162" y="24" text-anchor="middle" font-size="13" font-weight="900" fill="#fff">3</text>
+    <circle cx="232" cy="18" r="18" fill="#edf2f8"/><text x="232" y="24" text-anchor="middle" font-size="13" font-weight="900" fill="#7a8699">4</text>
+    <circle cx="302" cy="18" r="18" fill="#edf2f8"/><text x="302" y="24" text-anchor="middle" font-size="13" font-weight="900" fill="#7a8699">5</text>
+  </g>
+  <rect x="1048" y="640" width="332" height="72" rx="18" fill="#f4f8fd"/>
+  <text x="1072" y="670" font-size="16" font-weight="850" fill="#111827">转写进度 86%</text>
+  <text x="1072" y="694" class="small">正在准备进入 AI 分析</text>
+  <rect x="1048" y="728" width="332" height="72" rx="18" fill="#f4f8fd"/>
+  <text x="1072" y="758" font-size="16" font-weight="850" fill="#111827">今日重点</text>
+  <text x="1072" y="782" class="small">8 条任务等待人工审核</text>
+  <text x="1220" y="1000" class="label">Option 1 · Clarity Glass</text>
+</svg>

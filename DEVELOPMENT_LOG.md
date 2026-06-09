@@ -1,5 +1,13 @@
 # Development Log
 
+## 2026-06-09 v1.2 分支收拢与 MVP 全流程确认
+- 已将本地功能分支内容收拢到 `master`：抖音发送修复、B站发送修复、AI 接口设置、发送中心 AI 文案配置、Apple 风格 UI、Docker opencli 桥接和字幕相关历史均已纳入主分支历史。
+- `codex/Releasefunction` 是较早的大分支，直接合并会回退新版发送中心、品牌资源和 UI；本轮保留当前 `master` 最新代码，手动补入其核心改动：远程 / 本地 AI 长视频统一分段分析、失败小段跳过、旧字段兼容和短错误提示。
+- 项目版本更新为 `1.2.0`，侧边栏口径更新为 `v1.2 MVP 全流程`，新增根目录 `VERSION` 文件。
+- 根目录 `AGENTS.md` 已更新为“默认自动提交到 GitHub，并创建 PR”的协作规则，同时保留禁止自动合并 PR、删除分支、force push、提交敏感信息和删除历史数据的安全边界。
+- 当前项目状态记录为：上传视频、提取音频、远程 / 本地转写、AI 候选片段分析、片段审核、自动切割、自动加字幕、候选封面帧、发送中心队列和 opencli 辅助投稿链路均已实现 MVP。
+- 已安装 GitHub CLI 2.93.0；本机当前可访问 `api.github.com`，但此前访问 `github.com:443` 超时，后续推送前需要重新检查网络和登录状态。
+
 ## 2026-06-09 Docker 8001 opencli 辅助服务
 - 根据使用方式调整：Docker `http://127.0.0.1:8001` 继续作为唯一页面入口，不再要求打开 Windows 本地 `8002` 页面。
 - 新增 `scripts/opencli_host_bridge.py`，在 Windows 主机上提供 opencli 辅助服务；Docker 后台找不到容器内 opencli 时，会通过 `OPENCLI_HOST_BRIDGE_URL` 把 opencli 命令交给 Windows 执行。
