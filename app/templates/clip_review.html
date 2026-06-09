@@ -104,7 +104,7 @@
     <article class="panel empty-state">
       <p class="eyebrow">Empty</p>
       <h2>暂无候选片段</h2>
-      <p>请先完成转写和 AI 片段分析。远程 AI 会使用完整转写；如果远程不可用，系统会自动切到本地分段分析，避免 Ollama 一次性处理过长文本。</p>
+      <p>请先完成转写和 AI 片段分析。远程 AI 会使用完整转写；如果远程不可用，系统会暂停并显示原因，需要你手动回到任务详情页选择本地 AI 分析。</p>
       <div class="button-row empty-actions">
         <a class="secondary-button" href="/tasks/{{ task.id }}">返回任务详情</a>
         <button class="secondary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow" {{ "disabled" if task.transcript_exists else "" }}>先生成转写</button>
@@ -115,43 +115,45 @@
   </form>
 
   <aside class="panel preview-panel">
-    {% if task.source_exists %}
-    <div class="video-preview">
-      <video id="clip-preview-video" controls preload="metadata" src="/media/tasks/{{ task.id }}/source-video"></video>
-      <div class="video-preview-meta">
-        <strong>源视频预览</strong>
-        <span id="clip-preview-caption">点击左侧候选片段的“预览”，会自动跳到对应时间段播放。</span>
+    <div class="preview-sticky-core" id="clip-preview-dock">
+      {% if task.source_exists %}
+      <div class="video-preview">
+        <video id="clip-preview-video" controls preload="metadata" src="/media/tasks/{{ task.id }}/source-video"></video>
+        <div class="video-preview-meta">
+          <strong>源视频预览</strong>
+          <span id="clip-preview-caption">点击左侧候选片段的“预览”，会自动跳到对应时间段播放。</span>
+        </div>
       </div>
-    </div>
-    {% else %}
-    <div class="video-placeholder">
-      <button class="play-button" type="button" aria-label="播放"></button>
-      <strong>视频预览</strong>
-      <span>没有找到源视频文件，请回到任务详情确认视频路径是否存在。</span>
-    </div>
-    {% endif %}
-    <div class="preview-timeline">
-      {% for clip in clips[:3] %}
-      <span style="left: {{ 8 + loop.index0 * 28 }}%; width: 12%"></span>
-      {% endfor %}
-    </div>
-    <div class="panel-header compact">
-      <div>
-        <p class="eyebrow">Actions</p>
-        <h2>审核操作</h2>
+      {% else %}
+      <div class="video-placeholder">
+        <button class="play-button" type="button" aria-label="播放"></button>
+        <strong>视频预览</strong>
+        <span>没有找到源视频文件，请回到任务详情确认视频路径是否存在。</span>
       </div>
+      {% endif %}
+      <div class="preview-timeline">
+        {% for clip in clips[:3] %}
+        <span style="left: {{ 8 + loop.index0 * 28 }}%; width: 12%"></span>
+        {% endfor %}
+      </div>
+      <div class="panel-header compact">
+        <div>
+          <p class="eyebrow">Actions</p>
+          <h2>审核操作</h2>
+        </div>
+      </div>
+      <ul class="compact-list preview-action-notes">
+        <li>保存后任务仍保持：{{ task.status_label }}，这里主要作为 AI 结果检查入口。</li>
+        <li>生成切片会直接使用当前启用的 AI 候选片段，并写入切片输出目录。</li>
+        <li>AI 分析策略：优先选择有铺垫、爆点 / 观点、反应和自然收尾的完整片段。</li>
+      </ul>
+      <div class="button-row review-actions">
+        <button class="secondary-button review-action-button" id="save-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/clips/batch-update" {{ "disabled" if not clips else "" }}>保存修改</button>
+        <button class="primary-button review-action-button review-action-main" id="generate-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/cuts" {{ "disabled" if not clips else "" }}>生成切片</button>
+        <a class="secondary-button review-action-button" href="/subtitles">去字幕推送</a>
+      </div>
+      <p class="form-hint" id="process-result"></p>
     </div>
-    <ul class="compact-list">
-      <li>保存后任务仍保持：{{ task.status_label }}，这里主要作为 AI 结果检查入口。</li>
-      <li>生成切片会直接使用当前启用的 AI 候选片段，并写入切片输出目录。</li>
-      <li>AI 分析策略：优先选择有铺垫、爆点 / 观点、反应和自然收尾的完整片段。</li>
-    </ul>
-    <div class="button-row review-actions">
-      <button class="secondary-button" id="save-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/clips/batch-update" {{ "disabled" if not clips else "" }}>保存修改</button>
-      <button class="primary-button" id="generate-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/cuts" {{ "disabled" if not clips else "" }}>生成切片</button>
-      <a class="secondary-button" href="/subtitles">去字幕推送</a>
-    </div>
-    <p class="form-hint" id="process-result"></p>
 
     <div class="output-list">
       <div class="panel-header compact">

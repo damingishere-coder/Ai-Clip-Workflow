@@ -12,7 +12,7 @@ from app.services.ai.remote_responses_provider import RemoteResponsesProvider
 
 
 def remote_key_looks_valid(api_key: str | None = None) -> bool:
-    return len((api_key or settings.ai_remote_api_key or "").strip()) >= 20
+    return len((api_key or settings.ai_analysis_remote_api_key or "").strip()) >= 20
 
 
 def ollama_origin(base_url: str | None = None) -> str:
@@ -78,20 +78,19 @@ def test_local_json_generation(model: str | None = None, timeout_seconds: int | 
 
 def test_remote_json_generation(timeout_seconds: int | None = None) -> dict[str, Any]:
     if not remote_key_looks_valid():
-        raise AIProviderError("远程 AI Key 看起来无效或缺失，请检查 AI_REMOTE_API_KEY 或 OPENAI_API_KEY")
-    remote_model = settings.ai_remote_review_model or settings.ai_remote_model
-    if settings.ai_remote_model.startswith("deepseek") and not remote_model.startswith("deepseek"):
-        remote_model = settings.ai_remote_model
+        raise AIProviderError("远程分析接口 Key 看起来无效或缺失，请检查 AI_ANALYSIS_REMOTE_API_KEY")
+    remote_model = settings.ai_analysis_remote_model
     provider = RemoteResponsesProvider(
         ProviderConfig(
-            base_url=settings.ai_remote_base_url,
-            api_key=settings.ai_remote_api_key,
+            base_url=settings.ai_analysis_remote_base_url,
+            api_key=settings.ai_analysis_remote_api_key,
             model=remote_model,
-            protocol=settings.ai_remote_protocol,
-            timeout_seconds=timeout_seconds or settings.ai_request_timeout_seconds,
-            responses_path=settings.ai_remote_responses_path,
-            reasoning_effort=settings.ai_remote_reasoning_effort,
-            disable_response_storage=settings.ai_remote_disable_response_storage.lower() == "true",
+            protocol=settings.ai_analysis_remote_protocol,
+            timeout_seconds=timeout_seconds or settings.ai_analysis_request_timeout_seconds,
+            responses_path=settings.ai_analysis_remote_responses_path,
+            reasoning_effort=settings.ai_analysis_remote_reasoning_effort,
+            disable_response_storage=settings.ai_analysis_remote_disable_response_storage.lower() == "true",
+            api_key_name="AI_ANALYSIS_REMOTE_API_KEY",
         )
     )
     text = provider.generate_json('请只输出严格 JSON：{"status":"ok","provider":"remote"}')

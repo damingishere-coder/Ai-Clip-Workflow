@@ -13,6 +13,7 @@
       <span>当前状态：{{ task.status_label }}</span>
     </p>
   </div>
+  {% set header_transcript_progress = task.transcript_progress or {} %}
   <div class="button-row">
     {% if task.transcript_exists %}
     <button class="secondary-button" id="start-workflow-button" type="button" disabled>转写已完成</button>
@@ -23,6 +24,7 @@
     {% else %}
     <button class="secondary-button js-process-action" id="start-workflow-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow">{{ "继续处理" if task.audio_exists else "开始处理" }}</button>
     {% endif %}
+    <button class="secondary-button js-process-action" id="local-transcript-button" type="button" data-confirm="远程转写失败后才建议使用本地模型。本地模型会占用电脑性能，速度可能更慢。确认改用本地模型转写吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?force=true&provider=local" {% if task.transcript_exists or header_transcript_progress.status != "failed" or header_transcript_progress.provider == "local" %}hidden{% endif %}>改用本地模型转写</button>
     <a class="primary-button" href="/tasks/{{ task.id }}/clips/review">进入片段审核</a>
   </div>
 </section>
@@ -123,7 +125,7 @@
       <p class="empty-note">选择的方案会直接作为本次 AI 片段分析 Prompt。系统会自动替换最大时长、候选数量、AI 偏好和转写文本变量；最终成片仍需要进入人工审核确认。</p>
       <div class="button-row align-end">
         <button class="secondary-button" id="save-ai-prompts-button" type="button">保存 Prompt 方案</button>
-        <button class="secondary-button js-ai-process-action" type="button" data-provider="remote">DeepSeek AI 分析</button>
+        <button class="secondary-button js-ai-process-action" type="button" data-provider="remote">远程 AI 分析</button>
         <button class="secondary-button js-ai-process-action" type="button" data-provider="local">本地 AI 分析</button>
       </div>
       <div class="ai-analysis-progress" id="ai-analysis-progress" hidden>

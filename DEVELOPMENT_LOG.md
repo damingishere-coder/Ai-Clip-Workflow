@@ -1,5 +1,56 @@
 # Development Log
 
+## 2026-06-07 抖音发送封面确认和发布状态修复
+- 抖音 opencli 发送链路把“AI 推荐封面”从单个长脚本拆成等待推荐图、点击推荐图、确认“是否确认应用此封面？”弹窗、验证封面已应用四步，减少页面弹窗或重绘导致的 `Detached while handling command`。
+- 新增发布前校验：点击最终发布前会检查标题、作品描述、右侧投稿预览和封面状态；描述未写入、预览未出现或封面未确认时会返回明确错误码。
+- 封面相关步骤增加最多 2 次自动重试，只处理 opencli 页面断开的瞬时错误，不绕过验证码、登录失效、风控或平台人工确认。
+- 针对真实失败 `douyin_cover_confirm_not_found` 追加修复：封面候选图会排除抖音页面 logo、头像、icon 和顶部静态图片，避免误点左上角 logo 后跳到作品管理页；如果点击封面后跳转到作品管理，会返回 `douyin_cover_click_navigated` 方便定位。
+- 发布成功后会自动执行 `opencli browser <session> close`，关闭本次自动投稿打开的 OpenCLI Browser 标签；关闭失败只记录到 `cleanup_outputs`，不会把已经发布成功的任务改成失败。
+- 发送中心新增居中的“正在发布”状态框；点击单条发送或批量发送后立即显示，已有 `publishing` 任务时页面也会显示并自动刷新。
+- 右侧手机投稿预览改为跟随当前卡片编辑内容实时更新，包括标题、平台话题、正文简介和封面帧。
+- 已更新 `docs/UI_REFERENCE.md` 和 `NEXT_STEPS.md`；已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py`、`node --check app\static\js\app.js` 通过。
+
+## 2026-06-07 DeepSeek Pro 整集分析空正文修复
+- 修复远程 DeepSeek Pro 分析长视频时返回空 `message.content`，导致页面报“AI Chat Completions 响应中没有文本内容”的问题。
+- `app/services/ai/remote_responses_provider.py` 对 DeepSeek Chat Completions 请求显式加入 `thinking: {"type": "disabled"}`，让整集切片分析直接输出严格 JSON，不把输出预算消耗在推理内容上；非 DeepSeek 的 OpenAI-compatible 接口不加该专属字段。
+- `app/services/ai/base.py` 增强 Chat Completions 空正文报错信息，会带上 `finish_reason`、返回字段和推理内容长度，后续如果接口异常能更快定位。
+- 新增 `scripts/test_remote_ai_chat_payload.py`，离线验证 DeepSeek 请求会关闭 thinking、普通接口 payload 不受影响、空正文错误包含诊断信息。
+- 已验证真实 DeepSeek 连通测试通过，并对任务 `d38b9158aba1`（测试5 - 康熙来了）重新执行远程 AI 分析，成功生成 12 条候选片段，任务已进入片段审核流程。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_remote_ai_chat_payload.py`、`.venv\Scripts\python.exe scripts\test_remote_ai_transcript_input.py`、`.venv\Scripts\python.exe scripts\test_ai_json_validation.py`、`.venv\Scripts\python.exe scripts\test_transcript_markdown_format.py`、`.venv\Scripts\python.exe scripts\test_remote_ai_connection.py` 均通过。
+- 本次不调整页面结构，因此不需要同步更新 `docs/UI_REFERENCE.md`。
+
+## 2026-06-06 三类 AI 接口配置拆分
+- 系统状态页的 AI 配置从弹窗改为页面内直接编辑，按 `1. 音频转写`、`2. 分析文字稿，生成候选切片`、`3. 发送中心生成发布文案` 三块展示。
+- API Key 输入框改为普通文本框，页面会完整回显当前 `.env` 中的 Key，适合本机个人使用。
+- `.env` 保存逻辑改为按键更新并保留原文件内容，避免保存 AI 配置时误删 `VOLCENGINE_ASR_API_KEY`、存储路径或其他本地配置。
+- 新增 `AI_ANALYSIS_REMOTE_*` 和 `AI_PUBLISH_REMOTE_*` 独立远程接口配置；旧 `AI_REMOTE_*`、`AI_REMOTE_PUBLISH_MODEL` 仍作为兼容默认值读取。
+- 任务详情页远程按钮文案统一为“远程 AI 分析”，发送中心发布文案固定使用 `AI_PUBLISH_REMOTE_*` 接口。
+- 新增 `scripts/test_ai_config_service.py`，验证保存配置不会删除火山转写 Key 和其他无关 `.env` 内容。
+
+## 2026-06-06 发送中心 DeepSeek 发布文案模型配置
+- 新增 `AI_REMOTE_PUBLISH_MODEL` 配置，默认 `deepseek-v4-flash`，用于发送中心 AI 标题、话题和简介生成。
+- 发送中心点击“AI 补齐标题/话题”或“重新生成标题/话题”时固定使用远程 DeepSeek 发布文案模型，不再跟随 `AI_DEFAULT_PROVIDER` 切到本地 Ollama。
+- 系统状态页的“AI 配置”弹窗新增“发布文案模型”下拉框，保存后会写入 `.env` 并立即应用到当前运行服务。
+- 保留失败回退：DeepSeek Key 缺失、接口失败或返回异常时，发送中心继续使用本地规则生成发布文案，并把错误记录到 metadata。
+- 新增 `scripts/test_send_center_opencli_queue.py` 回归用例，确认默认 Provider 为 local 时发送中心 AI 文案仍走 DeepSeek 发布文案模型。
+
+## 2026-06-06 远程转写与 DeepSeek 失败确认机制
+- 调整转写 Provider 逻辑：任务详情点击“开始处理 / 继续处理”后默认走远程转写；远程不可用时任务会暂停并展示失败原因，不再自动切到本地 faster-whisper。
+- 任务详情页新增“改用本地模型转写”按钮，只在远程转写失败且未生成转写文件时显示；点击前会二次确认，确认后才会以 `provider=local` 重新执行转写。
+- 转写状态接口新增 `local_retry_available` 标记，前端据此控制本地重试按钮；动态恢复的“重新远程转写”按钮也会补绑定点击事件。
+- 任务列表的“当前状态”列会在失败任务下方显示简短失败原因，避免只看到“失败”但不知道远程服务哪里不可用。
+- DeepSeek AI 分析也取消自动降级本地 Ollama：远程 DeepSeek 报错时会暂停 AI 分析并提示原因，用户需要手动点击“本地 AI 分析”才会使用本地模型。
+- `.env.example` 和默认配置已同步：`TRANSCRIPTION_FALLBACK_PROVIDER` 默认留空，避免新环境默认自动本地兜底。
+- 已更新 `docs/UI_REFERENCE.md`、`docs/TASK_FLOW.md` 和 `NEXT_STEPS.md`，记录新的确认式本地模型流程。
+- 已验证：`.venv\Scripts\python.exe -m py_compile app\services\transcript_service.py app\services\task_service.py app\routers\tasks.py scripts\test_volcengine_transcription_provider.py`、`.venv\Scripts\python.exe scripts\test_volcengine_transcription_provider.py`、`.venv\Scripts\python.exe scripts\test_transcript_background_start.py`、`node --check app\static\js\app.js` 均通过。
+
+## 2026-06-04 AI 置信度分数兼容修复
+- 修复远程 AI 返回 `confidence_score` 为 8.9、7.8 这类十分制分数时，Pydantic 校验要求 0 到 1 导致 `AI 返回非法 JSON，安全重试后仍失败` 的问题。
+- `app/services/ai/ai_clip_analyzer.py` 在 AI JSON 进入字段校验前会统一规范化置信度：0 到 1 原样保留，1 到 10 自动除以 10，10 到 100 自动除以 100，非法值兜底为 0.7，最终夹在 0 到 1 范围内。
+- `scripts/test_ai_json_validation.py` 新增十分制和百分比格式回归测试，覆盖 `8.9 -> 0.89` 和 `92% -> 0.92`，避免后续远程 AI 再因同类分数字段失败。
+- 已验证：`.venv\Scripts\python.exe scripts\test_ai_json_validation.py` 通过；`.venv\Scripts\python.exe -m py_compile app\services\ai\ai_clip_analyzer.py scripts\test_ai_json_validation.py` 通过。
+- 本次不调整页面结构，因此不需要同步更新 `docs/UI_REFERENCE.md`。
+
 ## 2026-06-04 任务详情日志侧栏精简
 - 按浏览器标注反馈，移除任务详情页右侧“日志 / 元信息”路径清单，避免和基础信息、运行日志重复。
 - 右侧侧栏现在只保留“运行日志”，继续使用原有 `runtime-log-lines` 和 `runtime-log-state` 节点读取并刷新 `logs/process.log`。
@@ -428,3 +479,141 @@
 - 已基于牛马吉祥物主 logo 生成浏览器图标资源：`niuma-studio-favicon.ico`、`niuma-studio-favicon-32.png`、`niuma-studio-apple-touch-icon.png`、`niuma-studio-icon-192.png` 和 `niuma-studio-icon-512.png`。
 - `base.html` 的 `<head>` 已新增 `rel="icon"`、32x32 PNG、Apple touch icon 和 `theme-color`，用于浏览器标签页、收藏夹和保存快捷方式。
 - `app/main.py` 新增 `/favicon.ico` 路由，兼容浏览器默认请求根路径 favicon 的行为。
+
+## 2026-06-04 发送中心 opencli 检测修复
+
+- 修复 Windows 本地环境下发送中心误判“没有检测到 opencli”的问题：检测逻辑现在会优先识别 `opencli.cmd`、`opencli.exe`、`opencli` 和 `opencli.ps1`。
+- 当普通 PATH 检测不到时，会额外检查 npm 全局安装目录：`%APPDATA%\npm` 和 `%USERPROFILE%\AppData\Roaming\npm`。
+- opencli 自动发送命令现在会使用检测到的完整可执行文件路径，避免后台服务环境变量不完整时启动失败。
+- 已补充 `scripts/test_send_center_opencli_queue.py` 测试，覆盖 Windows npm 目录里的 `opencli.cmd` 备用检测。
+
+## 2026-06-04 发送中心 opencli 参数修复
+
+- 修复自动发送第一步报错 `unknown option '--window'` 的问题。
+- opencli `browser open` 命令已改为 `opencli browser <session> --window foreground open <url>`，不再把 `--window` 放到网址后面。
+- 已补充发送中心测试，确认抖音 / B站打开页面命令里的 `--window` 参数位置正确。
+
+## 2026-06-04 抖音 opencli 上传修复
+
+- 修复抖音上传视频时报错 `{"code":-32000,"message":"Not allowed"}` 的问题：不再使用 OpenCLI 的 `upload input[type='file']` 直接塞文件。
+- 新流程改为抖音页面脚本从本机 `OPENCLI_LOCAL_BASE_URL` 读取 `/media` 视频文件，构造浏览器 File 对象并触发上传控件 change 事件。
+- 本机 `/media` 和 `/static` 响应已增加抖音 / B站页面读取所需的 CORS 响应头，用于 opencli 自动发送时读取本地切片文件。
+- 抖音流程暂时跳过强制封面上传，先使用抖音默认/自动封面，避免封面 input 再次触发浏览器拒绝。
+
+## 2026-06-04 自动字幕中文方块修复
+
+- 修复自动加字幕后中文显示成小方块的问题：ASS 字幕生成会优先使用已保存的中文字体，并在字体不可用时兜底到 Windows 本机可用中文字体。
+- FFmpeg `subtitles` 滤镜现在会显式传入 `C:\Windows\Fonts` 作为字体目录，避免 libass 找不到微软雅黑、黑体、Noto Sans SC 等中文字体。
+- 字幕样式页面补充 `Noto Sans SC` 和 `Source Han Sans CN` 选项，方便后续选择更稳定的中文字体。
+- 已验证：`python -m compileall app` 通过。
+
+## 2026-06-04 发送中心标题话题安全与自动封面
+
+- 发送中心新增本地内容安全清洗：AI 或人工填写的标题、平台话题和简介会自动规避低俗脏话、死亡血腥、暴力恐怖、色情、赌博博彩、诈骗引流、绝对化夸张等高风险表达。
+- AI 元数据 Prompt 已明确要求 `tags` 返回平台 `#话题` 关键词，不再把标题重新解释成话题；页面字段同步改为“平台 #话题”。
+- 刷新发送队列时会自动为每条切片截取一张默认封面帧，并写入发送任务；已有任务如果没有封面，刷新队列也会自动补封面。
+- 保留“更换封面帧”能力：需要人工挑图时仍可生成多张候选帧并切换。
+- 已补充 `scripts/test_send_center_opencli_queue.py` 测试，覆盖敏感词清洗、平台 #话题格式和旧脏数据发送前清洗。
+- 已验证：`python -m compileall app`、`python scripts/test_send_center_opencli_queue.py` 通过。
+
+## 2026-06-04 发送中心标题选择器修复
+
+- 修复 opencli 上传视频后填写标题时报错 `selector_ambiguous` 的问题：不再使用 `input[placeholder*='标题'],textarea[placeholder*='标题']` 这种容易匹配多个元素的直接 `fill` 命令。
+- 抖音和 B站标题填写改为浏览器脚本：自动寻找当前页面里可见、可编辑的标题输入框，并触发 `input` / `change` 事件，让平台页面能正常感知标题变化。
+- 已补充 `scripts/test_send_center_opencli_queue.py` 测试，确认抖音 / B站发送命令不会再生成模糊标题选择器。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。
+
+## 2026-06-04 发送中心本机服务重启确认
+
+- 用户再次遇到旧报错后，检查确认代码里已经没有旧的直接 `fill input[placeholder*='标题'],textarea[placeholder*='标题']` 命令。
+- 发现 `127.0.0.1:8002` 仍由旧 Python 后台进程监听，因此浏览器实际调用的还是修复前的运行态代码。
+- 已停止旧的 `8002` uvicorn 进程，并用当前项目代码重新启动本机服务；`http://127.0.0.1:8002/publish` 已返回 HTTP 200。
+- 后续如果再次看到完全相同的旧 CSS selector 报错，优先确认是否访问的是 Windows 本机 `8002`，并重启后台服务后再测。
+
+## 2026-06-04 发送中心简介填写修复
+
+- 修复抖音填写简介/描述时 opencli 返回 `filled: true` 但 `verified: false` 的问题：不再使用直接 `fill textarea[placeholder*='简介'],textarea[placeholder*='描述'],div[contenteditable='true']` 命令。
+- 抖音简介和 B站简介都改为浏览器脚本填写，会优先选择可见、可编辑输入框，并对 `contenteditable` 输入框模拟插入文本，必要时再写入完整文本。
+- 已补充 `scripts/test_send_center_opencli_queue.py` 测试，确认抖音 / B站简介不会再生成容易被严格校验卡住的直接 `fill` 命令。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。
+
+## 2026-06-05 抖音话题封面和发布按钮修复
+
+- 抖音作品描述改为只填写发送中心的“正文 / 简介”，不再把平台 `#话题` 直接拼成普通文本塞进描述框。
+- 抖音话题改为单独写入编辑器的 `data-mention="#"` 话题块结构，目标是在抖音页面显示为蓝色话题块；写入失败会返回 `douyin_topic_insert_failed`。
+- 抖音封面改为等待并选择“AI智能推荐封面”区域第一个可用推荐图；如果 60 秒内没有可选推荐图，会返回 `douyin_ai_cover_not_ready`，不再使用发送中心封面兜底。
+- 抖音发布按钮改为脚本精确点击文本等于“发布”的底部按钮，避免 `--name 发布` 同时匹配“高清发布”和“发布”导致 `semantic_ambiguous`。
+- 已补充 `scripts/test_send_center_opencli_queue.py` 测试，覆盖描述/话题分离、AI 推荐封面命令和精确发布按钮命令。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。
+
+## 2026-06-05 片段审核播放器固定与操作按钮优化
+
+- 片段审核页右侧预览栏从窄固定栏改为约占页面内容区三分之一，源视频播放器高度同步放大，并继续使用 `object-fit: contain` 避免竖屏视频被裁切。
+- 右侧预览栏现在保持 sticky 固定在视口内，向下审核候选片段时播放器、时间提示和审核操作按钮会一直留在当前画面附近。
+- “保存修改”“生成切片”“去字幕推送”改成更醒目的审核操作按钮，其中“生成切片”保持主按钮视觉。
+- 小屏或窄窗口下仍然上下堆叠；点击列表下方片段的“播放预览”时，如果播放器不在可视区域，会自动平滑滚到播放器。
+
+## 2026-06-05 抖音 opencli 话题封面发送链路修复
+
+- 修复抖音发送到“插入话题”步骤时报 `SyntaxError: Unexpected token ')'`、`gt 不是命令` 的问题：Windows npm 的 `opencli.cmd` 会通过 `%*` 拼接参数，导致 JS 里的 `&`、`<`、`>` 被 `cmd.exe` 当成命令符号。
+- opencli 执行入口现在会优先改为 `node ...\node_modules\@jackwener\opencli\dist\src\main.js`，避免复杂浏览器脚本再被 Windows 批处理拆坏。
+- 抖音话题脚本改为用 DOM API 创建 `data-mention="#"` 话题节点，不再拼接包含 HTML 实体的大段字符串。
+- 抖音 AI 推荐封面选择脚本增强为按“AI智能推荐封面 / 智能推荐封面 / 推荐封面”文案和可见图片兜底查找，减少页面 class 变化导致选封面失败。
+- 已补充 `scripts/test_send_center_opencli_queue.py` 测试，覆盖 `.cmd` 改走 Node 入口、话题脚本不再含 `&gt;`、AI 推荐封面文案兜底。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。
+
+## 2026-06-05 抖音封面确认与话题简化
+
+- 抖音发送链路暂时取消单独插入蓝色话题块，改为把发送中心的 `#话题` 文本直接追加到作品简介中，例如 `#小S自夸 #美国往事 #陈亦飞爆料 #姐妹情深 #可爱自恋`。
+- 发送中心的话题格式化现在支持空格分隔的 `#话题` 字符串，不会再把中文话题拆坏。
+- 抖音 AI 推荐封面选择后会继续查找并点击“确定 / 确认 / 应用”按钮，处理“是否确认应用此封面？”弹窗，然后再进入最后的发布按钮步骤。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。
+
+## 2026-06-06 抖音发送简介话题和 AI 推荐封面流程修复
+
+- 抖音发送链路彻底移除残留的“蓝色话题块”插入脚本，不再生成 `data-mention="#"` 结构，避免复杂 JS 在 Windows / opencli 命令链路里再次触发 `SyntaxError: Unexpected token ')'` 或 `gt 不是命令`。
+- 作品描述现在只走一次填写：把发送中心的“正文 / 简介”和平台 `#话题` 合并后直接写入抖音简介框，支持类似 `#小S自恋名场面 #青春回忆杀 #明星搞笑日常` 的空格分隔话题。
+- 抖音 AI 推荐封面流程增强为先选择横封面，再点击“设置竖封面”并选择竖封面，最后点击“完成”后再继续发布。
+- 已补充 `scripts/test_send_center_opencli_queue.py`，覆盖用户提供的真实正文 + 话题格式，并确认发送命令里不再包含话题块插入痕迹。
+- 已验证：`.venv\Scripts\python.exe -m compileall app`、`.venv\Scripts\python.exe scripts\test_send_center_opencli_queue.py` 通过。
+
+## 2026-06-07 AI 接口配置落地
+
+- 已把本地 `.env` 配置切换为三段式远程接口：音频转写使用火山引擎远程转写，文字稿分析使用 DeepSeek Pro，发送中心发布文案使用 DeepSeek Flash。
+- 本次只在 `.env` 写入真实 API Key；`.env` 已被 `.gitignore` 忽略，不会提交到 Git。项目文档只记录配置结果，不记录密钥明文。
+- 已备份修改前的 `.env` 到本地 `.env.backup_20260607_122557`，方便需要时恢复。
+- 已重启 Windows 本地 `8002` 后台服务，让当前运行页面和后台任务重新读取最新配置。
+- 已验证：`python -m compileall app`、`scripts/test_ai_config_service.py`、`scripts/test_volcengine_transcription_provider.py` 均通过；DeepSeek 分析接口和发送中心文案接口均完成远程 JSON 连通性测试。
+
+## 2026-06-07 火山引擎 API Key 修正
+
+- 用户真实任务转写时报错 `Invalid X-Api-Key`，确认原先填入的不是豆包语音控制台生成的新版 API Key。
+- 已把 `.env` 中的 `VOLCENGINE_ASR_API_KEY` 替换为新版控制台 API Key，并清空旧版 `VOLCENGINE_ASR_APP_KEY` / `VOLCENGINE_ASR_ACCESS_KEY`。
+- 项目当前接入的是火山引擎极速版 `recognize/flash` 接口，因此继续使用 `VOLCENGINE_ASR_RESOURCE_ID=volc.bigasr.auc_turbo`，不切换到标准版 `submit/query` 文档里的 `volc.seedasr.auc`。
+- 已重启 Windows 本地 `8002` 后台服务，并用 1 秒静音 mp3 做远程烟测；接口不再返回 401，静音音频返回 0 句属于预期。
+
+## 2026-06-07 转写原文结构与 DeepSeek 分析输入调整
+
+- 新生成的 `transcripts/transcript.md` 不再写入本地拼接的“分钟级转写”，只保留“逐句时间戳原文”作为唯一权威原文。
+- 远程 DeepSeek 分析继续整集一次提交，但提交内容改为只取逐句时间戳原文；旧任务文件如果仍有分钟级章节，分析时会自动忽略分钟级重复内容。
+- 本地 AI 分析仍保留分段策略，继续按逐句时间戳原文拆成小段后合并候选片段。
+- 任务详情页转写预览也优先读取逐句时间戳原文，避免旧文件先显示分钟级聚合文本。
+
+## 2026-06-07 抖音 AI 推荐封面等待选择修复
+
+- 抖音 opencli 发送链路改为等待平台侧“AI智能推荐封面 / 智能推荐封面 / 推荐封面”区域生成图片，最长等待 150 秒。
+- 生成完成后会选择该区域最左边第一张真实图片，并尝试点击“设为封面 / 使用封面 / 确定 / 确认 / 应用”，再继续点击发布。
+- 已移除旧的“设置横封面 -> 设置竖封面 -> 完成”强制流程，避免页面已选好智能封面但因为找不到“完成”按钮而报 `douyin_cover_finish_not_found`。
+
+## 2026-06-07 抖音发布按钮查找加固
+
+- 用户继续测试时出现 `douyin_publish_button_not_found`，判断为封面确认后发布按钮文案或可见位置与旧脚本不一致。
+- 抖音封面脚本现在必须点到“设为封面 / 使用封面 / 确认”等按钮或检测到“封面效果检测通过”才继续；如果只看见图片但没确认，会返回 `douyin_cover_confirm_not_found`。
+- 最后发布脚本会滚动到页面底部，等待并识别“发布 / 立即发布 / 确认发布 / 发布作品”，同时避开左侧“高清发布”和右侧“发布助手”。
+
+## 2026-06-07 抖音真实发布确认与简介去重
+
+- 用户反馈作品管理没有已发送内容，确认不能再以“点击发布按钮成功”作为任务已发布依据。
+- 抖音发送链路新增发布结果确认步骤：点击发布后必须等到“发布成功 / 已提交审核 / 审核中 / 投稿成功”等平台提示，或在作品管理看到对应标题，才会把本地任务标记为已发布。
+- 如果页面出现验证码、登录失效、发布失败、风控等提示，会返回 `douyin_publish_blocked`；如果超时没有成功信号，会返回 `douyin_publish_not_confirmed`。
+- 抖音简介填写改为优先定位“作品描述 / 简介 / 描述”附近的编辑框，避开标题框，并在写入后检查重复内容，减少平台简介区出现重影或重复粘贴。

@@ -72,7 +72,7 @@ SQLite 保存任务元数据、状态、候选片段与异常信息。大型视�
 - 上传视频会保存到任务目录 `source/`。
 - NAS / 本地已有视频只保存路径，避免重复占用硬盘。
 - FFmpeg 音频提取输出到 `audio/source.wav`。
-- 本地 faster-whisper 转写输出到 `transcripts/transcript.md`，文件包含“分钟级转写”和“逐句时间戳原文”。转写阶段只做听写和文本整理，不做 AI 总结。
+- 火山引擎远程转写或本地 faster-whisper 输出到 `transcripts/transcript.md`，文件只保留“逐句时间戳原文”作为权威原文。转写阶段只做听写和文本整理，不做 AI 总结。
 
 当前任务数据表说明见：
 

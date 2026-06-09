@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -20,7 +21,7 @@ from app.models.task import (
     PublishSendJobUpdate,
     PublishSendStart,
 )
-from app.services.ai.ai_clip_analyzer import build_provider
+from app.services.ai.ai_clip_analyzer import build_remote_provider
 from app.services.ai.base import AIProviderError
 from app.services.publish_providers import (
     BilibiliPublishProvider,
@@ -72,11 +73,114 @@ OPENCLI_TIMEOUT_SECONDS = 900
 DEFAULT_BILIBILI_TID = "娱乐"
 _SEND_LOCK = Lock()
 
+SAFE_TOPIC_FALLBACKS = ("精彩片段", "高光片段", "直播切片")
+CONTENT_SAFETY_REPLACEMENTS = (
+    ("笑死我了", "笑到停不下"),
+    ("笑死", "笑到停不下"),
+    ("气死", "太上头"),
+    ("社死", "大型尴尬"),
+    ("作死", "危险尝试"),
+    ("死亡", "危险"),
+    ("死了", "没绷住"),
+    ("死", "不妙"),
+    ("屎一样", "有点离谱"),
+    ("这坨", "这段"),
+    ("拉屎", "尴尬瞬间"),
+    ("屎", "糟糕"),
+    ("尿", "尴尬"),
+    ("屁", "离谱"),
+    ("傻逼", "离谱"),
+    ("傻X", "离谱"),
+    ("傻x", "离谱"),
+    ("色情", "成人向内容"),
+    ("黄色", "成人向内容"),
+    ("裸露", "不适内容"),
+    ("约炮", "不当邀约"),
+    ("招嫖", "违法行为"),
+    ("嫖娼", "违法行为"),
+    ("强奸", "严重违法行为"),
+    ("血腥", "强刺激"),
+    ("暴力", "冲突"),
+    ("杀人", "危险事件"),
+    ("自杀", "危险行为"),
+    ("自残", "危险行为"),
+    ("尸体", "不适画面"),
+    ("赌博", "风险行为"),
+    ("博彩", "风险行为"),
+    ("诈骗", "风险套路"),
+    ("洗钱", "违法风险"),
+    ("毒品", "违禁内容"),
+    ("吸毒", "危险行为"),
+    ("加微信", "交流"),
+    ("微信号", "联系方式"),
+    ("QQ群", "社群"),
+)
+CONTENT_SAFETY_REMOVE_WORDS = (
+    "全网第一",
+    "唯一官方",
+    "100%",
+    "稳赚",
+    "稳赚不赔",
+    "无风险",
+    "包过",
+    "必赚",
+    "点击领取",
+    "私加",
+    "加我",
+    "买粉",
+    "刷单",
+)
+
 CommandRunner = Callable[[list[str]], subprocess.CompletedProcess]
 
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _opencli_executable() -> str | None:
+    candidates = ["opencli.cmd", "opencli.exe", "opencli", "opencli.ps1"]
+    for candidate in candidates:
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+
+    search_dirs = []
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        search_dirs.append(Path(appdata) / "npm")
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile:
+        search_dirs.append(Path(user_profile) / "AppData" / "Roaming" / "npm")
+
+    for directory in search_dirs:
+        for candidate in candidates:
+            path = directory / candidate
+            if path.exists():
+                return str(path)
+    return None
+
+
+def _opencli_node_command(executable: str) -> list[str] | None:
+    wrapper_path = Path(executable)
+    main_js = wrapper_path.parent / "node_modules" / "@jackwener" / "opencli" / "dist" / "src" / "main.js"
+    if not main_js.exists():
+        return None
+    local_node = wrapper_path.parent / "node.exe"
+    node = str(local_node) if local_node.exists() else (shutil.which("node") or "node")
+    return [node, str(main_js)]
+
+
+def _opencli_command() -> list[str]:
+    executable = _opencli_executable()
+    if not executable:
+        return ["opencli"]
+    path = Path(executable)
+    if path.suffix.lower() in {".cmd", ".ps1"} or path.name.lower() == "opencli":
+        node_command = _opencli_node_command(executable)
+        if node_command:
+            return node_command
+    return [executable]
 
 
 def _row_to_dict(row) -> dict | None:
@@ -117,6 +221,42 @@ def _parse_json_text(value: str | None) -> dict:
 def _truncate(value: str, max_length: int) -> str:
     text = re.sub(r"\s+", " ", (value or "").strip())
     return text[:max_length]
+
+
+def _apply_content_safety(value: str | None) -> str:
+    text = value or ""
+    for source, replacement in sorted(CONTENT_SAFETY_REPLACEMENTS, key=lambda item: len(item[0]), reverse=True):
+        text = re.sub(re.escape(source), replacement, text, flags=re.IGNORECASE)
+    for source in sorted(CONTENT_SAFETY_REMOVE_WORDS, key=len, reverse=True):
+        text = re.sub(re.escape(source), "", text, flags=re.IGNORECASE)
+    text = re.sub(r"[#＃]{2,}", "#", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip(" \t\r\n,，。.!！?？、；;:-_#＃")
+
+
+def _sanitize_publish_title(value: str | None, fallback: str = "精彩片段") -> str:
+    title = _apply_content_safety(value)
+    title = re.sub(r"[#＃]+", "", title)
+    title = _truncate(title, 80)
+    return title or fallback
+
+
+def _sanitize_publish_description(value: str | None, fallback: str = "") -> str:
+    description = _apply_content_safety(value)
+    return _truncate(description or fallback, 700)
+
+
+def _sanitize_publish_content(
+    title: str | None,
+    tags: list[str] | str | None,
+    description: str | None,
+    title_fallback: str = "精彩片段",
+    description_fallback: str = "",
+) -> dict:
+    safe_title = _sanitize_publish_title(title, title_fallback)
+    safe_tags = _format_tags(tags) or _format_tags(SAFE_TOPIC_FALLBACKS)
+    safe_description = _sanitize_publish_description(description, description_fallback)
+    return {"title": safe_title, "tags": safe_tags, "description": safe_description}
 
 
 def _normalize_config(row) -> dict:
@@ -493,29 +633,40 @@ def _fallback_tags(item: dict) -> list[str]:
 
 def _format_tags(tags: list[str] | str | None) -> str:
     if isinstance(tags, str):
-        raw_tags = re.split(r"[,，#\s]+", tags)
+        hashtag_tags = re.findall(r"[#＃]\s*([^#＃,，\s]+)", tags)
+        raw_tags = hashtag_tags if hashtag_tags else re.split(r"[,，#＃\s]+", tags)
     else:
         raw_tags = tags or []
     cleaned: list[str] = []
     for tag in raw_tags:
-        value = re.sub(r"[^\w\u4e00-\u9fff]+", "", str(tag).strip().lstrip("#"))
+        value = _apply_content_safety(str(tag).strip().lstrip("#"))
+        if re.search(r"(这是一段|这是|标题|简介|解释|适合|内容说明)", value):
+            continue
+        if len(value) > 12:
+            value = re.sub(r"(这是一段|这是|关于|适合|标题|简介|解释|内容|视频|片段|话题)", "", value)
+        value = re.sub(r"[^\w\u4e00-\u9fff]+", "", value)
+        if len(value) > 10:
+            continue
         if value and value not in cleaned:
-            cleaned.append(value[:20])
+            cleaned.append(value)
     return ", ".join(cleaned[:8])
 
 
 def _compose_description(item: dict, title: str, tags: str) -> str:
     summary = (item.get("clip_summary") or item.get("highlight_reason") or "").strip()
     if summary:
-        return _truncate(summary, 700)
+        return _sanitize_publish_description(summary)
     tag_text = " ".join(f"#{tag.strip()}" for tag in tags.split(",") if tag.strip())
-    return _truncate(f"{title}\n{tag_text}".strip(), 700)
+    return _sanitize_publish_description(f"{title}\n{tag_text}".strip())
 
 
 def _metadata_prompt(item: dict) -> str:
     return (
         "请根据下面的直播切片信息，为抖音和B站发布生成标题和话题。"
-        "只输出 JSON，不要 Markdown。JSON 格式："
+        "只输出 JSON，不要 Markdown。"
+        "tags 必须是真正的平台 #话题关键词，不是标题解释，每个话题 2 到 10 个字，返回时不要带 #。"
+        "标题、话题、简介都要主动规避低俗脏话、排泄词、死亡血腥、暴力恐怖、色情、赌博博彩、诈骗引流、绝对化夸张等平台高风险表达；"
+        "遇到类似表达请换成温和说法。JSON 格式："
         '{"title":"不超过30字的中文标题","tags":["话题1","话题2","话题3","话题4","话题5"],"description":"不超过180字的简介"}。'
         "\n\n"
         f"任务：{item.get('task_name') or ''}\n"
@@ -528,8 +679,8 @@ def _metadata_prompt(item: dict) -> str:
 
 
 def generate_publish_metadata(item: dict, use_ai: bool = False) -> dict:
-    fallback_title = _default_title_for_clip(item)
-    fallback_tags = _format_tags(_fallback_tags(item))
+    fallback_title = _sanitize_publish_title(_default_title_for_clip(item))
+    fallback_tags = _format_tags(_fallback_tags(item)) or _format_tags(SAFE_TOPIC_FALLBACKS)
     fallback_description = _compose_description(item, fallback_title, fallback_tags)
     metadata = {
         "title": fallback_title,
@@ -542,16 +693,21 @@ def generate_publish_metadata(item: dict, use_ai: bool = False) -> dict:
         return metadata
 
     try:
-        provider = build_provider(settings.ai_default_provider)
+        publish_model = settings.ai_publish_remote_model or "deepseek-v4-flash"
+        provider = build_remote_provider(publish_model, purpose="publish")
         parsed = json.loads(provider.generate_json(_metadata_prompt(item)))
-        ai_title = _truncate(str(parsed.get("title") or fallback_title), 80)
-        ai_tags = _format_tags(parsed.get("tags") or fallback_tags)
-        ai_description = _truncate(str(parsed.get("description") or fallback_description), 700)
+        safe_content = _sanitize_publish_content(
+            parsed.get("title") or fallback_title,
+            parsed.get("tags") or fallback_tags,
+            parsed.get("description") or fallback_description,
+            title_fallback=fallback_title,
+            description_fallback=fallback_description,
+        )
         return {
-            "title": ai_title or fallback_title,
-            "tags": ai_tags or fallback_tags,
-            "description": ai_description or fallback_description,
-            "source": f"ai:{settings.ai_default_provider}",
+            "title": safe_content["title"],
+            "tags": safe_content["tags"],
+            "description": safe_content["description"],
+            "source": f"ai:remote-publish:{publish_model}",
             "error": "",
         }
     except (AIProviderError, json.JSONDecodeError, TypeError, ValueError) as exc:
@@ -573,7 +729,20 @@ def _find_opencli_job(output_clip_id: str, platform: str) -> dict | None:
     return _normalize_job(row) if row else None
 
 
-def _insert_opencli_job(item: dict, platform: str, metadata: dict) -> dict:
+def _publish_provider_payload(metadata: dict, cover: dict | None = None) -> str:
+    cover = cover or {}
+    return json.dumps(
+        {
+            "metadata_source": metadata.get("source", ""),
+            "metadata_error": metadata.get("error", ""),
+            "cover_source": "auto_frame" if cover.get("cover_file_path") else "",
+            "cover_error": cover.get("cover_error", ""),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _insert_opencli_job(item: dict, platform: str, metadata: dict, cover: dict | None = None) -> dict:
     raw_video_path, _ = _resolve_publish_video_path(
         {
             **item,
@@ -585,6 +754,10 @@ def _insert_opencli_job(item: dict, platform: str, metadata: dict) -> dict:
     )
     job_id = uuid4().hex[:12]
     now = _now_iso()
+    cover = cover or {}
+    cover_file_path = str(cover.get("cover_file_path") or "")
+    cover_mode = "time" if cover_file_path else "auto"
+    cover_time_seconds = float(cover.get("cover_time_seconds") or 0)
     with get_connection() as connection:
         connection.execute(
             """
@@ -596,7 +769,7 @@ def _insert_opencli_job(item: dict, platform: str, metadata: dict) -> dict:
                 status, audit_status, provider_response, created_at, updated_at
             )
             VALUES (?, ?, ?, '', ?, 'opencli_publish', 'original', ?, ?, ?, ?, 'public',
-                'auto', 0, 1, ?, 'original', '', '', '', 'ready', 'not_submitted', ?, ?, ?)
+                ?, ?, 1, ?, 'original', '', ?, '', 'ready', 'not_submitted', ?, ?, ?)
             """,
             (
                 job_id,
@@ -607,8 +780,11 @@ def _insert_opencli_job(item: dict, platform: str, metadata: dict) -> dict:
                 metadata["title"],
                 metadata["description"],
                 metadata["tags"],
+                cover_mode,
+                cover_time_seconds,
                 DEFAULT_BILIBILI_TID,
-                json.dumps({"metadata_source": metadata["source"], "metadata_error": metadata["error"]}, ensure_ascii=False),
+                cover_file_path,
+                _publish_provider_payload(metadata, cover),
                 now,
                 now,
             ),
@@ -619,25 +795,44 @@ def _insert_opencli_job(item: dict, platform: str, metadata: dict) -> dict:
 
 def refresh_send_queue(use_ai: bool = False) -> dict:
     created: list[dict] = []
+    updated_covers = 0
     skipped = 0
     errors: list[str] = []
     for item in _list_completed_publish_clips():
         item_metadata: dict | None = None
+        cover_state: dict[str, Any] = {"attempted": False, "cover": None}
+
+        def ensure_cover_for_item() -> dict:
+            if not cover_state["attempted"]:
+                cover_state["attempted"] = True
+                try:
+                    cover_state["cover"] = _generate_default_publish_cover(item)
+                except Exception as exc:
+                    cover_state["cover"] = {"cover_error": str(exc)}
+                    errors.append(f"{item.get('output_file_name') or item.get('output_clip_id')} / 自动封面：{exc}")
+            return cover_state["cover"] or {}
+
         for platform in PLATFORM_LABELS:
-            if _find_opencli_job(item["output_clip_id"], platform):
+            existing_job = _find_opencli_job(item["output_clip_id"], platform)
+            if existing_job:
                 skipped += 1
+                if not existing_job.get("cover_file_path"):
+                    cover = ensure_cover_for_item()
+                    if cover.get("cover_file_path"):
+                        _update_job_cover(existing_job["id"], cover)
+                        updated_covers += 1
                 continue
             try:
                 if item_metadata is None:
                     item_metadata = generate_publish_metadata(item, use_ai=use_ai)
-                created.append(_insert_opencli_job(item, platform, item_metadata))
+                created.append(_insert_opencli_job(item, platform, item_metadata, ensure_cover_for_item()))
             except Exception as exc:
                 errors.append(f"{item.get('output_file_name') or item.get('output_clip_id')} / {PLATFORM_LABELS[platform]}：{exc}")
                 if item_metadata is None:
                     item_metadata = {}
     return {
         "status": "ok" if not errors else "partial",
-        "message": f"已新增 {len(created)} 条发送任务，跳过 {skipped} 条已存在任务，{len(errors)} 条未入队。",
+        "message": f"已新增 {len(created)} 条发送任务，自动选择 {len(created) + updated_covers} 张封面帧，跳过 {skipped} 条已存在任务，{len(errors)} 条需要处理。",
         "created": created,
         "errors": errors,
         **get_publish_center_context(),
@@ -645,7 +840,7 @@ def refresh_send_queue(use_ai: bool = False) -> dict:
 
 
 def _wrap_cover_title(title: str) -> str:
-    text = re.sub(r"\s+", " ", (title or "").strip()) or "精彩片段"
+    text = re.sub(r"\s+", " ", _sanitize_publish_title(title or "精彩片段")) or "精彩片段"
     if len(text) > 34:
         text = f"{text[:34]}..."
     if len(text) <= 15:
@@ -762,6 +957,12 @@ def _cover_frame_times(duration: float, frame_count: int) -> list[float]:
     return [max(0, min(duration - 0.1, step * index)) for index in range(1, frame_count + 1)]
 
 
+def _default_cover_time_seconds(duration: float) -> float:
+    if duration <= 1:
+        return 0
+    return max(0, min(duration - 0.1, max(1.0, duration * 0.25)))
+
+
 def _unique_frame_cover_path(task_id: str, output_clip_id: str, video_source: str, seconds: float) -> Path:
     cover_dir = get_artifact_paths(task_id)["covers_dir"]
     cover_dir.mkdir(parents=True, exist_ok=True)
@@ -773,42 +974,81 @@ def _unique_frame_cover_path(task_id: str, output_clip_id: str, video_source: st
     return cover_dir / f"{base_name}_{uuid4().hex[:6]}.jpg"
 
 
+def _write_plain_cover_frame(video_path: Path, cover_path: Path, seconds: float) -> None:
+    ffmpeg_path = ensure_ffmpeg_available()
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-ss",
+        f"{seconds:.3f}",
+        "-i",
+        str(video_path),
+        "-frames:v",
+        "1",
+        "-vf",
+        _plain_cover_filter(),
+        "-q:v",
+        "2",
+        str(cover_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        raise ValueError(f"封面帧生成失败：{summarize_stderr(result.stderr)}")
+    if not cover_path.exists() or cover_path.stat().st_size == 0:
+        raise ValueError("封面帧生成失败：FFmpeg 没有输出有效图片。")
+
+
+def _cover_frame_payload(task_id: str, cover_path: Path, seconds: float) -> dict:
+    return {
+        "cover_file_path": str(cover_path),
+        "cover_media_url": _cover_media_url(task_id, str(cover_path)),
+        "cover_time_seconds": round(seconds, 3),
+    }
+
+
+def _generate_default_publish_cover(item: dict, video_source: str = "original") -> dict:
+    _, video_path = _resolve_publish_video_path(
+        {
+            **item,
+            "output_status": item.get("output_status") or "completed",
+            "subtitle_status": item.get("subtitle_status"),
+            "subtitled_output_file_path": item.get("subtitled_output_file_path"),
+        },
+        video_source,
+    )
+    duration = _get_video_duration_seconds(video_path)
+    seconds = _default_cover_time_seconds(duration)
+    cover_path = _unique_frame_cover_path(item["task_id"], item["output_clip_id"], video_source, seconds)
+    _write_plain_cover_frame(video_path, cover_path, seconds)
+    return _cover_frame_payload(item["task_id"], cover_path, seconds)
+
+
+def _update_job_cover(job_id: str, cover: dict) -> None:
+    if not cover.get("cover_file_path"):
+        return
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE publish_jobs
+            SET cover_mode = 'time', cover_time_seconds = ?, cover_file_path = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (float(cover.get("cover_time_seconds") or 0), str(cover.get("cover_file_path") or ""), _now_iso(), job_id),
+        )
+        connection.commit()
+
+
 def generate_publish_cover_frames(payload: PublishCoverFrameBatchCreate) -> dict:
     output_clip = _get_output_clip_for_publish(payload.task_id, payload.output_clip_id)
     if not output_clip:
         raise ValueError("切片记录不存在。")
     _, video_path = _resolve_publish_video_path(output_clip, payload.video_source)
-    ffmpeg_path = ensure_ffmpeg_available()
     duration = _get_video_duration_seconds(video_path)
     frames = []
     for seconds in _cover_frame_times(duration, payload.frame_count):
         cover_path = _unique_frame_cover_path(payload.task_id, payload.output_clip_id, payload.video_source, seconds)
-        command = [
-            ffmpeg_path,
-            "-y",
-            "-ss",
-            f"{seconds:.3f}",
-            "-i",
-            str(video_path),
-            "-frames:v",
-            "1",
-            "-vf",
-            _plain_cover_filter(),
-            "-q:v",
-            "2",
-            str(cover_path),
-        ]
-        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
-        if result.returncode != 0:
-            raise ValueError(f"封面帧生成失败：{summarize_stderr(result.stderr)}")
-        if cover_path.exists() and cover_path.stat().st_size > 0:
-            frames.append(
-                {
-                    "cover_file_path": str(cover_path),
-                    "cover_media_url": _cover_media_url(payload.task_id, str(cover_path)),
-                    "cover_time_seconds": round(seconds, 3),
-                }
-            )
+        _write_plain_cover_frame(video_path, cover_path, seconds)
+        frames.append(_cover_frame_payload(payload.task_id, cover_path, seconds))
     if not frames:
         raise ValueError("封面帧生成失败：没有得到有效图片。")
     return {"status": "ok", "message": f"已生成 {len(frames)} 张候选封面。", "frames": frames}
@@ -892,6 +1132,28 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
     if not output_clip:
         raise ValueError("切片记录不存在。")
     raw_video_path, resolved_video_path = _resolve_publish_video_path(output_clip, payload.video_source)
+    safe_content = _sanitize_publish_content(payload.title, payload.tags, payload.description, title_fallback="精彩片段")
+    cover_file_path = (payload.cover_file_path or "").strip()
+    cover_time_seconds = float(payload.cover_time_seconds or 0)
+    cover_mode = payload.cover_mode
+    provider_payload = "真实发布任务已创建，等待执行。" if payload.publish_mode == "api_publish" else "本地发布任务已创建，等待人工确认。"
+    if not cover_file_path:
+        try:
+            auto_cover = _generate_default_publish_cover(
+                {
+                    **output_clip,
+                    "task_id": payload.task_id,
+                    "output_clip_id": payload.output_clip_id,
+                    "output_status": output_clip.get("output_status") or "completed",
+                },
+                payload.video_source,
+            )
+            cover_file_path = str(auto_cover.get("cover_file_path") or "")
+            cover_time_seconds = float(auto_cover.get("cover_time_seconds") or 0)
+            cover_mode = "time" if cover_file_path else cover_mode
+            provider_payload = json.dumps({"cover_source": "auto_frame"}, ensure_ascii=False)
+        except Exception as exc:
+            provider_payload = json.dumps({"cover_error": str(exc)}, ensure_ascii=False)
 
     config = None
     account = None
@@ -924,21 +1186,21 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
                 payload.publish_mode,
                 payload.video_source,
                 raw_video_path,
-                payload.title.strip(),
-                (payload.description or "").strip(),
-                (payload.tags or "").strip(),
+                safe_content["title"],
+                safe_content["description"],
+                safe_content["tags"],
                 payload.visibility,
-                payload.cover_mode,
-                float(payload.cover_time_seconds or 0),
+                cover_mode,
+                cover_time_seconds,
                 1 if payload.allow_download else 0,
                 (payload.bilibili_tid or "").strip(),
                 payload.bilibili_copyright,
                 (payload.bilibili_source or "").strip(),
-                (payload.cover_file_path or "").strip(),
+                cover_file_path,
                 (payload.scheduled_at or "").strip(),
                 status,
                 "not_submitted",
-                "真实发布任务已创建，等待执行。" if payload.publish_mode == "api_publish" else "本地发布任务已创建，等待人工确认。",
+                provider_payload,
                 now,
                 now,
             ),
@@ -1038,6 +1300,13 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
         raise ValueError("发送任务不存在。")
     if job.get("publish_mode") != "opencli_publish":
         raise ValueError("只能编辑 opencli 发送任务。")
+    safe_content = _sanitize_publish_content(
+        payload.title,
+        payload.tags,
+        payload.description,
+        title_fallback=job.get("title") or "精彩片段",
+        description_fallback=job.get("description") or "",
+    )
     with get_connection() as connection:
         connection.execute(
             """
@@ -1049,9 +1318,9 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
             WHERE id = ?
             """,
             (
-                payload.title.strip(),
-                (payload.description or "").strip(),
-                _format_tags(payload.tags or ""),
+                safe_content["title"],
+                safe_content["description"],
+                safe_content["tags"],
                 payload.visibility,
                 (payload.cover_file_path or "").strip(),
                 float(payload.cover_time_seconds or 0),
@@ -1086,7 +1355,13 @@ def regenerate_send_job_metadata(job_id: str, use_ai: bool = True) -> dict:
                 metadata["title"],
                 metadata["description"],
                 metadata["tags"],
-                json.dumps({"metadata_source": metadata["source"], "metadata_error": metadata["error"]}, ensure_ascii=False),
+                _publish_provider_payload(
+                    metadata,
+                    {
+                        "cover_file_path": job.get("cover_file_path") or "",
+                        "cover_error": (job.get("provider_payload") or {}).get("cover_error", ""),
+                    },
+                ),
                 _now_iso(),
                 job_id,
             ),
@@ -1111,13 +1386,33 @@ def _default_command_runner(command: list[str]) -> subprocess.CompletedProcess:
     )
 
 
+def _should_retry_opencli_detached(command: list[str], result: subprocess.CompletedProcess, attempt: int) -> bool:
+    if attempt >= 3:
+        return False
+    output_text = f"{result.stdout or ''}\n{result.stderr or ''}"
+    if "Detached while handling command" not in output_text:
+        return False
+    script = str(command[-1]) if command else ""
+    return "douyin_cover_retryable:true" in script
+
+
 def _hashtags(tags: str) -> str:
-    return " ".join(f"#{tag.strip().lstrip('#')}" for tag in re.split(r"[,，]+", tags or "") if tag.strip())
+    normalized_tags = _format_tags(tags)
+    return " ".join(f"#{tag.strip().lstrip('#')}" for tag in re.split(r"[,，]+", normalized_tags or "") if tag.strip())
+
+
+def _douyin_description_for_job(job: dict, fallback_title: str) -> str:
+    description = _sanitize_publish_description(job.get("description") or fallback_title, fallback_title)
+    tag_text = _hashtags(job.get("tags") or "")
+    parts = [description] if description else []
+    if tag_text:
+        parts.append(tag_text)
+    return "\n".join(parts).strip()[:1000]
 
 
 def _caption_for_job(job: dict) -> str:
     parts = []
-    description = (job.get("description") or "").strip()
+    description = _sanitize_publish_description(job.get("description") or "")
     if description:
         parts.append(description)
     tag_text = _hashtags(job.get("tags") or "")
@@ -1145,39 +1440,366 @@ def _job_cover_path(job: dict) -> Path | None:
 
 
 def _browser_open_command(session: str, url: str) -> list[str]:
-    return ["opencli", "browser", session, "open", url, "--window", "foreground"]
+    return [*_opencli_command(), "browser", session, "--window", "foreground", "open", url]
 
 
 def _browser_wait_command(session: str, seconds: int) -> list[str]:
-    return ["opencli", "browser", session, "wait", "time", str(seconds)]
+    return [*_opencli_command(), "browser", session, "wait", "time", str(seconds)]
+
+
+def _browser_eval_command(session: str, script: str) -> list[str]:
+    return [*_opencli_command(), "browser", session, "eval", script]
+
+
+def _browser_close_command(session: str) -> list[str]:
+    return [*_opencli_command(), "browser", session, "close"]
+
+
+_TITLE_FIELD_SELECTOR = ",".join(
+    [
+        "input[placeholder*='标题']",
+        "textarea[placeholder*='标题']",
+        "[contenteditable='true'][aria-label*='标题']",
+        "[contenteditable='true'][data-placeholder*='标题']",
+    ]
+)
+
+
+_BILIBILI_DESCRIPTION_FIELD_SELECTOR = ",".join(
+    [
+        "textarea[placeholder*='简介']",
+        "textarea[placeholder*='介绍']",
+        "textarea",
+    ]
+)
+
+
+def _fill_visible_field_script(selector: str, value: str, field_name: str) -> str:
+    return (
+        "(()=>{"
+        f"const selector={json.dumps(selector, ensure_ascii=False)};"
+        f"const value={json.dumps(value, ensure_ascii=False)};"
+        f"const fieldName={json.dumps(field_name, ensure_ascii=False)};"
+        f"const missingError={json.dumps(field_name + '_field_not_found', ensure_ascii=False)};"
+        "const all=[...document.querySelectorAll(selector)];"
+        "const usable=(el)=>!el.disabled&&!el.readOnly;"
+        "const visible=(el)=>{"
+        "const style=window.getComputedStyle(el);"
+        "const rect=el.getBoundingClientRect();"
+        "return usable(el)&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;"
+        "};"
+        "const el=all.find(visible)||all.find(usable);"
+        "if(!el){throw new Error(missingError);}"
+        "el.scrollIntoView({block:'center',inline:'center'});"
+        "el.focus();"
+        "if(el.isContentEditable){"
+        "const selection=window.getSelection();"
+        "const range=document.createRange();"
+        "range.selectNodeContents(el);"
+        "selection.removeAllRanges();"
+        "selection.addRange(range);"
+        "const inserted=document.execCommand?.('insertText',false,value);"
+        "const actual=(el.textContent||'').replace(/[\\u200B-\\u200D\\uFEFF]/g,'');"
+        "if(!inserted||actual!==value){el.textContent=value;}"
+        "}"
+        "else{"
+        "const proto=el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;"
+        "const setter=Object.getOwnPropertyDescriptor(proto,'value')?.set;"
+        "if(setter){setter.call(el,value);}else{el.value=value;}"
+        "}"
+        "el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));"
+        "el.dispatchEvent(new Event('change',{bubbles:true}));"
+        "return {filled:true,fieldName,tagName:el.tagName,placeholder:el.getAttribute('placeholder')||'',value:el.isContentEditable?el.textContent:el.value};"
+        "})()"
+    )
+
+
+def _browser_fill_title_command(session: str, title: str) -> list[str]:
+    return _browser_eval_command(session, _fill_visible_field_script(_TITLE_FIELD_SELECTOR, title, "title"))
+
+
+def _douyin_set_description_script(description: str) -> str:
+    return (
+        "(()=>{"
+        f"const value={json.dumps(description, ensure_ascii=False)};"
+        "const normalize=(text)=>String(text||'').replace(/[\\u200B-\\u200D\\uFEFF\\u00A0]/g,'').replace(/\\s+/g,' ').trim();"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&!el.readOnly&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const fieldScore=(el)=>{const rect=el.getBoundingClientRect();let score=rect.height>70?20:0;const attrs=[el.getAttribute('placeholder'),el.getAttribute('aria-label'),el.getAttribute('data-placeholder')].filter(Boolean).join('');if(attrs.includes('作品描述')||attrs.includes('简介')||attrs.includes('描述')){score+=120;}if(attrs.includes('标题')){score-=120;}let node=el;for(let i=0;i<7&&node;i+=1){const context=textOf(node);if(context.includes('作品描述')){score+=100-i*5;}if(context.includes('简介')||context.includes('描述')){score+=35-i*3;}if(context.includes('作品标题')||context.includes('标题')){score-=80-i*3;}if(context.includes('添加话题')||context.includes('@好友')){score-=20;}node=node.parentElement;}return score;};"
+        "const candidates=[...document.querySelectorAll('div[contenteditable=\"true\"],textarea')].filter(visible).map((el)=>({el,score:fieldScore(el)})).sort((a,b)=>b.score-a.score);"
+        "const editor=candidates[0]?.el;"
+        "if(!editor){throw new Error('douyin_description_editor_not_found');}"
+        "const before=normalize(editor.innerText||editor.textContent||'');"
+        "const expected=normalize(value);"
+        "const beforeCount=expected?before.split(expected).length-1:0;"
+        "editor.scrollIntoView({block:'center',inline:'center'});"
+        "editor.focus();"
+        "if(editor.tagName==='TEXTAREA'){const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')?.set;setter?setter.call(editor,value):(editor.value=value);}else{const selection=window.getSelection();const range=document.createRange();range.selectNodeContents(editor);selection.removeAllRanges();selection.addRange(range);document.execCommand?.('delete',false,null);editor.innerHTML='';const lines=String(value||'').split('\\n');lines.forEach((line,index)=>{if(index){editor.appendChild(document.createElement('br'));}editor.appendChild(document.createTextNode(line));});}"
+        "editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value||''}));"
+        "editor.dispatchEvent(new Event('change',{bubbles:true}));"
+        "editor.dispatchEvent(new Event('blur',{bubbles:true}));"
+        "const actual=normalize(editor.tagName==='TEXTAREA'?editor.value:(editor.innerText||editor.textContent||''));"
+        "if(actual!==expected){throw new Error('douyin_description_set_failed');}"
+        "const actualCount=expected?actual.split(expected).length-1:0;"
+        "if(actualCount>1){throw new Error('douyin_description_duplicated');}"
+        "return {description_set:true,plain_hashtags_removed:true,duplicate_removed:beforeCount>1||before!==actual,editor_score:candidates[0]?.score||0,actual};"
+        "})()"
+    )
+
+
+def _douyin_cover_helpers_script() -> str:
+    return (
+        "const retryMarker='douyin_cover_retryable:true';"
+        "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&el.getAttribute('aria-disabled')!=='true'&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const labels=['AI智能推荐封面','智能推荐封面','推荐封面'];"
+        "const successTexts=['封面效果检测通过','封面检测通过','检测通过'];"
+        "const successDetected=()=>successTexts.some((item)=>textOf(document.body).includes(item));"
+        "const hover=(el)=>{['mouseover','mouseenter','mousemove'].forEach((type)=>el.dispatchEvent(new MouseEvent(type,{bubbles:true,view:window})));};"
+        "const labelNodes=()=>[...document.querySelectorAll('button,div,span,section')].filter((el)=>{if(!visible(el)){return false;}const rect=el.getBoundingClientRect();const text=textOf(el);return labels.some((label)=>text.includes(label))&&text.length<=80&&rect.width>0&&rect.height>0&&rect.width<720&&rect.height<220;});"
+        "const nearLabel=(img,labelRect)=>{const rect=img.getBoundingClientRect();return rect.left>=labelRect.left-30&&rect.top>=labelRect.top-20&&rect.top<=labelRect.top+300;};"
+        "const candidateSections=()=>{const entries=[];for(const label of labelNodes()){let best=null;let node=label;const labelRect=label.getBoundingClientRect();for(let i=0;i<9&&node;i+=1){const rect=node.getBoundingClientRect();const imgs=[...node.querySelectorAll('img')].filter((img)=>visible(img)&&nearLabel(img,labelRect));if(imgs.length&&rect.width>0&&rect.height>0){const area=rect.width*rect.height;if(!best||area<best.area){best={section:node,label,area};}}node=node.parentElement;}if(best){entries.push(best);}}const seen=new Set();return entries.filter((item)=>{if(seen.has(item.section)){return false;}seen.add(item.section);return true;});};"
+        "const badImage=(src)=>/logo|avatar|favicon|icon|douyin-creator-logo|static\\/image/i.test(src||'');"
+        "const realImages=()=>candidateSections().flatMap((entry)=>[...entry.section.querySelectorAll('img')].filter((img)=>{const rect=img.getBoundingClientRect();const src=img.currentSrc||img.src||img.getAttribute('src')||'';const owner=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;const context=textOf(owner);const ratio=rect.width/Math.max(rect.height,1);return visible(img)&&nearLabel(img,entry.label.getBoundingClientRect())&&src&&!badImage(src)&&img.complete!==false&&img.naturalWidth>60&&img.naturalHeight>60&&rect.width>=48&&rect.height>=48&&ratio>0.55&&ratio<2.4&&rect.top>80&&!context.includes('暂无更多推荐')&&!context.includes('生成中');}).map((img)=>({img,rect:img.getBoundingClientRect()}))).sort((a,b)=>a.rect.left-b.rect.left||a.rect.top-b.rect.top);"
+        "const clickText=async(names,timeoutMs=12000)=>{const started=Date.now();let sawDialog=false;while(Date.now()-started<timeoutMs){const bodyText=textOf(document.body);sawDialog=sawDialog||bodyText.includes('是否确认应用此封面')||bodyText.includes('确认应用此封面');const candidates=[...document.querySelectorAll('button,[role=\"button\"],div,span')].filter(visible).map((el)=>({el,text:textOf(el)})).filter((item)=>names.some((name)=>item.text===name||item.text.includes(name))).sort((a,b)=>a.text.length-b.text.length);const target=candidates[0]?.el;if(target){target.scrollIntoView({block:'center',inline:'center'});target.click();await sleep(900);return {clicked:true,text:textOf(target),saw_dialog:sawDialog};}if(successDetected()){return {clicked:false,success_detected:true,saw_dialog:sawDialog};}await sleep(350);}return {clicked:false,saw_dialog:sawDialog};};"
+    )
+
+
+def _douyin_wait_ai_cover_script(timeout_seconds: int = 150) -> str:
+    return (
+        "(async()=>{"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        f"{_douyin_cover_helpers_script()}"
+        "const started=Date.now();let lastCount=0;while(Date.now()-started<timeoutMs){const images=realImages();lastCount=images.length;if(images.length){images[0].img.scrollIntoView({block:'center',inline:'center'});return {ai_cover_ready:true,leftmost_ai_cover_found:true,image_count:images.length,waited_ms:Date.now()-started,retryMarker};}await sleep(1000);}"
+        "throw new Error('douyin_ai_cover_not_ready:'+lastCount);"
+        "})()"
+    )
+
+
+def _douyin_click_ai_cover_script() -> str:
+    return (
+        "(async()=>{"
+        f"{_douyin_cover_helpers_script()}"
+        "const images=realImages();"
+        "if(!images.length){throw new Error('douyin_ai_cover_not_ready:0');}"
+        "const beforeUrl=location.href;"
+        "const img=images[0].img;"
+        "const clickable=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;"
+        "clickable.scrollIntoView({block:'center',inline:'center'});hover(clickable);hover(img);await sleep(350);clickable.click();img.click();"
+        "await sleep(900);"
+        "if(location.href!==beforeUrl&&/content\\/manage|manage/.test(location.href)){throw new Error('douyin_cover_click_navigated:'+location.href);}"
+        "return {ai_cover_clicked:true,leftmost_ai_cover_selected:true,src:img.currentSrc||img.src||img.getAttribute('src')||'',retryMarker};"
+        "})()"
+    )
+
+
+def _douyin_confirm_cover_script(timeout_seconds: int = 20) -> str:
+    return (
+        "(async()=>{"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        f"{_douyin_cover_helpers_script()}"
+        "const confirmTexts=['设为封面','设置为封面','使用封面','确认使用','确定','确认','应用'];"
+        "const result=await clickText(confirmTexts,timeoutMs);"
+        "if(result.clicked||result.success_detected){return {cover_confirm_clicked:result.clicked,cover_confirmed:true,cover_confirm_text:result.text||'',cover_dialog_seen:result.saw_dialog,cover_success_detected:successDetected(),retryMarker};}"
+        "if(result.saw_dialog){throw new Error('douyin_cover_confirm_dialog_not_clicked');}"
+        "throw new Error('douyin_cover_confirm_not_found');"
+        "})()"
+    )
+
+
+def _douyin_verify_cover_applied_script(timeout_seconds: int = 45) -> str:
+    return (
+        "(async()=>{"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        f"{_douyin_cover_helpers_script()}"
+        "const started=Date.now();let lastText='';while(Date.now()-started<timeoutMs){lastText=textOf(document.body).slice(-300);if(successDetected()){return {cover_applied:true,cover_success_detected:true,waited_ms:Date.now()-started,retryMarker};}const selected=[...document.querySelectorAll('button,[role=\"button\"],[class*=\"cover\"],div')].filter(visible).find((el)=>/selected|active|checked|current/i.test((el.className||'').toString())||textOf(el).includes('已选择')||textOf(el).includes('已选'));if(selected){return {cover_applied:true,selected_state:true,waited_ms:Date.now()-started,retryMarker};}await sleep(800);}"
+        "throw new Error('douyin_cover_not_applied:'+lastText);"
+        "})()"
+    )
+
+
+def _douyin_verify_publish_ready_script(title: str, description: str) -> str:
+    return (
+        "(()=>{"
+        f"const expectedTitle=String({json.dumps(_truncate(title, 30), ensure_ascii=False)}||'');"
+        f"const expectedDescription=String({json.dumps(description, ensure_ascii=False)}||'');"
+        "const normalize=(text)=>String(text||'').replace(/[\\u200B-\\u200D\\uFEFF\\u00A0]/g,'').replace(/\\s+/g,' ').trim();"
+        "const compact=(text)=>normalize(text).replace(/\\s/g,'');"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&!el.readOnly&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const titleValue=()=>{const fields=[...document.querySelectorAll('input,textarea,[contenteditable=\"true\"]')].filter(visible);for(const el of fields){const attrs=[el.getAttribute('placeholder'),el.getAttribute('aria-label'),el.getAttribute('data-placeholder')].filter(Boolean).join('');const value=el.isContentEditable?el.textContent:el.value;if(attrs.includes('标题')&&normalize(value)){return normalize(value);}}return '';};"
+        "const descriptionFields=[...document.querySelectorAll('div[contenteditable=\"true\"],textarea')].filter(visible).map((el)=>{let score=0;const attrs=[el.getAttribute('placeholder'),el.getAttribute('aria-label'),el.getAttribute('data-placeholder')].filter(Boolean).join('');if(attrs.includes('作品描述')||attrs.includes('简介')||attrs.includes('描述')){score+=120;}if(attrs.includes('标题')){score-=120;}let node=el;for(let i=0;i<7&&node;i+=1){const context=textOf(node);if(context.includes('作品描述')){score+=100-i*5;}if(context.includes('简介')||context.includes('描述')){score+=35-i*3;}if(context.includes('作品标题')||context.includes('标题')){score-=80-i*3;}node=node.parentElement;}return {el,score};}).sort((a,b)=>b.score-a.score);"
+        "const editor=descriptionFields[0]?.el;"
+        "const actualDescription=normalize(editor?(editor.tagName==='TEXTAREA'?editor.value:(editor.innerText||editor.textContent||'')):'');"
+        "const expectedCompact=compact(expectedDescription);"
+        "const actualCompact=compact(actualDescription);"
+        "const bodyPiece=compact(expectedDescription.split('\\n')[0]||'').slice(0,16);"
+        "if(expectedCompact&&(!actualCompact||(!actualCompact.includes(expectedCompact)&&!(bodyPiece&&actualCompact.includes(bodyPiece))))){throw new Error('douyin_description_missing_after_set');}"
+        "const titleActual=titleValue();"
+        "if(compact(expectedTitle)&&!compact(titleActual).includes(compact(expectedTitle).slice(0,12))){throw new Error('douyin_title_missing_after_set');}"
+        "const previewLabels=['预览视频','预览封面/标题','预览封面','平台投稿预览'];"
+        "const previewRoots=[...document.querySelectorAll('section,aside,div')].filter((el)=>visible(el)&&previewLabels.some((label)=>textOf(el).includes(label)));"
+        "const previewReady=previewRoots.some((root)=>[...root.querySelectorAll('img,video,canvas')].some(visible));"
+        "if(!previewReady){throw new Error('douyin_preview_not_ready');}"
+        "return {publish_ready:true,title_checked:true,description_checked:true,preview_checked:true,description_length:actualDescription.length,preview_roots:previewRoots.length};"
+        "})()"
+    )
+
+
+def _douyin_select_ai_cover_script(timeout_seconds: int = 150) -> str:
+    return (
+        "(async()=>{"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        f"{_douyin_cover_helpers_script()}"
+        "const started=Date.now();let lastSeen=null;while(Date.now()-started<timeoutMs){const images=realImages();if(images.length){const img=images[0].img;const clickable=img.closest('button,[role=\"button\"],[class*=\"recommendCover\"],[class*=\"cover\"],div')||img;lastSeen={selected:true,src:img.currentSrc||img.src||img.getAttribute('src'),waited_ms:Date.now()-started};clickable.scrollIntoView({block:'center',inline:'center'});hover(clickable);hover(img);await sleep(300);clickable.click();img.click();await sleep(800);const confirm=await clickText(['设为封面','设置为封面','使用封面','确认使用','确定','确认','应用']);const success=successDetected();if(confirm.clicked||success){return {ai_cover_selected:true,leftmost_ai_cover_selected:true,cover_confirmed:true,cover_success_detected:success,cover_wait_timeout_ms:timeoutMs,selected:lastSeen,confirmed:confirm,retryMarker};}}await sleep(1000);}if(lastSeen){throw new Error('douyin_cover_confirm_not_found');}throw new Error('douyin_ai_cover_not_ready');"
+        "})()"
+    )
+
+
+def _douyin_click_publish_script() -> str:
+    return (
+        "(async()=>{"
+        "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&el.getAttribute('aria-disabled')!=='true'&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const names=['发布','立即发布','确认发布','发布作品'];"
+        "const blocked=['高清发布','发布助手','发布设置','发布记录','发文助手'];"
+        "const isMatch=(text)=>names.some((name)=>text===name||(text.includes(name)&&text.length<=12))&&!blocked.some((name)=>text.includes(name));"
+        "const clickKnownTip=()=>{const tip=[...document.querySelectorAll('button,[role=\"button\"],div,span')].filter(visible).find((el)=>['我知道了','知道了'].includes(textOf(el)));if(tip){tip.click();return true;}return false;};"
+        "const findButton=()=>{const seen=new Set();const candidates=[];for(const el of [...document.querySelectorAll('button,[role=\"button\"],a,div,span')]){const text=textOf(el);if(!text||!isMatch(text)){continue;}const clickable=el.closest('button,[role=\"button\"],a')||el;if(seen.has(clickable)||!visible(clickable)){continue;}seen.add(clickable);const rect=clickable.getBoundingClientRect();if(rect.left<180&&text.includes('发布')){continue;}const exact=text==='发布'?0:1;const tag=clickable.tagName==='BUTTON'?0:1;candidates.push({el:clickable,text,rect,score:exact*10+tag});}return candidates.sort((a,b)=>a.score-b.score||b.rect.top-a.rect.top||b.rect.left-a.rect.left)[0];};"
+        "const started=Date.now();let lastTexts=[];while(Date.now()-started<45000){clickKnownTip();let found=findButton();if(found){found.el.scrollIntoView({block:'center',inline:'center'});await sleep(500);found=findButton()||found;setTimeout(()=>found.el.click(),50);return {click_scheduled:true,text:found.text,waited_ms:Date.now()-started};}lastTexts=[...document.querySelectorAll('button,[role=\"button\"],a')].filter(visible).map(textOf).filter(Boolean).slice(-20);window.scrollTo({top:document.documentElement.scrollHeight||document.body.scrollHeight,behavior:'instant'});await sleep(1000);}"
+        "throw new Error('douyin_publish_button_not_found:'+lastTexts.join('|'));"
+        "})()"
+    )
+
+
+def _douyin_wait_publish_result_script(title: str, timeout_seconds: int = 120) -> str:
+    return (
+        "(async()=>{"
+        f"const expectedTitle=String({json.dumps(_truncate(title, 30), ensure_ascii=False)}||'').replace(/\\s+/g,'').trim();"
+        f"const timeoutMs={int(timeout_seconds) * 1000};"
+        "const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));"
+        "const visible=(el)=>{const style=window.getComputedStyle(el);const rect=el.getBoundingClientRect();return !el.disabled&&el.getAttribute('aria-disabled')!=='true'&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&rect.width>0&&rect.height>0;};"
+        "const textOf=(el)=>(el.textContent||'').replace(/\\s+/g,'').trim();"
+        "const pageText=()=>textOf(document.body);"
+        "const successTexts=['发布成功','作品发布成功','发布完成','提交成功','已提交审核','审核中','投稿成功','发布已提交'];"
+        "const blockedTexts=['验证码','安全验证','登录失效','请先登录','未登录','发布失败','提交失败','内容违规','无法发布','风控','频繁'];"
+        "const confirmTexts=['确认发布','立即发布','继续发布','仍要发布','同意并发布','确认','确定'];"
+        "const hasSuccess=()=>successTexts.find((item)=>pageText().includes(item));"
+        "const hasBlock=()=>blockedTexts.find((item)=>pageText().includes(item));"
+        "const clickConfirm=()=>{const candidates=[...document.querySelectorAll('button,[role=\"button\"],div,span')].filter(visible).map((el)=>({el,text:textOf(el)})).filter((item)=>confirmTexts.some((name)=>item.text===name||item.text.includes(name))).sort((a,b)=>a.text.length-b.text.length);const target=candidates[0]?.el;if(target){target.scrollIntoView({block:'center',inline:'center'});target.click();return {clicked:true,text:textOf(target)};}return {clicked:false};};"
+        "const titleVisible=()=>{const text=pageText();return expectedTitle&&expectedTitle.length>=4&&text.includes(expectedTitle)&&!/共0个作品|共0件作品/.test(text);};"
+        "const started=Date.now();let confirms=[];let last='';while(Date.now()-started<timeoutMs){const success=hasSuccess();if(success){return {publish_confirmed:true,success_text:success,url:location.href,waited_ms:Date.now()-started,confirms};}if(titleVisible()&&/content\\/manage|manage/.test(location.href)){return {publish_confirmed:true,success_text:'作品管理出现标题',url:location.href,waited_ms:Date.now()-started,confirms};}const blocked=hasBlock();if(blocked){throw new Error('douyin_publish_blocked:'+blocked);}const confirm=clickConfirm();if(confirm.clicked){confirms.push(confirm);await sleep(2000);continue;}last=[...document.querySelectorAll('button,[role=\"button\"],a')].filter(visible).map(textOf).filter(Boolean).slice(-20).join('|');await sleep(1500);}"
+        "throw new Error('douyin_publish_not_confirmed:'+location.href+'|'+last);"
+        "})()"
+    )
+
+
+def _browser_set_douyin_description_command(session: str, description: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_set_description_script(description))
+
+
+def _browser_select_douyin_ai_cover_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_select_ai_cover_script())
+
+
+def _browser_wait_douyin_ai_cover_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_wait_ai_cover_script())
+
+
+def _browser_click_douyin_ai_cover_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_click_ai_cover_script())
+
+
+def _browser_confirm_douyin_cover_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_confirm_cover_script())
+
+
+def _browser_verify_douyin_cover_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_verify_cover_applied_script())
+
+
+def _browser_verify_douyin_publish_ready_command(session: str, title: str, description: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_verify_publish_ready_script(title, description))
+
+
+def _browser_click_douyin_publish_command(session: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_click_publish_script())
+
+
+def _browser_wait_douyin_publish_result_command(session: str, title: str) -> list[str]:
+    return _browser_eval_command(session, _douyin_wait_publish_result_script(title))
+
+
+def _browser_fill_bilibili_description_command(session: str, description: str) -> list[str]:
+    return _browser_eval_command(
+        session,
+        _fill_visible_field_script(_BILIBILI_DESCRIPTION_FIELD_SELECTOR, description, "description"),
+    )
+
+
+def _local_media_url(job: dict) -> str:
+    base_url = settings.opencli_local_base_url.rstrip("/")
+    return f"{base_url}{_video_media_url(job['task_id'], job['output_clip_id'], job.get('video_source') or 'original')}"
+
+
+def _douyin_video_upload_script(job: dict, video_path: Path) -> str:
+    media_url = _local_media_url(job)
+    file_name = video_path.name
+    return (
+        "(async()=>{"
+        "const input=document.querySelector('input[type=\"file\"]');"
+        "if(!input){throw new Error('douyin_file_input_not_found');}"
+        f"const response=await fetch({json.dumps(media_url, ensure_ascii=False)});"
+        "if(!response.ok){throw new Error(`local_media_fetch_failed:${response.status}`);}"
+        "const blob=await response.blob();"
+        f"const file=new File([blob],{json.dumps(file_name, ensure_ascii=False)},{{type:blob.type||'video/mp4'}});"
+        "const transfer=new DataTransfer();"
+        "transfer.items.add(file);"
+        "input.files=transfer.files;"
+        "input.dispatchEvent(new Event('input',{bubbles:true}));"
+        "input.dispatchEvent(new Event('change',{bubbles:true}));"
+        "return {uploaded:input.files.length,fileName:input.files[0]?.name||'',size:file.size,type:file.type};"
+        "})()"
+    )
+
+
+def _douyin_close_preview_tip_script() -> str:
+    return (
+        "(()=>{"
+        "const buttons=[...document.querySelectorAll('button')];"
+        "const button=buttons.find((item)=>(item.textContent||'').includes('我知道了'));"
+        "if(button){button.click();return {closed:true};}"
+        "return {closed:false};"
+        "})()"
+    )
 
 
 def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path | None) -> list[list[str]]:
     session = f"send-douyin-{job['id']}"
-    title = _truncate(job.get("title") or "直播切片", 30)
-    caption = _caption_for_job(job)
+    title = _truncate(_sanitize_publish_title(job.get("title") or "直播切片"), 30)
+    description = _douyin_description_for_job(job, title)
     commands = [
         _browser_open_command(session, "https://creator.douyin.com/creator-micro/content/upload"),
         _browser_wait_command(session, 5),
-        ["opencli", "browser", session, "upload", "input[type='file']", str(video_path)],
+        _browser_eval_command(session, _douyin_video_upload_script(job, video_path)),
         _browser_wait_command(session, 8),
-        ["opencli", "browser", session, "fill", "input[placeholder*='标题'],textarea[placeholder*='标题']", title],
+        _browser_eval_command(session, _douyin_close_preview_tip_script()),
+        _browser_fill_title_command(session, title),
+        _browser_set_douyin_description_command(session, description),
+        _browser_verify_douyin_publish_ready_command(session, title, description),
     ]
-    if caption:
-        commands.append(
-            ["opencli", "browser", session, "fill", "textarea[placeholder*='简介'],textarea[placeholder*='描述'],div[contenteditable='true']", caption]
-        )
-    if cover_path:
-        commands.extend(
-            [
-                ["opencli", "browser", session, "upload", "input[type='file'][accept*='image'],input[type='file'][accept*='.jpg']", str(cover_path)],
-                _browser_wait_command(session, 3),
-            ]
-        )
     commands.extend(
         [
-            ["opencli", "browser", session, "click", "--role", "button", "--name", "发布"],
-            _browser_wait_command(session, 5),
+            _browser_wait_douyin_ai_cover_command(session),
+            _browser_click_douyin_ai_cover_command(session),
+            _browser_confirm_douyin_cover_command(session),
+            _browser_verify_douyin_cover_command(session),
+            _browser_verify_douyin_publish_ready_command(session, title, description),
+            _browser_click_douyin_publish_command(session),
+            _browser_wait_command(session, 2),
+            _browser_wait_douyin_publish_result_command(session, title),
         ]
     )
     return commands
@@ -1185,30 +1807,31 @@ def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path
 
 def _build_bilibili_browser_commands(job: dict, video_path: Path, cover_path: Path | None) -> list[list[str]]:
     session = f"send-bilibili-{job['id']}"
-    title = _truncate(job.get("title") or "直播切片", 80)
+    opencli = _opencli_command()
+    title = _truncate(_sanitize_publish_title(job.get("title") or "直播切片"), 80)
     tags = _format_tags(job.get("tags") or "")
-    description = _truncate(job.get("description") or title, 2000)
+    description = _sanitize_publish_description(job.get("description") or title)
     commands = [
         _browser_open_command(session, "https://member.bilibili.com/platform/upload/video/frame"),
         _browser_wait_command(session, 5),
-        ["opencli", "browser", session, "upload", "input[type='file']", str(video_path)],
+        [*opencli, "browser", session, "upload", "input[type='file']", str(video_path)],
         _browser_wait_command(session, 8),
-        ["opencli", "browser", session, "fill", "input[placeholder*='标题'],textarea[placeholder*='标题']", title],
+        _browser_fill_title_command(session, title),
     ]
     if tags:
-        commands.append(["opencli", "browser", session, "fill", "input[placeholder*='标签'],input[placeholder*='tag']", tags])
+        commands.append([*opencli, "browser", session, "fill", "input[placeholder*='标签'],input[placeholder*='tag']", tags])
     if description:
-        commands.append(["opencli", "browser", session, "fill", "textarea[placeholder*='简介'],textarea[placeholder*='介绍'],textarea", description])
+        commands.append(_browser_fill_bilibili_description_command(session, description))
     if cover_path:
         commands.extend(
             [
-                ["opencli", "browser", session, "upload", "input[type='file'][accept*='image'],input[type='file'][accept*='.jpg']", str(cover_path)],
+                [*opencli, "browser", session, "upload", "input[type='file'][accept*='image'],input[type='file'][accept*='.jpg']", str(cover_path)],
                 _browser_wait_command(session, 3),
             ]
         )
     commands.extend(
         [
-            ["opencli", "browser", session, "click", "--role", "button", "--name", "立即投稿"],
+            [*opencli, "browser", session, "click", "--role", "button", "--name", "立即投稿"],
             _browser_wait_command(session, 5),
         ]
     )
@@ -1223,6 +1846,14 @@ def _opencli_commands_for_job(job: dict) -> list[list[str]]:
     if job["platform"] == "bilibili":
         return _build_bilibili_browser_commands(job, video_path, cover_path)
     raise ValueError("暂不支持这个发送平台。")
+
+
+def _opencli_cleanup_commands_for_job(job: dict) -> list[list[str]]:
+    if job["platform"] == "douyin":
+        return [_browser_close_command(f"send-douyin-{job['id']}")]
+    if job["platform"] == "bilibili":
+        return [_browser_close_command(f"send-bilibili-{job['id']}")]
+    return []
 
 
 def _command_summary(command: list[str]) -> str:
@@ -1286,35 +1917,66 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
 
     outputs: list[dict[str, Any]] = []
     for index, command in enumerate(commands, start=1):
-        try:
-            result = runner(command)
-        except subprocess.TimeoutExpired as exc:
-            message = f"opencli 第 {index} 步超时：{_command_summary(command)}"
-            failed_job = _mark_job_failed(job_id, "opencli_timeout", message, {"outputs": outputs})
-            return {"status": "failed", "message": message, "job": failed_job}
-        except Exception as exc:
-            message = f"opencli 第 {index} 步启动失败：{exc}"
-            failed_job = _mark_job_failed(job_id, "opencli_start_failed", message, {"outputs": outputs})
-            return {"status": "failed", "message": message, "job": failed_job}
+        attempt = 1
+        while True:
+            try:
+                result = runner(command)
+            except subprocess.TimeoutExpired as exc:
+                message = f"opencli 第 {index} 步超时：{_command_summary(command)}"
+                failed_job = _mark_job_failed(job_id, "opencli_timeout", message, {"outputs": outputs})
+                return {"status": "failed", "message": message, "job": failed_job}
+            except Exception as exc:
+                message = f"opencli 第 {index} 步启动失败：{exc}"
+                failed_job = _mark_job_failed(job_id, "opencli_start_failed", message, {"outputs": outputs})
+                return {"status": "failed", "message": message, "job": failed_job}
 
-        output = {
-            "step": index,
-            "command": _command_summary(command),
-            "returncode": result.returncode,
-            "stdout": (result.stdout or "")[-2000:],
-            "stderr": (result.stderr or "")[-2000:],
-        }
-        outputs.append(output)
-        if result.returncode != 0:
+            output = {
+                "step": index,
+                "attempt": attempt,
+                "command": _command_summary(command),
+                "returncode": result.returncode,
+                "stdout": (result.stdout or "")[-2000:],
+                "stderr": (result.stderr or "")[-2000:],
+            }
+            outputs.append(output)
+            if result.returncode == 0:
+                break
+            if _should_retry_opencli_detached(command, result, attempt):
+                output["retry_reason"] = "opencli_detached"
+                attempt += 1
+                continue
             message = output["stderr"] or output["stdout"] or f"opencli 第 {index} 步失败"
             failed_job = _mark_job_failed(job_id, "opencli_failed", message[:1000], {"outputs": outputs})
             return {"status": "failed", "message": message, "job": failed_job}
+
+    cleanup_outputs: list[dict[str, Any]] = []
+    for command in _opencli_cleanup_commands_for_job(get_publish_job(job_id)):
+        try:
+            result = runner(command)
+            cleanup_outputs.append(
+                {
+                    "command": _command_summary(command),
+                    "returncode": result.returncode,
+                    "stdout": (result.stdout or "")[-2000:],
+                    "stderr": (result.stderr or "")[-2000:],
+                }
+            )
+        except Exception as exc:
+            cleanup_outputs.append(
+                {
+                    "command": _command_summary(command),
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(exc),
+                }
+            )
 
     now = _now_iso()
     response = {
         "opencli": "completed",
         "platform_url": "",
         "outputs": outputs,
+        "cleanup_outputs": cleanup_outputs,
         "completed_at": now,
     }
     with get_connection() as connection:
@@ -1463,13 +2125,13 @@ def get_publish_center_context() -> dict:
     for item in _list_completed_publish_clips():
         original_path = resolve_video_file_path(item.get("output_file_path") or "")
         subtitled_path = resolve_video_file_path(item.get("subtitled_output_file_path") or "")
-        default_title = _default_title_for_clip(item)
+        default_title = _sanitize_publish_title(_default_title_for_clip(item))
         original_available = bool(original_path and original_path.exists() and original_path.is_file())
         subtitled_available = bool(subtitled_path and subtitled_path.exists() and subtitled_path.is_file())
         normalized_item = {
             **item,
             "default_title": default_title,
-            "default_tags": _format_tags(_fallback_tags(item)),
+            "default_tags": _format_tags(_fallback_tags(item)) or _format_tags(SAFE_TOPIC_FALLBACKS),
             "original_available": original_available,
             "subtitled_available": subtitled_available,
             "subtitle_status_label": "已加字幕" if item.get("subtitle_status") == "completed" else "未加字幕",
@@ -1486,9 +2148,9 @@ def get_publish_center_context() -> dict:
                         "job_id": job["id"],
                         "platform": platform,
                         "platform_label": PLATFORM_LABELS[platform],
-                        "title": job.get("title") or default_title,
-                        "description": job.get("description") or "",
-                        "tags": job.get("tags") or normalized_item["default_tags"],
+                        "title": _sanitize_publish_title(job.get("title") or default_title, default_title),
+                        "description": _sanitize_publish_description(job.get("description") or ""),
+                        "tags": _hashtags(job.get("tags") or normalized_item["default_tags"]),
                         "status": job.get("status"),
                         "status_label": job.get("status_label"),
                         "status_tone": job.get("status_tone"),
@@ -1506,9 +2168,9 @@ def get_publish_center_context() -> dict:
                         "job_id": "",
                         "platform": platform,
                         "platform_label": PLATFORM_LABELS[platform],
-                        "title": default_title,
+                        "title": _sanitize_publish_title(default_title),
                         "description": _compose_description(item, default_title, normalized_item["default_tags"]),
-                        "tags": normalized_item["default_tags"],
+                        "tags": _hashtags(normalized_item["default_tags"]),
                         "status": "not_queued",
                         "status_label": "待入队",
                         "status_tone": "amber",
@@ -1534,7 +2196,7 @@ def get_publish_center_context() -> dict:
         "publish_jobs": jobs,
         "jobs_by_platform": jobs_by_platform,
         "platforms": [{"id": platform, "label": label} for platform, label in PLATFORM_LABELS.items()],
-        "opencli_available": bool(shutil.which("opencli")),
+        "opencli_available": bool(_opencli_executable()),
         "stats": [
             {"label": "可入队切片", "value": len(publish_items), "tone": "green"},
             {"label": "待发送", "value": ready_count, "tone": "blue"},

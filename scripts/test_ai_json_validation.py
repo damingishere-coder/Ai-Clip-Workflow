@@ -121,6 +121,18 @@ def main() -> None:
     assert legacy_clip.duration_seconds == 90
     print("legacy ai field aliases: OK")
 
+    ten_point_payload = _valid_payload()
+    ten_point_payload["clips"][0]["confidence_score"] = 8.9
+    ten_point_result = _parse_and_validate(json.dumps(ten_point_payload, ensure_ascii=False))
+    assert ten_point_result.clips[0].confidence_score == 0.89
+    print("ten point confidence score: OK")
+
+    percent_payload = _valid_payload()
+    percent_payload["clips"][0]["confidence_score"] = "92%"
+    percent_result = _parse_and_validate(json.dumps(percent_payload, ensure_ascii=False))
+    assert percent_result.clips[0].confidence_score == 0.92
+    print("percent confidence score: OK")
+
 
 if __name__ == "__main__":
     main()

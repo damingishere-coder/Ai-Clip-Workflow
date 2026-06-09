@@ -31,6 +31,7 @@ class ProviderConfig:
     reasoning_effort: str | None = None
     fallback_protocol: str | None = None
     disable_response_storage: bool = True
+    api_key_name: str = "远程接口 API Key"
 
 
 def build_url(base_url: str, path: str) -> str:
@@ -102,7 +103,17 @@ def extract_chat_completion_text(response: dict[str, Any]) -> str:
     choices = response.get("choices") or []
     if not choices:
         raise AIProviderError("AI Chat Completions 响应中没有 choices")
-    content = choices[0].get("message", {}).get("content")
+    first_choice = choices[0]
+    message = first_choice.get("message") or {}
+    content = message.get("content")
     if isinstance(content, str) and content.strip():
         return content.strip()
-    raise AIProviderError("AI Chat Completions 响应中没有文本内容")
+
+    finish_reason = first_choice.get("finish_reason") or "unknown"
+    message_keys = ", ".join(sorted(str(key) for key in message.keys())) or "none"
+    reasoning_content = message.get("reasoning_content")
+    reasoning_chars = len(reasoning_content) if isinstance(reasoning_content, str) else 0
+    raise AIProviderError(
+        "AI Chat Completions 响应中没有文本内容"
+        f"（finish_reason={finish_reason}，message_keys={message_keys}，reasoning_chars={reasoning_chars}）"
+    )

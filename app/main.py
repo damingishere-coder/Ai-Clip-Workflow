@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -25,11 +25,27 @@ app = FastAPI(
 
 @app.middleware("http")
 async def disable_static_cache(request: Request, call_next):
-    response = await call_next(request)
+    is_local_asset = request.url.path.startswith(("/media/", "/static/"))
+    request_origin = request.headers.get("Origin", "")
+    allowed_origins = {
+        "https://creator.douyin.com",
+        "https://member.bilibili.com",
+    }
+    if is_local_asset and request.method == "OPTIONS":
+        response = Response()
+    else:
+        response = await call_next(request)
     if request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-store, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    if is_local_asset:
+        response.headers["Access-Control-Allow-Origin"] = (
+            request_origin if request_origin in allowed_origins else "*"
+        )
+        response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
     return response
 
 

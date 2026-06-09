@@ -8,7 +8,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from app.services.transcript_service import (
     TranscriptSegment,
-    build_minute_rows,
     build_transcript_markdown,
     read_transcript_preview,
 )
@@ -20,20 +19,15 @@ def main() -> None:
         TranscriptSegment(start_seconds=20.0, end_seconds=28.0, text="这一段是第一分钟里的真实原文。"),
         TranscriptSegment(start_seconds=66.0, end_seconds=72.0, text="这里进入第二分钟。"),
     ]
-    rows = build_minute_rows(segments)
-    assert rows == [
-        (0, 60, "大家好，今天我们来讲直播切片。 这一段是第一分钟里的真实原文。"),
-        (60, 120, "这里进入第二分钟。"),
-    ]
-
     markdown = build_transcript_markdown(
         {"id": "test-task", "task_name": "测试任务", "source": "source.mp4"},
         Path("audio/source.wav"),
         segments,
     )
-    assert "## 分钟级转写" in markdown
+    assert "## 分钟级转写" not in markdown
     assert "## 逐句时间戳原文" in markdown
-    assert "| 00:00:00 | 00:01:00 | 大家好，今天我们来讲直播切片。 这一段是第一分钟里的真实原文。 |" in markdown
+    assert "| 00:00:03 | 00:00:09 | 大家好，今天我们来讲直播切片。 |" in markdown
+    assert "| 00:00:20 | 00:00:28 | 这一段是第一分钟里的真实原文。 |" in markdown
     assert "| 00:01:06 | 00:01:12 | 这里进入第二分钟。 |" in markdown
 
     with TemporaryDirectory() as temp_dir:
@@ -42,12 +36,12 @@ def main() -> None:
         preview = read_transcript_preview(transcript_path, max_lines=3)
 
     assert preview[0] == {
-        "time": "00:00:00 - 00:01:00",
-        "text": "大家好，今天我们来讲直播切片。 这一段是第一分钟里的真实原文。",
+        "time": "00:00:03 - 00:00:09",
+        "text": "大家好，今天我们来讲直播切片。",
     }
     assert preview[1] == {
-        "time": "00:01:00 - 00:02:00",
-        "text": "这里进入第二分钟。",
+        "time": "00:00:20 - 00:00:28",
+        "text": "这一段是第一分钟里的真实原文。",
     }
     print("转写 Markdown 格式测试通过")
 

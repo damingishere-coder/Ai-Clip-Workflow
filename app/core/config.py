@@ -68,10 +68,77 @@ class Settings:
     default_cut_strategy: str = "accurate"
     ai_default_provider: str = _env("AI_DEFAULT_PROVIDER", "remote")
     ai_request_timeout_seconds: int = int(_env("AI_REQUEST_TIMEOUT_SECONDS", "120"))
+
+    ai_analysis_remote_base_url: str = _env_first(
+        ("AI_ANALYSIS_REMOTE_BASE_URL", "AI_REMOTE_BASE_URL"),
+        "https://api.deepseek.com",
+    )
+    ai_analysis_remote_api_key: str = _env_first(
+        ("AI_ANALYSIS_REMOTE_API_KEY", "AI_REMOTE_API_KEY", "OPENAI_API_KEY"),
+        "",
+    )
+    ai_analysis_remote_model: str = _env_first(
+        ("AI_ANALYSIS_REMOTE_MODEL", "AI_REMOTE_REVIEW_MODEL", "AI_REMOTE_MODEL"),
+        "deepseek-v4-flash",
+    )
+    ai_analysis_remote_protocol: str = _env_first(
+        ("AI_ANALYSIS_REMOTE_PROTOCOL", "AI_REMOTE_PROTOCOL"),
+        "chat_completions",
+    )
+    ai_analysis_remote_reasoning_effort: str = _env_first(
+        ("AI_ANALYSIS_REMOTE_REASONING_EFFORT", "AI_REMOTE_REASONING_EFFORT"),
+        "",
+    )
+    ai_analysis_remote_responses_path: str = _env_first(
+        ("AI_ANALYSIS_REMOTE_RESPONSES_PATH", "AI_REMOTE_RESPONSES_PATH"),
+        "/v1/responses",
+    )
+    ai_analysis_remote_disable_response_storage: str = _env_first(
+        ("AI_ANALYSIS_REMOTE_DISABLE_RESPONSE_STORAGE", "AI_REMOTE_DISABLE_RESPONSE_STORAGE"),
+        "true",
+    )
+    ai_analysis_request_timeout_seconds: int = int(
+        _env_first(("AI_ANALYSIS_REQUEST_TIMEOUT_SECONDS", "AI_REQUEST_TIMEOUT_SECONDS"), "120")
+    )
+
+    ai_publish_remote_base_url: str = _env_first(
+        ("AI_PUBLISH_REMOTE_BASE_URL", "AI_REMOTE_BASE_URL"),
+        "https://api.deepseek.com",
+    )
+    ai_publish_remote_api_key: str = _env_first(
+        ("AI_PUBLISH_REMOTE_API_KEY", "AI_REMOTE_API_KEY", "OPENAI_API_KEY"),
+        "",
+    )
+    ai_publish_remote_model: str = _env_first(
+        ("AI_PUBLISH_REMOTE_MODEL", "AI_REMOTE_PUBLISH_MODEL", "AI_REMOTE_MODEL"),
+        "deepseek-v4-flash",
+    )
+    ai_publish_remote_protocol: str = _env_first(
+        ("AI_PUBLISH_REMOTE_PROTOCOL", "AI_REMOTE_PROTOCOL"),
+        "chat_completions",
+    )
+    ai_publish_remote_reasoning_effort: str = _env_first(
+        ("AI_PUBLISH_REMOTE_REASONING_EFFORT", "AI_REMOTE_REASONING_EFFORT"),
+        "",
+    )
+    ai_publish_remote_responses_path: str = _env_first(
+        ("AI_PUBLISH_REMOTE_RESPONSES_PATH", "AI_REMOTE_RESPONSES_PATH"),
+        "/v1/responses",
+    )
+    ai_publish_remote_disable_response_storage: str = _env_first(
+        ("AI_PUBLISH_REMOTE_DISABLE_RESPONSE_STORAGE", "AI_REMOTE_DISABLE_RESPONSE_STORAGE"),
+        "true",
+    )
+    ai_publish_request_timeout_seconds: int = int(
+        _env_first(("AI_PUBLISH_REQUEST_TIMEOUT_SECONDS", "AI_REQUEST_TIMEOUT_SECONDS"), "120")
+    )
+
+    # Legacy AI_REMOTE_* values are kept for older scripts and as a fallback source.
     ai_remote_base_url: str = _env("AI_REMOTE_BASE_URL", "https://api.deepseek.com")
     ai_remote_api_key: str = _env_first(("AI_REMOTE_API_KEY", "OPENAI_API_KEY"), "")
     ai_remote_model: str = _env("AI_REMOTE_MODEL", "deepseek-v4-flash")
     ai_remote_review_model: str = _env("AI_REMOTE_REVIEW_MODEL", "deepseek-v4-flash")
+    ai_remote_publish_model: str = _env("AI_REMOTE_PUBLISH_MODEL", "deepseek-v4-flash")
     ai_remote_protocol: str = _env("AI_REMOTE_PROTOCOL", "chat_completions")
     ai_remote_reasoning_effort: str = _env("AI_REMOTE_REASONING_EFFORT", "")
     ai_remote_responses_path: str = _env("AI_REMOTE_RESPONSES_PATH", "/v1/responses")
@@ -82,12 +149,13 @@ class Settings:
     ai_local_protocol: str = _env("AI_LOCAL_PROTOCOL", "chat_completions")
     ai_local_fallback_protocol: str = _env("AI_LOCAL_FALLBACK_PROTOCOL", "")
     ai_local_health_timeout_seconds: int = int(_env("AI_LOCAL_HEALTH_TIMEOUT_SECONDS", "30"))
+    opencli_local_base_url: str = _env("OPENCLI_LOCAL_BASE_URL", "http://127.0.0.1:8002")
     ai_network_access: str = _env("AI_NETWORK_ACCESS", "enabled")
     ai_windows_wsl_setup_acknowledged: str = _env("AI_WINDOWS_WSL_SETUP_ACKNOWLEDGED", "true")
     ai_model_context_window: int = int(_env("AI_MODEL_CONTEXT_WINDOW", "1000000"))
     ai_model_auto_compact_token_limit: int = int(_env("AI_MODEL_AUTO_COMPACT_TOKEN_LIMIT", "900000"))
     transcription_provider: str = _env("TRANSCRIPTION_PROVIDER", "volcengine")
-    transcription_fallback_provider: str = _env("TRANSCRIPTION_FALLBACK_PROVIDER", "local")
+    transcription_fallback_provider: str = _env("TRANSCRIPTION_FALLBACK_PROVIDER", "")
     transcription_model: str = _env("TRANSCRIPTION_MODEL", "medium")
     transcription_language: str = _env("TRANSCRIPTION_LANGUAGE", "zh")
     transcription_device: str = _env("TRANSCRIPTION_DEVICE", "cpu")

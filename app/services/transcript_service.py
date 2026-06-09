@@ -97,13 +97,14 @@ def write_transcript_markdown(
     audio_path: Path,
     transcript_path: Path,
     progress_callback: Callable[[dict], None] | None = None,
+    provider: str | None = None,
 ) -> dict[str, str]:
     if not audio_path.exists():
         raise RuntimeError("未找到音频文件，请先提取音频")
 
     transcript_path.parent.mkdir(parents=True, exist_ok=True)
     progress_path = get_transcript_progress_path(transcript_path)
-    _set_configured_transcription_runtime()
+    _set_configured_transcription_runtime(provider)
     _emit_transcript_progress(
         progress_path,
         progress_callback,
@@ -118,6 +119,7 @@ def write_transcript_markdown(
         transcript_path.parent,
         progress_path,
         progress_callback,
+        provider=provider,
     )
     content = build_transcript_markdown(task, audio_path, segments)
     temp_path = transcript_path.with_name(f"{transcript_path.name}.tmp")
@@ -148,13 +150,15 @@ def transcribe_audio_with_configured_provider(
     working_dir: Path,
     progress_path: Path,
     progress_callback: Callable[[dict], None] | None = None,
+    provider: str | None = None,
+    allow_fallback: bool = False,
 ) -> list[TranscriptSegment]:
-    provider = _normalize_provider_name(settings.transcription_provider)
+    provider = _normalize_provider_name(provider or settings.transcription_provider)
     fallback_provider = _normalize_provider_name(settings.transcription_fallback_provider)
     try:
         return transcribe_audio_with_provider(audio_path, working_dir, progress_path, provider, progress_callback)
     except Exception as exc:
-        if fallback_provider and fallback_provider != provider:
+        if allow_fallback and fallback_provider and fallback_provider != provider:
             _emit_transcript_progress(
                 progress_path,
                 progress_callback,
@@ -177,7 +181,7 @@ def transcribe_audio_with_configured_provider(
                     f"{_provider_label(provider)} 转写失败：{exc}；"
                     f"{_provider_label(fallback_provider)} 兜底也失败：{fallback_exc}"
                 ) from fallback_exc
-        raise
+        raise RuntimeError(f"{_provider_label(provider)} 转写失败：{exc}") from exc
 
 
 def transcribe_audio_with_provider(
@@ -524,9 +528,9 @@ def _build_volcengine_flash_payload(audio_path: Path) -> dict:
 
 def _ensure_volcengine_configured() -> None:
     if not settings.volcengine_asr_api_key and not settings.volcengine_asr_app_key:
-        raise RuntimeError("缺少火山引擎转写密钥，请在 .env 中填写 VOLCENGINE_ASR_API_KEY")
+        raise RuntimeError("缺少火山引擎转写密钥，请在系统状态页的“1. 音频转写”填写 API Key")
     if not settings.volcengine_asr_resource_id:
-        raise RuntimeError("缺少火山引擎资源 ID，请在 .env 中填写 VOLCENGINE_ASR_RESOURCE_ID")
+        raise RuntimeError("缺少火山引擎资源 ID，请在系统状态页的“1. 音频转写”填写资源 ID")
 
 
 def _volcengine_headers() -> dict[str, str]:
@@ -846,8 +850,8 @@ def _set_active_transcription_runtime(
     _ACTIVE_TRANSCRIPTION_COMPUTE_TYPE = compute_type
 
 
-def _set_configured_transcription_runtime() -> None:
-    provider = _normalize_provider_name(settings.transcription_provider)
+def _set_configured_transcription_runtime(provider: str | None = None) -> None:
+    provider = _normalize_provider_name(provider or settings.transcription_provider)
     if provider == "volcengine":
         _set_active_transcription_runtime(
             provider="volcengine",
@@ -923,12 +927,7 @@ def build_transcript_markdown(
 ) -> str:
     source_path = task.get("source")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    minute_rows = build_minute_rows(segments)
 
-    minute_table = "\n".join(
-        f"| {format_seconds(start)} | {format_seconds(end)} | {escape_markdown_table_text(text)} |"
-        for start, end, text in minute_rows
-    )
     segment_table = "\n".join(
         "| "
         f"{format_seconds(segment.start_seconds)} | "
@@ -950,33 +949,12 @@ def build_transcript_markdown(
 - 转写语言：`{settings.transcription_language or "auto"}`
 - 转写设备：`{_transcription_runtime_label()}`
 
-## 分钟级转写
-
-| 开始 | 结束 | 文本 |
-| --- | --- | --- |
-{minute_table}
-
 ## 逐句时间戳原文
 
 | 开始 | 结束 | 文本 |
 | --- | --- | --- |
 {segment_table}
 """
-
-
-def build_minute_rows(segments: list[TranscriptSegment]) -> list[tuple[float, float, str]]:
-    grouped: dict[int, list[str]] = {}
-    for segment in segments:
-        minute_index = max(0, int(segment.start_seconds // 60))
-        grouped.setdefault(minute_index, []).append(segment.text)
-
-    rows = []
-    for minute_index in sorted(grouped):
-        start = minute_index * 60
-        end = start + 60
-        text = normalize_transcript_text(" ".join(grouped[minute_index]))
-        rows.append((start, end, text))
-    return rows
 
 
 def normalize_transcript_text(text: str) -> str:
@@ -999,6 +977,9 @@ def read_transcript_preview(transcript_path: Path, max_lines: int = 8) -> list[d
         return []
 
     lines = transcript_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    sentence_lines = _extract_sentence_section_lines(lines)
+    if sentence_lines:
+        lines = sentence_lines
     preview = []
     for line in lines:
         stripped = line.strip()
@@ -1031,6 +1012,21 @@ def read_transcript_preview(transcript_path: Path, max_lines: int = 8) -> list[d
         if len(preview) >= max_lines:
             break
     return preview
+
+
+def _extract_sentence_section_lines(lines: list[str]) -> list[str]:
+    section_lines: list[str] = []
+    in_sentence_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if in_sentence_section:
+                break
+            in_sentence_section = "逐句时间戳原文" in stripped
+            continue
+        if in_sentence_section:
+            section_lines.append(line)
+    return section_lines
 
 
 def _time_text_to_seconds(value: str) -> int:

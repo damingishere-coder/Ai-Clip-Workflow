@@ -50,6 +50,17 @@ WORKFLOW_STEPS = [
     "自动切割",
     "输出完成",
 ]
+
+WINDOWS_FONTS_DIR = Path("C:/Windows/Fonts")
+SUBTITLE_FONT_FILE_CANDIDATES = {
+    "Microsoft YaHei": ("msyh.ttc", "msyhbd.ttc", "msyhl.ttc"),
+    "SimHei": ("simhei.ttf",),
+    "Noto Sans SC": ("NotoSansSC-VF.ttf",),
+    "Source Han Sans CN": ("SourceHanSansCN-Regular.otf", "SourceHanSansCN-Normal.otf", "SourceHanSansCN-Medium.otf"),
+    "SimSun": ("simsun.ttc",),
+    "DengXian": ("Deng.ttf",),
+}
+SUBTITLE_CJK_FONT_FALLBACKS = ("Microsoft YaHei", "SimHei", "Noto Sans SC", "Source Han Sans CN", "SimSun", "DengXian")
 AI_CLIP_MIN_RECOMMENDED_SECONDS = 45
 
 STATUS_LABELS = {
@@ -112,6 +123,7 @@ _CANCEL_TRANSCRIPT_TASKS: set[str] = set()
 class TranscriptCancelledError(RuntimeError):
     pass
 _TRANSCRIPT_STALE_AFTER = timedelta(minutes=10)
+_DEFAULT_REMOTE_TRANSCRIPTION_PROVIDER = "volcengine"
 
 
 def get_workflow_steps() -> list[str]:
@@ -203,6 +215,29 @@ def _is_transcript_progress_stale(progress: dict) -> bool:
     if not updated_at:
         return False
     return datetime.now().astimezone() - updated_at > _TRANSCRIPT_STALE_AFTER
+
+
+def _resolve_transcription_provider_choice(provider: str | None = None) -> str:
+    choice = (provider or "remote").strip().lower()
+    if choice == "local":
+        return "local"
+    configured_provider = (settings.transcription_provider or "").strip().lower()
+    if configured_provider and configured_provider != "local":
+        return configured_provider
+    return _DEFAULT_REMOTE_TRANSCRIPTION_PROVIDER
+
+
+def _transcription_choice_label(provider: str) -> str:
+    if provider == "local":
+        return "本地 faster-whisper"
+    if provider == "volcengine":
+        return "火山引擎远程转写"
+    return provider or "远程转写"
+
+
+def _can_retry_transcript_with_local(progress: dict, transcript_exists: bool) -> bool:
+    provider = str(progress.get("provider") or "").strip().lower()
+    return not transcript_exists and progress.get("status") == "failed" and provider != "local"
 
 
 def _finalize_cancelled_transcript_task(task_id: str, paths: dict[str, Path], progress: dict) -> dict:
@@ -466,8 +501,8 @@ def _ai_model_name(provider_name: str) -> str:
     if provider_name == "local":
         return settings.ai_local_model
     if provider_name == "remote":
-        return settings.ai_remote_review_model or settings.ai_remote_model
-    return settings.ai_remote_model
+        return settings.ai_analysis_remote_model
+    return settings.ai_analysis_remote_model
 
 
 def _ai_provider_label(provider_name: str) -> str:
@@ -1138,6 +1173,21 @@ def _escape_ass_text(text: str) -> str:
     return (text or "").replace("\\", "\\\\").replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
 
 
+def _subtitle_font_exists(font_family: str) -> bool:
+    candidates = SUBTITLE_FONT_FILE_CANDIDATES.get(font_family, ())
+    return any((WINDOWS_FONTS_DIR / file_name).exists() for file_name in candidates)
+
+
+def _resolve_subtitle_font_family(requested_font_family: str | None) -> str:
+    font_family = (requested_font_family or "").strip()
+    if font_family and _subtitle_font_exists(font_family):
+        return font_family
+    for fallback_font_family in SUBTITLE_CJK_FONT_FALLBACKS:
+        if _subtitle_font_exists(fallback_font_family):
+            return fallback_font_family
+    return font_family or "Microsoft YaHei"
+
+
 def _build_subtitle_rows(task_id: str, output_clip: dict) -> tuple[int, list[dict[str, Any]]]:
     clip = get_clip_candidate(task_id, output_clip["clip_candidate_id"]) if output_clip.get("clip_candidate_id") else None
     if not clip:
@@ -1172,7 +1222,7 @@ def _write_ass_file(task_id: str, output_clip: dict, style: dict) -> Path:
         margin_v = "70"
     outline = "3" if style.get("shadow_enabled") else "1"
     shadow = "1" if style.get("shadow_enabled") else "0"
-    font_family = style.get("font_family") or "Microsoft YaHei"
+    font_family = _resolve_subtitle_font_family(style.get("font_family"))
     font_size = int(style.get("font_size") or 42)
     primary_color = _hex_to_ass_color(style.get("font_color") or "#ffffff")
     outline_color = _hex_to_ass_color(style.get("stroke_color") or "#111827")
@@ -1203,6 +1253,13 @@ def _ffmpeg_filter_path(path: Path) -> str:
     return normalized.replace(":", r"\:").replace("'", r"\'")
 
 
+def _ffmpeg_subtitles_filter(subtitle_path: Path) -> str:
+    filter_parts = [f"filename='{_ffmpeg_filter_path(subtitle_path)}'"]
+    if WINDOWS_FONTS_DIR.exists():
+        filter_parts.append(f"fontsdir='{_ffmpeg_filter_path(WINDOWS_FONTS_DIR)}'")
+    return f"subtitles={':'.join(filter_parts)}"
+
+
 def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
     task = get_task(task_id, include_video_probe=False)
     if not task:
@@ -1231,7 +1288,7 @@ def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
             "-i",
             str(input_path),
             "-vf",
-            f"subtitles='{_ffmpeg_filter_path(subtitle_path)}'",
+            _ffmpeg_subtitles_filter(subtitle_path),
             "-c:a",
             "copy",
             str(output_path),
@@ -1286,17 +1343,19 @@ def get_task_transcript_status(task_id: str) -> dict:
             "message": "转写进度长时间没有更新，可能已经卡住。请重新点击“生成转写 MD”。",
         }
 
+    transcript_exists = paths["transcript_path"].exists()
     return {
         "task_id": task_id,
         "task_status": task.get("status"),
         "task_status_label": task.get("status_label"),
         "task_progress": task.get("progress"),
-        "transcript_exists": paths["transcript_path"].exists(),
+        "transcript_exists": transcript_exists,
         "progress": progress,
         "progress_age_seconds": age_seconds,
         "is_stale": is_stale,
         "preview": read_transcript_preview(paths["transcript_path"]),
         "error_message": task.get("error_message") or "",
+        "local_retry_available": _can_retry_transcript_with_local(progress, transcript_exists),
     }
 
 
@@ -1329,9 +1388,9 @@ def get_task_ai_analysis_status(task_id: str) -> dict:
         if any("将使用分段分析" in line for line in log_lines):
             percent = 62
             message = "AI 已读取 Prompt 和转写文本，正在分段生成候选片段。"
-        if any("远程 AI 不可用" in line for line in log_lines):
+        if any("远程 AI 分析接口不可用" in line for line in log_lines):
             percent = 72
-            message = "远程 AI 暂不可用，系统正在尝试本地 AI。"
+            message = "远程 AI 分析接口暂不可用，已暂停等待你确认下一步。"
     elif task.get("status") == TaskStatus.pending_review.value and has_analysis:
         status = "completed"
         percent = 100
@@ -1699,7 +1758,11 @@ def process_task_audio(task_id: str) -> dict:
     return {**result, "task": get_task(task_id)}
 
 
-def process_task_transcript(task_id: str, background_tasks: Any | None = None) -> dict:
+def process_task_transcript(
+    task_id: str,
+    background_tasks: Any | None = None,
+    provider: str | None = None,
+) -> dict:
     task = get_task(task_id)
     if not task:
         raise ValueError("任务不存在")
@@ -1721,6 +1784,8 @@ def process_task_transcript(task_id: str, background_tasks: Any | None = None) -
         _RUNNING_TRANSCRIPT_TASKS.discard(task_id)
         _append_task_log(task_id, "发现过期的后台转写状态，准备重新开始转写")
 
+    provider_name = _resolve_transcription_provider_choice(provider)
+    provider_label = _transcription_choice_label(provider_name)
     removed_dirs = cleanup_transcript_chunk_dirs(paths["transcript_path"])
     if removed_dirs:
         _append_task_log(task_id, f"已清理旧的转写临时目录：{removed_dirs} 个")
@@ -1731,18 +1796,20 @@ def process_task_transcript(task_id: str, background_tasks: Any | None = None) -
         current_chunk=0,
         total_chunks=0,
         percent=1,
-        message="后台分段转写已启动，正在准备环境",
+        message=f"后台分段转写已启动，正在准备{provider_label}环境",
     )
-    _append_task_log(task_id, "开始后台分段语音转写")
+    _append_task_log(task_id, f"开始后台分段语音转写，Provider：{provider_name}")
     _CANCEL_TRANSCRIPT_TASKS.discard(task_id)
     _RUNNING_TRANSCRIPT_TASKS.add(task_id)
     if background_tasks is not None:
-        background_tasks.add_task(_run_task_transcript_background, task_id)
+        background_tasks.add_task(_run_task_transcript_background, task_id, provider_name)
     else:
-        _run_task_transcript_background(task_id)
+        _run_task_transcript_background(task_id, provider_name)
     return {
         "status": "started",
-        "message": "已开始后台分段转写，请稍后刷新查看进度。",
+        "message": f"已开始{provider_label}分段转写，请稍后刷新查看进度。",
+        "provider": provider_name,
+        "provider_label": provider_label,
         "task": get_task(task_id),
     }
 
@@ -1788,6 +1855,7 @@ def process_task_transcript_workflow(
     task_id: str,
     background_tasks: Any | None = None,
     force: bool = False,
+    provider: str | None = None,
 ) -> dict:
     task = get_task(task_id)
     if not task:
@@ -1808,15 +1876,17 @@ def process_task_transcript_workflow(
     if force:
         _append_task_log(task_id, "用户明确要求重新生成转写 Markdown")
 
-    return process_task_transcript(task_id, background_tasks=background_tasks)
+    return process_task_transcript(task_id, background_tasks=background_tasks, provider=provider)
 
 
-def _run_task_transcript_background(task_id: str) -> None:
+def _run_task_transcript_background(task_id: str, provider: str | None = None) -> None:
     task = get_task(task_id)
     if not task:
         _RUNNING_TRANSCRIPT_TASKS.discard(task_id)
         return
     paths = get_artifact_paths(task_id)
+    provider_name = _resolve_transcription_provider_choice(provider)
+    provider_label = _transcription_choice_label(provider_name)
 
     def progress_callback(progress: dict) -> None:
         if task_id in _CANCEL_TRANSCRIPT_TASKS:
@@ -1838,6 +1908,7 @@ def _run_task_transcript_background(task_id: str) -> None:
             paths["audio_path"],
             paths["transcript_path"],
             progress_callback=progress_callback,
+            provider=provider_name,
         )
     except TranscriptCancelledError as exc:
         last_progress = read_transcript_progress(paths["transcript_path"])
@@ -1855,16 +1926,20 @@ def _run_task_transcript_background(task_id: str) -> None:
     except Exception as exc:
         error = str(exc)
         last_progress = read_transcript_progress(paths["transcript_path"])
+        if provider_name == "local":
+            user_message = f"本地转写失败：{error}"
+        else:
+            user_message = f"{provider_label}不可用，已暂停转写：{error}。如需改用本地模型，请点击“改用本地模型转写”。"
         write_transcript_progress(
             paths["transcript_path"],
             status="failed",
             current_chunk=int(last_progress.get("current_chunk") or 0),
             total_chunks=int(last_progress.get("total_chunks") or 0),
             percent=int(last_progress.get("percent") or 0),
-            message=f"分段转写失败：{error}",
+            message=user_message,
         )
-        update_task_status(task_id, TaskStatus.failed, error)
-        _append_task_log(task_id, f"转写失败：{error}")
+        update_task_status(task_id, TaskStatus.failed, user_message)
+        _append_task_log(task_id, f"转写失败：{user_message}")
         return
     finally:
         _RUNNING_TRANSCRIPT_TASKS.discard(task_id)
@@ -2209,33 +2284,6 @@ def _analyze_with_provider(task_id: str, task: dict, paths: dict[str, Path], pro
     return analyze_task_transcript(request)
 
 
-def _should_fallback_to_local_ai(error: str) -> bool:
-    lowered = error.lower()
-    markers = (
-        "http 403",
-        "error code: 1010",
-        "unauthorized",
-        "forbidden",
-        "api key",
-        "openai_api_key",
-        "ai_remote_api_key",
-        "key 看起来无效",
-        "密钥",
-        "quota",
-        "balance",
-        "timeout",
-        "timed out",
-        "无法连接",
-        "连接超时",
-        "权限",
-        "余额",
-        "费用",
-        "网络",
-    )
-    return any(marker in lowered for marker in markers)
-
-
-
 def _append_ai_clip_quality_warnings(task_id: str, clips: list[dict]) -> None:
     short_clips = []
     for clip in clips:
@@ -2283,20 +2331,14 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
     try:
         try:
             analysis = _analyze_with_provider(task_id, task, paths, provider_name)
-        except Exception as remote_exc:
-            remote_error = str(remote_exc)
-            if provider_name == "remote" and _should_fallback_to_local_ai(remote_error):
-                _append_task_log(task_id, f"远程 AI 不可用，准备自动降级到本地 AI：{remote_error}")
-                try:
-                    analysis = _analyze_with_provider(task_id, task, paths, "local")
-                    used_provider = "local"
-                    fallback_notice = f"远程 AI 不可用，已自动改用本地 AI。远程错误：{remote_error}"
-                except Exception as local_exc:
-                    raise AIAnalysisError(
-                        f"远程 AI 和本地 AI 都失败。远程错误：{remote_error}；本地错误：{local_exc}"
-                    ) from local_exc
-            else:
-                raise
+        except Exception as provider_exc:
+            provider_error = str(provider_exc)
+            if provider_name == "remote":
+                raise AIAnalysisError(
+                    "远程 AI 分析接口不可用，已暂停 AI 分析："
+                    f"{provider_error}。如需使用本地模型，请点击“本地 AI 分析”。"
+                ) from provider_exc
+            raise
         analysis_payload = result_to_jsonable(analysis)
         analysis_payload["analysis_meta"] = {
             "provider": used_provider,

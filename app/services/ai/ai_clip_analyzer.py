@@ -170,21 +170,7 @@ def _analyze_task_transcript_in_local_chunks(
 def build_provider(provider_name: str | None = None) -> AIProvider:
     resolved = (provider_name or settings.ai_default_provider).lower()
     if resolved == "remote":
-        remote_model = settings.ai_remote_review_model or settings.ai_remote_model
-        if settings.ai_remote_model.startswith("deepseek") and not remote_model.startswith("deepseek"):
-            remote_model = settings.ai_remote_model
-        return RemoteResponsesProvider(
-            ProviderConfig(
-                base_url=settings.ai_remote_base_url,
-                api_key=settings.ai_remote_api_key,
-                model=remote_model,
-                protocol=settings.ai_remote_protocol,
-                timeout_seconds=settings.ai_request_timeout_seconds,
-                responses_path=settings.ai_remote_responses_path,
-                reasoning_effort=settings.ai_remote_reasoning_effort,
-                disable_response_storage=settings.ai_remote_disable_response_storage.lower() == "true",
-            )
-        )
+        return build_remote_provider(settings.ai_analysis_remote_model)
     if resolved == "local":
         return LocalModelProvider(
             ProviderConfig(
@@ -199,15 +185,66 @@ def build_provider(provider_name: str | None = None) -> AIProvider:
     raise AIAnalysisError("AI provider 只能是 remote 或 local")
 
 
+def build_remote_provider(model: str | None = None, purpose: str = "analysis") -> AIProvider:
+    if purpose == "publish":
+        return RemoteResponsesProvider(
+            ProviderConfig(
+                base_url=settings.ai_publish_remote_base_url,
+                api_key=settings.ai_publish_remote_api_key,
+                model=(model or settings.ai_publish_remote_model or "deepseek-v4-flash"),
+                protocol=settings.ai_publish_remote_protocol,
+                timeout_seconds=settings.ai_publish_request_timeout_seconds,
+                responses_path=settings.ai_publish_remote_responses_path,
+                reasoning_effort=settings.ai_publish_remote_reasoning_effort,
+                disable_response_storage=settings.ai_publish_remote_disable_response_storage.lower() == "true",
+                api_key_name="AI_PUBLISH_REMOTE_API_KEY",
+            )
+        )
+    return RemoteResponsesProvider(
+        ProviderConfig(
+            base_url=settings.ai_analysis_remote_base_url,
+            api_key=settings.ai_analysis_remote_api_key,
+            model=(model or settings.ai_analysis_remote_model or "deepseek-v4-flash"),
+            protocol=settings.ai_analysis_remote_protocol,
+            timeout_seconds=settings.ai_analysis_request_timeout_seconds,
+            responses_path=settings.ai_analysis_remote_responses_path,
+            reasoning_effort=settings.ai_analysis_remote_reasoning_effort,
+            disable_response_storage=settings.ai_analysis_remote_disable_response_storage.lower() == "true",
+            api_key_name="AI_ANALYSIS_REMOTE_API_KEY",
+        )
+    )
+
+
 def _read_transcript(transcript_path: Path) -> str:
     if not transcript_path.exists():
         raise AIAnalysisError("未找到转写文本，请先生成转写 Markdown")
     transcript_text = transcript_path.read_text(encoding="utf-8", errors="replace").strip()
     if not transcript_text:
         raise AIAnalysisError("转写文本为空，无法进行 AI 分析")
+    sentence_text = _extract_sentence_transcript_section(transcript_text)
+    if sentence_text:
+        transcript_text = sentence_text
     if not _TIME_PATTERN.search(transcript_text):
         raise AIAnalysisError("转写文本里没有可识别时间戳，请先生成带时间戳的转写文本")
     return transcript_text
+
+
+def _extract_sentence_transcript_section(transcript_text: str) -> str:
+    lines = transcript_text.splitlines()
+    section_lines: list[str] = []
+    in_sentence_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if in_sentence_section:
+                break
+            in_sentence_section = "逐句时间戳原文" in stripped
+            if in_sentence_section:
+                section_lines.append(stripped)
+            continue
+        if in_sentence_section:
+            section_lines.append(line)
+    return "\n".join(section_lines).strip()
 
 
 def _render_prompt(
@@ -436,6 +473,7 @@ def _normalize_ai_clip_item(clip: dict[str, Any], index: int) -> dict[str, Any]:
         item["suggested_editing"] = "保留片段核心内容，剪掉明显停顿和无关转场。"
     if not _has_text(item.get("confidence_score")):
         item["confidence_score"] = 0.7
+    item["confidence_score"] = _normalize_confidence_score(item.get("confidence_score"))
 
     duration_seconds = _duration_seconds_from_clip(item)
     if duration_seconds is not None:
@@ -472,6 +510,21 @@ def _has_text(value: Any) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
     return isinstance(value, (int, float, bool))
+
+
+def _normalize_confidence_score(value: Any) -> float:
+    try:
+        score = float(str(value).strip().rstrip("%"))
+    except (TypeError, ValueError):
+        return 0.7
+
+    if math.isnan(score) or math.isinf(score):
+        return 0.7
+    if 1 < score <= 10:
+        score = score / 10
+    elif 10 < score <= 100:
+        score = score / 100
+    return min(1, max(0, score))
 
 
 def _limit_text(value: Any, max_length: int) -> str:
@@ -782,6 +835,7 @@ __all__ = [
     "AnalysisRequest",
     "analyze_task_transcript",
     "build_provider",
+    "build_remote_provider",
     "inspect_local_analysis_plan",
     "result_to_jsonable",
 ]

@@ -18,7 +18,7 @@ class RemoteResponsesProvider:
 
     def generate_json(self, prompt: str, retry_instruction: str | None = None) -> str:
         if not self.config.api_key:
-            raise AIProviderError("缺少 AI_REMOTE_API_KEY 或 OPENAI_API_KEY，请先在 .env 中填写远程中转站密钥")
+            raise AIProviderError(f"缺少 {self.config.api_key_name}，请先在系统状态页填写对应远程接口密钥")
         if self.config.protocol == "responses":
             return self._responses(prompt, retry_instruction)
         if self.config.protocol == "chat_completions":
@@ -49,13 +49,16 @@ class RemoteResponsesProvider:
         payload = {
             "model": self.config.model,
             "messages": [
-                {"role": "system", "content": "你只输出严格 JSON，不输出 Markdown。"},
+                {"role": "system", "content": "你只输出严格 JSON，不输出 Markdown，不输出推理过程。"},
                 {"role": "user", "content": _merge_prompt(prompt, retry_instruction)},
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.2,
             "max_tokens": 8192,
         }
+        thinking = _deepseek_thinking_payload(self.config.base_url, self.config.reasoning_effort)
+        if thinking:
+            payload["thinking"] = thinking
         response = post_json(
             build_url(self.config.base_url, _chat_completions_path(self.config.base_url)),
             payload,
@@ -73,6 +76,14 @@ def _merge_prompt(prompt: str, retry_instruction: str | None) -> str:
 
 def _is_deepseek_endpoint(base_url: str) -> bool:
     return "deepseek" in (base_url or "").lower()
+
+
+def _deepseek_thinking_payload(base_url: str, reasoning_effort: str | None) -> dict[str, str] | None:
+    if not _is_deepseek_endpoint(base_url):
+        return None
+    if reasoning_effort:
+        return {"type": "enabled", "reasoning_effort": reasoning_effort}
+    return {"type": "disabled"}
 
 
 def _chat_completions_path(base_url: str) -> str:
