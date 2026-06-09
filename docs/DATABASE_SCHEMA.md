@@ -1,10 +1,11 @@
-﻿# 鏁版嵁搴撶粨鏋勮鏄?
+# 数据库结构说明
+
 ## 2026-05-27：任务目录改为项目名
 
-- `tasks` 表新增 `task_dir_name` 字段，用来记录任务在 E 盘里的实际文件夹名。
-- `id` 仍是任务唯一 ID，用于数据库关联和网页地址；本地文件夹不再默认使用短 ID，而是使用项目名。
+- `tasks` 表新增 `task_dir_name` 字段，用来记录任务在存储盘里的实际文件夹名。
+- `id` 仍是任务唯一 ID，用于数据库关联和网页地址；本地文件夹不再默认使用短 ID，而是使用 `task_dir_name`。
 - 新建任务时会根据 `task_name` 生成安全的 Windows 文件夹名；重名时自动追加序号，避免覆盖旧目录。
-- `DELETE /api/tasks/{task_id}` 现在会把 `is_deleted` 设为 `1`，写入 `deleted_at`，并把任务文件夹移动到 `E:\直播间切片工作流存储\_回收站`；不会删除文件。
+- `DELETE /api/tasks/{task_id}` 现在会把 `is_deleted` 设为 `1`，写入 `deleted_at`，并把任务文件夹移动到存储根目录下的 `_回收站`；不会删除文件。
 - 一次性迁移脚本为 `scripts/migrate_task_dirs_to_project_names.py`，默认 dry-run，带 `--apply` 才会移动文件夹并更新路径字段。
 
 ## 2026-05-25：发布后台新增表
@@ -48,13 +49,13 @@
 | `output_clip_id` | TEXT | 所属输出切片 ID |
 | `account_id` | TEXT | 发布账号 ID |
 | `platform` | TEXT | 发布平台 |
-| `publish_mode` | TEXT | `draft`、`manual_review` 或 `api_publish` |
+| `publish_mode` | TEXT | `draft`、`manual_review`、`api_publish` 或 `opencli_publish` |
 | `video_source` | TEXT | `original` 或 `subtitled` |
 | `video_file_path` | TEXT | 本次发布使用的视频路径 |
 | `title` | TEXT | 标题 |
 | `description` | TEXT | 简介 / 正文 |
 | `tags` | TEXT | 标签 |
-| `status` | TEXT | 草稿、待人工发布、发布中、已发布、失败、取消 |
+| `status` | TEXT | `ready` / `publishing` / `published` / `failed` / `cancelled` |
 | `audit_status` | TEXT | 平台审核状态 |
 | `platform_item_id` | TEXT | 平台稿件 / 视频 ID |
 | `platform_upload_id` | TEXT | 平台上传 ID |
@@ -62,11 +63,12 @@
 | `error_message` | TEXT | 错误说明 |
 | `provider_response` | TEXT | 平台响应摘要 JSON |
 | `retry_count` | INTEGER | 重试次数 |
+| `scheduled_at` | TEXT | 计划发布时间（v1.2 仅字段预留，尚无后台定时调度器） |
 
 ## 2026-05-23：AI Prompt 方案
 
 - `tasks` 表新增 `ai_prompt_preset_id`，记录当前任务使用哪一套 AI 分析 Prompt。
-- 新增 `ai_prompt_presets` 表，用于保存全局共用的 1、2、3 号 Prompt 方案；2 号方案为空时会自动写入“综艺访谈完整上下文专家”Prompt，若 2 号已有内容且 3 号为空，则写入 3 号以避免覆盖已有 Prompt。
+- 新增 `ai_prompt_presets` 表，用于保存全局共用的 1、2、3 号 Prompt 方案；2 号方案为空时会自动写入"综艺访谈完整上下文专家"Prompt，若 2 号已有内容且 3 号为空，则写入 3 号以避免覆盖已有 Prompt。
 - 新增 `ai_analysis_runs` 表，用于保存每一次 AI 分析历史，支持刷新后继续展示分析预览和恢复旧分析结果。
 
 ### ai_prompt_presets 表
@@ -99,119 +101,186 @@
 | `fallback_notice` | TEXT | 远程降级本地等提示 |
 | `analysis_payload_json` | TEXT | 完整 AI 分析结果 JSON |
 | `created_at` | TEXT | 创建时间 |
-褰撳墠鏁版嵁搴撲娇鐢?SQLite锛屾暟鎹簱鏂囦欢榛樿浣嶄簬锛?
+
+## 存储与数据库位置
+
+当前数据库使用 SQLite，数据库文件默认位于项目目录：
+
 ```text
 data/workflow.sqlite3
 ```
 
-澶у瀷瑙嗛銆侀煶棰戙€佽浆鍐?Markdown 鍜屽悗缁緭鍑烘枃浠朵笉鏀捐繘鏁版嵁搴擄紝缁熶竴鏀惧湪锛?
-```text
-E:\鐩存挱闂村垏鐗囧伐浣滄祦瀛樺偍\{task_id}\
-```
+大型视频、音频、转写 Markdown 和后续输出文件不放进数据库，统一放在存储根目录下的任务目录中。存储根目录由 `STORAGE_ROOT` 或 `TASKS_DIR` 环境变量配置，默认值为 `E:\直播间切片工作流存储`。
 
-## tasks 琛?
-`tasks` 琛ㄧ敤浜庝繚瀛樼洿鎾棰戝鐞嗕换鍔＄殑鍩虹淇℃伅鍜岀姸鎬併€?
-| 瀛楁 | 绫诲瀷 | 璇存槑 |
-| --- | --- | --- |
-| `id` | TEXT | 浠诲姟鍞竴 ID锛屽垱寤烘椂鑷姩鐢熸垚 |
-| `task_name` | TEXT | 浠诲姟鍚嶇О |
-| `task_dir_name` | TEXT | E 盘实际任务文件夹名；正常任务通常等于项目名，已移入回收站的任务为 `_回收站\项目名` |
-| `source_type` | TEXT | 瑙嗛鏉ユ簮锛歚upload` 鎴?`nas` |
-| `platform` | TEXT | 骞冲彴绫诲瀷锛歚douyin`銆乣bilibili`銆乣general` |
-| `original_video_path` | TEXT | 鏈湴涓婁紶瑙嗛璺緞锛屽悗缁帴鐪熷疄涓婁紶鍚庡啓鍏?|
-| `nas_file_path` | TEXT | NAS / 鏈湴宸叉湁瑙嗛璺緞 |
-| `max_clip_duration` | INTEGER | 单条切片最长时长，单位：分钟；新建任务默认建议为 5 分钟 |
-| `candidate_clip_count` | INTEGER | 甯屾湜 AI 杈撳嚭鐨勫€欓€夌墖娈垫暟閲?|
-| `ai_preference` | TEXT | AI 鐗囨閫夋嫨鍋忓ソ |
-| `status` | TEXT | 褰撳墠浠诲姟鐘舵€?|
-| `progress` | INTEGER | 褰撳墠杩涘害鐧惧垎姣旓紝鍚庣画娴佹按绾挎帹杩涙椂鏇存柊 |
-| `error_message` | TEXT | 寮傚父淇℃伅 |
-| `is_deleted` | INTEGER | 鏄惁宸蹭粠椤甸潰鍒楄〃闅愯棌锛宍1` 琛ㄧず闅愯棌锛屾枃浠朵笉浼氳鍒犻櫎 |
-| `deleted_at` | TEXT | 闅愯棌鏃堕棿锛孖SO 鏍煎紡 |
-| `created_at` | TEXT | 鍒涘缓鏃堕棿锛孖SO 鏍煎紡 |
-| `updated_at` | TEXT | 鏇存柊鏃堕棿锛孖SO 鏍煎紡 |
+任务产物路径由 `task_dir_name` 决定；`task_id` 只作为数据库关联、URL 和内部唯一 ID 使用，不再直接决定文件夹名。
 
-## 浠诲姟鐘舵€佸€?
-`status` 浣跨敤鑻辨枃鐘舵€佺爜淇濆瓨锛岄〉闈㈠睍绀烘椂鍐嶈浆鎹㈡垚涓枃銆?
-| 鐘舵€佺爜 | 涓枃灞曠ず |
-| --- | --- |
-| `pending_video` | 寰呮彁浜よ棰?|
-| `pending_processing` | 寰呭鐞?|
-| `audio_extracting` | 闊抽鎻愬彇涓?|
-| `transcribing` | 杞啓涓?|
-| `pending_ai` | 寰?AI 鍒嗘瀽 |
-| `ai_analyzing` | AI 鍒嗘瀽涓?|
-| `pending_review` | 寰呬汉宸ュ鏍?|
-| `cutting` | 鍒囧壊涓?|
-| `completed` | 宸插畬鎴?|
-| `completed_with_errors` | 閮ㄥ垎瀹屾垚锛岃嚦灏戞湁涓€涓垏鐗囨垚鍔燂紝浣嗕篃鏈夊垏鐗囧け璐?|
-| `failed` | 澶辫触 |
+## tasks 表
 
-## output_clip 琛?
-`output_clip` 琛ㄧ敤浜庝繚瀛樻瘡涓€鏉℃渶缁堝垏鐗囪緭鍑虹粨鏋溿€傝棰戞枃浠舵湰韬粛淇濆瓨鍦ㄤ换鍔＄洰褰曢噷锛屾暟鎹簱鍙繚瀛樿矾寰勩€佺姸鎬佸拰閿欒淇℃伅銆?
-| 瀛楁 | 绫诲瀷 | 璇存槑 |
-| --- | --- | --- |
-| `id` | TEXT | 杈撳嚭璁板綍鍞竴 ID |
-| `task_id` | TEXT | 鎵€灞炰换鍔?ID |
-| `clip_candidate_id` | TEXT | 鏉ユ簮鍊欓€夌墖娈?ID |
-| `output_file_path` | TEXT | 杈撳嚭瑙嗛瀹屾暣璺緞 |
-| `output_file_name` | TEXT | 杈撳嚭瑙嗛鏂囦欢鍚?|
-| `status` | TEXT | 杈撳嚭鐘舵€侊細`pending`銆乣processing`銆乣completed`銆乣failed` |
-| `error_message` | TEXT | 鍗曟潯鍒囩墖澶辫触鍘熷洜 |
-| `created_at` | TEXT | 鍒涘缓鏃堕棿锛孖SO 鏍煎紡 |
-| `updated_at` | TEXT | 鏇存柊鏃堕棿锛孖SO 鏍煎紡 |
-
-## 鍏煎璇存槑
-
-鏃╂湡椤圭洰楠ㄦ灦鏇句娇鐢ㄨ繃 `title`銆乣source_path`銆乣max_clip_minutes`銆乣target_clip_count` 绛夎崏妗堝瓧娈点€傚綋鍓嶅垵濮嬪寲閫昏緫浼氳嚜鍔ㄨˉ榻愭柊瀛楁锛屽苟鎶婃棫瀛楁鏁版嵁杩佺Щ鍒板綋鍓嶅瓧娈典腑銆?
-涓轰簡涓嶇牬鍧忓凡鏈夋湰鍦版暟鎹簱锛屾棫瀛楁涓嶄細琚己鍒跺垹闄ゃ€傚悗缁唬鐮佷互鏈枃浠跺垪鍑虹殑褰撳墠瀛楁涓哄噯銆?
-任务移入回收站采用软删除方式：`DELETE /api/tasks/{task_id}` 会把 `is_deleted` 改为 `1`、写入 `deleted_at`，并把该任务的 E 盘目录移动到 `_回收站`。工作台、任务列表和片段审核总览默认不显示已移入回收站的任务，原视频、音频、转写、AI 分析文件、切片输出和字幕输出都会保留。
-`clip_candidates.reason` 鏄棭鏈熸帹鑽愮悊鐢卞瓧娈碉紝褰撳墠瀹℃牳椤典紭鍏堣鍙?`highlight_reason`銆傛暟鎹簱鍒濆鍖栨椂浼氭妸宸叉湁 `reason` 鑷姩琛ュ埌 `highlight_reason`銆?
-## clip_candidates 琛?
-`clip_candidates` 琛ㄧ敤浜庝繚瀛?AI 鍒嗘瀽鐢熸垚銆佺瓑寰呬汉宸ュ鏍哥殑鍊欓€夌煭瑙嗛鐗囨锛屼篃淇濆瓨浜哄伐瀹℃牳椤靛啓鍥炵殑缂栬緫缁撴灉銆?
-| 瀛楁 | 绫诲瀷 | 璇存槑 |
-| --- | --- | --- |
-| `id` | TEXT | 鍊欓€夌墖娈垫暟鎹簱 ID |
-| `task_id` | TEXT | 鎵€灞炰换鍔?ID |
-| `clip_key` | TEXT | AI 杩斿洖鐨勭墖娈?key锛屼緥濡?`clip_001` |
-| `title` | TEXT | 鐗囨鏍囬锛屽彲鍦ㄥ鏍搁〉浜哄伐淇敼 |
-| `start_time` | TEXT | 寮€濮嬫椂闂达紝淇濆瓨涓?`HH:MM:SS` |
-| `end_time` | TEXT | 缁撴潫鏃堕棿锛屼繚瀛樹负 `HH:MM:SS` |
-| `duration_seconds` | INTEGER | 鐗囨鏃堕暱锛屽崟浣嶇锛屼繚瀛樺鏍镐慨鏀规椂鑷姩閲嶇畻 |
-| `summary` | TEXT | 鐗囨鎽樿锛屽彲鍦ㄥ鏍搁〉浜哄伐淇敼 |
-| `reason` | TEXT | 鍏煎鏃у瓧娈碉紝褰撳墠涓庢帹鑽愮悊鐢变繚鎸佷竴鑷?|
-| `highlight_reason` | TEXT | AI 鎺ㄨ崘鐞嗙敱 |
-| `spread_value` | TEXT | 浼犳挱浠峰€?|
-| `suggested_editing` | TEXT | 鍓緫寤鸿 |
-| `confidence_score` | REAL | AI 缃俊搴︼紝鑼冨洿 0 鍒?1 |
-| `selected_by_default` | INTEGER | AI 鏄惁寤鸿榛樿鍚敤 |
-| `enabled` | INTEGER | 浜哄伐瀹℃牳鏃舵槸鍚﹀惎鐢紝`1` 鍚敤锛宍0` 绂佺敤 |
-| `reviewed` | INTEGER | 鏄惁宸蹭汉宸ヤ慨鏀规垨瀹℃牳锛屼繚瀛樺悗鍐欎负 `1` |
-| `created_at` | TEXT | 鍒涘缓鏃堕棿锛孖SO 鏍煎紡 |
-| `updated_at` | TEXT | 鏇存柊鏃堕棿锛孖SO 鏍煎紡 |
-
-## 浠诲姟浜х墿璺緞
-
-任务产物路径当前由 `task_dir_name` 决定；`task_id` 只作为内部唯一 ID 使用，不再直接决定 E 盘文件夹名：
-
-| 浜х墿 | 璺緞 |
-| --- | --- |
-| 浠诲姟鐩綍 | `E:\直播间切片工作流存储\{task_dir_name}\` |
-| 涓婁紶婧愯棰?| `source\鍘熸枃浠跺悕` |
-| 鎻愬彇闊抽 | `audio\source.wav` |
-| 杞啓 Markdown | `transcripts\transcript.md` |
-| AI 鍒嗘瀽鏂囦欢 | `analysis\candidate_clips.json` |
-| 杈撳嚭鍒囩墖 | `05_clips\` |
-| 澶勭悊鏃ュ織 | `logs\process.log` |
-
-
-## 2026-05-27：候选片段软删除字段
-
-`clip_candidates` 表新增以下字段：
+`tasks` 表用于保存直播视频处理任务的基础信息和状态。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `is_deleted` | INTEGER | 候选片段是否已从审核页隐藏，`1` 表示隐藏；自动切片不会再使用 |
+| `id` | TEXT | 任务唯一 ID，创建时自动生成 |
+| `task_name` | TEXT | 任务名称 |
+| `task_dir_name` | TEXT | 存储盘实际任务文件夹名；正常任务通常等于项目名，已移入回收站的任务为 `_回收站\项目名` |
+| `source_type` | TEXT | 视频来源：`upload` 或 `nas` |
+| `platform` | TEXT | 平台类型：`douyin`、`bilibili`、`general` |
+| `original_video_path` | TEXT | 本地上传视频路径，后续接真实上传后写入 |
+| `nas_file_path` | TEXT | NAS / 本地已有视频路径 |
+| `max_clip_duration` | INTEGER | 单条切片最长时长，单位：分钟；新建任务默认建议为 5 分钟 |
+| `candidate_clip_count` | INTEGER | 希望 AI 输出的候选片段数量 |
+| `ai_preference` | TEXT | AI 片段选择偏好 |
+| `ai_prompt_preset_id` | TEXT | 当前使用的 AI Prompt 方案 ID |
+| `status` | TEXT | 当前任务状态 |
+| `progress` | INTEGER | 当前进度百分比，后续流水线推进时更新 |
+| `error_message` | TEXT | 异常信息 |
+| `is_deleted` | INTEGER | 是否已从页面列表隐藏，`1` 表示隐藏，文件不会被删除 |
+| `deleted_at` | TEXT | 隐藏时间，ISO 格式 |
+| `created_at` | TEXT | 创建时间，ISO 格式 |
+| `updated_at` | TEXT | 更新时间，ISO 格式 |
+
+## 任务状态值
+
+`status` 使用英文状态码保存，页面展示时再转换成中文。
+
+| 状态码 | 中文展示 |
+| --- | --- |
+| `pending_video` | 待提交视频 |
+| `pending_processing` | 待处理 |
+| `audio_extracting` | 音频提取中 |
+| `transcribing` | 转写中 |
+| `pending_ai` | 待 AI 分析 |
+| `ai_analyzing` | AI 分析中 |
+| `pending_review` | AI 结果待检查 |
+| `cutting` | 切割中 |
+| `completed` | 已完成 |
+| `completed_with_errors` | 部分完成，至少有一个切片成功，但也有切片失败 |
+| `failed` | 失败 |
+
+注意：`completed` / `completed_with_errors` 表示"自动切割阶段结束"，不是平台发布完成。字幕是 `subtitle_jobs` 独立流程，发送中心是 `publish_jobs` 独立流程，它们不直接混入 `tasks.status`。
+
+## output_clip 表
+
+`output_clip` 表用于保存每一条最终切片输出结果。视频文件本身仍保存在任务目录里，数据库只保存路径、状态和错误信息。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | TEXT | 输出记录唯一 ID |
+| `task_id` | TEXT | 所属任务 ID |
+| `clip_candidate_id` | TEXT | 来源候选片段 ID |
+| `output_file_path` | TEXT | 输出视频完整路径 |
+| `output_file_name` | TEXT | 输出视频文件名 |
+| `status` | TEXT | 输出状态：`pending`、`processing`、`completed`、`failed` |
+| `error_message` | TEXT | 单条切片失败原因 |
+| `created_at` | TEXT | 创建时间，ISO 格式 |
+| `updated_at` | TEXT | 更新时间，ISO 格式 |
+
+## subtitle_jobs 表
+
+`subtitle_jobs` 表用于保存每条切片的字幕生成任务，是独立于 `tasks.status` 的字幕工作流。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | TEXT | 字幕任务 ID |
+| `task_id` | TEXT | 所属任务 ID |
+| `output_clip_id` | TEXT | 所属输出切片 ID |
+| `style_preset_id` | TEXT | 字幕样式 ID |
+| `status` | TEXT | 状态：`pending`、`processing`、`completed`、`failed` |
+| `subtitle_file_path` | TEXT | 字幕文件路径（.ass） |
+| `output_file_path` | TEXT | 带字幕视频输出路径 |
+| `error_message` | TEXT | 错误信息 |
+| `created_at` | TEXT | 创建时间 |
+| `updated_at` | TEXT | 更新时间 |
+
+## subtitle_style_presets 表
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | TEXT | 样式 ID |
+| `name` | TEXT | 样式名称 |
+| `font_family` | TEXT | 字体 |
+| `font_size` | INTEGER | 字号 |
+| `position` | TEXT | 位置：`bottom_center`、`middle_lower`、`top_center` |
+| `font_color` | TEXT | 字体颜色 |
+| `stroke_color` | TEXT | 描边颜色 |
+| `shadow_enabled` | INTEGER | 是否启用阴影 |
+| `is_default` | INTEGER | 是否默认样式 |
+| `created_at` | TEXT | 创建时间 |
+| `updated_at` | TEXT | 更新时间 |
+
+## clip_candidates 表
+
+`clip_candidates` 表用于保存 AI 分析生成、等待人工审核的候选短视频片段，也保存人工审核页写回的编辑结果。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | TEXT | 候选片段数据库 ID |
+| `task_id` | TEXT | 所属任务 ID |
+| `clip_key` | TEXT | AI 返回的片段 key，例如 `clip_001` |
+| `title` | TEXT | 片段标题，可在审核页人工修改 |
+| `start_time` | TEXT | 开始时间，保存为 `HH:MM:SS` |
+| `end_time` | TEXT | 结束时间，保存为 `HH:MM:SS` |
+| `duration_seconds` | INTEGER | 片段时长，单位秒，保存审核修改时自动重算 |
+| `summary` | TEXT | 片段摘要，可在审核页人工修改 |
+| `reason` | TEXT | 兼容旧字段，当前与推荐理由保持一致 |
+| `highlight_reason` | TEXT | AI 推荐理由 |
+| `spread_value` | TEXT | 传播价值 |
+| `suggested_editing` | TEXT | 剪辑建议 |
+| `confidence_score` | REAL | AI 置信度，范围 0 到 1 |
+| `selected_by_default` | INTEGER | AI 是否建议默认启用 |
+| `enabled` | INTEGER | 人工审核时是否启用，`1` 启用，`0` 禁用 |
+| `reviewed` | INTEGER | 是否已人工修改或审核，保存后写为 `1` |
+| `is_deleted` | INTEGER | 候选片段是否已从审核页隐藏，`1` 表示隐藏 |
 | `deleted_at` | TEXT | 候选片段隐藏时间，ISO 格式 |
+| `created_at` | TEXT | 创建时间，ISO 格式 |
+| `updated_at` | TEXT | 更新时间，ISO 格式 |
+
+## 兼容说明
+
+早期项目骨架曾使用过 `title`、`source_path`、`max_clip_minutes`、`target_clip_count` 等草稿字段。当前初始化逻辑会自动补齐新字段，并把旧字段数据迁移到当前字段中。
+为了不破坏已有本地数据库，旧字段不会被强制删除。后续代码以本文件列出的当前字段为准。
+
+任务移入回收站采用软删除方式：`DELETE /api/tasks/{task_id}` 会把 `is_deleted` 改为 `1`、写入 `deleted_at`，并把该任务的存储目录移动到 `_回收站`。工作台、任务列表和片段审核总览默认不显示已移入回收站的任务，原视频、音频、转写、AI 分析文件、切片输出和字幕输出都会保留。
+
+`clip_candidates.reason` 是早期推荐理由字段，当前审核页优先读取 `highlight_reason`。数据库初始化时会把已有 `reason` 自动补到 `highlight_reason`。
 
 候选片段删除是软删除：`DELETE /api/tasks/{task_id}/clips/{clip_id}` 只更新数据库记录，不删除源视频、转写文件、AI 分析文件或已生成切片文件。
+
+## 任务产物路径
+
+任务产物路径当前由 `task_dir_name` 决定；`task_id` 只作为内部唯一 ID 使用，不再直接决定存储文件夹名。
+
+历史任务可能仍兼容 `task_id` 目录，但新逻辑以 `task_dir_name` 为准。
+
+正式任务目录结构：
+
+```text
+{task_dir_name}/
+  source/          ← 上传源视频
+  audio/           ← 提取的音频 source.wav
+  transcripts/     ← 转写结果 transcript.md
+  analysis/        ← AI 分析结果 candidate_clips.json
+  05_clips/        ← 正式切片输出目录
+  06_subtitled/    ← 带字幕成片目录
+  07_covers/       ← 发送中心候选封面目录
+  logs/            ← 处理日志 process.log
+```
+
+| 产物 | 路径 |
+| --- | --- |
+| 任务目录 | `{存储根目录}/{task_dir_name}/` |
+| 上传源视频 | `source/原文件名` |
+| 提取音频 | `audio/source.wav` |
+| 转写 Markdown | `transcripts/transcript.md` |
+| AI 分析文件 | `analysis/candidate_clips.json` |
+| 输出切片 | `05_clips/` |
+| 带字幕成片 | `06_subtitled/` |
+| 候选封面 | `07_covers/` |
+| 处理日志 | `logs/process.log` |
+
+## 2026-06-09 v1.2 补充说明
+
+- 发送中心当前已有发送队列和 opencli 辅助投稿能力，但还没有真正的定时调度器。
+- `publish_jobs.scheduled_at` 当前只是字段预留，可以保存计划发布时间，但 v1.2 还没有后台定时调度器，不会自动按 `scheduled_at` 发送。
+- 平台发送依赖 opencli 辅助浏览器操作，不绕过验证码、登录失效、风控和人工确认。
+- 代码中仍存在兼容性 `clips` 子目录（`TASK_SUBDIRECTORIES` 同时包含 `clips` 和 `05_clips`），新任务的正式输出目录是 `05_clips`。旧 `clips` 目录为兼容保留，不建议删除。
