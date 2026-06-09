@@ -145,9 +145,40 @@ class TestCreateTaskDirectory:
     """创建任务目录时以 task_dir_name 为准"""
 
     def test_directory_created_with_dir_name(self, tmp_path, monkeypatch):
+        """create_task_directory 使用 task_dir_name 而非 task_id 作为文件夹名"""
+        # 先设置临时数据目录和数据库路径，避免污染真实数据
+        data_dir = tmp_path / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv("TASKS_DIR", str(tmp_path))
         monkeypatch.setenv("STORAGE_ROOT", str(tmp_path))
-        # 重建 settings
-        import app.core.config as config_mod
-        # 这里验证逻辑：create_task_directory 使用 task_dir_name
-        # 因为依赖完整的数据库，这里只做轻量检查
+        monkeypatch.setenv("DATA_DIR", str(data_dir))
+        monkeypatch.setenv("DATABASE_PATH", str(data_dir / "test_db.sqlite3"))
+
+        # 强制重载 config 和 storage_service，让新环境变量生效
+        import importlib
+        import app.core.config
+        import app.services.storage_service
+        importlib.reload(app.core.config)
+        importlib.reload(app.services.storage_service)
+        from app.services.storage_service import create_task_directory, get_artifact_paths
+
+        task_dir = create_task_directory(task_id="abc123", task_dir_name="我的项目")
+
+        # 目录名以 task_dir_name 为准，不是 task_id
+        assert "我的项目" in str(task_dir), f"目录名应包含 task_dir_name，实际：{task_dir}"
+        assert "abc123" not in str(task_dir), f"目录名不应包含 task_id"
+
+        # 所有子目录都存在
+        expected_subdirs = [
+            "source", "audio", "transcripts", "analysis",
+            "05_clips", "06_subtitled", "07_covers", "logs",
+        ]
+        for sub in expected_subdirs:
+            sub_path = task_dir / sub
+            assert sub_path.exists(), f"缺少子目录：{sub}"
+
+        # clips_dir 指向 05_clips
+        paths = get_artifact_paths(task_id="abc123", task_dir_name="我的项目")
+        assert "05_clips" in str(paths["clips_dir"]), (
+            f"正式 clips_dir 应指向 05_clips，实际：{paths['clips_dir']}"
+        )
