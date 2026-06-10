@@ -367,7 +367,7 @@ def _probe_video(path: Path | None) -> dict[str, str]:
     return {"duration": _format_duration(duration), "video_size": _format_file_size(path.stat().st_size)}
 
 
-def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
+def _row_to_task(row: Row, include_video_probe: bool = False, output_clip_count: int | None = None) -> dict:
     task = dict(row)
     task_name = task.get("task_name") or "未命名任务"
     platform = task.get("platform") or "general"
@@ -417,7 +417,7 @@ def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
         "analysis_path": str(paths["analysis_path"]),
         "analysis_exists": paths["analysis_path"].exists(),
         "clips_dir": str(paths["clips_dir"]),
-        "output_clip_count": count_output_clips(task["id"]),
+        "output_clip_count": output_clip_count if output_clip_count is not None else count_output_clips(task["id"]),
         "log_path": str(paths["log_path"]),
         "log_exists": paths["log_path"].exists(),
     }
@@ -437,7 +437,9 @@ def list_tasks(include_deleted: bool = False) -> list[dict]:
             ORDER BY created_at DESC
             """
         ).fetchall()
-    return [_row_to_task(row) for row in rows]
+    task_ids = [row["id"] for row in rows]
+    oc_counts = _batch_output_clip_counts(task_ids)
+    return [_row_to_task(row, output_clip_count=oc_counts.get(row["id"], 0)) for row in rows]
 
 
 def get_task(task_id: str, include_video_probe: bool = True) -> dict | None:
@@ -810,6 +812,125 @@ def count_completed_output_clips(task_id: str) -> int:
     return int(row["total"]) if row else 0
 
 
+# ── 批量聚合查询（避免 N+1）──
+
+def _batch_output_clip_counts(task_ids: list[str]) -> dict[str, int]:
+    """一次查询获得多个 task 的 output_clip 总数。"""
+    if not task_ids:
+        return {}
+    placeholders = ",".join("?" for _ in task_ids)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"SELECT task_id, COUNT(*) AS cnt FROM output_clip WHERE task_id IN ({placeholders}) GROUP BY task_id",
+            task_ids,
+        ).fetchall()
+    return {row["task_id"]: row["cnt"] for row in rows}
+
+
+def _batch_completed_output_clip_counts(task_ids: list[str]) -> dict[str, int]:
+    """一次查询获得多个 task 的已完成 output_clip 数量。"""
+    if not task_ids:
+        return {}
+    placeholders = ",".join("?" for _ in task_ids)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"SELECT task_id, COUNT(*) AS cnt FROM output_clip WHERE task_id IN ({placeholders}) AND status = 'completed' GROUP BY task_id",
+            task_ids,
+        ).fetchall()
+    return {row["task_id"]: row["cnt"] for row in rows}
+
+
+def _batch_clip_candidate_counts(task_ids: list[str]) -> dict[str, dict[str, int]]:
+    """一次查询获得多个 task 的候选片段总数和已启用数量。"""
+    if not task_ids:
+        return {}
+    placeholders = ",".join("?" for _ in task_ids)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT task_id,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) AS enabled_count
+            FROM clip_candidates
+            WHERE task_id IN ({placeholders}) AND is_deleted = 0
+            GROUP BY task_id
+            """,
+            task_ids,
+        ).fetchall()
+    return {row["task_id"]: {"total": row["total"], "enabled": row["enabled_count"]} for row in rows}
+
+
+def _batch_all_output_clips(task_ids: list[str]) -> dict[str, list[dict]]:
+    """一次查询获得所有 task 的 output_clip（含字幕信息），按 task_id 分组。"""
+    if not task_ids:
+        return {}
+    placeholders = ",".join("?" for _ in task_ids)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                output_clip.id, output_clip.task_id, output_clip.clip_candidate_id,
+                output_clip.output_file_path, output_clip.output_file_name,
+                output_clip.status, output_clip.error_message, output_clip.created_at, output_clip.updated_at,
+                clip_candidates.title AS clip_title,
+                clip_candidates.start_time AS clip_start_time,
+                clip_candidates.end_time AS clip_end_time,
+                clip_candidates.duration_seconds AS clip_duration_seconds,
+                clip_candidates.summary AS clip_summary,
+                clip_candidates.enabled AS clip_enabled,
+                subtitle_jobs.id AS subtitle_job_id,
+                subtitle_jobs.status AS subtitle_status,
+                subtitle_jobs.subtitle_file_path,
+                subtitle_jobs.output_file_path AS subtitled_output_file_path,
+                subtitle_jobs.error_message AS subtitle_error_message,
+                subtitle_jobs.updated_at AS subtitle_updated_at
+            FROM output_clip
+            LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
+            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
+            WHERE output_clip.task_id IN ({placeholders})
+            ORDER BY
+                CASE WHEN output_clip.output_file_name IS NULL OR output_clip.output_file_name = '' THEN 1 ELSE 0 END,
+                output_clip.output_file_name ASC,
+                output_clip.created_at ASC
+            """,
+            task_ids,
+        ).fetchall()
+    result: dict[str, list[dict]] = {tid: [] for tid in task_ids}
+    for row in rows:
+        output = dict(row)
+        raw_output_path = (output.get("output_file_path") or "").strip()
+        output_path = resolve_video_file_path(raw_output_path) if raw_output_path else None
+        raw_subtitled_path = (output.get("subtitled_output_file_path") or "").strip()
+        subtitled_path = resolve_video_file_path(raw_subtitled_path) if raw_subtitled_path else None
+        subtitle_status = output.get("subtitle_status") or "pending"
+        clip_start_time_str = output.get("clip_start_time") or ""
+        clip_end_time_str = output.get("clip_end_time") or ""
+        try:
+            clip_start_seconds = _parse_time_to_seconds(clip_start_time_str) if clip_start_time_str else 0
+            clip_end_seconds = _parse_time_to_seconds(clip_end_time_str) if clip_end_time_str else 0
+        except ValueError:
+            clip_start_seconds = 0
+            clip_end_seconds = 0
+        result[output["task_id"]].append(
+            {
+                **output,
+                "status_label": OUTPUT_STATUS_LABELS.get(output["status"], output["status"]),
+                "file_exists": bool(output_path and output_path.exists() and output_path.is_file()),
+                "media_url": f"/media/tasks/{output['task_id']}/output-clips/{output['id']}",
+                "source_media_url": f"/media/tasks/{output['task_id']}/source-video",
+                "clip_start_seconds": clip_start_seconds,
+                "clip_end_seconds": clip_end_seconds,
+                "subtitle_status": subtitle_status,
+                "subtitle_status_label": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),
+                "subtitle_stage": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),
+                "subtitled_file_exists": bool(subtitled_path and subtitled_path.exists() and subtitled_path.is_file()),
+                "subtitled_media_url": f"/media/tasks/{output['task_id']}/subtitled-clips/{output['id']}",
+                "publish_stage": "待推送配置" if subtitle_status == "completed" else "待字幕确认",
+            }
+        )
+    return result
+
+
 def list_output_clips(task_id: str) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
@@ -918,6 +1039,8 @@ def get_output_clip(task_id: str, output_clip_id: str) -> dict | None:
 
 def get_subtitle_workflow_context() -> dict:
     tasks = list_tasks()
+    task_ids = [task["id"] for task in tasks]
+    all_outputs = _batch_all_output_clips(task_ids)
     workflow_tasks = []
     total_output_records = 0
     ready_output_clips = 0
@@ -925,8 +1048,8 @@ def get_subtitle_workflow_context() -> dict:
     playable_output_clips = 0
 
     for task in tasks:
-        output_clips = []
-        for output in list_output_clips(task["id"]):
+        output_clips = all_outputs.get(task["id"], [])
+        for output in output_clips:
             total_output_records += 1
             if output.get("status") == "completed":
                 ready_output_clips += 1
@@ -934,11 +1057,6 @@ def get_subtitle_workflow_context() -> dict:
                 completed_subtitles += 1
             if output.get("file_exists"):
                 playable_output_clips += 1
-            output_clips.append(
-                {
-                    **output,
-                }
-            )
 
         if output_clips:
             task_completed_subtitles = sum(1 for output in output_clips if output.get("subtitle_status") == "completed")
@@ -1460,7 +1578,8 @@ def get_dashboard_context() -> dict:
         if task["status"] in {TaskStatus.completed.value, TaskStatus.completed_with_errors.value}
     )
     output_clip_count = sum(int(task.get("output_clip_count") or 0) for task in tasks)
-    ready_for_subtitle_count = sum(count_completed_output_clips(task["id"]) for task in tasks)
+    completed_oc_map = _batch_completed_output_clip_counts([task["id"] for task in tasks])
+    ready_for_subtitle_count = sum(completed_oc_map.get(task["id"], 0) for task in tasks)
     failed_count = sum(1 for task in tasks if task["status"] == TaskStatus.failed.value)
 
     return {
@@ -1485,10 +1604,13 @@ def get_dashboard_context() -> dict:
 
 def get_clips_overview_context() -> dict:
     tasks = list_tasks()
+    task_ids = [task["id"] for task in tasks]
+    clip_counts_map = _batch_clip_candidate_counts(task_ids)
     enriched_tasks = []
     for task in tasks:
-        clip_count = count_clip_candidates(task["id"])
-        enabled_count = count_enabled_clip_candidates(task["id"])
+        counts = clip_counts_map.get(task["id"], {"total": 0, "enabled": 0})
+        clip_count = counts["total"]
+        enabled_count = counts["enabled"]
         review_ready = clip_count > 0
         can_cut = enabled_count > 0 and task["source_exists"]
         if task["status"] == TaskStatus.failed.value:
