@@ -62,7 +62,8 @@ from app.services.subtitle_workflow_service import (
     _resolve_subtitle_font_family,
     _subtitle_font_exists,
     _subtitle_job_for_output,
-    _upsert_subtitle_job,
+    _create_subtitle_job,
+    _activate_subtitle_job,
     _write_ass_file,
     get_default_subtitle_style,
     render_subtitles_for_output_clip,
@@ -676,7 +677,7 @@ def list_enabled_clip_candidates(task_id: str) -> list[dict]:
 def count_output_clips(task_id: str) -> int:
     with get_connection() as connection:
         row = connection.execute(
-            "SELECT COUNT(*) AS total FROM output_clip WHERE task_id = ?",
+            "SELECT COUNT(*) AS total FROM output_clip WHERE task_id = ? AND is_active = 1",
             (task_id,),
         ).fetchone()
     return int(row["total"]) if row else 0
@@ -685,7 +686,7 @@ def count_output_clips(task_id: str) -> int:
 def count_completed_output_clips(task_id: str) -> int:
     with get_connection() as connection:
         row = connection.execute(
-            "SELECT COUNT(*) AS total FROM output_clip WHERE task_id = ? AND status = 'completed'",
+            "SELECT COUNT(*) AS total FROM output_clip WHERE task_id = ? AND status = 'completed' AND is_active = 1",
             (task_id,),
         ).fetchone()
     return int(row["total"]) if row else 0
@@ -713,8 +714,8 @@ def list_output_clips(task_id: str) -> list[dict]:
                 subtitle_jobs.updated_at AS subtitle_updated_at
             FROM output_clip
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
-            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
-            WHERE output_clip.task_id = ?
+            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
+            WHERE output_clip.task_id = ? AND output_clip.is_active = 1
             ORDER BY
                 CASE WHEN output_clip.output_file_name IS NULL OR output_clip.output_file_name = '' THEN 1 ELSE 0 END,
                 output_clip.output_file_name ASC,
@@ -765,7 +766,7 @@ def get_output_clip(task_id: str, output_clip_id: str) -> dict | None:
             SELECT id, task_id, clip_candidate_id, output_file_path, output_file_name,
                    status, error_message, created_at, updated_at
             FROM output_clip
-            WHERE task_id = ? AND id = ?
+            WHERE task_id = ? AND id = ? AND is_active = 1
             """,
             (task_id, output_clip_id),
         ).fetchone()
@@ -777,7 +778,7 @@ def get_output_clip(task_id: str, output_clip_id: str) -> dict | None:
             """
             SELECT *
             FROM subtitle_jobs
-            WHERE task_id = ? AND output_clip_id = ?
+            WHERE task_id = ? AND output_clip_id = ? AND is_active = 1
             """,
             (task_id, output_clip_id),
         ).fetchone()

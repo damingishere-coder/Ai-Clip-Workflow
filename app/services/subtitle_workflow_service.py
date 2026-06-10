@@ -124,79 +124,116 @@ def update_default_subtitle_style(payload) -> dict:
     }
 
 
-def _subtitle_job_for_output(task_id: str, output_clip_id: str) -> dict | None:
+def _subtitle_job_for_output(task_id: str, output_clip_id: str, active_only: bool = True) -> dict | None:
     from app.db.database import get_connection
 
     with get_connection() as connection:
-        row = connection.execute(
-            """
-            SELECT *
-            FROM subtitle_jobs
-            WHERE task_id = ? AND output_clip_id = ?
-            """,
-            (task_id, output_clip_id),
-        ).fetchone()
+        if active_only:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM subtitle_jobs
+                WHERE task_id = ? AND output_clip_id = ? AND is_active = 1
+                """,
+                (task_id, output_clip_id),
+            ).fetchone()
+        else:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM subtitle_jobs
+                WHERE task_id = ? AND output_clip_id = ?
+                ORDER BY is_active DESC, created_at DESC
+                LIMIT 1
+                """,
+                (task_id, output_clip_id),
+            ).fetchone()
     return dict(row) if row else None
 
 
-def _upsert_subtitle_job(
+def _create_subtitle_job(
     task_id: str,
     output_clip_id: str,
     status: str,
     subtitle_file_path: str = "",
     output_file_path: str = "",
     error_message: str = "",
+    is_active: int = 0,
 ) -> dict:
+    """创建新的字幕任务记录（不再 upsert，每次生成都创建新记录）"""
     from app.db.database import get_connection
     from app.services.task_service import _now_iso
 
     now = _now_iso()
-    existing = _subtitle_job_for_output(task_id, output_clip_id)
+    job_id = uuid4().hex[:12]
     with get_connection() as connection:
-        if existing:
-            connection.execute(
-                """
-                UPDATE subtitle_jobs
-                SET status = ?, style_preset_id = ?, subtitle_file_path = ?,
-                    output_file_path = ?, error_message = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    status,
-                    "default",
-                    subtitle_file_path or existing.get("subtitle_file_path") or "",
-                    output_file_path or existing.get("output_file_path") or "",
-                    error_message,
-                    now,
-                    existing["id"],
-                ),
+        connection.execute(
+            """
+            INSERT INTO subtitle_jobs (
+                id, task_id, output_clip_id, style_preset_id, status,
+                subtitle_file_path, output_file_path, error_message,
+                is_active, created_at, updated_at
             )
-            job_id = existing["id"]
-        else:
-            job_id = uuid4().hex[:12]
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                task_id,
+                output_clip_id,
+                "default",
+                status,
+                subtitle_file_path,
+                output_file_path,
+                error_message,
+                is_active,
+                now,
+                now,
+            ),
+        )
+        connection.commit()
+    return {"id": job_id, "task_id": task_id, "output_clip_id": output_clip_id, "status": status,
+            "subtitle_file_path": subtitle_file_path, "output_file_path": output_file_path,
+            "error_message": error_message, "is_active": is_active}
+
+
+def _activate_subtitle_job(task_id: str, output_clip_id: str, job_id: str) -> None:
+    """激活指定的字幕任务，同时将该 output_clip 下的其他字幕任务标记为非活跃"""
+    from app.db.database import get_connection
+    from app.services.task_service import _now_iso
+
+    now = _now_iso()
+    with get_connection() as connection:
+        # 将同 output_clip 下所有其他字幕 job 设为非活跃
+        connection.execute(
+            "UPDATE subtitle_jobs SET is_active = 0, updated_at = ? WHERE task_id = ? AND output_clip_id = ? AND id != ?",
+            (now, task_id, output_clip_id, job_id),
+        )
+        # 激活当前 job
+        connection.execute(
+            "UPDATE subtitle_jobs SET is_active = 1, updated_at = ? WHERE id = ?",
+            (now, job_id),
+        )
+        connection.commit()
+
+
+def _update_subtitle_job_status(job_id: str, status: str, error_message: str = "") -> None:
+    """更新字幕任务状态（不改变 is_active）"""
+    from app.db.database import get_connection
+    from app.services.task_service import _now_iso
+
+    now = _now_iso()
+    with get_connection() as connection:
+        if error_message:
             connection.execute(
-                """
-                INSERT INTO subtitle_jobs (
-                    id, task_id, output_clip_id, style_preset_id, status,
-                    subtitle_file_path, output_file_path, error_message, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job_id,
-                    task_id,
-                    output_clip_id,
-                    "default",
-                    status,
-                    subtitle_file_path,
-                    output_file_path,
-                    error_message,
-                    now,
-                    now,
-                ),
+                "UPDATE subtitle_jobs SET status = ?, error_message = ?, updated_at = ? WHERE id = ?",
+                (status, error_message, now, job_id),
+            )
+        else:
+            connection.execute(
+                "UPDATE subtitle_jobs SET status = ?, updated_at = ? WHERE id = ?",
+                (status, now, job_id),
             )
         connection.commit()
-    return _subtitle_job_for_output(task_id, output_clip_id) or {"id": job_id, "status": status}
 
 
 # ---------- ASS 字幕渲染 ----------
@@ -332,7 +369,9 @@ def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
     paths = get_artifact_paths(task_id)
     paths["subtitled_dir"].mkdir(parents=True, exist_ok=True)
     output_path = paths["subtitled_dir"] / f"{input_path.stem}_subtitled.mp4"
-    job = _upsert_subtitle_job(task_id, output_clip_id, "processing")
+
+    # === 版本化：创建新的字幕 job，不覆盖旧的 ===
+    job = _create_subtitle_job(task_id, output_clip_id, "processing", is_active=0)
     append_task_log(task_id, f"开始自动加字幕：{input_path.name}")
 
     try:
@@ -353,18 +392,30 @@ def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
             raise RuntimeError(result.stderr.strip() or "FFmpeg 字幕生成失败")
     except Exception as exc:
         error = str(exc)
-        _upsert_subtitle_job(task_id, output_clip_id, "failed", error_message=error)
+        # 失败时：标记当前 job 为 failed，不激活，旧字幕保持 active
+        _update_subtitle_job_status(job["id"], "failed", error_message=error)
         append_task_log(task_id, f"自动加字幕失败：{input_path.name}，原因：{error}")
         raise
 
-    job = _upsert_subtitle_job(
-        task_id,
-        output_clip_id,
-        "completed",
-        subtitle_file_path=str(subtitle_path),
-        output_file_path=str(output_path),
-    )
+    # 成功：更新 job 信息并切换为 active
+    _update_subtitle_job_status(job["id"], "completed")
+    # 用 subtitle_file_path 和 output_file_path 更新记录
+    from app.db.database import get_connection
+    from app.services.task_service import _now_iso
+
+    now = _now_iso()
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE subtitle_jobs SET subtitle_file_path = ?, output_file_path = ?, updated_at = ? WHERE id = ?",
+            (str(subtitle_path), str(output_path), now, job["id"]),
+        )
+        connection.commit()
+
+    # 激活当前字幕 job，旧字幕 job 标记为非活跃
+    _activate_subtitle_job(task_id, output_clip_id, job["id"])
     append_task_log(task_id, f"自动加字幕完成：{output_path.name}")
+
+    job = _subtitle_job_for_output(task_id, output_clip_id, active_only=False) or job
     return {
         "status": "ok",
         "message": "自动加字幕完成，已生成带字幕视频。",
