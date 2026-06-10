@@ -16,6 +16,8 @@ from app.models.task import (
 from app.services import task_service
 from app.services.ai_prompt_preset_service import update_task_ai_prompt_preset
 from app.services.storage_service import allocate_task_dir_name, save_uploaded_video
+from app.services import job_service
+from app.services import job_worker
 
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -285,3 +287,65 @@ async def save_subtitle_style(payload: SubtitleStyleUpdate) -> dict:
         return task_service.update_default_subtitle_style(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ── Job 队列相关端点 ──────────────────────────────────────────────
+
+@router.post("/{task_id}/process/cuts-async")
+async def process_video_cuts_async(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    """自动切片异步版：创建 job 后立即返回，后台执行切割"""
+    # 先验证任务存在
+    task = task_service.get_task(task_id, include_video_probe=False)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    # 创建 job
+    try:
+        job = job_service.create_job(task_id=task_id, job_type=job_service.JOB_TYPE_VIDEO_CUT)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"创建切片任务失败：{exc}") from exc
+
+    # 放入后台执行
+    background_tasks.add_task(_run_job_in_background, job["id"])
+
+    return {
+        "status": "queued",
+        "message": "切片任务已加入后台队列，可通过 job id 查询进度",
+        "job_id": job["id"],
+        "job": job,
+    }
+
+
+@router.get("/jobs/{job_id}")
+async def get_job_status(job_id: str) -> dict:
+    """查询 job 的执行状态和进度"""
+    job = job_service.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job 不存在")
+    return job
+
+
+@router.get("/{task_id}/jobs")
+async def list_task_jobs(task_id: str, status: str | None = Query(default=None)) -> dict:
+    """查看某个任务下的所有 job 记录"""
+    task = task_service.get_task(task_id, include_video_probe=False)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    jobs = job_service.list_jobs(task_id=task_id, status=status)
+    return {
+        "task_id": task_id,
+        "jobs": jobs,
+        "count": len(jobs),
+    }
+
+
+def _run_job_in_background(job_id: str) -> None:
+    """后台线程执行 job"""
+    try:
+        job_worker.execute_job(job_id)
+    except Exception:
+        # 错误已由 worker 记录到 job 的 error_message 字段
+        pass
