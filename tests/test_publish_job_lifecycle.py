@@ -7,10 +7,8 @@
 - TestFormatTags: 平台话题格式化
 """
 
-import json
 from uuid import uuid4
 
-import pytest
 
 from app.services.publish_service import (
     STATUS_LABELS,
@@ -69,7 +67,6 @@ class TestPublishJobDbLifecycle:
     def test_create_defaults_to_ready(self, tmp_path, monkeypatch):
         """新建 publish_jobs 记录默认状态为 ready"""
         self._setup_test_db(tmp_path, monkeypatch)
-        from app.db.database import get_connection
 
         job = self._insert_test_job(status="ready", scheduled_at="2026-06-10T09:00:00")
         assert job["status"] == "ready"

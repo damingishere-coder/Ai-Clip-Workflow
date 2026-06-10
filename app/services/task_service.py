@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
-import re
 import shutil
 import subprocess
 from sqlite3 import Row
@@ -22,9 +21,9 @@ from app.services.ai.ai_clip_analyzer import (
 from app.services.ai.diagnostics import ensure_local_ai_ready
 from app.services.ai_prompt_preset_service import get_task_ai_prompt_preset
 from app.services.storage_service import (
+    allocate_task_dir_name,
     create_task_directory,
     get_artifact_paths,
-    get_expected_subdirectories,
     get_source_video_path,
     resolve_video_file_path,
     validate_source_video_path,
