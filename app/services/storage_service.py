@@ -1,3 +1,4 @@
+import os
 from pathlib import Path, PureWindowsPath
 import re
 import sqlite3
@@ -11,6 +12,7 @@ from app.core.config import EXTERNAL_STORAGE_ROOT, settings
 
 TASK_SUBDIRECTORIES = ("source", "audio", "transcripts", "analysis", "clips", "05_clips", "06_subtitled", "07_covers", "logs")
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".flv", ".webm", ".m4v", ".ts"}
+AUDIO_EXTENSIONS = {".wav", ".mp3", ".aac", ".flac", ".ogg", ".wma", ".m4a"}
 TRASH_DIR_NAME = "_回收站"
 _WINDOWS_FORBIDDEN_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WINDOWS_RESERVED_NAMES = {
@@ -21,6 +23,85 @@ _WINDOWS_RESERVED_NAMES = {
     *(f"COM{index}" for index in range(1, 10)),
     *(f"LPT{index}" for index in range(1, 10)),
 }
+
+# 路径遍历攻击的标记
+_PATH_TRAVERSAL_MARKERS = ("..", "~")
+
+
+def _collect_allowed_roots() -> list[Path]:
+    """收集所有允许访问的文件系统根目录。"""
+    roots: list[Path] = []
+    # 始终包含 STORAGE_ROOT 和 TASKS_DIR
+    for root in (settings.storage_root, settings.tasks_dir):
+        try:
+            resolved = root.resolve(strict=False)
+            if resolved not in roots:
+                roots.append(resolved)
+        except (OSError, ValueError):
+            pass
+    # 额外配置的 ALLOWED_MEDIA_ROOTS
+    extra_roots = settings.allowed_media_roots
+    if extra_roots:
+        for part in extra_roots.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                resolved = Path(part).expanduser().resolve(strict=False)
+                if resolved not in roots:
+                    roots.append(resolved)
+            except (OSError, ValueError):
+                pass
+    return roots
+
+
+def _is_path_within_roots(path: Path, roots: list[Path] | None = None) -> bool:
+    """检查路径是否在允许的根目录范围内，阻止 .. 和符号链接逃逸。"""
+    if roots is None:
+        roots = _collect_allowed_roots()
+    if not roots:
+        return False
+
+    # 拒绝包含 .. 的路径
+    path_str = str(path).replace("\\", "/")
+    if ".." in Path(path_str).parts:
+        return False
+
+    try:
+        resolved = path.resolve(strict=False)
+    except (OSError, ValueError):
+        return False
+
+    for root in roots:
+        try:
+            root_resolved = root.resolve(strict=False)
+            resolved_str = str(resolved).replace("\\", "/").lower()
+            root_str = str(root_resolved).replace("\\", "/").lower()
+            # 精确匹配或以 root/ 开头
+            if resolved_str == root_str or resolved_str.startswith(root_str + "/"):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def _validate_upload_extension(filename: str) -> str:
+    """校验上传文件扩展名，返回小写扩展名；不合法则抛出 ValueError。"""
+    allowed_raw = settings.allowed_upload_extensions
+    allowed = {
+        ext.strip().lower()
+        for ext in allowed_raw.split(",")
+        if ext.strip()
+    }
+    if not allowed:
+        allowed = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+
+    suffix = Path(filename).suffix.lower()
+    if not suffix:
+        raise ValueError(f"上传文件没有扩展名，允许的格式：{', '.join(sorted(allowed))}")
+    if suffix not in allowed:
+        raise ValueError(f"不支持的文件格式 {suffix}，允许的格式：{', '.join(sorted(allowed))}")
+    return suffix
 
 
 def ensure_storage_root() -> Path:
@@ -203,12 +284,23 @@ def validate_source_video_path(path_value: str | None) -> tuple[bool, str]:
     path = resolve_video_file_path(path_value)
     if path is None:
         return False, "尚未选择视频文件"
+
+    # 路径遍历检查
+    path_str = str(path).replace("\\", "/")
+    if ".." in Path(path_str).parts:
+        return False, "视频路径包含不安全的路径跳转字符"
+
     if not path.exists():
         return False, "视频文件不存在"
     if not path.is_file():
         return False, "选择的路径不是文件"
     if path.suffix.lower() not in VIDEO_EXTENSIONS:
         return False, "请选择常见视频文件格式"
+
+    # 必须在允许的根目录下
+    if not _is_path_within_roots(path):
+        return False, "视频文件不在允许的存储目录范围内"
+
     return True, ""
 
 
@@ -219,12 +311,34 @@ def get_source_video_path(task: dict) -> Path | None:
 
 def save_uploaded_video(task_id: str, filename: str, file_object: BinaryIO, task_dir_name: str | None = None) -> Path:
     create_task_directory(task_id, task_dir_name)
+
+    # 扩展名校验
+    _validate_upload_extension(filename)
+
     safe_name = Path(filename or "source_video").name
     if not Path(safe_name).suffix:
         safe_name = f"{safe_name}.mp4"
     output_path = get_expected_subdirectories(task_id, task_dir_name)["source"] / safe_name
+
+    # 流式写入 + 大小限制检查
+    max_size = settings.max_upload_size_bytes
+    written = 0
     with output_path.open("wb") as target:
-        copyfileobj(file_object, target)
+        while True:
+            chunk = file_object.read(1024 * 1024)  # 1MB chunks
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > max_size:
+                # 删除已写入的部分
+                try:
+                    output_path.unlink()
+                except OSError:
+                    pass
+                max_gb = max_size / (1024 * 1024 * 1024)
+                raise ValueError(f"上传文件超过大小限制（{max_gb:.1f} GB）")
+            target.write(chunk)
+
     return output_path
 
 
@@ -241,19 +355,41 @@ def move_task_directory_to_trash(task_id: str, task_name: str, task_dir_name: st
 
 
 def browse_video_directory(path_value: str | None) -> dict:
-    base_path = Path(path_value) if path_value else settings.storage_root
+    allowed_roots = _collect_allowed_roots()
+
+    if path_value:
+        base_path = Path(path_value)
+        # 阻止路径遍历
+        path_str = str(base_path).replace("\\", "/")
+        if ".." in Path(path_str).parts:
+            return {"path": str(base_path), "exists": False, "directories": [], "files": [],
+                    "error": "路径包含不安全的跳转字符"}
+        if not _is_path_within_roots(base_path, roots=allowed_roots):
+            # 回退到 STORAGE_ROOT
+            base_path = settings.storage_root
+    else:
+        base_path = settings.storage_root
+
     if not base_path.exists():
         return {"path": str(base_path), "exists": False, "directories": [], "files": []}
     if base_path.is_file():
         base_path = base_path.parent
 
+    # 再次确认父目录在允许范围内
+    if not _is_path_within_roots(base_path, roots=allowed_roots):
+        base_path = settings.storage_root
+
     directories = []
     files = []
-    for item in sorted(base_path.iterdir(), key=lambda value: (value.is_file(), value.name.lower())):
-        if item.is_dir():
-            directories.append({"name": item.name, "path": str(item)})
-        elif is_video_file(item):
-            files.append({"name": item.name, "path": str(item), "size": item.stat().st_size})
+    try:
+        for item in sorted(base_path.iterdir(), key=lambda value: (value.is_file(), value.name.lower())):
+            if item.is_dir():
+                directories.append({"name": item.name, "path": str(item)})
+            elif is_video_file(item):
+                files.append({"name": item.name, "path": str(item), "size": item.stat().st_size})
+    except PermissionError:
+        return {"path": str(base_path), "exists": True, "directories": [], "files": [],
+                "error": "没有权限浏览此目录"}
 
     return {
         "path": str(base_path),
