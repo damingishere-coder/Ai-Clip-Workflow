@@ -24,6 +24,24 @@ from app.services.task_service import (
 )
 
 
+def _batch_output_clip_counts(task_ids: list[str]) -> dict[str, int]:
+    """一次查询获得多个任务的 output_clip 总数。"""
+    if not task_ids:
+        return {}
+    placeholders = ",".join("?" for _ in task_ids)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT task_id, COUNT(*) AS cnt
+            FROM output_clip
+            WHERE task_id IN ({placeholders}) AND is_active = 1
+            GROUP BY task_id
+            """,
+            task_ids,
+        ).fetchall()
+    return {row["task_id"]: int(row["cnt"] or 0) for row in rows}
+
+
 def _batch_completed_output_clip_counts(task_ids: list[str]) -> dict[str, int]:
     """一次查询获得多个任务的已完成 output_clip 数量。"""
     if not task_ids:
@@ -34,7 +52,7 @@ def _batch_completed_output_clip_counts(task_ids: list[str]) -> dict[str, int]:
             f"""
             SELECT task_id, COUNT(*) AS cnt
             FROM output_clip
-            WHERE task_id IN ({placeholders}) AND status = 'completed'
+            WHERE task_id IN ({placeholders}) AND status = 'completed' AND is_active = 1
             GROUP BY task_id
             """,
             task_ids,
@@ -95,7 +113,7 @@ def _batch_all_output_clips(task_ids: list[str]) -> dict[str, list[dict]]:
             FROM output_clip
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
             LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
-            WHERE output_clip.task_id IN ({placeholders})
+            WHERE output_clip.task_id IN ({placeholders}) AND output_clip.is_active = 1
             ORDER BY
                 CASE WHEN output_clip.output_file_name IS NULL OR output_clip.output_file_name = '' THEN 1 ELSE 0 END,
                 output_clip.output_file_name ASC,

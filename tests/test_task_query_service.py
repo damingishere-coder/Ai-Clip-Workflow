@@ -174,8 +174,12 @@ def _insert_test_subtitle_job(
 
 def _clean_test_data() -> None:
     with get_connection() as connection:
+        connection.execute("DELETE FROM publish_jobs")
         connection.execute("DELETE FROM subtitle_jobs")
         connection.execute("DELETE FROM output_clip")
+        connection.execute("DELETE FROM cut_runs")
+        connection.execute("DELETE FROM workflow_jobs")
+        connection.execute("DELETE FROM ai_analysis_runs")
         connection.execute("DELETE FROM clip_candidates")
         connection.execute("DELETE FROM tasks")
         connection.commit()

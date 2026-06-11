@@ -4,7 +4,6 @@
 """
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from sqlite3 import Row
 from uuid import uuid4
@@ -513,8 +512,6 @@ def _analyze_with_provider(task_id: str, task: dict, paths: dict[str, Path], pro
     if not prompt_template:
         raise AIAnalysisError(f"当前选择的 AI Prompt 方案\"{prompt_preset.get('name')}\"还没有填写 Prompt 内容")
 
-    from app.services.task_service import _now_iso
-
     request = AnalysisRequest(
         task_id=task_id,
         transcript_path=paths["transcript_path"],
@@ -566,7 +563,6 @@ def _append_ai_clip_quality_warnings(task_id: str, clips: list[dict]) -> None:
 
 def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
     from app.services.task_service import (
-        _format_datetime,
         _now_iso,
         get_task,
         list_clip_candidates,

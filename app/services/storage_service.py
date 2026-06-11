@@ -1,9 +1,7 @@
-import os
 from pathlib import Path, PureWindowsPath
 import re
 import sqlite3
 import shutil
-from shutil import copyfileobj
 from typing import BinaryIO
 from uuid import uuid4
 

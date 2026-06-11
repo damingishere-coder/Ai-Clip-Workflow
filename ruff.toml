@@ -24,6 +24,12 @@ ignore = [
     "B023",   # 函数内循环变量绑定（项目中现有的惰性求值模式）
 ]
 
+[lint.per-file-ignores]
+"tests/**/*.py" = [
+    "F401",   # 测试里有导入即断言兼容性的场景
+    "F841",   # 测试准备数据时允许保留中间变量
+]
+
 # 格式化配置
 [format]
 quote-style = "double"

@@ -28,8 +28,12 @@ class TestCutRunVersioning:
 
         yield
         with get_connection() as conn:
+            conn.execute("DELETE FROM publish_jobs WHERE task_id LIKE 'test-%'")
+            conn.execute("DELETE FROM subtitle_jobs WHERE task_id LIKE 'test-%'")
             conn.execute("DELETE FROM output_clip WHERE task_id LIKE 'test-%'")
             conn.execute("DELETE FROM cut_runs WHERE task_id LIKE 'test-%'")
+            conn.execute("DELETE FROM workflow_jobs WHERE task_id LIKE 'test-%'")
+            conn.execute("DELETE FROM ai_analysis_runs WHERE task_id LIKE 'test-%'")
             conn.execute("DELETE FROM clip_candidates WHERE task_id LIKE 'test-%'")
             conn.execute("DELETE FROM tasks WHERE id LIKE 'test-%'")
             conn.commit()
@@ -152,6 +156,7 @@ class TestCutRunVersioning:
         from app.db.database import get_connection
 
         self._create_task("test-cutrun-005")
+        self._insert_clip_candidate("test-cutrun-005", "clip-001", "片段1", "00:01:00", "00:02:00")
         run = _create_cut_run("test-cutrun-005")
 
         result = CutResult(
@@ -182,6 +187,7 @@ class TestCutRunVersioning:
         from app.db.database import get_connection
 
         self._create_task("test-cutrun-006")
+        self._insert_clip_candidate("test-cutrun-006", "clip-001", "片段1", "00:01:00", "00:02:00")
 
         # 第一次切割
         run1 = _create_cut_run("test-cutrun-006")
@@ -219,6 +225,8 @@ class TestCutRunVersioning:
         from app.services.task_service import list_output_clips
 
         self._create_task("test-cutrun-007")
+        self._insert_clip_candidate("test-cutrun-007", "clip-001", "片段1", "00:01:00", "00:02:00")
+        self._insert_clip_candidate("test-cutrun-007", "clip-002", "片段2", "00:03:00", "00:04:00")
 
         # 第一次切割 → 活跃
         run1 = _create_cut_run("test-cutrun-007")
@@ -249,6 +257,7 @@ class TestCutRunVersioning:
         from app.services.task_service import list_output_clips, count_output_clips
 
         self._create_task("test-cutrun-008")
+        self._insert_clip_candidate("test-cutrun-008", "clip-001", "片段1", "00:01:00", "00:02:00")
 
         # 第一次切割成功
         run1 = _create_cut_run("test-cutrun-008")
@@ -282,8 +291,13 @@ class TestSubtitleVersioning:
 
         yield
         with get_connection() as conn:
+            conn.execute("DELETE FROM publish_jobs WHERE task_id LIKE 'test-%'")
             conn.execute("DELETE FROM subtitle_jobs WHERE task_id LIKE 'test-%'")
             conn.execute("DELETE FROM output_clip WHERE task_id LIKE 'test-%'")
+            conn.execute("DELETE FROM cut_runs WHERE task_id LIKE 'test-%'")
+            conn.execute("DELETE FROM workflow_jobs WHERE task_id LIKE 'test-%'")
+            conn.execute("DELETE FROM ai_analysis_runs WHERE task_id LIKE 'test-%'")
+            conn.execute("DELETE FROM clip_candidates WHERE task_id LIKE 'test-%'")
             conn.execute("DELETE FROM tasks WHERE id LIKE 'test-%'")
             conn.commit()
 
@@ -414,6 +428,11 @@ class TestAIAnalysisActive:
 
         yield
         with get_connection() as conn:
+            conn.execute("DELETE FROM publish_jobs WHERE task_id LIKE 'test-%'")
+            conn.execute("DELETE FROM subtitle_jobs WHERE task_id LIKE 'test-%'")
+            conn.execute("DELETE FROM output_clip WHERE task_id LIKE 'test-%'")
+            conn.execute("DELETE FROM cut_runs WHERE task_id LIKE 'test-%'")
+            conn.execute("DELETE FROM workflow_jobs WHERE task_id LIKE 'test-%'")
             conn.execute("DELETE FROM ai_analysis_runs WHERE task_id LIKE 'test-%'")
             conn.execute("DELETE FROM clip_candidates WHERE task_id LIKE 'test-%'")
             conn.execute("DELETE FROM tasks WHERE id LIKE 'test-%'")

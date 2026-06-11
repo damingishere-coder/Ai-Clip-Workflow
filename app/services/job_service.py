@@ -6,7 +6,7 @@
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 from uuid import uuid4
 
 from app.db.database import get_connection

@@ -1,3 +1,4 @@
+# ruff: noqa: F401
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shutil
@@ -796,3 +797,59 @@ def get_output_clip(task_id: str, output_clip_id: str) -> dict | None:
     else:
         output.update({"subtitle_status": "pending", "subtitle_status_label": SUBTITLE_STATUS_LABELS["pending"]})
     return output
+
+
+def _batch_output_clip_counts(task_ids: list[str]) -> dict[str, int]:
+    from app.services.task_query_service import _batch_output_clip_counts as batch_output_clip_counts
+
+    return batch_output_clip_counts(task_ids)
+
+
+def _batch_completed_output_clip_counts(task_ids: list[str]) -> dict[str, int]:
+    from app.services.task_query_service import (
+        _batch_completed_output_clip_counts as batch_completed_output_clip_counts,
+    )
+
+    return batch_completed_output_clip_counts(task_ids)
+
+
+def _batch_clip_candidate_counts(task_ids: list[str]) -> dict[str, dict[str, int]]:
+    from app.services.task_query_service import _batch_clip_candidate_counts as batch_clip_candidate_counts
+
+    return batch_clip_candidate_counts(task_ids)
+
+
+def _batch_all_output_clips(task_ids: list[str]) -> dict[str, list[dict]]:
+    from app.services.task_query_service import _batch_all_output_clips as batch_all_output_clips
+
+    return batch_all_output_clips(task_ids)
+
+
+def get_dashboard_context() -> dict:
+    from app.services.task_query_service import get_dashboard_context as dashboard_context
+
+    return dashboard_context()
+
+
+def get_clips_overview_context() -> dict:
+    from app.services.task_query_service import get_clips_overview_context as clips_overview_context
+
+    return clips_overview_context()
+
+
+def get_subtitle_workflow_context() -> dict:
+    from app.services.task_query_service import get_subtitle_workflow_context as subtitle_workflow_context
+
+    return subtitle_workflow_context()
+
+
+def get_subtitle_task_context(task_id: str) -> dict:
+    from app.services.task_query_service import get_subtitle_task_context as subtitle_task_context
+
+    return subtitle_task_context(task_id)
+
+
+def get_system_status_context() -> dict:
+    from app.services.task_query_service import get_system_status_context as system_status_context
+
+    return system_status_context()

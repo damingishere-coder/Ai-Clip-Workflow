@@ -219,7 +219,7 @@ def process_task_video_cuts(task_id: str) -> dict:
         # 全部失败：不激活新 run，旧 active 保持不变
         _fail_cut_run(cut_run_id, final_error or "全部切片失败")
         update_task_status(task_id, final_status, final_error)
-        append_task_log(task_id, f"切割批次失败，旧切片结果保留不变")
+        append_task_log(task_id, "切割批次失败，旧切片结果保留不变")
     else:
         # 成功或部分成功：激活新 run，旧 output_clip 标记为非活跃
         _activate_cut_run(task_id, cut_run_id)

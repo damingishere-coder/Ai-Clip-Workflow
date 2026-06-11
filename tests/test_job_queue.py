@@ -7,10 +7,29 @@
 - TestJobQuery: 查询和过滤
 """
 
-import json
+from datetime import datetime, timezone
 from uuid import uuid4
 
-import pytest
+
+def _create_test_task(prefix: str = "task") -> str:
+    from app.db.database import get_connection
+
+    task_id = f"{prefix}_{uuid4().hex[:8]}"
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO tasks (
+                id, task_name, task_dir_name, source_type, platform,
+                original_video_path, max_clip_duration, candidate_clip_count,
+                ai_prompt_preset_id, status, progress, is_deleted, created_at, updated_at
+            )
+            VALUES (?, ?, ?, 'upload', 'general', '', 3, 5, 'preset_001', 'pending_video', 0, 0, ?, ?)
+            """,
+            (task_id, f"测试任务-{task_id}", task_id, now, now),
+        )
+        connection.commit()
+    return task_id
 
 
 class TestJobCreate:
@@ -41,7 +60,7 @@ class TestJobCreate:
         self._setup(tmp_path, monkeypatch)
         from app.services.job_service import create_job, JOB_STATUS_QUEUED, JOB_TYPE_VIDEO_CUT
 
-        task_id = f"task_{uuid4().hex[:8]}"
+        task_id = _create_test_task()
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
 
         assert job["id"] is not None
@@ -57,7 +76,7 @@ class TestJobCreate:
         self._setup(tmp_path, monkeypatch)
         from app.services.job_service import create_job, JOB_TYPE_VIDEO_CUT
 
-        task_id = f"task_{uuid4().hex[:8]}"
+        task_id = _create_test_task()
         payload = {"clip_count": 5, "strategy": "segment"}
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT, payload=payload)
 
@@ -68,7 +87,7 @@ class TestJobCreate:
         self._setup(tmp_path, monkeypatch)
         from app.services.job_service import create_job, JOB_TYPE_VIDEO_CUT
 
-        task_id = f"task_{uuid4().hex[:8]}"
+        task_id = _create_test_task()
         custom_id = "my_custom_job_001"
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT, job_id=custom_id)
 
@@ -103,7 +122,6 @@ class TestJobLifecycle:
         self._setup(tmp_path, monkeypatch)
         from app.services.job_service import (
             create_job,
-            get_job,
             mark_job_running,
             mark_job_completed,
             JOB_STATUS_QUEUED,
@@ -112,7 +130,7 @@ class TestJobLifecycle:
             JOB_TYPE_VIDEO_CUT,
         )
 
-        task_id = f"task_{uuid4().hex[:8]}"
+        task_id = _create_test_task()
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
 
         # 步骤 1：初始状态 queued
@@ -139,14 +157,13 @@ class TestJobLifecycle:
         self._setup(tmp_path, monkeypatch)
         from app.services.job_service import (
             create_job,
-            get_job,
             mark_job_running,
             mark_job_failed,
             JOB_STATUS_FAILED,
             JOB_TYPE_VIDEO_CUT,
         )
 
-        task_id = f"task_{uuid4().hex[:8]}"
+        task_id = _create_test_task()
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
         mark_job_running(job["id"])
 
@@ -169,7 +186,7 @@ class TestJobLifecycle:
             JOB_TYPE_VIDEO_CUT,
         )
 
-        task_id = f"task_{uuid4().hex[:8]}"
+        task_id = _create_test_task()
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
         mark_job_running(job["id"])
 
@@ -215,7 +232,7 @@ class TestJobSerialization:
         self._setup(tmp_path, monkeypatch)
         from app.services.job_service import create_job, JOB_TYPE_VIDEO_CUT
 
-        task_id = f"task_{uuid4().hex[:8]}"
+        task_id = _create_test_task()
         payload = {
             "clips": [
                 {"id": "clip-1", "title": "片段1", "start": "00:01:00", "end": "00:03:00"},
@@ -241,7 +258,7 @@ class TestJobSerialization:
             JOB_TYPE_VIDEO_CUT,
         )
 
-        task_id = f"task_{uuid4().hex[:8]}"
+        task_id = _create_test_task()
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
         mark_job_running(job["id"])
 
@@ -266,7 +283,7 @@ class TestJobSerialization:
         self._setup(tmp_path, monkeypatch)
         from app.services.job_service import create_job, JOB_TYPE_VIDEO_CUT
 
-        task_id = f"task_{uuid4().hex[:8]}"
+        task_id = _create_test_task()
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
 
         assert job["payload_json"] == {}
@@ -282,7 +299,7 @@ class TestJobSerialization:
             JOB_TYPE_VIDEO_CUT,
         )
 
-        task_id = f"task_{uuid4().hex[:8]}"
+        task_id = _create_test_task()
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
         mark_job_running(job["id"])
         job = mark_job_completed(job["id"])
@@ -319,14 +336,12 @@ class TestJobQuery:
         from app.services.job_service import (
             create_job,
             list_jobs,
-            mark_job_completed,
-            mark_job_running,
             JOB_TYPE_VIDEO_CUT,
             JOB_TYPE_AI_ANALYSIS,
         )
 
-        task_1 = f"task_{uuid4().hex[:8]}"
-        task_2 = f"task_{uuid4().hex[:8]}"
+        task_1 = _create_test_task("task_1")
+        task_2 = _create_test_task("task_2")
 
         # 为 task_1 创建 2 个 job
         j1 = create_job(task_id=task_1, job_type=JOB_TYPE_VIDEO_CUT)
@@ -353,7 +368,7 @@ class TestJobQuery:
             JOB_TYPE_VIDEO_CUT,
         )
 
-        task_id = f"task_{uuid4().hex[:8]}"
+        task_id = _create_test_task()
         j1 = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
         j2 = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
 
