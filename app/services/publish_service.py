@@ -895,6 +895,38 @@ def _find_opencli_job(output_clip_id: str, platform: str) -> dict | None:
     return _normalize_job(row) if row else None
 
 
+def _batch_find_opencli_jobs(output_clip_ids: list[str]) -> dict[str, dict[str, dict]]:
+    """一次查询获得所有 output_clip 在各平台的 opencli 发布任务。
+
+    返回: {output_clip_id: {platform: normalized_job}}
+    """
+    if not output_clip_ids:
+        return {}
+    placeholders = ",".join("?" for _ in output_clip_ids)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT * FROM publish_jobs
+            WHERE output_clip_id IN ({placeholders}) AND publish_mode = 'opencli_publish'
+            ORDER BY created_at DESC
+            """,
+            output_clip_ids,
+        ).fetchall()
+    result: dict[str, dict[str, dict]] = {}
+    for row in rows:
+        job = _normalize_job(row)
+        if job is None:
+            continue
+        oc_id = job["output_clip_id"]
+        platform = job["platform"]
+        if oc_id not in result:
+            result[oc_id] = {}
+        # 只保留每个 (output_clip_id, platform) 的第一条（按 created_at DESC）
+        if platform not in result[oc_id]:
+            result[oc_id][platform] = job
+    return result
+
+
 def _publish_provider_payload(metadata: dict, cover: dict | None = None) -> str:
     cover = cover or {}
     return json.dumps(
@@ -2514,7 +2546,10 @@ def _get_provider(platform: str, config: dict):
 def get_publish_center_context() -> dict:
     publish_items = []
     queue_items = []
-    for item in _list_completed_publish_clips():
+    raw_items = _list_completed_publish_clips()
+    output_clip_ids = [item["output_clip_id"] for item in raw_items]
+    opencli_jobs_map = _batch_find_opencli_jobs(output_clip_ids)
+    for item in raw_items:
         original_path = resolve_video_file_path(item.get("output_file_path") or "")
         subtitled_path = resolve_video_file_path(item.get("subtitled_output_file_path") or "")
         default_title = _sanitize_publish_title(_default_title_for_clip(item))
@@ -2530,8 +2565,9 @@ def get_publish_center_context() -> dict:
             "video_media_url": _video_media_url(item["task_id"], item["output_clip_id"], "original"),
         }
         publish_items.append(normalized_item)
+        jobs_for_oc = opencli_jobs_map.get(item["output_clip_id"], {})
         for platform in PLATFORM_LABELS:
-            job = _find_opencli_job(item["output_clip_id"], platform)
+            job = jobs_for_oc.get(platform)
             if job:
                 queue_items.append(
                     {

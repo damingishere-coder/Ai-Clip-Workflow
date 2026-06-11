@@ -255,10 +255,21 @@ def _get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[s
 def _create_indexes(connection: sqlite3.Connection) -> None:
     """创建常用查询索引（IF NOT EXISTS 语法兼容 SQLite 3.27+）。"""
     indexes = [
+        # 任务列表与状态筛选
         "CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_is_deleted_created ON tasks(is_deleted, created_at)",
+        # 片段候选查询（按任务、启用状态、删除标记）
         "CREATE INDEX IF NOT EXISTS idx_clip_candidates_task_enabled_deleted ON clip_candidates(task_id, enabled, is_deleted)",
+        # 输出切片（按任务、状态）
         "CREATE INDEX IF NOT EXISTS idx_output_clip_task_status ON output_clip(task_id, status)",
+        # AI 分析（按任务、创建时间；ai_analysis_runs 表无 status 列）
+        "CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_task_created ON ai_analysis_runs(task_id, created_at)",
+        # 字幕任务（按任务、输出切片、状态）
+        "CREATE INDEX IF NOT EXISTS idx_subtitle_jobs_task_output_status ON subtitle_jobs(task_id, output_clip_id, status)",
+        # 发布任务（按状态、平台、时间；按任务、输出切片）
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_status_platform_created ON publish_jobs(status, platform, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_publish_jobs_task_output ON publish_jobs(task_id, output_clip_id)",
+        # OAuth state 过期清理
         "CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at)",
     ]
     for sql in indexes:
