@@ -14,8 +14,11 @@ VARIETY_AI_PROMPT_PATH = settings.project_root / "prompts" / "variety_interview_
 @contextmanager
 def get_connection() -> Iterator[sqlite3.Connection]:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(settings.database_path)
+    connection = sqlite3.connect(str(settings.database_path), timeout=10)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 5000")
+    connection.execute("PRAGMA journal_mode = WAL")
     try:
         yield connection
     finally:
@@ -219,6 +222,13 @@ def init_db() -> None:
                 FOREIGN KEY(output_clip_id) REFERENCES output_clip(id),
                 FOREIGN KEY(account_id) REFERENCES publish_accounts(id)
             );
+
+            CREATE TABLE IF NOT EXISTS oauth_states (
+                state TEXT PRIMARY KEY,
+                platform TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
             """
         )
         _migrate_tasks_table(connection)
@@ -233,12 +243,29 @@ def init_db() -> None:
         _seed_ai_prompt_presets(connection)
         _seed_subtitle_style_preset(connection)
         _seed_publish_platform_configs(connection)
+        _create_indexes(connection)
         connection.commit()
 
 
 def _get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
     rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row["name"] for row in rows}
+
+
+def _create_indexes(connection: sqlite3.Connection) -> None:
+    """创建常用查询索引（IF NOT EXISTS 语法兼容 SQLite 3.27+）。"""
+    indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_clip_candidates_task_enabled_deleted ON clip_candidates(task_id, enabled, is_deleted)",
+        "CREATE INDEX IF NOT EXISTS idx_output_clip_task_status ON output_clip(task_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_publish_jobs_status_platform_created ON publish_jobs(status, platform, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at)",
+    ]
+    for sql in indexes:
+        try:
+            connection.execute(sql)
+        except sqlite3.Error:
+            pass
 
 
 def _migrate_tasks_table(connection: sqlite3.Connection) -> None:

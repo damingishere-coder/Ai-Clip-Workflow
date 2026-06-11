@@ -587,10 +587,46 @@ def build_douyin_oauth_url() -> dict:
         raise ValueError("抖音配置不存在。")
     state = uuid4().hex
     url = DouyinPublishProvider(config).build_oauth_url(state)
+    # 保存 state，10 分钟过期
+    now = datetime.now()
+    expires_at = (now + timedelta(minutes=10)).isoformat(timespec="seconds")
+    with get_connection() as connection:
+        connection.execute(
+            "INSERT INTO oauth_states (state, platform, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (state, "douyin", now.isoformat(timespec="seconds"), expires_at),
+        )
+        connection.commit()
     return {"status": "ok", "url": url, "state": state}
 
 
-def save_douyin_oauth_account(code: str) -> dict:
+def _validate_and_consume_oauth_state(state: str, platform: str) -> bool:
+    """校验 OAuth state 参数，校验通过后删除记录。"""
+    if not state:
+        return False
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT state, expires_at FROM oauth_states WHERE state = ? AND platform = ?",
+            (state, platform),
+        ).fetchone()
+        if not row:
+            return False
+        if row["expires_at"] < now:
+            # 过期 state，清理掉
+            connection.execute("DELETE FROM oauth_states WHERE state = ?", (state,))
+            connection.commit()
+            return False
+        # 校验通过，消费 state
+        connection.execute("DELETE FROM oauth_states WHERE state = ?", (state,))
+        connection.commit()
+    return True
+
+
+def save_douyin_oauth_account(code: str, state: str = "") -> dict:
+    # 先校验 state
+    if not _validate_and_consume_oauth_state(state, "douyin"):
+        raise ValueError("OAuth state 无效或已过期，请重新发起授权")
+
     config = get_platform_config("douyin")
     if not config:
         raise ValueError("抖音配置不存在。")
@@ -1069,6 +1105,7 @@ def _get_video_duration_seconds(video_path: Path) -> float:
         text=True,
         encoding="utf-8",
         errors="replace",
+        timeout=settings.ffprobe_timeout,
     )
     if ffprobe_path.returncode != 0:
         return 0
@@ -1121,7 +1158,8 @@ def _write_plain_cover_frame(video_path: Path, cover_path: Path, seconds: float)
         "2",
         str(cover_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            timeout=settings.ffmpeg_cover_timeout)
     if result.returncode != 0:
         raise ValueError(f"封面帧生成失败：{summarize_stderr(result.stderr)}")
     if not cover_path.exists() or cover_path.stat().st_size == 0:
@@ -1207,7 +1245,8 @@ def generate_publish_cover(payload: PublishCoverCreate, job_id: str | None = Non
         "2",
         str(cover_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            timeout=settings.ffmpeg_cover_timeout)
     if result.returncode != 0:
         raise ValueError(f"封面生成失败：{summarize_stderr(result.stderr)}")
     if not cover_path.exists() or cover_path.stat().st_size == 0:

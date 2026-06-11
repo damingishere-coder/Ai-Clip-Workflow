@@ -4,6 +4,8 @@ import re
 import shutil
 import subprocess
 
+from app.core.config import settings
+
 
 WINDOWS_UNSAFE_CHARS = r'<>:"/\|?*'
 
@@ -181,7 +183,8 @@ def cut_single_clip(
 ) -> CutResult:
     plan.output_path.parent.mkdir(parents=True, exist_ok=True)
     command = build_ffmpeg_cut_command(ffmpeg_path, source_video, plan, strategy=strategy)
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            timeout=settings.ffmpeg_cut_timeout)
     if result.returncode != 0:
         return CutResult(
             clip_candidate_id=plan.clip_candidate_id,
