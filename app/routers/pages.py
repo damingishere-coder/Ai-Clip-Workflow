@@ -6,13 +6,15 @@ from fastapi.templating import Jinja2Templates
 from app.core.config import settings
 from app.services.ai_prompt_preset_service import list_ai_prompt_presets
 from app.services.publish_service import get_publish_center_context
-from app.services.task_service import (
-    get_artifact_paths,
+from app.services.task_query_service import (
     get_clips_overview_context,
     get_dashboard_context,
     get_subtitle_task_context,
     get_subtitle_workflow_context,
     get_system_status_context,
+)
+from app.services.task_service import (
+    get_artifact_paths,
     get_latest_ai_analysis_run,
     get_task,
     get_task_workflow_steps,
