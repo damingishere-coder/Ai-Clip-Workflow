@@ -1,13 +1,10 @@
 """AI JSON 解析测试：正常 / Markdown 包裹 / 尾逗号 / Python 风格 / 非法"""
 
-import json
 
 import pytest
 
 from app.services.ai.ai_clip_analyzer import (
     _loads_ai_json,
-    _iter_json_candidates,
-    _iter_repaired_json_candidates,
     _strip_markdown_code_fence,
     _extract_first_json_value,
     _remove_trailing_commas,

@@ -1,0 +1,31 @@
+# ruff 配置 — NiuMa Studio
+# 使用方法：
+#   ruff check app tests          # 代码检查
+#   ruff format app tests --check # 格式检查（不修改文件）
+#   ruff format app tests         # 自动格式化
+
+target-version = "py312"
+
+# 只检查 app 和 tests 目录
+include = ["app/**/*.py", "tests/**/*.py"]
+
+# 检查规则（首批只开启关键检查，后续迭代逐步扩展）
+[lint]
+select = [
+    "E",      # pycodestyle 错误（如缩进、空白问题）
+    "F",      # Pyflakes（未使用导入、未定义变量、语法错误等）
+    "W",      # pycodestyle 警告
+    "B",      # flake8-bugbear（常见 bug 检测）
+]
+
+ignore = [
+    "E501",   # 行过长（交给 ruff format 处理）
+    "B008",   # 允许在函数参数中直接调用（FastAPI Depends 需要）
+    "B023",   # 函数内循环变量绑定（项目中现有的惰性求值模式）
+]
+
+# 格式化配置
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"

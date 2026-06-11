@@ -2335,7 +2335,7 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
         while True:
             try:
                 result = runner(command)
-            except subprocess.TimeoutExpired as exc:
+            except subprocess.TimeoutExpired:
                 message = f"opencli 第 {index} 步超时：{_command_summary(command)}"
                 failed_job = _mark_job_failed(job_id, "opencli_timeout", message, {"outputs": outputs})
                 return {"status": "failed", "message": message, "job": failed_job}

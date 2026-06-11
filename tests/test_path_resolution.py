@@ -1,17 +1,12 @@
 """路径解析测试：task_dir_name / task_id / resolve_video_file_path"""
 
-import os
 from pathlib import Path
-from unittest.mock import patch
 
-import pytest
 
 from app.services.storage_service import (
-    _storage_path_from_dir_name,
     allocate_task_dir_name,
     create_task_directory,
     get_artifact_paths,
-    get_task_directory,
     resolve_task_dir_name,
     resolve_video_file_path,
     sanitize_task_dir_name,
@@ -160,13 +155,13 @@ class TestCreateTaskDirectory:
         import app.services.storage_service
         importlib.reload(app.core.config)
         importlib.reload(app.services.storage_service)
-        from app.services.storage_service import create_task_directory, get_artifact_paths
+        from app.services.storage_service import get_artifact_paths
 
         task_dir = create_task_directory(task_id="abc123", task_dir_name="我的项目")
 
         # 目录名以 task_dir_name 为准，不是 task_id
         assert "我的项目" in str(task_dir), f"目录名应包含 task_dir_name，实际：{task_dir}"
-        assert "abc123" not in str(task_dir), f"目录名不应包含 task_id"
+        assert "abc123" not in str(task_dir), "目录名不应包含 task_id"
 
         # 所有子目录都存在
         expected_subdirs = [
