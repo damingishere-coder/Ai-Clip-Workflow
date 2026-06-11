@@ -8,18 +8,135 @@ from datetime import datetime
 import shutil
 
 from app.core.config import settings
+from app.db.database import get_connection
 from app.models.task import TaskStatus
 from app.services.ai_config_service import get_ai_config_context
+from app.services.storage_service import resolve_video_file_path
+from app.services.subtitle_workflow_service import SUBTITLE_STATUS_LABELS
 from app.services.task_service import (
+    OUTPUT_STATUS_LABELS,
+    WORKFLOW_STEPS,
+    _parse_time_to_seconds,
     get_default_subtitle_style,
     get_task,
     list_output_clips,
     list_tasks,
-    WORKFLOW_STEPS,
-    _batch_all_output_clips,
-    _batch_clip_candidate_counts,
-    _batch_completed_output_clip_counts,
 )
+
+
+def _batch_completed_output_clip_counts(task_ids: list[str]) -> dict[str, int]:
+    """一次查询获得多个任务的已完成 output_clip 数量。"""
+    if not task_ids:
+        return {}
+    placeholders = ",".join("?" for _ in task_ids)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT task_id, COUNT(*) AS cnt
+            FROM output_clip
+            WHERE task_id IN ({placeholders}) AND status = 'completed'
+            GROUP BY task_id
+            """,
+            task_ids,
+        ).fetchall()
+    return {row["task_id"]: int(row["cnt"] or 0) for row in rows}
+
+
+def _batch_clip_candidate_counts(task_ids: list[str]) -> dict[str, dict[str, int]]:
+    """一次查询获得多个任务的候选片段总数和已启用数量。"""
+    if not task_ids:
+        return {}
+    placeholders = ",".join("?" for _ in task_ids)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT task_id,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) AS enabled_count
+            FROM clip_candidates
+            WHERE task_id IN ({placeholders}) AND is_deleted = 0
+            GROUP BY task_id
+            """,
+            task_ids,
+        ).fetchall()
+    return {
+        row["task_id"]: {
+            "total": int(row["total"] or 0),
+            "enabled": int(row["enabled_count"] or 0),
+        }
+        for row in rows
+    }
+
+
+def _batch_all_output_clips(task_ids: list[str]) -> dict[str, list[dict]]:
+    """一次查询获得所有任务的 output_clip（含字幕信息），按 task_id 分组。"""
+    if not task_ids:
+        return {}
+    placeholders = ",".join("?" for _ in task_ids)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                output_clip.id, output_clip.task_id, output_clip.clip_candidate_id,
+                output_clip.output_file_path, output_clip.output_file_name,
+                output_clip.status, output_clip.error_message, output_clip.created_at, output_clip.updated_at,
+                clip_candidates.title AS clip_title,
+                clip_candidates.start_time AS clip_start_time,
+                clip_candidates.end_time AS clip_end_time,
+                clip_candidates.duration_seconds AS clip_duration_seconds,
+                clip_candidates.summary AS clip_summary,
+                clip_candidates.enabled AS clip_enabled,
+                subtitle_jobs.id AS subtitle_job_id,
+                subtitle_jobs.status AS subtitle_status,
+                subtitle_jobs.subtitle_file_path,
+                subtitle_jobs.output_file_path AS subtitled_output_file_path,
+                subtitle_jobs.error_message AS subtitle_error_message,
+                subtitle_jobs.updated_at AS subtitle_updated_at
+            FROM output_clip
+            LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
+            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
+            WHERE output_clip.task_id IN ({placeholders})
+            ORDER BY
+                CASE WHEN output_clip.output_file_name IS NULL OR output_clip.output_file_name = '' THEN 1 ELSE 0 END,
+                output_clip.output_file_name ASC,
+                output_clip.created_at ASC
+            """,
+            task_ids,
+        ).fetchall()
+    result: dict[str, list[dict]] = {task_id: [] for task_id in task_ids}
+    for row in rows:
+        output = dict(row)
+        raw_output_path = (output.get("output_file_path") or "").strip()
+        output_path = resolve_video_file_path(raw_output_path) if raw_output_path else None
+        raw_subtitled_path = (output.get("subtitled_output_file_path") or "").strip()
+        subtitled_path = resolve_video_file_path(raw_subtitled_path) if raw_subtitled_path else None
+        subtitle_status = output.get("subtitle_status") or "pending"
+        clip_start_time = output.get("clip_start_time") or ""
+        clip_end_time = output.get("clip_end_time") or ""
+        try:
+            clip_start_seconds = _parse_time_to_seconds(clip_start_time) if clip_start_time else 0
+            clip_end_seconds = _parse_time_to_seconds(clip_end_time) if clip_end_time else 0
+        except ValueError:
+            clip_start_seconds = 0
+            clip_end_seconds = 0
+        result[output["task_id"]].append(
+            {
+                **output,
+                "status_label": OUTPUT_STATUS_LABELS.get(output["status"], output["status"]),
+                "file_exists": bool(output_path and output_path.exists() and output_path.is_file()),
+                "media_url": f"/media/tasks/{output['task_id']}/output-clips/{output['id']}",
+                "source_media_url": f"/media/tasks/{output['task_id']}/source-video",
+                "clip_start_seconds": clip_start_seconds,
+                "clip_end_seconds": clip_end_seconds,
+                "subtitle_status": subtitle_status,
+                "subtitle_status_label": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),
+                "subtitle_stage": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),
+                "subtitled_file_exists": bool(subtitled_path and subtitled_path.exists() and subtitled_path.is_file()),
+                "subtitled_media_url": f"/media/tasks/{output['task_id']}/subtitled-clips/{output['id']}",
+                "publish_stage": "待推送配置" if subtitle_status == "completed" else "待字幕确认",
+            }
+        )
+    return result
 
 
 def get_dashboard_context() -> dict:
