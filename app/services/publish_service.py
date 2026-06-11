@@ -671,8 +671,8 @@ def _get_output_clip_for_publish(task_id: str, output_clip_id: str) -> dict | No
             FROM output_clip
             JOIN tasks ON tasks.id = output_clip.task_id
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
-            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
-            WHERE output_clip.task_id = ? AND output_clip.id = ?
+            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
+            WHERE output_clip.task_id = ? AND output_clip.id = ? AND output_clip.is_active = 1
             """,
             (task_id, output_clip_id),
         ).fetchone()
@@ -696,8 +696,8 @@ def _get_output_clip_by_id(output_clip_id: str) -> dict | None:
             FROM output_clip
             JOIN tasks ON tasks.id = output_clip.task_id
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
-            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
-            WHERE output_clip.id = ?
+            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
+            WHERE output_clip.id = ? AND output_clip.is_active = 1
             """,
             (output_clip_id,),
         ).fetchone()
@@ -731,8 +731,8 @@ def _list_completed_publish_clips() -> list[dict]:
             FROM output_clip
             JOIN tasks ON tasks.id = output_clip.task_id
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
-            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
-            WHERE tasks.is_deleted = 0 AND output_clip.status = 'completed'
+            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
+            WHERE tasks.is_deleted = 0 AND output_clip.status = 'completed' AND output_clip.is_active = 1
             ORDER BY output_clip.created_at DESC
             """
         ).fetchall()

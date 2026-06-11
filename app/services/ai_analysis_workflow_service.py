@@ -309,12 +309,13 @@ def get_latest_ai_analysis_run(task_id: str) -> dict | None:
         raise ValueError("任务不存在")
     _ensure_ai_analysis_history_from_current_file(task_id)
     with get_connection() as connection:
+        # 优先查找 active run，其次最新 run_number
         row = connection.execute(
             """
             SELECT *
             FROM ai_analysis_runs
             WHERE task_id = ?
-            ORDER BY run_number DESC, created_at DESC
+            ORDER BY is_active DESC, run_number DESC, created_at DESC
             LIMIT 1
             """,
             (task_id,),
@@ -350,14 +351,20 @@ def _insert_ai_analysis_run(
     clips = analysis_payload.get("clips") or []
     with get_connection() as connection:
         run_number = _next_ai_analysis_run_number(connection, task_id)
+        # 将同 task 下所有旧 run 标记为非活跃
+        connection.execute(
+            "UPDATE ai_analysis_runs SET is_active = 0 WHERE task_id = ?",
+            (task_id,),
+        )
         connection.execute(
             """
             INSERT INTO ai_analysis_runs (
                 id, task_id, run_number, provider, provider_label, model,
                 ai_prompt_preset_id, ai_prompt_preset_name, requested_clip_count,
-                clip_count, analysis_summary, fallback_notice, analysis_payload_json, created_at
+                clip_count, analysis_summary, fallback_notice, analysis_payload_json,
+                is_active, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -373,6 +380,7 @@ def _insert_ai_analysis_run(
                 analysis_payload.get("analysis_summary") or "",
                 fallback_notice,
                 json.dumps(analysis_payload, ensure_ascii=False),
+                1,  # is_active
                 now,
             ),
         )
@@ -469,8 +477,20 @@ def restore_ai_analysis_run(task_id: str, run_id: str) -> dict:
         raise ValueError("这条历史记录已损坏，无法恢复") from exc
 
     _write_analysis_payload(task_id, payload)
-    _clear_clip_candidates(task_id)
+    # 先生成新结果，再清除旧的（安全顺序）
     _insert_clip_candidates(task_id, payload.get("clips") or [])
+    _clear_clip_candidates(task_id)
+    # 切换 active 到被恢复的 run
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE ai_analysis_runs SET is_active = 0 WHERE task_id = ?",
+            (task_id,),
+        )
+        connection.execute(
+            "UPDATE ai_analysis_runs SET is_active = 1 WHERE id = ?",
+            (run_id,),
+        )
+        connection.commit()
     update_task_status(task_id, TaskStatus.pending_review)
     append_task_log(task_id, f"已恢复 AI 分析历史：第 {run['run_number']} 次分析")
 
@@ -592,6 +612,10 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
         prompt_preset = get_task_ai_prompt_preset(task_id)
         provider_label = _ai_provider_label(used_provider)
         model_name = _ai_model_name(used_provider)
+        # 先插入新候选片段，成功后再清除旧的（避免"先删后建"导致丢失）
+        _insert_clip_candidates(task_id, analysis_payload["clips"])
+        _clear_clip_candidates(task_id)
+        # 插入新的 AI 分析历史 run（自动标记 is_active=1，旧 run 取消激活）
         analysis_run = _insert_ai_analysis_run(
             task_id=task_id,
             analysis_payload=analysis_payload,
@@ -602,8 +626,6 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             prompt_preset=prompt_preset,
             requested_clip_count=int(task["candidate_clip_count"]),
         )
-        _clear_clip_candidates(task_id)
-        _insert_clip_candidates(task_id, analysis_payload["clips"])
         _append_ai_clip_quality_warnings(task_id, analysis_payload["clips"])
     except (AIAnalysisError, Exception) as exc:
         error = str(exc)
