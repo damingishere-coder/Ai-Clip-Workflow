@@ -229,6 +229,23 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS workflow_jobs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                progress INTEGER NOT NULL DEFAULT 0,
+                message TEXT,
+                payload_json TEXT,
+                result_json TEXT,
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                FOREIGN KEY(task_id) REFERENCES tasks(id)
+            );
             """
         )
         _migrate_tasks_table(connection)
@@ -240,6 +257,7 @@ def init_db() -> None:
         _migrate_publish_platform_configs_table(connection)
         _migrate_publish_accounts_table(connection)
         _migrate_publish_jobs_table(connection)
+        _migrate_workflow_jobs_table(connection)
         _seed_ai_prompt_presets(connection)
         _seed_subtitle_style_preset(connection)
         _seed_publish_platform_configs(connection)
@@ -604,6 +622,31 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
         "retry_count": "ALTER TABLE publish_jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
         "created_at": "ALTER TABLE publish_jobs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         "updated_at": "ALTER TABLE publish_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+    }
+    for column, statement in migrations.items():
+        if column not in columns:
+            connection.execute(statement)
+
+
+def _migrate_workflow_jobs_table(connection: sqlite3.Connection) -> None:
+    columns = _get_table_columns(connection, "workflow_jobs")
+    if not columns:
+        return
+
+    migrations = {
+        "id": "ALTER TABLE workflow_jobs ADD COLUMN id TEXT",
+        "task_id": "ALTER TABLE workflow_jobs ADD COLUMN task_id TEXT",
+        "job_type": "ALTER TABLE workflow_jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT ''",
+        "status": "ALTER TABLE workflow_jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'queued'",
+        "progress": "ALTER TABLE workflow_jobs ADD COLUMN progress INTEGER NOT NULL DEFAULT 0",
+        "message": "ALTER TABLE workflow_jobs ADD COLUMN message TEXT",
+        "payload_json": "ALTER TABLE workflow_jobs ADD COLUMN payload_json TEXT",
+        "result_json": "ALTER TABLE workflow_jobs ADD COLUMN result_json TEXT",
+        "error_message": "ALTER TABLE workflow_jobs ADD COLUMN error_message TEXT",
+        "created_at": "ALTER TABLE workflow_jobs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+        "updated_at": "ALTER TABLE workflow_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+        "started_at": "ALTER TABLE workflow_jobs ADD COLUMN started_at TEXT",
+        "finished_at": "ALTER TABLE workflow_jobs ADD COLUMN finished_at TEXT",
     }
     for column, statement in migrations.items():
         if column not in columns:
