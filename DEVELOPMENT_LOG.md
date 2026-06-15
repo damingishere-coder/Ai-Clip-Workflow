@@ -1,5 +1,12 @@
 # Development Log
 
+## 2026-06-15 v1.3 分支整理与集成发布
+- 新建并验证 `codex/branch-integration-20260611` 集成分支，按顺序整合 `fix/p0-security-and-stability`、`fix/p1-1-db-performance`、`fix/p1-2-query-refactor`、`feature/p1-3-job-queue`、`feature/p1-4-split-task-service`、`feature/p1-5-versioned-products-rollback`、`feature/p2-1-engineering` 和 `feature/p2-2-architecture-docs`。
+- 已处理分支之间的冲突：数据库初始化同时保留 `oauth_states`、`workflow_jobs`、`cut_runs` 等结构；`task_service.py` 保留兼容出口，页面查询实际迁移到 `task_query_service.py`；任务队列、服务拆分、产物版本化和工程化配置已统一集成。
+- 项目版本更新为 `1.3.0`，页面侧边栏状态更新为 `v1.3 分支整合版`。
+- 集成验证结果：`.venv\Scripts\python.exe -m pytest -v` 通过，结果为 202 passed、2 warnings；`.venv\Scripts\ruff.exe check app tests` 通过。
+- 本轮按用户确认后的要求准备将集成分支合并到 `master`，并清理多余功能分支；不执行 force push，不删除 `master`。
+
 ## 2026-06-09 v1.2 分支收拢与 MVP 全流程确认
 - 已将本地功能分支内容收拢到 `master`：抖音发送修复、B站发送修复、AI 接口设置、发送中心 AI 文案配置、Apple 风格 UI、Docker opencli 桥接和字幕相关历史均已纳入主分支历史。
 - `codex/Releasefunction` 是较早的大分支，直接合并会回退新版发送中心、品牌资源和 UI；本轮保留当前 `master` 最新代码，手动补入其核心改动：远程 / 本地 AI 长视频统一分段分析、失败小段跳过、旧字段兼容和短错误提示。
