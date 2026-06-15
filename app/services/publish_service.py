@@ -587,10 +587,46 @@ def build_douyin_oauth_url() -> dict:
         raise ValueError("抖音配置不存在。")
     state = uuid4().hex
     url = DouyinPublishProvider(config).build_oauth_url(state)
+    # 保存 state，10 分钟过期
+    now = datetime.now()
+    expires_at = (now + timedelta(minutes=10)).isoformat(timespec="seconds")
+    with get_connection() as connection:
+        connection.execute(
+            "INSERT INTO oauth_states (state, platform, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (state, "douyin", now.isoformat(timespec="seconds"), expires_at),
+        )
+        connection.commit()
     return {"status": "ok", "url": url, "state": state}
 
 
-def save_douyin_oauth_account(code: str) -> dict:
+def _validate_and_consume_oauth_state(state: str, platform: str) -> bool:
+    """校验 OAuth state 参数，校验通过后删除记录。"""
+    if not state:
+        return False
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT state, expires_at FROM oauth_states WHERE state = ? AND platform = ?",
+            (state, platform),
+        ).fetchone()
+        if not row:
+            return False
+        if row["expires_at"] < now:
+            # 过期 state，清理掉
+            connection.execute("DELETE FROM oauth_states WHERE state = ?", (state,))
+            connection.commit()
+            return False
+        # 校验通过，消费 state
+        connection.execute("DELETE FROM oauth_states WHERE state = ?", (state,))
+        connection.commit()
+    return True
+
+
+def save_douyin_oauth_account(code: str, state: str = "") -> dict:
+    # 先校验 state
+    if not _validate_and_consume_oauth_state(state, "douyin"):
+        raise ValueError("OAuth state 无效或已过期，请重新发起授权")
+
     config = get_platform_config("douyin")
     if not config:
         raise ValueError("抖音配置不存在。")
@@ -635,8 +671,8 @@ def _get_output_clip_for_publish(task_id: str, output_clip_id: str) -> dict | No
             FROM output_clip
             JOIN tasks ON tasks.id = output_clip.task_id
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
-            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
-            WHERE output_clip.task_id = ? AND output_clip.id = ?
+            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
+            WHERE output_clip.task_id = ? AND output_clip.id = ? AND output_clip.is_active = 1
             """,
             (task_id, output_clip_id),
         ).fetchone()
@@ -660,8 +696,8 @@ def _get_output_clip_by_id(output_clip_id: str) -> dict | None:
             FROM output_clip
             JOIN tasks ON tasks.id = output_clip.task_id
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
-            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
-            WHERE output_clip.id = ?
+            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
+            WHERE output_clip.id = ? AND output_clip.is_active = 1
             """,
             (output_clip_id,),
         ).fetchone()
@@ -695,8 +731,8 @@ def _list_completed_publish_clips() -> list[dict]:
             FROM output_clip
             JOIN tasks ON tasks.id = output_clip.task_id
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
-            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
-            WHERE tasks.is_deleted = 0 AND output_clip.status = 'completed'
+            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
+            WHERE tasks.is_deleted = 0 AND output_clip.status = 'completed' AND output_clip.is_active = 1
             ORDER BY output_clip.created_at DESC
             """
         ).fetchall()
@@ -857,6 +893,38 @@ def _find_opencli_job(output_clip_id: str, platform: str) -> dict | None:
             (output_clip_id, platform),
         ).fetchone()
     return _normalize_job(row) if row else None
+
+
+def _batch_find_opencli_jobs(output_clip_ids: list[str]) -> dict[str, dict[str, dict]]:
+    """一次查询获得所有 output_clip 在各平台的 opencli 发布任务。
+
+    返回: {output_clip_id: {platform: normalized_job}}
+    """
+    if not output_clip_ids:
+        return {}
+    placeholders = ",".join("?" for _ in output_clip_ids)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT * FROM publish_jobs
+            WHERE output_clip_id IN ({placeholders}) AND publish_mode = 'opencli_publish'
+            ORDER BY created_at DESC
+            """,
+            output_clip_ids,
+        ).fetchall()
+    result: dict[str, dict[str, dict]] = {}
+    for row in rows:
+        job = _normalize_job(row)
+        if job is None:
+            continue
+        oc_id = job["output_clip_id"]
+        platform = job["platform"]
+        if oc_id not in result:
+            result[oc_id] = {}
+        # 只保留每个 (output_clip_id, platform) 的第一条（按 created_at DESC）
+        if platform not in result[oc_id]:
+            result[oc_id][platform] = job
+    return result
 
 
 def _publish_provider_payload(metadata: dict, cover: dict | None = None) -> str:
@@ -1069,6 +1137,7 @@ def _get_video_duration_seconds(video_path: Path) -> float:
         text=True,
         encoding="utf-8",
         errors="replace",
+        timeout=settings.ffprobe_timeout,
     )
     if ffprobe_path.returncode != 0:
         return 0
@@ -1121,7 +1190,8 @@ def _write_plain_cover_frame(video_path: Path, cover_path: Path, seconds: float)
         "2",
         str(cover_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            timeout=settings.ffmpeg_cover_timeout)
     if result.returncode != 0:
         raise ValueError(f"封面帧生成失败：{summarize_stderr(result.stderr)}")
     if not cover_path.exists() or cover_path.stat().st_size == 0:
@@ -1207,7 +1277,8 @@ def generate_publish_cover(payload: PublishCoverCreate, job_id: str | None = Non
         "2",
         str(cover_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            timeout=settings.ffmpeg_cover_timeout)
     if result.returncode != 0:
         raise ValueError(f"封面生成失败：{summarize_stderr(result.stderr)}")
     if not cover_path.exists() or cover_path.stat().st_size == 0:
@@ -2264,7 +2335,7 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
         while True:
             try:
                 result = runner(command)
-            except subprocess.TimeoutExpired as exc:
+            except subprocess.TimeoutExpired:
                 message = f"opencli 第 {index} 步超时：{_command_summary(command)}"
                 failed_job = _mark_job_failed(job_id, "opencli_timeout", message, {"outputs": outputs})
                 return {"status": "failed", "message": message, "job": failed_job}
@@ -2475,7 +2546,10 @@ def _get_provider(platform: str, config: dict):
 def get_publish_center_context() -> dict:
     publish_items = []
     queue_items = []
-    for item in _list_completed_publish_clips():
+    raw_items = _list_completed_publish_clips()
+    output_clip_ids = [item["output_clip_id"] for item in raw_items]
+    opencli_jobs_map = _batch_find_opencli_jobs(output_clip_ids)
+    for item in raw_items:
         original_path = resolve_video_file_path(item.get("output_file_path") or "")
         subtitled_path = resolve_video_file_path(item.get("subtitled_output_file_path") or "")
         default_title = _sanitize_publish_title(_default_title_for_clip(item))
@@ -2491,8 +2565,9 @@ def get_publish_center_context() -> dict:
             "video_media_url": _video_media_url(item["task_id"], item["output_clip_id"], "original"),
         }
         publish_items.append(normalized_item)
+        jobs_for_oc = opencli_jobs_map.get(item["output_clip_id"], {})
         for platform in PLATFORM_LABELS:
-            job = _find_opencli_job(item["output_clip_id"], platform)
+            job = jobs_for_oc.get(platform)
             if job:
                 queue_items.append(
                     {

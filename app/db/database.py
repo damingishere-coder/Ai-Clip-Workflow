@@ -14,8 +14,11 @@ VARIETY_AI_PROMPT_PATH = settings.project_root / "prompts" / "variety_interview_
 @contextmanager
 def get_connection() -> Iterator[sqlite3.Connection]:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(settings.database_path)
+    connection = sqlite3.connect(str(settings.database_path), timeout=10)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 5000")
+    connection.execute("PRAGMA journal_mode = WAL")
     try:
         yield connection
     finally:
@@ -219,6 +222,42 @@ def init_db() -> None:
                 FOREIGN KEY(output_clip_id) REFERENCES output_clip(id),
                 FOREIGN KEY(account_id) REFERENCES publish_accounts(id)
             );
+
+            CREATE TABLE IF NOT EXISTS oauth_states (
+                state TEXT PRIMARY KEY,
+                platform TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS workflow_jobs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                progress INTEGER NOT NULL DEFAULT 0,
+                message TEXT,
+                payload_json TEXT,
+                result_json TEXT,
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                FOREIGN KEY(task_id) REFERENCES tasks(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS cut_runs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                run_number INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'processing',
+                is_active INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES tasks(id)
+            );
             """
         )
         _migrate_tasks_table(connection)
@@ -230,15 +269,45 @@ def init_db() -> None:
         _migrate_publish_platform_configs_table(connection)
         _migrate_publish_accounts_table(connection)
         _migrate_publish_jobs_table(connection)
+        _migrate_workflow_jobs_table(connection)
+        _migrate_cut_runs_table(connection)
         _seed_ai_prompt_presets(connection)
         _seed_subtitle_style_preset(connection)
         _seed_publish_platform_configs(connection)
+        _create_indexes(connection)
         connection.commit()
 
 
 def _get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
     rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row["name"] for row in rows}
+
+
+def _create_indexes(connection: sqlite3.Connection) -> None:
+    """创建常用查询索引（IF NOT EXISTS 语法兼容 SQLite 3.27+）。"""
+    indexes = [
+        # 任务列表与状态筛选
+        "CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_is_deleted_created ON tasks(is_deleted, created_at)",
+        # 片段候选查询（按任务、启用状态、删除标记）
+        "CREATE INDEX IF NOT EXISTS idx_clip_candidates_task_enabled_deleted ON clip_candidates(task_id, enabled, is_deleted)",
+        # 输出切片（按任务、状态）
+        "CREATE INDEX IF NOT EXISTS idx_output_clip_task_status ON output_clip(task_id, status)",
+        # AI 分析（按任务、创建时间；ai_analysis_runs 表无 status 列）
+        "CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_task_created ON ai_analysis_runs(task_id, created_at)",
+        # 字幕任务（按任务、输出切片、状态）
+        "CREATE INDEX IF NOT EXISTS idx_subtitle_jobs_task_output_status ON subtitle_jobs(task_id, output_clip_id, status)",
+        # 发布任务（按状态、平台、时间；按任务、输出切片）
+        "CREATE INDEX IF NOT EXISTS idx_publish_jobs_status_platform_created ON publish_jobs(status, platform, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_publish_jobs_task_output ON publish_jobs(task_id, output_clip_id)",
+        # OAuth state 过期清理
+        "CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at)",
+    ]
+    for sql in indexes:
+        try:
+            connection.execute(sql)
+        except sqlite3.Error:
+            pass
 
 
 def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
@@ -397,11 +466,18 @@ def _migrate_output_clip_table(connection: sqlite3.Connection) -> None:
         "error_message": "ALTER TABLE output_clip ADD COLUMN error_message TEXT",
         "created_at": "ALTER TABLE output_clip ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         "updated_at": "ALTER TABLE output_clip ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+        "cut_run_id": "ALTER TABLE output_clip ADD COLUMN cut_run_id TEXT",
+        "is_active": "ALTER TABLE output_clip ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
     }
 
     for column, statement in migrations.items():
         if column not in columns:
             connection.execute(statement)
+
+    # 为已有记录补充默认值
+    columns = _get_table_columns(connection, "output_clip")
+    if "is_active" in columns:
+        connection.execute("UPDATE output_clip SET is_active = 1 WHERE is_active IS NULL")
 
 
 def _migrate_ai_analysis_runs_table(connection: sqlite3.Connection) -> None:
@@ -424,11 +500,31 @@ def _migrate_ai_analysis_runs_table(connection: sqlite3.Connection) -> None:
         "fallback_notice": "ALTER TABLE ai_analysis_runs ADD COLUMN fallback_notice TEXT",
         "analysis_payload_json": "ALTER TABLE ai_analysis_runs ADD COLUMN analysis_payload_json TEXT NOT NULL DEFAULT '{}'",
         "created_at": "ALTER TABLE ai_analysis_runs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+        "is_active": "ALTER TABLE ai_analysis_runs ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
     }
 
     for column, statement in migrations.items():
         if column not in columns:
             connection.execute(statement)
+
+    # 为已有记录补充默认值，并将每个 task 只有最新 run 标记为 active
+    columns = _get_table_columns(connection, "ai_analysis_runs")
+    if "is_active" in columns:
+        connection.execute("UPDATE ai_analysis_runs SET is_active = 1 WHERE is_active IS NULL")
+        # 每个 task 只保留最新 run_number 为 active
+        connection.executescript(
+            """
+            UPDATE ai_analysis_runs SET is_active = 0
+            WHERE id NOT IN (
+                SELECT id FROM ai_analysis_runs
+                WHERE (task_id, run_number) IN (
+                    SELECT task_id, MAX(run_number)
+                    FROM ai_analysis_runs
+                    GROUP BY task_id
+                )
+            );
+            """
+        )
 
 
 def _migrate_subtitle_style_presets_table(connection: sqlite3.Connection) -> None:
@@ -468,10 +564,16 @@ def _migrate_subtitle_jobs_table(connection: sqlite3.Connection) -> None:
         "error_message": "ALTER TABLE subtitle_jobs ADD COLUMN error_message TEXT",
         "created_at": "ALTER TABLE subtitle_jobs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         "updated_at": "ALTER TABLE subtitle_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+        "is_active": "ALTER TABLE subtitle_jobs ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
     }
     for column, statement in migrations.items():
         if column not in columns:
             connection.execute(statement)
+
+    # 为已有记录补充默认值
+    columns = _get_table_columns(connection, "subtitle_jobs")
+    if "is_active" in columns:
+        connection.execute("UPDATE subtitle_jobs SET is_active = 1 WHERE is_active IS NULL")
 
 
 def _migrate_publish_platform_configs_table(connection: sqlite3.Connection) -> None:
@@ -567,6 +669,53 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
         "created_at": "ALTER TABLE publish_jobs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         "updated_at": "ALTER TABLE publish_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
     }
+    for column, statement in migrations.items():
+        if column not in columns:
+            connection.execute(statement)
+
+
+def _migrate_workflow_jobs_table(connection: sqlite3.Connection) -> None:
+    columns = _get_table_columns(connection, "workflow_jobs")
+    if not columns:
+        return
+
+    migrations = {
+        "id": "ALTER TABLE workflow_jobs ADD COLUMN id TEXT",
+        "task_id": "ALTER TABLE workflow_jobs ADD COLUMN task_id TEXT",
+        "job_type": "ALTER TABLE workflow_jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT ''",
+        "status": "ALTER TABLE workflow_jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'queued'",
+        "progress": "ALTER TABLE workflow_jobs ADD COLUMN progress INTEGER NOT NULL DEFAULT 0",
+        "message": "ALTER TABLE workflow_jobs ADD COLUMN message TEXT",
+        "payload_json": "ALTER TABLE workflow_jobs ADD COLUMN payload_json TEXT",
+        "result_json": "ALTER TABLE workflow_jobs ADD COLUMN result_json TEXT",
+        "error_message": "ALTER TABLE workflow_jobs ADD COLUMN error_message TEXT",
+        "created_at": "ALTER TABLE workflow_jobs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+        "updated_at": "ALTER TABLE workflow_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+        "started_at": "ALTER TABLE workflow_jobs ADD COLUMN started_at TEXT",
+        "finished_at": "ALTER TABLE workflow_jobs ADD COLUMN finished_at TEXT",
+    }
+    for column, statement in migrations.items():
+        if column not in columns:
+            connection.execute(statement)
+
+
+def _migrate_cut_runs_table(connection: sqlite3.Connection) -> None:
+    """cut_runs 表的列级迁移，兼容未来新增字段"""
+    columns = _get_table_columns(connection, "cut_runs")
+    if not columns:
+        return
+
+    migrations = {
+        "id": "ALTER TABLE cut_runs ADD COLUMN id TEXT",
+        "task_id": "ALTER TABLE cut_runs ADD COLUMN task_id TEXT",
+        "run_number": "ALTER TABLE cut_runs ADD COLUMN run_number INTEGER NOT NULL DEFAULT 1",
+        "status": "ALTER TABLE cut_runs ADD COLUMN status TEXT NOT NULL DEFAULT 'processing'",
+        "is_active": "ALTER TABLE cut_runs ADD COLUMN is_active INTEGER NOT NULL DEFAULT 0",
+        "error_message": "ALTER TABLE cut_runs ADD COLUMN error_message TEXT",
+        "created_at": "ALTER TABLE cut_runs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+        "updated_at": "ALTER TABLE cut_runs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+    }
+
     for column, statement in migrations.items():
         if column not in columns:
             connection.execute(statement)

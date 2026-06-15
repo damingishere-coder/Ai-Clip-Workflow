@@ -81,7 +81,8 @@ def run_ffmpeg_audio_extract(video_path: Path, output_path: Path) -> dict[str, s
         "1",
         str(output_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            timeout=settings.ffmpeg_audio_extract_timeout)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "FFmpeg 音频提取失败")
     return {
@@ -415,7 +416,8 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
         "default=noprint_wrappers=1:nokey=1",
         str(audio_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            timeout=settings.ffprobe_timeout)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "FFprobe 无法读取音频时长")
     try:
@@ -473,7 +475,8 @@ def _extract_audio_chunk(audio_path: Path, chunk_path: Path, chunk: TranscriptCh
         "1",
         str(chunk_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            timeout=settings.ffmpeg_chunk_timeout)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"FFmpeg 音频分段失败：第 {chunk.index} 段")
 
@@ -501,7 +504,8 @@ def _extract_remote_audio_chunk(audio_path: Path, chunk_path: Path, chunk: Trans
         *codec_args,
         str(chunk_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            timeout=settings.ffmpeg_chunk_timeout)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"FFmpeg 远程转写音频压缩失败：第 {chunk.index} 段")
 

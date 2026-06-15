@@ -1,12 +1,43 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.db.database import init_db
 from app.routers import ai_prompts, files, media, pages, publish, settings as settings_router, tasks
+
+
+# /media 和 /static 的 Origin 白名单
+_ALLOWED_CORS_ORIGINS = {
+    "https://creator.douyin.com",
+    "https://members.bilibili.com",
+    "http://localhost:8001",
+    "http://127.0.0.1:8001",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+}
+
+# /api 写方法（需要 token 校验）
+_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _is_origin_allowed(origin: str) -> bool:
+    if not origin:
+        return False
+    return origin in _ALLOWED_CORS_ORIGINS
+
+
+def _build_allow_origin_header(origin: str) -> str:
+    if _is_origin_allowed(origin):
+        return origin
+    # 对于 localhost / 127.0.0.1 的任意端口也放行（本地开发）
+    if origin.startswith("http://localhost:") or origin.startswith("http://127.0.0.1:"):
+        return origin
+    return "null"
 
 
 @asynccontextmanager
@@ -18,34 +49,51 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     description=settings.app_description,
-    version="1.2.0",
+    version="1.3.0",
     lifespan=lifespan,
 )
 
 
 @app.middleware("http")
-async def disable_static_cache(request: Request, call_next):
-    is_local_asset = request.url.path.startswith(("/media/", "/static/"))
+async def security_middleware(request: Request, call_next):
+    request_path = request.url.path
     request_origin = request.headers.get("Origin", "")
-    allowed_origins = {
-        "https://creator.douyin.com",
-        "https://member.bilibili.com",
-    }
-    if is_local_asset and request.method == "OPTIONS":
+
+    # ── 1. API 写保护 ──
+    if request_path.startswith("/api/") and request.method in _WRITE_METHODS:
+        token = settings.local_admin_token
+        if token:
+            auth_header = request.headers.get("Authorization", "")
+            expected = f"Bearer {token}"
+            if auth_header != expected:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "API 写操作需要有效的 LOCAL_ADMIN_TOKEN"},
+                )
+
+    # ── 2. OPTIONS 预检请求处理 ──
+    is_static_asset = request_path.startswith(("/media/", "/static/"))
+    if is_static_asset and request.method == "OPTIONS":
         response = Response()
     else:
         response = await call_next(request)
-    if request.url.path.startswith("/static/"):
+
+    # ── 3. 静态资源缓存 ──
+    if request_path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-store, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
-    if is_local_asset:
-        response.headers["Access-Control-Allow-Origin"] = (
-            request_origin if request_origin in allowed_origins else "*"
-        )
+
+    # ── 4. CORS / Private Network Access ──
+    if is_static_asset:
+        allow_origin = _build_allow_origin_header(request_origin)
+        response.headers["Access-Control-Allow-Origin"] = allow_origin
         response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "*"
-        response.headers["Access-Control-Allow-Private-Network"] = "true"
+        # 仅白名单 Origin 返回 Private Network 预检头
+        if _is_origin_allowed(request_origin) or request_origin.startswith("http://localhost:") or request_origin.startswith("http://127.0.0.1:"):
+            response.headers["Access-Control-Allow-Private-Network"] = "true"
+
     return response
 
 

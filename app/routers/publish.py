@@ -53,7 +53,7 @@ async def douyin_oauth_callback(code: str = "", state: str = ""):
     if not code:
         return RedirectResponse(url=f"/publish?publish_message={quote('抖音授权失败：没有收到授权 code')}")
     try:
-        publish_service.save_douyin_oauth_account(code)
+        publish_service.save_douyin_oauth_account(code, state=state)
     except Exception as exc:
         return RedirectResponse(url=f"/publish?publish_message={quote(f'抖音授权失败：{str(exc)}')}")
     return RedirectResponse(url=f"/publish?publish_message={quote('抖音授权账号已保存')}")

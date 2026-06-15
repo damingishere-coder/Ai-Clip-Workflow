@@ -1,7 +1,21 @@
-fastapi
-uvicorn[standard]
-jinja2
-python-multipart
-pydantic
-aiofiles
-faster-whisper
+# NiuMa Studio 依赖
+# Python 版本要求：>=3.12
+
+# Web 框架
+fastapi>=0.136.0
+uvicorn[standard]>=0.47.0
+
+# 模板引擎
+jinja2>=3.1.0
+
+# 表单与文件上传
+python-multipart>=0.0.28
+
+# 数据校验
+pydantic>=2.13.0
+
+# 异步文件操作
+aiofiles>=25.1.0
+
+# 本地语音转写（可选，远程转写不需要此包）
+faster-whisper>=1.2.0

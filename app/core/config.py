@@ -66,6 +66,9 @@ class Settings:
     default_max_clip_minutes: int = 2
     default_candidate_count: int = 8
     default_cut_strategy: str = "accurate"
+    local_admin_token: str = _env("LOCAL_ADMIN_TOKEN", "")
+    ffmpeg_timeout: int = int(_env("FFMPEG_TIMEOUT", "600"))
+    ai_provider: str = _env_first(("AI_PROVIDER", "AI_DEFAULT_PROVIDER"), "remote")
     ai_default_provider: str = _env("AI_DEFAULT_PROVIDER", "remote")
     ai_request_timeout_seconds: int = int(_env("AI_REQUEST_TIMEOUT_SECONDS", "120"))
 
@@ -174,6 +177,31 @@ class Settings:
     volcengine_asr_resource_id: str = _env("VOLCENGINE_ASR_RESOURCE_ID", "volc.bigasr.auc_turbo")
     volcengine_asr_timeout_seconds: int = int(_env("VOLCENGINE_ASR_TIMEOUT_SECONDS", "300"))
     volcengine_asr_audio_format: str = _env("VOLCENGINE_ASR_AUDIO_FORMAT", "mp3")
+
+    # === P0 安全与稳定性配置 ===
+
+    # 本地 API 访问保护：对 /api 下写接口校验 token
+    local_admin_token: str = _env("LOCAL_ADMIN_TOKEN", "")
+
+    # 允许浏览的媒体根目录（逗号分隔的绝对路径列表）
+    allowed_media_roots: str = _env("ALLOWED_MEDIA_ROOTS", "")
+
+    # 上传文件大小限制（字节），默认 4GB
+    max_upload_size_bytes: int = int(_env("MAX_UPLOAD_SIZE_BYTES", str(4 * 1024 * 1024 * 1024)))
+
+    # 上传文件允许的扩展名（逗号分隔）
+    allowed_upload_extensions: str = _env(
+        "ALLOWED_UPLOAD_EXTENSIONS",
+        ".mp4,.mov,.mkv,.avi,.flv,.webm,.m4v,.ts,.wav,.mp3,.aac,.flac,.ogg,.wma",
+    )
+
+    # FFmpeg / FFprobe 子进程超时（秒）
+    ffmpeg_audio_extract_timeout: int = int(_env("FFMPEG_AUDIO_EXTRACT_TIMEOUT", "600"))
+    ffmpeg_cut_timeout: int = int(_env("FFMPEG_CUT_TIMEOUT", "600"))
+    ffmpeg_subtitle_timeout: int = int(_env("FFMPEG_SUBTITLE_TIMEOUT", "300"))
+    ffmpeg_cover_timeout: int = int(_env("FFMPEG_COVER_TIMEOUT", "120"))
+    ffprobe_timeout: int = int(_env("FFPROBE_TIMEOUT", "60"))
+    ffmpeg_chunk_timeout: int = int(_env("FFMPEG_CHUNK_TIMEOUT", "120"))
 
 
 settings = Settings()
