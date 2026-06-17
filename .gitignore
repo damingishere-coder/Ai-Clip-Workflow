@@ -1,12 +1,15 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
 
 # 本地真实配置与密钥：不要提交 API Key
 .env
 .env.*
 !.env.example
 
+# 本地数据库、日志、截图、浏览器缓存、测试素材都不提交
 data/*
 !data/.gitkeep
 
@@ -25,6 +28,7 @@ tasks/*
 *.webm
 *.mp3
 *.wav
+*.bak_*
 
 .DS_Store
 Thumbs.db

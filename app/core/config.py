@@ -66,7 +66,6 @@ class Settings:
     default_max_clip_minutes: int = 2
     default_candidate_count: int = 8
     default_cut_strategy: str = "accurate"
-    local_admin_token: str = _env("LOCAL_ADMIN_TOKEN", "")
     ffmpeg_timeout: int = int(_env("FFMPEG_TIMEOUT", "600"))
     ai_provider: str = _env_first(("AI_PROVIDER", "AI_DEFAULT_PROVIDER"), "remote")
     ai_default_provider: str = _env("AI_DEFAULT_PROVIDER", "remote")

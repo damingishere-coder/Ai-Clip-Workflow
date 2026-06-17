@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class TaskStatus(str, Enum):
@@ -131,7 +131,7 @@ class PublishBatchJobCreate(BaseModel):
     description: Optional[str] = Field(default="", max_length=2000)
     tags: Optional[str] = Field(default="", max_length=500)
 
-    @validator("output_clip_ids")
+    @field_validator("output_clip_ids")
     def validate_output_clip_ids(cls, value: list[str]) -> list[str]:
         if not value:
             raise ValueError("至少选择一条切片")
@@ -220,7 +220,7 @@ class AIClipItem(BaseModel):
     confidence_score: float = Field(..., ge=0, le=1)
     selected_by_default: bool = True
 
-    @validator("start_time", "end_time")
+    @field_validator("start_time", "end_time")
     def validate_time_text(cls, value: str) -> str:
         parts = value.split(":")
         if len(parts) not in {2, 3}:

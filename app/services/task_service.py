@@ -294,27 +294,31 @@ def _probe_video(path: Path | None) -> dict[str, str]:
     duration = None
     ffprobe = shutil.which("ffprobe")
     if ffprobe:
-        result = subprocess.run(
-            [
-                ffprobe,
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        if result.returncode == 0:
-            try:
-                duration = float(result.stdout.strip())
-            except ValueError:
-                duration = None
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=settings.ffprobe_timeout,
+            )
+            if result.returncode == 0:
+                try:
+                    duration = float(result.stdout.strip())
+                except ValueError:
+                    duration = None
+        except subprocess.TimeoutExpired:
+            duration = None
     return {"duration": _format_duration(duration), "video_size": _format_file_size(path.stat().st_size)}
 
 
