@@ -25,5 +25,6 @@ services:
       - ./app:/app/app
       - ./prompts:/app/prompts
       - ./data:/app/data
+      # Windows 宿主机任务目录。没有 E 盘时，请把左侧路径改成真实存在的目录。
       - E:/直播间切片工作流存储:/workspace/tasks
     restart: unless-stopped

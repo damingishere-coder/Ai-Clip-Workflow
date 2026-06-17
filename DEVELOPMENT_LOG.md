@@ -1,5 +1,15 @@
 # Development Log
 
+## 2026-06-17 Windows 代码体检、文档重写与冗余清理
+- 在 `refactor/windows-codebase-audit-docs-cleanup` 分支执行本轮整理，开始前确认 `master` 工作区无未提交的跟踪文件修改。
+- 修复 AI 分析候选片段替换顺序：重新跑 AI 分析或恢复历史分析时，会用新结果替换当前候选，不再插入后立刻清空。
+- 为字幕 FFmpeg 烧录和任务详情 FFprobe 探测补充超时保护，降低 Windows 本地进程卡死风险。
+- 移除重复的 `LOCAL_ADMIN_TOKEN` 配置字段，并将 Pydantic 校验器迁移到 `field_validator`。
+- 新增 AI 候选片段替换和历史恢复回归测试，已先单独验证 `tests/test_versioning_rollback.py::TestAIAnalysisActive` 通过。
+- 重写或同步 `README.md`、`docs/WINDOWS_SETUP.md`、`docs/ARCHITECTURE.md`、`docs/TASK_FLOW.md`、`docs/DATABASE_SCHEMA.md`、`docs/DEPLOYMENT.md`、`docs/AI_ANALYSIS.md`、`docs/VIDEO_CUTTING.md`、`docs/CLIP_REVIEW.md`、`docs/SUBTITLE_AND_PUBLISH_PLAN.md`、`docs/UI_REFERENCE.md`、`.env.example` 和 `CHANGELOG.md`。
+- 文档统一说明：`05_clips` 是当前切片目录，`06_subtitled` 是字幕成片目录，`07_covers` 是封面帧目录；`scheduled_at` 只是字段预留，发送中心仍需人工确认。
+- 本轮不删除真实数据库、`.env`、任务目录、浏览器截图缓存或疑似含密钥备份文件；这些只列为后续需人工确认清理项。
+
 ## 2026-06-15 v1.3 分支整理与集成发布
 - 新建并验证 `codex/branch-integration-20260611` 集成分支，按顺序整合 `fix/p0-security-and-stability`、`fix/p1-1-db-performance`、`fix/p1-2-query-refactor`、`feature/p1-3-job-queue`、`feature/p1-4-split-task-service`、`feature/p1-5-versioned-products-rollback`、`feature/p2-1-engineering` 和 `feature/p2-2-architecture-docs`。
 - 已处理分支之间的冲突：数据库初始化同时保留 `oauth_states`、`workflow_jobs`、`cut_runs` 等结构；`task_service.py` 保留兼容出口，页面查询实际迁移到 `task_query_service.py`；任务队列、服务拆分、产物版本化和工程化配置已统一集成。

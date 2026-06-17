@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from app.core.config import settings
 from app.services.storage_service import get_artifact_paths, resolve_video_file_path
 from app.services.transcript_service import read_transcript_range
 
@@ -387,7 +388,14 @@ def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
             "copy",
             str(output_path),
         ]
-        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=settings.ffmpeg_subtitle_timeout,
+        )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "FFmpeg 字幕生成失败")
     except Exception as exc:

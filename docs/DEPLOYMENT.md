@@ -1,303 +1,155 @@
-# 部署说明
+# 部署与启动说明
 
-## 1. 当前部署模式
+当前项目优先支持 Windows 本地运行。部署方式分为本地 Python 启动和 Docker 启动。
 
-v1.3 支持两种部署方式：
+## 1. 推荐方式：Windows 本地 Python
 
-### 方式 A：Windows 本地直接运行（推荐日常使用）
+适合日常开发、调试、连接本机 FFmpeg、Ollama、opencli。
 
-```
-你的 Windows 电脑
-├── Python 3.12（系统安装）
-├── FFmpeg（系统安装，需在 PATH 中）
-├── 项目代码（任意目录）
-├── .venv（Python 虚拟环境）
-└── 浏览器打开 http://127.0.0.1:8001
-```
+详细步骤见 [WINDOWS_SETUP.md](WINDOWS_SETUP.md)。
 
-**适用场景**：日常使用、开发调试、单机处理。
-
-### 方式 B：Docker 容器运行（推荐测试/隔离环境）
-
-```
-你的 Windows 电脑
-├── Docker Desktop
-├── 项目代码（任意目录）
-├── 容器 niuma-studio
-│   ├── Python 3.12 + FFmpeg（容器内预装）
-│   └── uvicorn 监听 8001 端口
-└── 浏览器打开 http://127.0.0.1:8001
-```
-
-**适用场景**：不想装 Python/FFmpeg、测试环境隔离、CI 验证。
-
----
-
-## 2. 方式 A 详细步骤：Windows 本地直接运行
-
-### 2.1 环境要求
-
-| 软件 | 最低版本 | 检查命令 |
-| --- | --- | --- |
-| Python | 3.12 | `python --version` |
-| FFmpeg | 4.0+ | `ffmpeg -version` |
-| Git | 2.30+ | `git --version` |
-
-### 2.2 获取代码
-
-打开 PowerShell，进入你想放项目的目录：
+核心命令：
 
 ```powershell
-git clone <仓库地址> "New project 2"
-cd "New project 2"
+cd "C:\Users\10578\Documents\New project 2"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 ```
 
-### 2.3 创建虚拟环境并安装依赖
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-看到 `Successfully installed ...` 即为成功。
-
-### 2.4 配置环境变量
-
-```powershell
-copy .env.example .env
-```
-
-然后用记事本或 VS Code 打开 `.env`，按注释填写：
-
-- `STORAGE_ROOT`：任务产物存放目录（默认 `E:\直播间切片工作流存储`）
-- `AI_ANALYSIS_REMOTE_API_KEY`：DeepSeek API Key（可选，用远程 AI 分析时需要）
-- `VOLCENGINE_ASR_API_KEY`：火山引擎转写 Key（可选，用远程转写时需要）
-- `LOCAL_ADMIN_TOKEN`：管理接口鉴权 Token（可留空或设随机字符串）
-
-### 2.5 启动服务
-
-```powershell
-uvicorn app.main:app --reload --port 8001
-```
-
-看到类似以下输出说明启动成功：
-
-```text
-INFO:     Uvicorn running on http://127.0.0.1:8001
-INFO:     Application startup complete.
-```
-
-### 2.6 打开页面
-
-浏览器访问：
+成功后打开：
 
 ```text
 http://127.0.0.1:8001
 ```
 
-### 2.7 停止服务
+## 2. Docker 方式
 
-在终端按 `Ctrl + C`。
+适合隔离 Python 环境。当前 Compose 配置：
 
----
+- 容器端口：`8001`
+- 容器内数据目录：`/app/data`
+- 容器内任务目录：`/workspace/tasks`
+- 宿主机默认挂载：`E:/直播间切片工作流存储`
 
-## 3. 方式 B 详细步骤：Docker 运行
-
-### 3.1 环境要求
-
-- Docker Desktop for Windows（已安装并启动）
-
-### 3.2 配置环境变量
-
-与方式 A 相同，先 `copy .env.example .env` 并填写配置。
-
-### 3.3 构建并启动
+启动：
 
 ```powershell
 docker compose up --build
 ```
 
-首次启动会下载基础镜像并安装依赖，等待几分钟。
-
-看到以下输出说明启动成功：
-
-```text
-niuma-studio  | INFO:     Uvicorn running on http://0.0.0.0:8001
-niuma-studio  | INFO:     Application startup complete.
-```
-
-### 3.4 打开页面
-
-```text
-http://127.0.0.1:8001
-```
-
-### 3.5 停止容器
+停止：
 
 ```powershell
 docker compose down
 ```
 
-### 3.6 Docker 特有说明
+如果电脑没有 E 盘，请先修改 `docker-compose.yml`：
 
-- **存储目录**：`docker-compose.yml` 默认将 `E:\直播间切片工作流存储` 挂载到容器内 `/workspace/tasks`。如果你的存储目录在其他位置，请修改 `docker-compose.yml` 中的 `volumes` 配置。
-- **代码热更新**：`app/` 和 `prompts/` 目录以 volume 方式挂载，修改代码后容器自动重载。
-- **Ollama 连接**：如果 Ollama 在宿主机运行，容器内通过 `http://host.docker.internal:11434/v1` 访问。
-- **opencli 桥接**：容器内通过 `http://host.docker.internal:8765` 访问宿主机上的 opencli 桥接服务。
+```yaml
+volumes:
+  - 你的真实Windows目录:/workspace/tasks
+```
 
----
+示例：
 
-## 4. 当前部署的局限性
+```yaml
+volumes:
+  - C:/NiuMaStudio/tasks:/workspace/tasks
+```
 
-这些是当前版本的**已知限制**，不是 Bug，会在后续版本逐步改善：
+## 3. 配置文件
 
-| 局限 | 说明 | 影响 |
-| --- | --- | --- |
-| **单进程** | API 和视频处理在同一进程 | 处理大视频时页面可能卡住（请求阻塞） |
-| **无后台队列** | 没有独立 Worker 进程 | 转写、AI 分析、切割都在请求线程中同步执行 |
-| **单机存储** | 任务产物必须在本地磁盘 | 不能跨机器共享任务数据 |
-| **无负载均衡** | 不支持多实例部署 | 只能一个人用，不能横向扩展 |
-| **无 HTTPS** | 只有 HTTP | 只适合本地使用，不要暴露到公网 |
-| **单用户** | 没有登录和用户隔离 | 谁打开浏览器都能操作所有任务 |
+复制模板：
 
----
+```powershell
+copy .env.example .env
+```
 
-## 5. 未来部署场景（规划中）
+关键配置：
 
-### 5.1 短期：Windows 本地 + NAS 存储
+| 配置 | 说明 |
+|---|---|
+| `STORAGE_ROOT` | 任务产物根目录 |
+| `TASKS_DIR` | 任务目录，通常和 `STORAGE_ROOT` 一样 |
+| `DATABASE_PATH` | SQLite 数据库路径 |
+| `TRANSCRIPTION_PROVIDER` | `volcengine` 或 `local` |
+| `AI_DEFAULT_PROVIDER` | `remote` 或 `local` |
+| `LOCAL_ADMIN_TOKEN` | 本地写接口保护令牌 |
+| `OPENCLI_HOST_BRIDGE_URL` | Docker 调用宿主机 opencli 桥接时使用 |
+
+真实密钥只写入 `.env`，不要写入代码、文档或 `.env.example`。
+
+## 4. 外部依赖
+
+| 能力 | 必需依赖 | 检查命令 |
+|---|---|---|
+| 视频探测 / 切片 / 字幕 | FFmpeg + FFprobe | `ffmpeg -version` / `ffprobe -version` |
+| 火山引擎转写 | 火山引擎 API Key | 检查 `.env` |
+| 本地转写 | faster-whisper 依赖 | 运行本地转写时验证 |
+| 本地 AI | Ollama | `ollama list` |
+| 发送中心浏览器辅助 | opencli + 已登录 Chrome | `opencli --help` |
+
+## 5. 后台任务说明
+
+当前没有 Celery、Redis 或独立 Worker。
+
+代码里存在 `workflow_jobs` 本地轻量队列表，当前主要用于异步切片任务。它运行在同一个 FastAPI 进程内，不需要额外部署服务。
+
+转写流程使用 FastAPI `BackgroundTasks`。AI 分析会在线程池里执行。视频切片既有同步入口，也有异步队列入口。
+
+## 6. 发送中心边界
+
+发送中心当前主要做：
+
+- 从已完成切片生成抖音 / B站待发送任务。
+- 生成标题、简介、话题。
+- 生成候选封面帧。
+- 调用 opencli 辅助已登录 Chrome 打开和填写投稿页。
+
+发送中心当前不做：
+
+- 不保证完全无人值守发布。
+- 不绕过验证码。
+- 不绕过登录失效。
+- 不绕过平台风控。
+- 不自动按 `scheduled_at` 定时发布。
+
+## 7. 健康检查
+
+启动后可以访问：
 
 ```text
-Windows 主机（运行 FastAPI）
-└── 存储目录指向 NAS 网络路径
-    └── \\192.168.1.100\share\切片工作流存储
+http://127.0.0.1:8001/health
 ```
 
-只需修改 `.env` 中的 `STORAGE_ROOT` 为 NAS 路径即可。无架构变更。
+成功时应返回健康状态 JSON。
 
-### 5.2 中期：API + Worker 分离
+## 8. 常见问题
 
-```text
-┌─────────────────┐     ┌─────────────────────┐
-│  API 服务器       │────▶│  Redis Queue         │
-│  (FastAPI)       │     │  (消息队列)           │
-│  只做调度+查询    │     └─────────┬───────────┘
-└─────────────────┘               │
-                                  ▼
-                        ┌─────────────────────┐
-                        │  Worker 1 (Windows)  │
-                        │  Worker 2 (Windows)  │
-                        │  Worker 3 (Linux)    │
-                        │  各自处理耗时任务     │
-                        └─────────────────────┘
-                                  │
-                                  ▼
-                        ┌─────────────────────┐
-                        │  PostgreSQL          │
-                        │  + MinIO / NAS       │
-                        └─────────────────────┘
+### 启动时报 E 盘不存在
+
+原因：默认任务目录是历史 Windows 路径 `E:\直播间切片工作流存储`。
+
+解决：
+
+- 本地 Python：修改 `.env` 中的 `STORAGE_ROOT` 和 `TASKS_DIR`。
+- Docker：修改 `docker-compose.yml` 的 volume 左侧路径。
+
+### 页面能打开，但视频处理失败
+
+优先检查：
+
+```powershell
+ffmpeg -version
+ffprobe -version
 ```
 
-- API 服务器：轻量 FastAPI，只做任务创建、状态查询、页面渲染
-- Worker：独立进程，从 Redis 取任务，执行 FFmpeg/转写/AI 分析
-- 共享存储：NAS 或 MinIO，所有 Worker 可见
-- 共享数据库：PostgreSQL，API 和 Worker 共同读写
+如果命令不可用，说明 FFmpeg 没有安装或没有加入 PATH。
 
-### 5.3 长期：多用户平台化
+### AI 或转写失败
 
-```text
-┌──────────────────────────────────────────┐
-│              负载均衡 / 反向代理            │
-│              (Nginx / Traefik)            │
-└────────┬─────────────┬───────────────────┘
-         ▼             ▼
-┌─────────────┐ ┌─────────────┐
-│ API 实例 1   │ │ API 实例 2   │  ← 无状态，可横向扩展
-└──────┬──────┘ └──────┬──────┘
-       │               │
-       └───────┬───────┘
-               ▼
-     ┌─────────────────┐
-     │ PostgreSQL +     │
-     │ Redis            │
-     └─────────────────┘
-               │
-               ▼
-     ┌─────────────────┐
-     │ Worker 集群       │  ← 按需扩缩
-     │ (Celery / RQ)    │
-     └─────────────────┘
-               │
-               ▼
-     ┌─────────────────┐
-     │ MinIO / S3       │  ← 对象存储
-     │ (共享任务产物)    │
-     └─────────────────┘
-```
+优先检查：
 
----
-
-## 6. 当前不做的事
-
-以下部署方式**当前明确不推荐、不维护**：
-
-| 不推荐 | 原因 |
-| --- | --- |
-| 直接暴露到公网 | 无 HTTPS、无用户认证、无速率限制，极不安全 |
-| 云服务器生产部署 | 当前架构不支持多用户、无监控告警、无自动恢复 |
-| Kubernetes 部署 | 单体应用无益于 K8s，过度设计 |
-| 多实例负载均衡 | SQLite 不支持并发写，多实例会数据冲突 |
-| macOS / Linux 主机部署 | 未测试，opencli 和部分路径逻辑依赖 Windows |
-
-如果将来需要上云或上 K8s，需先完成 P3（数据库升级 + Worker 分离）。
-
----
-
-## 7. 环境变量参考
-
-完整环境变量列表见 `.env.example`。以下是最关键的几个：
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `STORAGE_ROOT` | `E:\直播间切片工作流存储` | 任务产物根目录 |
-| `TASKS_DIR` | 同 `STORAGE_ROOT` | 任务目录（优先级高于 STORAGE_ROOT） |
-| `DATA_DIR` | 项目目录 `data/` | 数据库存放目录 |
-| `DATABASE_PATH` | `data/workflow.sqlite3` | 数据库文件路径 |
-| `AI_ANALYSIS_REMOTE_API_KEY` | 空 | DeepSeek API Key |
-| `TRANSCRIPTION_PROVIDER` | `volcengine` | 转写引擎：`volcengine` 或 `faster_whisper` |
-| `AI_PROVIDER` | `remote` | AI 分析引擎：`remote` 或 `local` |
-
----
-
-## 8. 健康检查
-
-服务启动后，可以访问健康检查接口确认运行正常：
-
-```text
-GET http://127.0.0.1:8001/health
-```
-
-正常返回：
-
-```json
-{"status": "ok", "app": "NiuMa Studio"}
-```
-
----
-
-## 9. 备份建议
-
-### 当前版本（单机 SQLite）
-
-需手动备份两类数据：
-
-1. **数据库**：复制 `data/workflow.sqlite3` 到安全位置
-2. **任务产物**：复制 `STORAGE_ROOT` 下所有任务目录到安全位置
-
-建议定期（如每周）执行备份脚本（待开发）。
-
-### 后续版本（PostgreSQL）
-
-- 数据库：`pg_dump` 定期导出
-- 任务产物：MinIO / S3 自带的版本管理和复制功能
-- 备份自动化：CI 定时任务或 K8s CronJob
+- `.env` 里是否填了真实 API Key。
+- `TRANSCRIPTION_PROVIDER` 是否为 `volcengine` 或 `local`。
+- `AI_DEFAULT_PROVIDER` 是否为 `remote` 或 `local`。
+- 本地 Ollama 是否已经启动。

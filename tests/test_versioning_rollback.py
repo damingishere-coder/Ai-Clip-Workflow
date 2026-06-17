@@ -287,8 +287,10 @@ class TestSubtitleVersioning:
 
     @pytest.fixture(autouse=True)
     def setup_teardown(self):
+        from app.db.database import init_db
         from app.db.database import get_connection
 
+        init_db()
         yield
         with get_connection() as conn:
             conn.execute("DELETE FROM publish_jobs WHERE task_id LIKE 'test-%'")
@@ -424,8 +426,10 @@ class TestAIAnalysisActive:
 
     @pytest.fixture(autouse=True)
     def setup_teardown(self):
+        from app.db.database import init_db
         from app.db.database import get_connection
 
+        init_db()
         yield
         with get_connection() as conn:
             conn.execute("DELETE FROM publish_jobs WHERE task_id LIKE 'test-%'")
@@ -449,6 +453,39 @@ class TestAIAnalysisActive:
                 (task_id, f"AI测试-{task_id}", now, now),
             )
             conn.commit()
+
+    def _insert_clip_candidate(self, task_id: str, clip_id: str, title: str = "旧候选"):
+        from app.db.database import get_connection
+        from app.services.task_service import _now_iso
+
+        now = _now_iso()
+        with get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO clip_candidates (
+                    id, task_id, clip_key, title, start_time, end_time, duration_seconds,
+                    summary, reason, highlight_reason, spread_value, suggested_editing,
+                    confidence_score, selected_by_default, enabled, reviewed, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, '00:00:01', '00:00:30', 29, '', '', '', '', '', 0.7, 1, 1, 0, ?, ?)
+                """,
+                (clip_id, task_id, clip_id, title, now, now),
+            )
+            conn.commit()
+
+    def _analysis_clip(self, clip_id: str, title: str) -> dict:
+        return {
+            "clip_id": clip_id,
+            "title": title,
+            "start_time": "00:00:10",
+            "end_time": "00:01:10",
+            "duration_seconds": 60,
+            "summary": f"{title} 摘要",
+            "highlight_reason": f"{title} 高光原因",
+            "spread_value": "情绪价值",
+            "suggested_editing": "保留关键反应镜头",
+            "confidence_score": 0.86,
+            "selected_by_default": True,
+        }
 
     def test_insert_run_sets_active_and_deactivates_old(self):
         """新 AI run 应自动设为 active，旧 run 取消激活"""
@@ -539,6 +576,93 @@ class TestAIAnalysisActive:
         providers = {r["provider"] for r in runs}
         assert "remote" in providers
         assert "local" in providers
+
+    def test_process_ai_analysis_replaces_old_candidates_and_keeps_new(self, tmp_path):
+        """重新跑 AI 分析后，新候选片段应保留下来，旧候选应被替换"""
+        from app.models.task import AIClipAnalysisResult
+        from app.services.ai_analysis_workflow_service import process_task_ai_analysis
+        from app.services.task_service import list_clip_candidates
+
+        task_id = "test-aiactive-process"
+        self._create_task(task_id)
+        self._insert_clip_candidate(task_id, f"{task_id}_old", "旧候选")
+
+        transcript_path = tmp_path / "transcripts" / "transcript.md"
+        analysis_path = tmp_path / "analysis" / "candidate_clips.json"
+        log_path = tmp_path / "logs" / "process.log"
+        transcript_path.parent.mkdir(parents=True, exist_ok=True)
+        analysis_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        transcript_path.write_text("00:00:10 --> 00:01:10\n这是一段测试转写。", encoding="utf-8")
+        fake_paths = {"transcript_path": transcript_path, "analysis_path": analysis_path, "log_path": log_path}
+        fake_result = AIClipAnalysisResult(
+            task_id=task_id,
+            analysis_summary="新分析结果",
+            clips=[
+                self._analysis_clip("new-001", "新候选 1"),
+                self._analysis_clip("new-002", "新候选 2"),
+            ],
+        )
+
+        with (
+            patch("app.services.ai_analysis_workflow_service.get_artifact_paths", return_value=fake_paths),
+            patch("app.services.ai_analysis_workflow_service.append_task_log"),
+            patch("app.services.ai_analysis_workflow_service._analyze_with_provider", return_value=fake_result),
+        ):
+            result = process_task_ai_analysis(task_id, provider="local")
+
+        clips = list_clip_candidates(task_id)
+        clip_titles = {clip["title"] for clip in clips}
+        assert result["status"] == "ok"
+        assert len(clips) == 2
+        assert clip_titles == {"新候选 1", "新候选 2"}
+        assert analysis_path.exists()
+
+    def test_restore_ai_analysis_run_replaces_old_candidates_and_keeps_restored(self, tmp_path):
+        """恢复历史 AI 分析时，恢复出来的新候选片段不应被清空"""
+        from app.services.ai_analysis_workflow_service import _insert_ai_analysis_run, restore_ai_analysis_run
+        from app.services.task_service import list_clip_candidates
+
+        task_id = "test-aiactive-restore"
+        self._create_task(task_id)
+        self._insert_clip_candidate(task_id, f"{task_id}_old", "旧候选")
+        payload = {
+            "analysis_summary": "恢复的历史结果",
+            "clips": [
+                self._analysis_clip("restored-001", "恢复候选 1"),
+                self._analysis_clip("restored-002", "恢复候选 2"),
+            ],
+        }
+        run = _insert_ai_analysis_run(
+            task_id=task_id,
+            analysis_payload=payload,
+            provider="remote",
+            provider_label="远程 AI",
+            model="test-model",
+            fallback_notice="",
+            prompt_preset={"id": "p1", "name": "测试"},
+            requested_clip_count=5,
+        )
+
+        analysis_path = tmp_path / "analysis" / "candidate_clips.json"
+        log_path = tmp_path / "logs" / "process.log"
+        analysis_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with (
+            patch(
+                "app.services.ai_analysis_workflow_service.get_artifact_paths",
+                return_value={"analysis_path": analysis_path, "log_path": log_path},
+            ),
+            patch("app.services.ai_analysis_workflow_service.append_task_log"),
+        ):
+            result = restore_ai_analysis_run(task_id, run["id"])
+
+        clips = list_clip_candidates(task_id)
+        clip_titles = {clip["title"] for clip in clips}
+        assert result["status"] == "ok"
+        assert len(clips) == 2
+        assert clip_titles == {"恢复候选 1", "恢复候选 2"}
+        assert analysis_path.exists()
 
 
 # ---------------------------------------------------------------------------
