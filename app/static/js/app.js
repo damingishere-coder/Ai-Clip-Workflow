@@ -2218,6 +2218,10 @@ document.querySelectorAll("[data-publish-job-action]").forEach((button) => {
 const sendCenterMessage = document.querySelector("#send-center-message");
 const sendPublishingOverlay = document.querySelector("[data-send-publishing-overlay]");
 const sendPreviewPanel = document.querySelector("[data-send-preview-panel]");
+const opencliStatusAlert = document.querySelector("[data-opencli-status-alert]");
+const opencliStatusMessage = document.querySelector("[data-opencli-status-message]");
+const opencliRestartCommand = document.querySelector("[data-opencli-restart-command]");
+const opencliPublishUrl = document.querySelector("[data-opencli-publish-url]");
 
 function setSendCenterMessage(message, tone = "info") {
   if (!sendCenterMessage) return;
@@ -2225,6 +2229,42 @@ function setSendCenterMessage(message, tone = "info") {
   sendCenterMessage.textContent = message;
   sendCenterMessage.classList.toggle("tone-red", tone === "error");
   sendCenterMessage.classList.toggle("tone-blue", tone !== "error");
+}
+
+async function refreshOpencliStatus() {
+  if (!opencliStatusAlert) return false;
+  try {
+    const response = await fetch("/api/publish/opencli/status", { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || data.message || "opencli 状态检查失败");
+    }
+    const status = data.opencli_status || {};
+    const wasVisible = !opencliStatusAlert.hidden;
+    if (status.message && opencliStatusMessage) opencliStatusMessage.textContent = status.message;
+    if (status.restart_command && opencliRestartCommand) opencliRestartCommand.textContent = status.restart_command;
+    if (status.publish_url && opencliPublishUrl) opencliPublishUrl.textContent = status.publish_url;
+    if (status.available) {
+      opencliStatusAlert.hidden = true;
+      if (wasVisible) {
+        setSendCenterMessage(status.message || "Windows opencli 辅助服务已连接。", "success");
+      }
+      return true;
+    }
+    opencliStatusAlert.hidden = false;
+    return false;
+  } catch (error) {
+    if (opencliStatusMessage) {
+      opencliStatusMessage.textContent = `正在检查 Windows opencli 辅助服务：${error.message}`;
+    }
+    opencliStatusAlert.hidden = false;
+    return false;
+  }
+}
+
+if (opencliStatusAlert) {
+  refreshOpencliStatus();
+  window.setInterval(refreshOpencliStatus, 5000);
 }
 
 function showSendPublishingOverlay(title = "正在发布", text = "opencli 正在操作平台页面，请不要关闭 Chrome 或本地后台。") {

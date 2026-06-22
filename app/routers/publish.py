@@ -82,6 +82,11 @@ async def get_send_queue() -> dict:
     return publish_service.get_publish_center_context()
 
 
+@router.get("/opencli/status")
+async def get_opencli_status() -> dict:
+    return publish_service.get_opencli_status_context()
+
+
 @router.post("/queue/refresh")
 async def refresh_send_queue(use_ai: bool = Query(default=False)) -> dict:
     try:

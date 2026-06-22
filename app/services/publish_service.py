@@ -313,6 +313,14 @@ def _opencli_status() -> dict:
     return status
 
 
+def get_opencli_status_context() -> dict:
+    opencli_status = _opencli_status()
+    return {
+        "opencli_available": opencli_status["available"],
+        "opencli_status": opencli_status,
+    }
+
+
 def _row_to_dict(row) -> dict | None:
     return dict(row) if row else None
 

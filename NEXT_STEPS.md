@@ -1,5 +1,18 @@
 # Next Steps
 
+## 2026-06-22 Docker opencli 辅助服务怎么测试
+1. 在项目目录运行一次：`.\scripts\install_opencli_host_bridge_task.ps1`。它会创建 Windows 计划任务，并立刻启动 opencli 辅助服务。
+2. 打开 `http://127.0.0.1:8765/health`，正常会看到 `opencli_available` 是 `true`。
+3. 启动 Docker 主页面：`.\scripts\start_docker_opencli.ps1`。这个脚本会先确认 Windows 辅助服务，再刷新 Docker。
+4. 打开 `http://127.0.0.1:8001/publish`，只使用这个 Docker 主页面，不要切到 `8002`。
+5. 如果页面顶部仍提示未连接，等待 5 秒；发送中心会自动轮询 `GET /api/publish/opencli/status`，辅助服务恢复后提示会自动消失。
+6. 只选 1 条抖音或 B 站任务点击“发送此条”测试。遇到验证码、登录失效、平台风控或人工确认时，仍需要你自己在 Chrome 页面处理，项目不会绕过这些限制。
+
+## 2026-06-22 Docker opencli 下一步建议
+1. 建议先安装一次计划任务，以后 Windows 登录后辅助服务会自动启动。
+2. 如果想取消自动启动，运行：`.\scripts\uninstall_opencli_host_bridge_task.ps1`。
+3. 不建议把 Windows opencli 直接放进 Docker；自动投稿依赖 Windows 上已登录的 Chrome 和 OpenCLI 扩展，Docker 容器不能稳定接管这个桌面登录态。
+
 ## 2026-06-15 v1.3 合并后怎么检查
 1. 打开项目后先确认左侧显示 `v1.3 分支整合版`。
 2. 启动 Docker 主页面：`docker compose up --build`。

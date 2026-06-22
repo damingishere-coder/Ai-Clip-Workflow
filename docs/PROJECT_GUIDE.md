@@ -52,6 +52,22 @@ docker compose up --build
 .\scripts\start_docker_opencli.ps1
 ```
 
+如果你希望以后不用每次手动启动 Windows opencli 辅助服务，可以先安装一次自动启动任务：
+
+```powershell
+.\scripts\install_opencli_host_bridge_task.ps1
+```
+
+这条命令会为当前 Windows 用户创建计划任务 `NiuMa Studio OpenCLI Host Bridge`。以后你登录 Windows 后，辅助服务会自动启动，Docker 页面 `http://127.0.0.1:8001/publish` 会自动连接它。
+
+如果以后想取消自动启动，运行：
+
+```powershell
+.\scripts\uninstall_opencli_host_bridge_task.ps1
+```
+
+注意：不要把 Windows opencli 辅助服务直接放进 Docker。自动发送依赖 Windows 上已经登录的 Chrome 和 OpenCLI 扩展，Docker 容器不能稳定复用这个桌面登录态，所以正确方式是 Docker 跑后台页面，Windows 主机跑 opencli 辅助服务。
+
 看到服务启动后，在浏览器打开：
 
 ```text

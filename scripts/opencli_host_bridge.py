@@ -57,9 +57,16 @@ def _opencli_command() -> list[str]:
 def _normalize_command(command: list[str]) -> list[str]:
     if not command:
         return command
-    if Path(command[0]).name.lower() not in OPENCLI_NAMES:
+    if Path(command[0].replace("\\", "/")).name.lower() not in OPENCLI_NAMES:
         return command
     return [*_opencli_command(), *command[1:]]
+
+
+def _is_opencli_command(command: list[str]) -> bool:
+    if not command:
+        return False
+    executable_name = Path(command[0].replace("\\", "/")).name.lower()
+    return executable_name in OPENCLI_NAMES
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
@@ -99,8 +106,23 @@ class OpenCLIHostBridgeHandler(BaseHTTPRequestHandler):
             timeout = int(payload.get("timeout") or OPENCLI_TIMEOUT_SECONDS)
             if not isinstance(command, list) or not all(isinstance(part, str) for part in command):
                 raise ValueError("command 必须是字符串数组。")
+            if not command:
+                raise ValueError("command must not be empty.")
         except Exception as exc:
             _json_response(self, 400, {"status": "bad_request", "message": str(exc)})
+            return
+
+        if not _is_opencli_command(command):
+            _json_response(
+                self,
+                403,
+                {
+                    "status": "forbidden",
+                    "returncode": 126,
+                    "stdout": "",
+                    "stderr": "Only opencli commands are allowed.",
+                },
+            )
             return
 
         command = _normalize_command(command)

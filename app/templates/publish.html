@@ -20,14 +20,12 @@
 <section class="inline-alert tone-blue">{{ publish_message }}</section>
 {% endif %}
 
-{% if not opencli_available %}
-<section class="inline-alert tone-red">
-  <strong>{{ opencli_status.message }}</strong>
+<section class="inline-alert tone-red" data-opencli-status-alert{% if opencli_available %} hidden{% endif %}>
+  <strong data-opencli-status-message>{{ opencli_status.message }}</strong>
   <p>请继续使用 Docker 主页面 <code>http://127.0.0.1:8001</code>，不要切到第二个网页。</p>
-  <p>推荐处理：在项目目录运行 <code>{{ opencli_status.restart_command }}</code>，脚本会启动 Windows opencli 辅助服务、刷新 Docker，并打开 <code>{{ opencli_status.publish_url }}</code>。</p>
-  <p>页面打开后按 <code>Ctrl + F5</code> 强制刷新，再回到发送中心测试自动发送。</p>
+  <p>推荐处理：在项目目录运行 <code data-opencli-restart-command>{{ opencli_status.restart_command }}</code>，脚本会启动 Windows opencli 辅助服务、刷新 Docker，并打开 <code data-opencli-publish-url>{{ opencli_status.publish_url }}</code>。</p>
+  <p data-opencli-polling-hint>页面会自动检查辅助服务连接状态；辅助服务启动成功后，这条提示会自动消失。</p>
 </section>
-{% endif %}
 
 <section id="send-center-message" class="inline-alert tone-blue" hidden></section>
 

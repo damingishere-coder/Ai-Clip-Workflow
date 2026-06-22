@@ -163,6 +163,7 @@ docs/SECURITY_AND_GIT.md
 
 ```text
 docs/PROJECT_GUIDE.md          新手项目总览与启动说明
+docs/WINDOWS_SETUP.md          Windows 启动与 opencli 辅助服务
 docs/SECURITY_AND_GIT.md       API Key、.env、Git 提交安全说明
 docs/ARCHITECTURE.md           系统架构
 docs/TASK_FLOW.md              任务处理流程

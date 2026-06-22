@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import sys
 import subprocess
 import tempfile
@@ -8,6 +9,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.services import publish_service  # noqa: E402
+
+
+def _opencli_host_bridge_module():
+    module_path = PROJECT_ROOT / "scripts" / "opencli_host_bridge.py"
+    spec = importlib.util.spec_from_file_location("opencli_host_bridge", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
 
 
 def _fake_job(platform: str) -> dict:
@@ -167,12 +177,31 @@ def test_send_center_frontend_publishing_overlay_resources() -> None:
     assert "data-send-preview-description" in html
     assert "is-previewing" in css
     assert "opencli_status.restart_command" in html
+    assert "data-opencli-status-alert" in html
+    assert "refreshOpencliStatus" in js
+    assert "/api/publish/opencli/status" in js
     assert "请继续使用 Docker 主页面" in html
     assert "http://127.0.0.1:8001" in html
     assert "OPENCLI_LOCAL_BASE_URL: http://127.0.0.1:8001" in compose
     assert "OPENCLI_HOST_BRIDGE_URL: http://host.docker.internal:8765" in compose
     assert "OPENCLI_LOCAL_BASE_URL=http://127.0.0.1:8001" in env_example
     assert "OPENCLI_HOST_BRIDGE_URL=http://host.docker.internal:8765" in env_example
+
+
+def test_opencli_host_bridge_autostart_scripts_exist() -> None:
+    start_bridge = (PROJECT_ROOT / "scripts" / "start_opencli_host_bridge.ps1").read_text(encoding="utf-8")
+    install_task = (PROJECT_ROOT / "scripts" / "install_opencli_host_bridge_task.ps1").read_text(encoding="utf-8")
+    uninstall_task = (PROJECT_ROOT / "scripts" / "uninstall_opencli_host_bridge_task.ps1").read_text(encoding="utf-8")
+    start_docker = (PROJECT_ROOT / "scripts" / "start_docker_opencli.ps1").read_text(encoding="utf-8")
+
+    assert "opencli_host_bridge.py" in start_bridge
+    assert "data\\logs" in start_bridge
+    assert "Register-ScheduledTask" in install_task
+    assert "New-ScheduledTaskTrigger -AtLogOn" in install_task
+    assert "start_opencli_host_bridge.ps1" in install_task
+    assert "Unregister-ScheduledTask" in uninstall_task
+    assert "start_opencli_host_bridge.ps1" in start_docker
+    assert "host.docker.internal:$BridgePort/health" in start_docker
 
 
 def test_douyin_description_copies_body_and_platform_topics_directly() -> None:
@@ -451,6 +480,26 @@ def test_opencli_bridge_status_supports_docker_page() -> None:
         publish_service._opencli_bridge_health = original_bridge_health
 
 
+def test_opencli_status_context_exposes_endpoint_payload() -> None:
+    original_opencli_executable = publish_service._opencli_executable
+    original_bridge_health = publish_service._opencli_bridge_health
+    try:
+        publish_service._opencli_executable = lambda: None
+        publish_service._opencli_bridge_health = lambda: {
+            "available": True,
+            "message": "bridge ok",
+            "executable": r"C:\Users\demo\AppData\Roaming\npm\opencli.cmd",
+        }
+
+        context = publish_service.get_opencli_status_context()
+
+        assert context["opencli_available"]
+        assert context["opencli_status"]["mode"] == "host_bridge"
+    finally:
+        publish_service._opencli_executable = original_opencli_executable
+        publish_service._opencli_bridge_health = original_bridge_health
+
+
 def test_opencli_bridge_runner_executes_commands_from_docker() -> None:
     original_opencli_executable = publish_service._opencli_executable
     original_bridge_url = publish_service._opencli_bridge_url
@@ -479,6 +528,15 @@ def test_opencli_bridge_runner_executes_commands_from_docker() -> None:
         publish_service._opencli_executable = original_opencli_executable
         publish_service._opencli_bridge_url = original_bridge_url
         publish_service.urllib.request.urlopen = original_urlopen
+
+
+def test_opencli_host_bridge_rejects_non_opencli_commands() -> None:
+    bridge = _opencli_host_bridge_module()
+
+    assert bridge._is_opencli_command(["opencli", "browser", "demo", "close"])
+    assert bridge._is_opencli_command([r"C:\Users\demo\AppData\Roaming\npm\opencli.cmd", "list"])
+    assert not bridge._is_opencli_command(["powershell.exe", "-NoProfile"])
+    assert not bridge._is_opencli_command([])
 
 
 def test_opencli_cmd_uses_node_entrypoint() -> None:
@@ -513,6 +571,8 @@ def main() -> None:
     print("opencli cleanup leaves browser: OK")
     test_send_center_frontend_publishing_overlay_resources()
     print("send center frontend publishing overlay: OK")
+    test_opencli_host_bridge_autostart_scripts_exist()
+    print("opencli host bridge autostart scripts: OK")
     test_douyin_description_copies_body_and_platform_topics_directly()
     print("douyin direct description topics: OK")
     test_bilibili_browser_commands()
@@ -537,8 +597,12 @@ def main() -> None:
     print("opencli missing status restart hint: OK")
     test_opencli_bridge_status_supports_docker_page()
     print("opencli docker bridge status: OK")
+    test_opencli_status_context_exposes_endpoint_payload()
+    print("opencli status endpoint payload: OK")
     test_opencli_bridge_runner_executes_commands_from_docker()
     print("opencli docker bridge runner: OK")
+    test_opencli_host_bridge_rejects_non_opencli_commands()
+    print("opencli host bridge command guard: OK")
     test_opencli_cmd_uses_node_entrypoint()
     print("opencli cmd node entrypoint: OK")
 

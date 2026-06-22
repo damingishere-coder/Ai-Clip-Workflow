@@ -1,5 +1,13 @@
 # Development Log
 
+## 2026-06-22 Docker opencli 辅助服务自动常驻
+- 新增 `scripts/start_opencli_host_bridge.ps1`，把 Windows opencli 辅助服务从 Docker 启动脚本里拆出来，单独负责检查 opencli、启动 `scripts/opencli_host_bridge.py`、写入 `data/logs/opencli_bridge_8765.*.log` 并验证 `http://127.0.0.1:8765/health`。
+- 新增 `scripts/install_opencli_host_bridge_task.ps1` 和 `scripts/uninstall_opencli_host_bridge_task.ps1`，可为当前 Windows 用户创建/移除登录后自动启动的计划任务 `NiuMa Studio OpenCLI Host Bridge`，不保存账号、密码、cookie、token 或浏览器缓存。
+- `scripts/start_docker_opencli.ps1` 改为复用独立辅助服务脚本，再刷新 Docker，并从容器内验证 `http://host.docker.internal:8765/health` 是否可访问。
+- `scripts/opencli_host_bridge.py` 收紧 `/run` 安全边界，只允许执行 opencli/opencli.cmd/opencli.exe/opencli.ps1 相关命令，拒绝任意系统命令。
+- 发送中心新增 `GET /api/publish/opencli/status`，页面顶部 opencli 提示会自动轮询状态；辅助服务恢复后，Docker 主页面 `http://127.0.0.1:8001/publish` 可自动隐藏未连接提示，不需要切到第二个网页。
+- 说明边界：Windows opencli 辅助服务仍必须运行在 Windows 主机上，因为它依赖已登录 Chrome 和 OpenCLI 扩展；Docker 容器不能可靠复用 Windows 桌面登录态。
+
 ## 2026-06-15 v1.3 分支整理与集成发布
 - 新建并验证 `codex/branch-integration-20260611` 集成分支，按顺序整合 `fix/p0-security-and-stability`、`fix/p1-1-db-performance`、`fix/p1-2-query-refactor`、`feature/p1-3-job-queue`、`feature/p1-4-split-task-service`、`feature/p1-5-versioned-products-rollback`、`feature/p2-1-engineering` 和 `feature/p2-2-architecture-docs`。
 - 已处理分支之间的冲突：数据库初始化同时保留 `oauth_states`、`workflow_jobs`、`cut_runs` 等结构；`task_service.py` 保留兼容出口，页面查询实际迁移到 `task_query_service.py`；任务队列、服务拆分、产物版本化和工程化配置已统一集成。
