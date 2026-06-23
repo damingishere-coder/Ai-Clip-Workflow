@@ -323,3 +323,11 @@ data/workflow.sqlite3
 - `publish_jobs.scheduled_at` 当前只是字段预留，可以保存计划发布时间，但 v1.2 还没有后台定时调度器，不会自动按 `scheduled_at` 发送。
 - 平台发送依赖 opencli 辅助浏览器操作，不绕过验证码、登录失效、风控和人工确认。
 - 代码中仍存在兼容性 `clips` 子目录（`TASK_SUBDIRECTORIES` 同时包含 `clips` 和 `05_clips`），新任务的正式输出目录是 `05_clips`。旧 `clips` 目录为兼容保留，不建议删除。
+# 2026-06-23：v1.4.0 定时发送字段
+
+- `publish_jobs` 已补齐定时发送字段：`clip_id`、`caption`、`hashtags`、`cover_text`、`video_path`、`risk_flags`、`publish_result`、`remote_video_id`、`attempt_count`、`published_at`。
+- 旧字段继续兼容：`output_clip_id` 等同于 `clip_id`，`description` 等同于 `caption`，`tags` 等同于 `hashtags`，`video_file_path` 等同于 `video_path`，`provider_response` 兼容 `publish_result`，`retry_count` 兼容 `attempt_count`。
+- 发布状态使用：`DRAFT`、`SCHEDULED`、`WAITING`、`PUBLISHING`、`PUBLISHED`、`FAILED`、`CANCELLED`、`NEED_REVIEW`。
+- 调度器只扫描 `status = SCHEDULED` 且 `scheduled_at <= 当前时间` 的任务；`NEED_REVIEW`、`CANCELLED`、`PUBLISHED` 不会自动发布。
+- 默认发布器为 `manual_export`，成功后写入 `published_at`、`publish_result`、`remote_video_id`；失败后写入 `FAILED`、`last_error`、`error_message`，并增加 `attempt_count`。
+- 没有 `scheduled_at` 的旧手动发送任务迁移为 `WAITING`，避免被自动调度器误执行。

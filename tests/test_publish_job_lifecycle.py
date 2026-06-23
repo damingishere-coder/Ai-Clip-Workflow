@@ -69,7 +69,7 @@ class TestPublishJobDbLifecycle:
         self._setup_test_db(tmp_path, monkeypatch)
 
         job = self._insert_test_job(status="ready", scheduled_at="2026-06-10T09:00:00")
-        assert job["status"] == "ready"
+        assert job["status"] == "SCHEDULED"
         assert job["status_label"] == "待发送"
 
     def test_mark_published_saves_correctly(self, tmp_path, monkeypatch):
@@ -78,7 +78,7 @@ class TestPublishJobDbLifecycle:
         job = self._insert_test_job(status="ready")
         result = update_publish_job_status(job["id"], "published")
         updated = result["job"]
-        assert updated["status"] == "published"
+        assert updated["status"] == "PUBLISHED"
         assert updated["status_label"] == "已发布"
 
     def test_mark_failed_saves_error(self, tmp_path, monkeypatch):
@@ -89,7 +89,7 @@ class TestPublishJobDbLifecycle:
             job["id"], "failed", error_message="平台验证码弹窗，需要人工处理"
         )
         updated = result["job"]
-        assert updated["status"] == "failed"
+        assert updated["status"] == "FAILED"
         assert updated["status_label"] == "发送失败"
         assert "验证码" in (updated.get("error_message") or "")
 
@@ -99,7 +99,7 @@ class TestPublishJobDbLifecycle:
         job = self._insert_test_job(status="ready", scheduled_at="2026-06-10T09:00:00")
         assert job.get("scheduled_at") == "2026-06-10T09:00:00"
         # 状态仍为 ready，没有被定时调度改为 publishing 或其他
-        assert job["status"] == "ready"
+        assert job["status"] == "SCHEDULED"
 
     # ── 辅助 ──
 

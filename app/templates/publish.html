@@ -66,10 +66,12 @@
       <button type="button" class="active" data-send-filter="all">全部</button>
       <button type="button" data-send-filter="douyin">抖音</button>
       <button type="button" data-send-filter="bilibili">B站</button>
-      <button type="button" data-send-filter="ready">待发送</button>
+      <button type="button" data-send-filter="waiting">等待</button>
+      <button type="button" data-send-filter="scheduled">定时</button>
       <button type="button" data-send-filter="publishing">发送中</button>
       <button type="button" data-send-filter="published">已发布</button>
       <button type="button" data-send-filter="failed">失败</button>
+      <button type="button" data-send-filter="need_review">需复核</button>
     </div>
 
     <div class="send-queue">
@@ -97,7 +99,7 @@
               <h3>{{ item.title }}</h3>
               <p>{{ item.output_file_name or item.output_clip_id }}</p>
             </div>
-            {% if item.job_id and item.status in ["ready", "failed"] %}
+            {% if item.job_id and item.status in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}
             <label class="send-checkbox">
               <input type="checkbox" data-send-job-checkbox value="{{ item.job_id }}">
               发送
@@ -169,7 +171,7 @@
               <button type="submit" class="secondary-button" {% if not item.job_id %}disabled{% endif %}>保存</button>
               <button type="button" class="secondary-button" data-regenerate-send-metadata {% if not item.job_id %}disabled{% endif %}>重新生成标题/话题</button>
               <button type="button" class="secondary-button" data-generate-cover-frames>更换封面帧</button>
-              <button type="button" class="primary-button" data-send-single-job {% if not item.job_id or item.status not in ["ready", "failed"] %}disabled{% endif %}>发送此条</button>
+              <button type="button" class="primary-button" data-send-single-job {% if not item.job_id or item.status not in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}disabled{% endif %}>发送此条</button>
             </div>
           </div>
         </form>
@@ -239,13 +241,13 @@
         {% if job.trace_path %}<p class="form-hint">Trace：{{ job.trace_path }}</p>{% endif %}
       </div>
       <div class="button-row">
-        {% if job.status in ["ready", "failed"] %}
+        {% if job.status in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}
         <button type="button" class="secondary-button" data-publish-job-action="retry">重试</button>
         {% endif %}
-        {% if job.status != "published" %}
+        {% if job.status not in ["PUBLISHED", "published"] %}
         <button type="button" class="secondary-button" data-publish-job-action="mark-published">标记已发</button>
         {% endif %}
-        {% if job.status not in ["failed", "published"] %}
+        {% if job.status not in ["FAILED", "PUBLISHED", "failed", "published"] %}
         <button type="button" class="secondary-button" data-publish-job-action="mark-failed">标记失败</button>
         {% endif %}
       </div>

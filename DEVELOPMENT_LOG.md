@@ -1,5 +1,16 @@
 # Development Log
 
+## 2026-06-23 v1.4.0 定时发送与自动发布执行器
+- 新增 `PublishScheduler`，应用启动时可自动后台扫描 `publish_jobs`，也支持 `python -m app.publish_scheduler run` 持续运行和 `python -m app.publish_scheduler run-once` 手动扫描一次。
+- `publish_jobs` 补齐 v1.4.0 字段：`clip_id`、`caption`、`hashtags`、`cover_text`、`video_path`、`risk_flags`、`publish_result`、`remote_video_id`、`attempt_count`、`published_at` 等；旧字段继续兼容。
+- 发布状态统一为 `DRAFT`、`SCHEDULED`、`WAITING`、`PUBLISHING`、`PUBLISHED`、`FAILED`、`CANCELLED`、`NEED_REVIEW`；没有 `scheduled_at` 的旧手动队列会进入 `WAITING`，避免被调度器误执行。
+- 新增 `BasePublisher`、`ManualExportPublisher`、`LocalBrowserPublisher`；本轮完整实现 `ManualExportPublisher`，到点后导出 `outputs/publish_packages/{task_id}/{clip_id}/` 发布包。
+- v1.3.0 自动流水线创建的发布任务现在默认写入 `manual_export` + `SCHEDULED`，到点后可由 v1.4.0 调度器自动导出发布包；有 `risk_flags` 的任务保持 `NEED_REVIEW`，不会自动发布。
+- 新增发布队列 API：队列快照、run-once、立即发布、取消、跳过、失败重试、复核通过、修改发布时间、修改标题文案后重新入队；发送中心同步识别新状态并展示发布记录。
+- 新增 `.env.example` 配置项：`PUBLISH_SCHEDULER_ENABLED`、`PUBLISH_SCHEDULER_INTERVAL_SECONDS`、`PUBLISH_SCHEDULER_DEFAULT_PLATFORM`、`PUBLISH_SCHEDULER_MAX_RETRY_COUNT`、`PUBLISH_SCHEDULER_EXPORT_DIR`、`PUBLISH_SCHEDULER_ALLOW_PUBLISH_WITHOUT_REVIEW`。
+- 当前默认不接真实平台 API，不写死账号密码、cookie、token；`LocalBrowserPublisher` 仅预留结构，后续可接 Playwright、Selenium、opencli 或平台 API。
+- 已验证：`.venv\Scripts\python.exe -m pytest tests\test_publish_scheduler.py -q` 通过，10 passed；`.venv\Scripts\python.exe -m pytest tests\test_publish_job_lifecycle.py tests\test_auto_pipeline.py -q` 通过，30 passed。Pydantic 旧 `@validator` 警告为既有警告。
+
 ## 2026-06-23 v1.3.0 全自动任务流水线
 - 新增 `PipelineEngine`，把新建任务后的准备视频、读取/生成转写文本、AI 分析、自动选片、原片切割、标题文案、发布计划和发布任务创建串成一键全自动流程；引擎只做调度，继续复用现有转写、AI 分析、切片和发布任务数据结构。
 - `tasks` 表新增 `auto_mode`、`auto_config_json`、`last_error`；全自动模式新增 `CREATED`、`PREPARING_SOURCE`、`TRANSCRIBING`、`AI_ANALYZING`、`CLIP_SELECTING`、`VIDEO_CUTTING`、`METADATA_GENERATING`、`SCHEDULE_CREATING`、`PUBLISH_JOB_CREATING`、`READY_TO_PUBLISH`、`COMPLETED` 以及对应 `FAILED_*` 状态。

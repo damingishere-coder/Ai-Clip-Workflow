@@ -121,6 +121,8 @@ def test_existing_transcript_skips_transcription(monkeypatch):
 def test_missing_transcript_calls_transcription(monkeypatch):
     task = _create_auto_task("test-auto-generate-transcript")
     paths = get_artifact_paths(task["id"])
+    if paths["transcript_path"].exists():
+        paths["transcript_path"].unlink()
 
     def fake_transcribe(task_id, background_tasks=None, force=False):
         paths["transcript_path"].parent.mkdir(parents=True, exist_ok=True)
@@ -241,7 +243,7 @@ def test_create_auto_publish_job_records_scheduled_at():
             (task["id"],),
         ).fetchone()
     assert row["scheduled_at"] == "2026-06-23T08:10:00+00:00"
-    assert row["status"] == "ready"
+    assert row["status"] == "SCHEDULED"
     assert row["video_source"] == "original"
 
 

@@ -144,9 +144,9 @@ class PublishAccountCreate(BaseModel):
 class PublishJobCreate(BaseModel):
     task_id: str = Field(..., min_length=1, max_length=80)
     output_clip_id: str = Field(..., min_length=1, max_length=80)
-    platform: Literal["douyin", "bilibili"]
+    platform: Literal["douyin", "bilibili", "manual_export", "local_browser"]
     account_id: Optional[str] = Field(default="", max_length=80)
-    publish_mode: Literal["draft", "manual_review", "api_publish", "opencli_publish"] = "manual_review"
+    publish_mode: Literal["draft", "manual_review", "manual_export", "local_browser", "api_publish", "opencli_publish"] = "manual_review"
     video_source: Literal["original", "subtitled"] = "original"
     title: str = Field(..., min_length=1, max_length=120)
     description: Optional[str] = Field(default="", max_length=2000)
@@ -159,6 +159,18 @@ class PublishJobCreate(BaseModel):
     bilibili_tid: Optional[str] = Field(default="", max_length=80)
     bilibili_copyright: Literal["original", "repost"] = "original"
     bilibili_source: Optional[str] = Field(default="", max_length=300)
+    scheduled_at: Optional[str] = Field(default="", max_length=80)
+
+
+class PublishJobScheduleUpdate(BaseModel):
+    scheduled_at: str = Field(..., min_length=1, max_length=80)
+
+
+class PublishJobContentUpdate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=120)
+    caption: str = Field(..., min_length=1, max_length=2000)
+    hashtags: Optional[str] = Field(default="", max_length=500)
+    cover_text: Optional[str] = Field(default="", max_length=500)
     scheduled_at: Optional[str] = Field(default="", max_length=80)
 
 

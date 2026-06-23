@@ -1,5 +1,22 @@
 # Next Steps
 
+## 2026-06-23 v1.4.0 定时发送怎么测试
+1. 在项目目录启动后台：`.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001`。
+2. 打开 `http://127.0.0.1:8001/tasks/new`，新建任务并勾选“新建后自动跑完整流水线”，发布计划可以选择立即或较近时间。
+3. 等任务自动完成准备视频、转写/读取文本、AI 分析、自动选片、原片切割、生成标题文案、生成发布计划、创建发布任务。
+4. 到点后调度器会自动扫描 `SCHEDULED` 任务并执行 `manual_export`，也可以手动运行一次：`.\.venv\Scripts\python.exe -m app.publish_scheduler run-once`。
+5. 发布包默认在 `outputs/publish_packages/{task_id}/{clip_id}/`，应能看到 `clip.mp4`、`title.txt`、`caption.txt`、`hashtags.txt`、`cover_text.txt`、`publish_plan.json`、`metadata.json`。
+6. 打开 `/publish`，在发布记录里查看 `SCHEDULED`、`PUBLISHING`、`PUBLISHED`、`FAILED`、`NEED_REVIEW` 等状态；也可以访问 `/api/publish/queue/snapshot` 查看队列快照。
+7. 失败任务可以调用 `POST /api/publish/jobs/{job_id}/retry` 重试；立即发布可以调用 `POST /api/publish/jobs/{job_id}/publish-now`；取消和跳过分别调用 `/cancel`、`/skip`。
+8. `NEED_REVIEW` 表示任务带风险标记或需要人工复核，不会自动发布；复核后调用 `POST /api/publish/jobs/{job_id}/approve-review` 可回到 `SCHEDULED`。
+9. 本轮仍然跳过加字幕、烧录字幕和字幕叠加，自动发布使用 `05_clips/` 的原片切割结果。
+
+## v1.4.0 后续真实平台发布还差什么
+1. 抖音 / B站真实发布器需要明确账号授权方式、上传接口、发布接口、审核回调或查询方式。
+2. 需要确定 token、cookie、账号授权等敏感信息只走本地 `.env` 或本机安全存储，不写入代码和 Git。
+3. 浏览器自动化版需要选择 Playwright、Selenium 或继续 opencli，并保留验证码、登录失效、风控和人工确认边界。
+4. 真实平台发布前需要加入单条灰度测试、失败重试上限、重复发布确认和人工撤销机制。
+
 ## 2026-06-23 v1.3.0 全自动流水线怎么测试
 1. 启动本地后台后打开 `http://127.0.0.1:8001/tasks/new`。
 2. 选择一个本地视频，勾选“新建后自动跑完整流水线”，按需要设置自动切片数量、时长范围和发布计划。

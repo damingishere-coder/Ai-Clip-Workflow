@@ -41,6 +41,13 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(value).expanduser()
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 _load_env_file()
 
 
@@ -154,6 +161,18 @@ class Settings:
     ai_local_health_timeout_seconds: int = int(_env("AI_LOCAL_HEALTH_TIMEOUT_SECONDS", "30"))
     opencli_local_base_url: str = _env("OPENCLI_LOCAL_BASE_URL", "http://127.0.0.1:8001")
     opencli_host_bridge_url: str = _env("OPENCLI_HOST_BRIDGE_URL", "")
+    publish_scheduler_enabled: bool = _env_bool("PUBLISH_SCHEDULER_ENABLED", True)
+    publish_scheduler_interval_seconds: int = int(_env("PUBLISH_SCHEDULER_INTERVAL_SECONDS", "60"))
+    publish_scheduler_default_platform: str = _env("PUBLISH_SCHEDULER_DEFAULT_PLATFORM", "manual_export")
+    publish_scheduler_max_retry_count: int = int(_env("PUBLISH_SCHEDULER_MAX_RETRY_COUNT", "3"))
+    publish_scheduler_export_dir: Path = _env_path(
+        "PUBLISH_SCHEDULER_EXPORT_DIR",
+        PROJECT_ROOT / "outputs" / "publish_packages",
+    )
+    publish_scheduler_allow_publish_without_review: bool = _env_bool(
+        "PUBLISH_SCHEDULER_ALLOW_PUBLISH_WITHOUT_REVIEW",
+        False,
+    )
     ai_network_access: str = _env("AI_NETWORK_ACCESS", "enabled")
     ai_windows_wsl_setup_acknowledged: str = _env("AI_WINDOWS_WSL_SETUP_ACKNOWLEDGED", "true")
     ai_model_context_window: int = int(_env("AI_MODEL_CONTEXT_WINDOW", "1000000"))

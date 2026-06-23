@@ -2,13 +2,13 @@
 
 牛马片场是一个运行在 Windows 本地的 AI 高光生产后台，用来把直播录像、综艺访谈、长视频素材整理成可转写、可分析、可审核、可切割、可加字幕、可进入发送中心的短视频生产任务。
 
-当前版本：`1.3.0`。
+当前版本：`1.4.0`。
 
-v1.3 已经整合前期多个功能分支：在 v1.2 MVP 全流程基础上，补入本地安全边界、数据库性能优化、任务查询拆分、本地任务队列、任务服务拆分、产物版本化与失败回滚、CI / Ruff 工程化和架构文档。
+v1.4.0 已实现定时发送与自动发布执行器：系统会按 `publish_jobs.scheduled_at` 扫描到点任务，默认使用 `manual_export` 生成本地发布包，不调用真实平台 API。
 
 ## 当前状态
 
-- 后端：FastAPI 可启动，当前 API 版本为 `1.3.0`。
+- 后端：FastAPI 可启动，当前 API 版本为 `1.4.0`。
 - 前端：HTML + CSS + JavaScript + Jinja2 后台页面，已完成 Apple 风格全页面美化。
 - 数据库：SQLite，保存任务、候选片段、输出片段、字幕任务、发送任务和 AI 配置等信息。
 - 视频处理：已接入 FFmpeg / FFprobe，用于音频提取、切片、封面帧和字幕成片。
@@ -71,6 +71,29 @@ uvicorn app.main:app --reload --port 8001
 ```text
 http://127.0.0.1:8001
 ```
+
+---
+
+## v1.4.0 定时发送
+
+- 应用启动时会自动启动 `PublishScheduler`，默认每 60 秒扫描一次 `publish_jobs`。
+- 默认发布方式是 `manual_export`，会把发布包导出到 `outputs/publish_packages/{task_id}/{clip_id}/`。
+- 发布包包含 `clip.mp4`、`title.txt`、`caption.txt`、`hashtags.txt`、`cover_text.txt`、`publish_plan.json` 和 `metadata.json`。
+- 手动执行一次扫描：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.publish_scheduler run-once
+```
+
+- 持续运行独立调度器：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.publish_scheduler run
+```
+
+- `NEED_REVIEW` 表示文案或风险标记需要人工复核，不会自动发布；复核通过后可通过发布 API 或页面操作重新进入 `SCHEDULED` 队列。
+- 当前仍然跳过加字幕、烧录字幕和字幕叠加，自动发布使用原片切割结果。
+- 真实平台发布器仍是预留扩展点，后续需要平台账号授权、上传接口、风控边界和人工确认策略后才能接入。
 
 ---
 

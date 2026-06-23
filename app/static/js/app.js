@@ -2310,10 +2310,11 @@ function activeSendJobIds() {
 }
 
 function updateSendFilter(filter) {
+  const normalizedFilter = (filter || "all").toLowerCase();
   document.querySelectorAll("[data-send-card]").forEach((card) => {
-    const platform = card.dataset.platform;
-    const status = card.dataset.status;
-    const visible = filter === "all" || filter === platform || filter === status;
+    const platform = (card.dataset.platform || "").toLowerCase();
+    const status = (card.dataset.status || "").toLowerCase();
+    const visible = normalizedFilter === "all" || normalizedFilter === platform || normalizedFilter === status;
     card.classList.toggle("is-hidden", !visible);
   });
 }
@@ -2571,7 +2572,7 @@ document.querySelectorAll("[data-send-select-all]").forEach((checkbox) => {
   });
 });
 
-if (document.querySelector("[data-send-card][data-status='publishing']")) {
+if (document.querySelector("[data-send-card][data-status='publishing'], [data-send-card][data-status='PUBLISHING']")) {
   showSendPublishingOverlay("正在发布", "已有任务正在发布中，页面会自动刷新状态。");
   window.setTimeout(() => window.location.reload(), 5000);
 }

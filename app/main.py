@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.db.database import init_db
 from app.routers import ai_prompts, files, media, pages, publish, settings as settings_router, tasks
+from app.services.publish_scheduler import start_scheduler_background
 
 
 # /media 和 /static 的 Origin 白名单
@@ -43,13 +44,19 @@ def _build_allow_origin_header(origin: str) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    yield
+    scheduler = await start_scheduler_background()
+    app.state.publish_scheduler = scheduler
+    try:
+        yield
+    finally:
+        if scheduler:
+            scheduler.stop()
 
 
 app = FastAPI(
     title=settings.app_name,
     description=settings.app_description,
-    version="1.3.0",
+    version="1.4.0",
     lifespan=lifespan,
 )
 
