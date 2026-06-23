@@ -1,5 +1,16 @@
 # Development Log
 
+## 2026-06-23 v1.3.0 全自动任务流水线
+- 新增 `PipelineEngine`，把新建任务后的准备视频、读取/生成转写文本、AI 分析、自动选片、原片切割、标题文案、发布计划和发布任务创建串成一键全自动流程；引擎只做调度，继续复用现有转写、AI 分析、切片和发布任务数据结构。
+- `tasks` 表新增 `auto_mode`、`auto_config_json`、`last_error`；全自动模式新增 `CREATED`、`PREPARING_SOURCE`、`TRANSCRIBING`、`AI_ANALYZING`、`CLIP_SELECTING`、`VIDEO_CUTTING`、`METADATA_GENERATING`、`SCHEDULE_CREATING`、`PUBLISH_JOB_CREATING`、`READY_TO_PUBLISH`、`COMPLETED` 以及对应 `FAILED_*` 状态。
+- 新建任务页新增“全自动模式”开关、自动切片数量、片段时长范围和发布计划配置；`auto_mode=false` 时保留原手动流程，`auto_mode=true` 时通过后台任务自动启动流水线。
+- 全自动模式会优先读取 `transcripts/transcript.md` 或已有文本/字幕文件；没有文本时才调用现有转写流程。转写文本仅用于 AI 分析，本轮明确跳过加字幕、字幕样式渲染、字幕叠加和字幕烧录。
+- 自动选片会校验时间戳和最小/最大时长，跳过非法片段并记录原因；自动切片继续输出到 `05_clips/`，单个切片失败不会阻断其他成功切片进入后续文案和发布任务创建。
+- 新增 `MetadataGenerator` 和全自动发布任务创建服务，为每条成功切片生成结构化 `title`、`caption`、`hashtags`、`cover_text`、`platform`、`risk_flags`；有风险标记的发布任务进入 `NEED_REVIEW`，不影响其他切片。
+- 自动生成 `auto_publish_metadata.json`、`auto_publish_schedule.json`、`05_clips/clip_metadata.json` 和 `analysis/task_summary.json`；发布任务写入现有 `publish_jobs`，本轮只创建任务，不执行真实定时发送。
+- 新增 `tests/test_auto_pipeline.py` 覆盖：手动模式不触发、自动模式触发、已有转写跳过、无转写调用转写、切片跳过字幕、AI JSON 异常记录失败、单切片失败不阻断、默认排期、发布任务创建、Windows 路径引用。
+- 已验证：`.venv\Scripts\python.exe -m pytest tests\test_auto_pipeline.py -q` 通过，结果为 10 passed、3 个 Pydantic 既有弃用警告。
+
 ## 2026-06-15 v1.3 分支整理与集成发布
 - 新建并验证 `codex/branch-integration-20260611` 集成分支，按顺序整合 `fix/p0-security-and-stability`、`fix/p1-1-db-performance`、`fix/p1-2-query-refactor`、`feature/p1-3-job-queue`、`feature/p1-4-split-task-service`、`feature/p1-5-versioned-products-rollback`、`feature/p2-1-engineering` 和 `feature/p2-2-architecture-docs`。
 - 已处理分支之间的冲突：数据库初始化同时保留 `oauth_states`、`workflow_jobs`、`cut_runs` 等结构；`task_service.py` 保留兼容出口，页面查询实际迁移到 `task_query_service.py`；任务队列、服务拆分、产物版本化和工程化配置已统一集成。

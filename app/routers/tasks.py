@@ -15,6 +15,7 @@ from app.models.task import (
 )
 from app.services import task_service
 from app.services.ai_prompt_preset_service import update_task_ai_prompt_preset
+from app.services.pipeline_engine import start_auto_pipeline
 from app.services.storage_service import allocate_task_dir_name, save_uploaded_video
 from app.services import job_service
 from app.services import job_worker
@@ -29,20 +30,34 @@ async def list_tasks() -> list[dict]:
 
 
 @router.post("")
-async def create_task(payload: TaskCreate) -> dict:
+async def create_task(payload: TaskCreate, background_tasks: BackgroundTasks) -> dict:
     try:
-        return task_service.create_task_record(payload)
+        result = task_service.create_task_record(payload)
+        if payload.auto_mode:
+            result["auto_pipeline"] = start_auto_pipeline(result["id"], background_tasks=background_tasks)
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/upload")
 async def create_upload_task(
+    background_tasks: BackgroundTasks,
     task_name: str = Form(...),
     platform: str = Form("general"),
     max_clip_duration: int = Form(5),
     candidate_clip_count: int = Form(5),
     ai_preference: str | None = Form(None),
+    auto_mode: bool = Form(False),
+    auto_clip_count: str = Form("auto"),
+    auto_min_clip_seconds: int = Form(15),
+    auto_max_clip_seconds: int = Form(300),
+    auto_schedule_mode: str = Form("default"),
+    auto_schedule_start_at: str | None = Form(""),
+    auto_schedule_interval_hours: int = Form(3),
+    auto_schedule_daily_start_time: str = Form("09:00"),
+    auto_schedule_daily_end_time: str = Form("21:00"),
+    auto_metadata_use_ai: bool = Form(False),
     video_file: UploadFile = File(...),
 ) -> dict:
     task_id = uuid4().hex[:12]
@@ -61,9 +76,22 @@ async def create_upload_task(
         max_clip_duration=max_clip_duration,
         candidate_clip_count=candidate_clip_count,
         ai_preference=ai_preference,
+        auto_mode=auto_mode,
+        auto_clip_count=auto_clip_count,
+        auto_min_clip_seconds=auto_min_clip_seconds,
+        auto_max_clip_seconds=auto_max_clip_seconds,
+        auto_schedule_mode=auto_schedule_mode,
+        auto_schedule_start_at=auto_schedule_start_at,
+        auto_schedule_interval_hours=auto_schedule_interval_hours,
+        auto_schedule_daily_start_time=auto_schedule_daily_start_time,
+        auto_schedule_daily_end_time=auto_schedule_daily_end_time,
+        auto_metadata_use_ai=auto_metadata_use_ai,
     )
     try:
-        return task_service.create_task_record(payload, task_id=task_id, task_dir_name=task_dir_name)
+        result = task_service.create_task_record(payload, task_id=task_id, task_dir_name=task_dir_name)
+        if payload.auto_mode:
+            result["auto_pipeline"] = start_auto_pipeline(task_id, background_tasks=background_tasks)
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -268,6 +296,26 @@ async def process_video_cuts(task_id: str) -> dict:
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/process/auto")
+async def process_auto_pipeline(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    retry: bool = Query(default=False),
+) -> dict:
+    try:
+        return start_auto_pipeline(task_id, background_tasks=background_tasks, retry=retry)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/process/auto-retry")
+async def retry_auto_pipeline(task_id: str, background_tasks: BackgroundTasks) -> dict:
+    try:
+        return start_auto_pipeline(task_id, background_tasks=background_tasks, retry=True)
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

@@ -785,6 +785,23 @@ dd {
   min-height: 0;
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.checkbox-row input {
+  width: auto;
+  min-height: 0;
+  padding: 0;
+}
+
 .drop-zone,
 .nas-zone {
   display: grid;

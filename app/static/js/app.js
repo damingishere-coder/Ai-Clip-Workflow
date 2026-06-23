@@ -22,6 +22,16 @@ if (newTaskForm) {
       uploadData.append("max_clip_duration", payload.max_clip_duration || "5");
       uploadData.append("candidate_clip_count", payload.candidate_clip_count || "5");
       uploadData.append("ai_preference", "");
+      uploadData.append("auto_mode", payload.auto_mode === "true" ? "true" : "false");
+      uploadData.append("auto_clip_count", payload.auto_clip_count || "auto");
+      uploadData.append("auto_min_clip_seconds", payload.auto_min_clip_seconds || "15");
+      uploadData.append("auto_max_clip_seconds", payload.auto_max_clip_seconds || "300");
+      uploadData.append("auto_schedule_mode", payload.auto_schedule_mode || "default");
+      uploadData.append("auto_schedule_start_at", payload.auto_schedule_start_at || "");
+      uploadData.append("auto_schedule_interval_hours", payload.auto_schedule_interval_hours || "3");
+      uploadData.append("auto_schedule_daily_start_time", payload.auto_schedule_daily_start_time || "09:00");
+      uploadData.append("auto_schedule_daily_end_time", payload.auto_schedule_daily_end_time || "21:00");
+      uploadData.append("auto_metadata_use_ai", "false");
       uploadData.append("video_file", videoFileInput.files[0]);
       const response = await fetch("/api/tasks/upload", {
         method: "POST",
@@ -32,7 +42,7 @@ if (newTaskForm) {
       if (!response.ok) {
         throw new Error(data.detail || "任务创建失败");
       }
-      result.textContent = `${data.message} 正在进入详情页...`;
+      result.textContent = `${data.message}${payload.auto_mode === "true" ? " 全自动流水线已启动。" : ""} 正在进入详情页...`;
       window.location.href = data.detail_url;
     } catch (error) {
       result.textContent = `任务创建失败：${error.message}`;

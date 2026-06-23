@@ -15,6 +15,9 @@
   </div>
   {% set header_transcript_progress = task.transcript_progress or {} %}
   <div class="button-row">
+    {% if task.auto_mode and task.status.startswith("FAILED_") %}
+    <button class="primary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/auto-retry">重试全自动流程</button>
+    {% endif %}
     {% if task.transcript_exists %}
     <button class="secondary-button" id="start-workflow-button" type="button" disabled>转写已完成</button>
     <button class="secondary-button js-process-action" type="button" data-confirm="重新生成会覆盖当前转写文件，并且需要重新等待转写完成。确认重新生成吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?force=true">重新生成转写</button>

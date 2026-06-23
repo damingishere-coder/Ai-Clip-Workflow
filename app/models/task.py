@@ -5,6 +5,25 @@ from pydantic import BaseModel, Field, validator
 
 
 class TaskStatus(str, Enum):
+    CREATED = "CREATED"
+    PREPARING_SOURCE = "PREPARING_SOURCE"
+    TRANSCRIBING = "TRANSCRIBING"
+    AI_ANALYZING = "AI_ANALYZING"
+    CLIP_SELECTING = "CLIP_SELECTING"
+    VIDEO_CUTTING = "VIDEO_CUTTING"
+    METADATA_GENERATING = "METADATA_GENERATING"
+    SCHEDULE_CREATING = "SCHEDULE_CREATING"
+    PUBLISH_JOB_CREATING = "PUBLISH_JOB_CREATING"
+    READY_TO_PUBLISH = "READY_TO_PUBLISH"
+    COMPLETED = "COMPLETED"
+    FAILED_PREPARING_SOURCE = "FAILED_PREPARING_SOURCE"
+    FAILED_TRANSCRIBING = "FAILED_TRANSCRIBING"
+    FAILED_AI_ANALYZING = "FAILED_AI_ANALYZING"
+    FAILED_CLIP_SELECTING = "FAILED_CLIP_SELECTING"
+    FAILED_VIDEO_CUTTING = "FAILED_VIDEO_CUTTING"
+    FAILED_METADATA_GENERATING = "FAILED_METADATA_GENERATING"
+    FAILED_SCHEDULE_CREATING = "FAILED_SCHEDULE_CREATING"
+    FAILED_PUBLISH_JOB_CREATING = "FAILED_PUBLISH_JOB_CREATING"
     pending_video = "pending_video"
     pending_processing = "pending_processing"
     audio_extracting = "audio_extracting"
@@ -27,6 +46,28 @@ class TaskCreate(BaseModel):
     max_clip_duration: int = Field(default=5, ge=1, le=60)
     candidate_clip_count: int = Field(default=5, ge=1, le=50)
     ai_preference: Optional[str] = None
+    auto_mode: bool = False
+    auto_clip_count: str = Field(default="auto", max_length=10)
+    auto_min_clip_seconds: int = Field(default=15, ge=1, le=3600)
+    auto_max_clip_seconds: int = Field(default=300, ge=1, le=7200)
+    auto_schedule_mode: Literal["default", "immediate", "interval", "daily_window"] = "default"
+    auto_schedule_start_at: Optional[str] = Field(default="", max_length=80)
+    auto_schedule_interval_hours: int = Field(default=3, ge=1, le=168)
+    auto_schedule_daily_start_time: str = Field(default="09:00", max_length=5)
+    auto_schedule_daily_end_time: str = Field(default="21:00", max_length=5)
+    auto_metadata_use_ai: bool = False
+
+    @validator("auto_clip_count")
+    def validate_auto_clip_count(cls, value: str) -> str:
+        text = str(value or "auto").strip().lower()
+        if text == "auto":
+            return text
+        if not text.isdigit():
+            raise ValueError("自动切片数量必须是 auto 或数字")
+        number = int(text)
+        if number not in {5, 10, 15} and not 1 <= number <= 50:
+            raise ValueError("自动切片数量必须是 auto、5、10、15 或 1-50 的数字")
+        return text
 
 
 class TaskSummary(BaseModel):

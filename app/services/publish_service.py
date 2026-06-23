@@ -43,6 +43,7 @@ PLATFORM_LABELS = {
 STATUS_LABELS = {
     "draft": "草稿",
     "ready": "待发送",
+    "NEED_REVIEW": "需人工复核",
     "publishing": "发送中",
     "published": "已发布",
     "failed": "发送失败",
@@ -52,6 +53,7 @@ STATUS_LABELS = {
 STATUS_TONES = {
     "draft": "amber",
     "ready": "blue",
+    "NEED_REVIEW": "amber",
     "publishing": "purple",
     "published": "green",
     "failed": "red",

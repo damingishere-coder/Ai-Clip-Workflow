@@ -36,7 +36,48 @@ pending_video          ← 任务已创建，尚未上传视频
 - `completed` / `completed_with_errors` 代表"自动切割阶段结束"，不是平台发布完成。
 - 字幕和发布是独立于主任务状态的后续工作流。
 
-## 3. 失败流转
+## 3. v1.3.0 全自动任务状态流
+
+`auto_mode=true` 的任务使用独立的大写状态，不破坏原有手动流程：
+
+```text
+CREATED
+→ PREPARING_SOURCE
+→ TRANSCRIBING
+→ AI_ANALYZING
+→ CLIP_SELECTING
+→ VIDEO_CUTTING
+→ METADATA_GENERATING
+→ SCHEDULE_CREATING
+→ PUBLISH_JOB_CREATING
+→ READY_TO_PUBLISH
+→ COMPLETED
+```
+
+对应失败状态：
+
+```text
+FAILED_PREPARING_SOURCE
+FAILED_TRANSCRIBING
+FAILED_AI_ANALYZING
+FAILED_CLIP_SELECTING
+FAILED_VIDEO_CUTTING
+FAILED_METADATA_GENERATING
+FAILED_SCHEDULE_CREATING
+FAILED_PUBLISH_JOB_CREATING
+```
+
+全自动流程规则：
+
+- 每一步开始前写入对应状态。
+- 任意步骤失败时写入对应 `FAILED_*`，并把错误写入 `tasks.last_error` / `tasks.error_message`。
+- 失败后可调用 `POST /api/tasks/{task_id}/process/auto-retry` 从失败步骤继续。
+- 已有 `transcripts/transcript.md` 或文本/字幕文件时优先复用；没有文本时才调用转写。
+- 转写文本只作为 AI 分析输入；全自动模式不执行加字幕、字幕样式渲染、字幕叠加或字幕烧录。
+- 切片输出仍写入 `05_clips/`，并写入 `output_clip`；单个切片失败不会阻断其他成功切片生成文案和发布任务。
+- 发布任务只创建到 `publish_jobs`，真正按 `scheduled_at` 定时发送留到 v1.4.0。
+
+## 4. 失败流转
 
 任意处理阶段出现不可恢复错误时，任务进入：
 
@@ -51,7 +92,7 @@ failed
 - 相关文件路径。
 - 是否可以重试。
 
-## 4. 首版进度占比
+## 5. 首版进度占比
 
 | 状态 | 进度 |
 | --- | --- |
@@ -65,7 +106,7 @@ failed
 | cutting | 88% |
 | completed / completed_with_errors | 100% |
 
-## 5. AI 分析阶段
+## 6. AI 分析阶段
 
 AI 分析阶段当前已接入真实接口入口：
 
@@ -84,7 +125,7 @@ pending_ai
 - AI 返回非法 JSON 时，程序会自动安全重试一次。重试后仍失败时，任务进入 `failed`。
 - 远程 AI 失败时不会自动降级到本地 AI，会暂停并显示原因，用户需手动点击"本地 AI 分析"。
 
-## 6. 转写阶段
+## 7. 转写阶段
 
 转写阶段默认使用火山引擎远程转写：
 
@@ -104,7 +145,7 @@ audio/source.wav
 - 本地 faster-whisper 默认按 2 分钟切分音频，段与段之间重叠 5 秒。
 - 转写完成后进入 `pending_ai`。
 
-## 7. 自动切割阶段
+## 8. 自动切割阶段
 
 - 用户在片段审核页点击"生成切片"后，任务进入 `cutting`。
 - 所有启用片段都切割成功时，任务进入 `completed`。
@@ -112,7 +153,7 @@ audio/source.wav
 - 所有片段都失败时，任务进入 `failed`。
 - 切割输出到 `05_clips/` 目录，结果逐条写入 `output_clip` 表。
 
-## 8. 字幕工作流（独立于主任务状态）
+## 9. 字幕工作流（独立于主任务状态）
 
 字幕是 output_clip 生成之后的独立 `subtitle_jobs` 流程，不直接混入 `tasks.status`：
 
@@ -129,7 +170,7 @@ output_clip 生成成功
 
 字幕任务状态：`pending` → `processing` → `completed` / `failed`
 
-## 9. 发送中心工作流（独立于主任务状态）
+## 10. 发送中心工作流（独立于主任务状态）
 
 发送中心是切片生成后的独立 `publish_jobs` 流程，不直接混入 `tasks.status`：
 
@@ -150,6 +191,7 @@ output_clip 生成成功 + 字幕完成
 
 | 状态 | 说明 |
 | --- | --- |
+| `NEED_REVIEW` | 全自动文案含风险标记，需要人工复核后再发送 |
 | `ready` | 待发送，已整理好标题、封面和视频 |
 | `publishing` | 发送中，opencli 正在操作浏览器 |
 | `published` | 已发布，平台返回成功信号 |
@@ -158,8 +200,8 @@ output_clip 生成成功 + 字幕完成
 
 ### scheduled_at 字段说明
 
-- `publish_jobs.scheduled_at` 当前只是字段预留，可以保存计划发布时间。
-- v1.2 还没有后台定时调度器，不会自动按 `scheduled_at` 发送。
+- `publish_jobs.scheduled_at` 当前可以由全自动流水线写入计划发布时间。
+- v1.3.0 还没有后台定时调度器，不会自动按 `scheduled_at` 发送。
 - 所有发送都需要用户手动在发送中心点击"发送此条"或"开始发送全部"触发。
 
 ### 安全边界
