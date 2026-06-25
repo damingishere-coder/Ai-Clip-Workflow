@@ -1,5 +1,12 @@
 # 数据库结构说明
 
+## 2026-06-25：全自动配置兼容与发送中心排期
+
+- 不新增数据库列，也不执行破坏性迁移。
+- `tasks.auto_config_json` 中旧的 `auto_clip_count`、`auto_min_clip_seconds`、`auto_max_clip_seconds` 和排期字段继续保留，供历史任务和旧接口读取；新任务的自动选片以 `candidate_clip_count` 和 `max_clip_duration` 为准。
+- 全自动流水线新建的 `publish_jobs` 默认 `scheduled_at=''`、`status='WAITING'`；有风险标记时保持 `NEED_REVIEW`。
+- 发送中心批量排期会写入每条 `publish_jobs.scheduled_at` 并改为 `SCHEDULED`；清除排期后普通任务回到 `WAITING`。
+
 ## 2026-06-23：v1.3.0 全自动流水线字段
 
 - `tasks` 表新增 `auto_mode`：标记任务是否由全自动流水线接管。

@@ -1,5 +1,16 @@
 # Development Log
 
+## 2026-06-25 全自动切片修复与发送中心批量排期
+- 修复 AI 分析完成后候选片段“先写入、随后又被全部删除”的事务顺序错误；候选片段现在在单个 SQLite 事务内替换，任一新片段写入失败都会自动回滚并保留旧结果。
+- 修复历史全自动任务卡在 AI 分析后的问题：任务可从最近一次 AI 分析历史恢复候选片段，并从自动选片阶段继续，不需要重新消耗一次 AI 分析。
+- 自动选片不再读取独立的自动数量和 15-300 秒范围；目标数量统一使用任务的“候选片段数量”，时长上限统一使用“单条切片最长”，无效时间戳不会被强行送入 FFmpeg。
+- 新建任务页的全自动区精简为一个开关；创建成功后后台立即启动完整流水线，任务详情隐藏手动“开始处理”，处理中自动刷新，失败或历史中断时显示重试/继续按钮。
+- 全自动流水线生成的发布任务默认进入 `WAITING`，不再自行安排发布时间；旧 `auto_config_json` 字段继续保留，兼容历史任务和旧接口。
+- 发送中心新增批量发布计划：勾选未发布任务后可设置起始时间、间隔小时和每日允许时段，超过当日结束时间会顺延到次日开始；支持批量清除排期，并在任务卡片和发布记录中显示计划时间。
+- 新增批量排期 API `PATCH /api/publish/jobs/schedule-batch`；已发布和已取消任务禁止改期，`NEED_REVIEW` 可保存时间但仍保持人工复核状态。
+- 静态资源版本更新为 `20260625-auto-pipeline-schedule`，避免浏览器继续使用旧版 JavaScript / CSS。
+- 已验证：完整 232 项 pytest 测试通过；Python 编译、JavaScript 语法检查和 Ruff 检查通过；浏览器检查 `/tasks/new`、历史全自动任务详情和 `/publish` 正常。
+
 ## 2026-06-23 v1.4.0 定时发送与自动发布执行器
 - 新增 `PublishScheduler`，应用启动时可自动后台扫描 `publish_jobs`，也支持 `python -m app.publish_scheduler run` 持续运行和 `python -m app.publish_scheduler run-once` 手动扫描一次。
 - `publish_jobs` 补齐 v1.4.0 字段：`clip_id`、`caption`、`hashtags`、`cover_text`、`video_path`、`risk_flags`、`publish_result`、`remote_video_id`、`attempt_count`、`published_at` 等；旧字段继续兼容。

@@ -2232,6 +2232,9 @@ document.querySelectorAll("[data-publish-job-action]").forEach((button) => {
 const sendCenterMessage = document.querySelector("#send-center-message");
 const sendPublishingOverlay = document.querySelector("[data-send-publishing-overlay]");
 const sendPreviewPanel = document.querySelector("[data-send-preview-panel]");
+const publishScheduleForm = document.querySelector("[data-publish-schedule-form]");
+const publishScheduleResult = document.querySelector("[data-publish-schedule-result]");
+const scheduleSelectedCount = document.querySelector("[data-schedule-selected-count]");
 
 function setSendCenterMessage(message, tone = "info") {
   if (!sendCenterMessage) return;
@@ -2253,6 +2256,143 @@ function showSendPublishingOverlay(title = "正在发布", text = "opencli 正�
 function hideSendPublishingOverlay() {
   if (sendPublishingOverlay) sendPublishingOverlay.hidden = true;
 }
+
+function publishScheduleCheckboxes() {
+  return Array.from(document.querySelectorAll("[data-publish-schedule-checkbox]"));
+}
+
+function selectedPublishScheduleJobIds() {
+  return Array.from(
+    new Set(
+      publishScheduleCheckboxes()
+        .filter((checkbox) => checkbox.checked)
+        .map((checkbox) => checkbox.value)
+        .filter(Boolean)
+    )
+  );
+}
+
+function updateScheduleSelectedCount() {
+  if (!scheduleSelectedCount) return;
+  scheduleSelectedCount.textContent = `已选 ${selectedPublishScheduleJobIds().length} 条`;
+}
+
+function localDatetimeValue(date) {
+  const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return offsetDate.toISOString().slice(0, 16);
+}
+
+function setScheduleResult(message, tone = "info") {
+  if (!publishScheduleResult) return;
+  publishScheduleResult.textContent = message;
+  publishScheduleResult.classList.toggle("error-text", tone === "error");
+}
+
+function formatScheduledTimes() {
+  document.querySelectorAll("[data-publish-scheduled-at]").forEach((node) => {
+    const value = node.dataset.publishScheduledAt || "";
+    if (!value) {
+      node.textContent = "未排期";
+      return;
+    }
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      node.textContent = parsed.toLocaleString([], {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+  });
+}
+
+async function submitBatchSchedule(action) {
+  if (!publishScheduleForm) return;
+  const jobIds = selectedPublishScheduleJobIds();
+  if (!jobIds.length) {
+    setScheduleResult("请先勾选至少一条未发布任务。", "error");
+    return;
+  }
+
+  const startValue = String(publishScheduleForm.elements.start_at?.value || "");
+  if (action === "apply" && !startValue) {
+    setScheduleResult("请先选择起始时间。", "error");
+    return;
+  }
+  const startDate = startValue ? new Date(startValue) : null;
+  if (action === "apply" && (!startDate || Number.isNaN(startDate.getTime()))) {
+    setScheduleResult("起始时间无效，请重新选择。", "error");
+    return;
+  }
+
+  setScheduleResult(action === "apply" ? "正在应用发布计划..." : "正在清除发布时间...");
+  const response = await fetch("/api/publish/jobs/schedule-batch", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      job_ids: jobIds,
+      action,
+      start_at: startDate ? startDate.toISOString() : "",
+      interval_hours: Number(publishScheduleForm.elements.interval_hours?.value || 3),
+      daily_start_time: String(publishScheduleForm.elements.daily_start_time?.value || "09:00"),
+      daily_end_time: String(publishScheduleForm.elements.daily_end_time?.value || "21:00"),
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || data.message || "发布计划保存失败");
+  }
+  setScheduleResult(data.message || "发布计划已更新。");
+  reloadSendCenter(700);
+}
+
+if (publishScheduleForm) {
+  const startInput = publishScheduleForm.elements.start_at;
+  if (startInput && !startInput.value) {
+    startInput.value = localDatetimeValue(new Date(Date.now() + 10 * 60 * 1000));
+  }
+  publishScheduleForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await submitBatchSchedule("apply");
+    } catch (error) {
+      setScheduleResult(`保存失败：${error.message}`, "error");
+    }
+  });
+}
+
+document.querySelectorAll("[data-publish-schedule-checkbox]").forEach((checkbox) => {
+  checkbox.addEventListener("change", () => {
+    publishScheduleCheckboxes()
+      .filter((item) => item.value === checkbox.value)
+      .forEach((item) => {
+        item.checked = checkbox.checked;
+      });
+    updateScheduleSelectedCount();
+  });
+});
+
+document.querySelector("[data-select-all-schedule]")?.addEventListener("click", () => {
+  const checkboxes = publishScheduleCheckboxes();
+  const shouldCheck = checkboxes.some((checkbox) => !checkbox.checked);
+  checkboxes.forEach((checkbox) => {
+    checkbox.checked = shouldCheck;
+  });
+  updateScheduleSelectedCount();
+});
+
+document.querySelector("[data-clear-batch-schedule]")?.addEventListener("click", async () => {
+  try {
+    await submitBatchSchedule("clear");
+  } catch (error) {
+    setScheduleResult(`清除失败：${error.message}`, "error");
+  }
+});
+
+formatScheduledTimes();
+updateScheduleSelectedCount();
 
 function sendJobPayload(form) {
   const formData = new FormData(form);
@@ -2578,6 +2718,7 @@ document.querySelectorAll("[data-send-select-all]").forEach((checkbox) => {
       const item = card.querySelector("[data-send-job-checkbox]");
       if (item && !item.disabled) item.checked = checkbox.checked;
     });
+    updateScheduleSelectedCount();
   });
 });
 

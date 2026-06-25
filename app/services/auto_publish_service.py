@@ -47,7 +47,8 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                 skipped_ids.append(existing["id"])
                 continue
 
-            status = "NEED_REVIEW" if metadata.get("risk_flags") else "SCHEDULED"
+            scheduled_at = str(item.get("scheduled_at") or "").strip()
+            status = "NEED_REVIEW" if metadata.get("risk_flags") else ("SCHEDULED" if scheduled_at else "WAITING")
             job_id = uuid4().hex[:12]
             provider_response = {
                 "source": "auto_pipeline",
@@ -56,7 +57,7 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                 "metadata_error": metadata.get("error") or "",
                 "cover_text": metadata.get("cover_text") or "",
                 "risk_flags": metadata.get("risk_flags") or [],
-                "note": "v1.3.0 只创建发布任务，不执行真实发送。",
+                "note": "全自动流水线只创建待发送任务，发布时间在发送中心统一设置。",
             }
             connection.execute(
                 """
@@ -88,7 +89,7 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                     metadata.get("cover_text") or "",
                     json.dumps(metadata.get("risk_flags") or [], ensure_ascii=False),
                     DEFAULT_BILIBILI_TID,
-                    item["scheduled_at"],
+                    scheduled_at,
                     status,
                     json.dumps(provider_response, ensure_ascii=False),
                     now,

@@ -318,15 +318,12 @@ class PipelineEngine:
         metadata_result = context.get(TaskStatus.METADATA_GENERATING.value) or {}
         metadata_items = metadata_result.get("metadata_items") or []
         if not metadata_items:
-            raise ValueError("没有可排期的文案记录")
-        scheduled_at_values = build_schedule_times(len(metadata_items), context["config"])
-        scheduled_items = []
-        for item, scheduled_at in zip(metadata_items, scheduled_at_values, strict=True):
-            scheduled_items.append({**item, "scheduled_at": scheduled_at})
+            raise ValueError("没有可加入发送队列的文案记录")
+        scheduled_items = [{**item, "scheduled_at": ""} for item in metadata_items]
         paths = get_artifact_paths(task_id)
         schedule_path = paths["analysis_path"].parent / "auto_publish_schedule.json"
         schedule_path.write_text(json.dumps(scheduled_items, ensure_ascii=False, indent=2), encoding="utf-8")
-        append_task_log(task_id, f"全自动发布计划生成完成：{len(scheduled_items)} 条")
+        append_task_log(task_id, f"全自动发送队列准备完成：{len(scheduled_items)} 条，发布时间待发送中心设置")
         return {"schedule_path": str(schedule_path), "scheduled_items": scheduled_items}
 
     def _create_publish_jobs(self, task_id: str, context: dict) -> dict:

@@ -48,6 +48,45 @@
   {% endfor %}
 </section>
 
+<section class="panel publish-schedule-panel">
+  <div class="panel-header">
+    <div>
+      <p class="eyebrow">Publish Schedule</p>
+      <h2>批量发布计划</h2>
+      <p>先勾选下方未发布任务，再统一设置起始时间、发布间隔和每天允许发布的时段。</p>
+    </div>
+    <span class="status-pill" data-schedule-selected-count>已选 0 条</span>
+  </div>
+  <form class="publish-schedule-form" data-publish-schedule-form>
+    <div class="publish-schedule-grid">
+      <label>
+        <span>起始时间</span>
+        <input name="start_at" type="datetime-local" required>
+      </label>
+      <label>
+        <span>间隔小时</span>
+        <input name="interval_hours" type="number" min="1" max="168" step="1" value="3" required>
+      </label>
+      <label>
+        <span>每日开始</span>
+        <input name="daily_start_time" type="time" value="09:00" required>
+      </label>
+      <label>
+        <span>每日结束</span>
+        <input name="daily_end_time" type="time" value="21:00" required>
+      </label>
+    </div>
+    <div class="publish-schedule-actions">
+      <p class="form-hint" data-publish-schedule-result>未排期任务会保持等待状态，不会被定时发送器自动执行。</p>
+      <div class="button-row">
+        <button class="secondary-button" type="button" data-select-all-schedule>选择全部未发布</button>
+        <button class="secondary-button" type="button" data-clear-batch-schedule>清除所选排期</button>
+        <button class="primary-button" type="submit">应用发布计划</button>
+      </div>
+    </div>
+  </form>
+</section>
+
 <section class="send-center-grid">
   <section class="panel send-main-panel">
     <div class="panel-header">
@@ -95,14 +134,20 @@
                 <span class="status-pill tone-{{ item.status_tone }}">{{ item.platform_label }}</span>
                 <span class="status-pill tone-{{ item.status_tone }}">{{ item.status_label }}</span>
                 <span>{{ item.task_name or "未命名任务" }}</span>
+                {% if item.job_id %}
+                <span class="schedule-time-note">
+                  计划：
+                  <time data-publish-scheduled-at="{{ item.job.scheduled_at or '' }}" datetime="{{ item.job.scheduled_at or '' }}">{{ item.job.scheduled_at_display }}</time>
+                </span>
+                {% endif %}
               </p>
               <h3>{{ item.title }}</h3>
               <p>{{ item.output_file_name or item.output_clip_id }}</p>
             </div>
             {% if item.job_id and item.status in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}
             <label class="send-checkbox">
-              <input type="checkbox" data-send-job-checkbox value="{{ item.job_id }}">
-              发送
+              <input type="checkbox" data-send-job-checkbox data-publish-schedule-checkbox value="{{ item.job_id }}">
+              选择
             </label>
             {% endif %}
           </div>
@@ -236,11 +281,21 @@
         </p>
         <h3>{{ job.title or job.output_file_name or job.id }}</h3>
         <p>{{ job.task_name or "未命名任务" }} · {{ job.updated_at or job.created_at }}</p>
+        <p class="schedule-time-note">
+          发布时间：
+          <time data-publish-scheduled-at="{{ job.scheduled_at or '' }}" datetime="{{ job.scheduled_at or '' }}">{{ job.scheduled_at_display }}</time>
+        </p>
         {% if job.error_message %}<p class="error-text">{{ job.error_message }}</p>{% endif %}
         {% if job.platform_url %}<a class="text-link" href="{{ job.platform_url }}" target="_blank" rel="noreferrer">平台链接</a>{% endif %}
         {% if job.trace_path %}<p class="form-hint">Trace：{{ job.trace_path }}</p>{% endif %}
       </div>
       <div class="button-row">
+        {% if job.status not in ["PUBLISHED", "CANCELLED", "published", "cancelled"] %}
+        <label class="send-checkbox">
+          <input type="checkbox" data-publish-schedule-checkbox value="{{ job.id }}">
+          排期
+        </label>
+        {% endif %}
         {% if job.status in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}
         <button type="button" class="secondary-button" data-publish-job-action="retry">重试</button>
         {% endif %}

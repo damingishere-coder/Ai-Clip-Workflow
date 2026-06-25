@@ -166,6 +166,22 @@ class PublishJobScheduleUpdate(BaseModel):
     scheduled_at: str = Field(..., min_length=1, max_length=80)
 
 
+class PublishBatchScheduleUpdate(BaseModel):
+    job_ids: list[str] = Field(default_factory=list)
+    action: Literal["apply", "clear"] = "apply"
+    start_at: Optional[str] = Field(default="", max_length=80)
+    interval_hours: int = Field(default=3, ge=1, le=168)
+    daily_start_time: str = Field(default="09:00", min_length=5, max_length=5)
+    daily_end_time: str = Field(default="21:00", min_length=5, max_length=5)
+
+    @validator("job_ids")
+    def validate_schedule_job_ids(cls, value: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
+        if not normalized:
+            raise ValueError("至少选择一条发布任务")
+        return normalized
+
+
 class PublishJobContentUpdate(BaseModel):
     title: str = Field(..., min_length=1, max_length=120)
     caption: str = Field(..., min_length=1, max_length=2000)

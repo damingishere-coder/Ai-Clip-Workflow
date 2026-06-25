@@ -266,6 +266,8 @@ class TestAIAnalysisEntry:
         assert clips[0]["title"] == "新片段"
 
     def test_replace_clip_candidates_rolls_back_when_insert_fails(self):
+        import sqlite3
+
         from app.db.database import get_connection
         from app.services.ai_analysis_workflow_service import _replace_clip_candidates
         from app.services.task_lifecycle_service import create_task_record
@@ -319,12 +321,61 @@ class TestAIAnalysisEntry:
             },
         ]
 
-        with pytest.raises(Exception):
+        with pytest.raises(sqlite3.IntegrityError):
             _replace_clip_candidates(task_id, duplicate_clips)
 
         clips = list_clip_candidates(task_id)
         assert len(clips) == 1
         assert clips[0]["title"] == "旧片段"
+
+    def test_restore_ai_history_recreates_candidates(self):
+        from app.services.ai_analysis_workflow_service import (
+            _insert_ai_analysis_run,
+            restore_ai_analysis_run,
+        )
+        from app.services.task_lifecycle_service import create_task_record
+        from app.services.task_service import list_clip_candidates
+
+        task_id = "test-ai-restore-history"
+        create_task_record(
+            TaskCreate(task_name="历史恢复测试", source_type="upload", platform="general"),
+            task_id=task_id,
+        )
+        payload = {
+            "analysis_summary": "历史结果",
+            "clips": [
+                {
+                    "clip_id": "history-001",
+                    "title": "历史候选",
+                    "start_time": "00:20",
+                    "end_time": "01:00",
+                    "duration_seconds": 40,
+                    "summary": "摘要",
+                    "highlight_reason": "亮点",
+                    "spread_value": "高",
+                    "suggested_editing": "直接切",
+                    "confidence_score": 0.95,
+                    "selected_by_default": True,
+                }
+            ],
+        }
+        run = _insert_ai_analysis_run(
+            task_id=task_id,
+            analysis_payload=payload,
+            provider="remote",
+            provider_label="远程 AI",
+            model="test-model",
+            fallback_notice="",
+            prompt_preset={"id": "preset_001", "name": "测试 Prompt"},
+            requested_clip_count=1,
+        )
+
+        result = restore_ai_analysis_run(task_id, run["id"])
+
+        assert result["status"] == "ok"
+        clips = list_clip_candidates(task_id)
+        assert len(clips) == 1
+        assert clips[0]["title"] == "历史候选"
 
 
 # ---------------------------------------------------------------------------

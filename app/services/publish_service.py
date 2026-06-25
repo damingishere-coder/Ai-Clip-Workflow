@@ -498,6 +498,16 @@ def _normalize_publish_status(status: str | None) -> str:
     return LEGACY_STATUS_MAP.get(raw.lower(), raw)
 
 
+def _format_publish_schedule(value: str | None) -> str:
+    text = (value or "").strip()
+    if not text:
+        return "未排期"
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return text
+
+
 def _normalize_job(row) -> dict:
     job = dict(row)
     status = _normalize_publish_status(job.get("status"))
@@ -527,6 +537,7 @@ def _normalize_job(row) -> dict:
             "status_tone": STATUS_TONES.get(status, "blue"),
             "video_source_label": VIDEO_SOURCE_LABELS.get(job.get("video_source"), job.get("video_source")),
             "publish_mode_label": PUBLISH_MODE_LABELS.get(job.get("publish_mode"), job.get("publish_mode")),
+            "scheduled_at_display": _format_publish_schedule(job.get("scheduled_at")),
             "account_name": job.get("account_name") or "未选择账号",
             "cover_media_url": _cover_media_url(job.get("task_id") or "", job.get("cover_file_path")),
             "video_media_url": _video_media_url(

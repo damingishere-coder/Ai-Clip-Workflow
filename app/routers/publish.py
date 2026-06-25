@@ -6,6 +6,7 @@ from fastapi.responses import RedirectResponse
 from app.models.task import (
     PublishAccountCreate,
     PublishBatchJobCreate,
+    PublishBatchScheduleUpdate,
     PublishCoverCreate,
     PublishCoverFrameBatchCreate,
     PublishJobContentUpdate,
@@ -214,6 +215,21 @@ async def approve_review_publish_job(job_id: str) -> dict:
 async def update_publish_job_schedule(job_id: str, payload: PublishJobScheduleUpdate) -> dict:
     try:
         return publish_service.update_publish_job_schedule(job_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/jobs/schedule-batch")
+async def update_publish_jobs_schedule_batch(payload: PublishBatchScheduleUpdate) -> dict:
+    try:
+        return PublishScheduler().update_batch_schedule(
+            payload.job_ids,
+            action=payload.action,
+            start_at=payload.start_at or "",
+            interval_hours=payload.interval_hours,
+            daily_start_time=payload.daily_start_time,
+            daily_end_time=payload.daily_end_time,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -247,6 +247,50 @@ def test_create_auto_publish_job_records_scheduled_at():
     assert row["video_source"] == "original"
 
 
+def test_create_auto_publish_job_without_schedule_waits_for_send_center():
+    task = _create_auto_task("test-auto-publish-waiting")
+    clip_path = _fake_video("publish_waiting_clip.mp4")
+    with get_connection() as connection:
+        now = "2026-06-23T08:00:00+00:00"
+        connection.execute(
+            """
+            INSERT INTO output_clip (
+                id, task_id, clip_candidate_id, output_file_path, output_file_name,
+                status, is_active, created_at, updated_at
+            )
+            VALUES ('out-waiting', ?, NULL, ?, 'publish_waiting_clip.mp4', 'completed', 1, ?, ?)
+            """,
+            (task["id"], str(clip_path), now, now),
+        )
+        connection.commit()
+    result = create_auto_publish_jobs(
+        task,
+        [
+            {
+                "output_clip": {"id": "out-waiting", "output_file_path": str(clip_path)},
+                "metadata": {
+                    "platform": "douyin",
+                    "title": "待排期片段",
+                    "caption": "等待发送中心设置时间",
+                    "hashtags": ["待排期"],
+                    "cover_text": "待排期",
+                    "risk_flags": [],
+                    "source": "rule",
+                },
+                "scheduled_at": "",
+            }
+        ],
+    )
+    assert result["created_count"] == 1
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT scheduled_at, status FROM publish_jobs WHERE task_id = ?",
+            (task["id"],),
+        ).fetchone()
+    assert row["scheduled_at"] == ""
+    assert row["status"] == "WAITING"
+
+
 def test_prepare_source_uses_pathlib_and_writes_reference():
     task = _create_auto_task("test-auto-windows-path")
     result = PipelineEngine()._prepare_source(task["id"], {"config": {}})

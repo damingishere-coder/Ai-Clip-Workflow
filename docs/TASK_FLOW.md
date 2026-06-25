@@ -72,10 +72,13 @@ FAILED_PUBLISH_JOB_CREATING
 - 每一步开始前写入对应状态。
 - 任意步骤失败时写入对应 `FAILED_*`，并把错误写入 `tasks.last_error` / `tasks.error_message`。
 - 失败后可调用 `POST /api/tasks/{task_id}/process/auto-retry` 从失败步骤继续。
+- 已有 AI 分析历史但候选片段缺失时，可调用 `POST /api/tasks/{task_id}/process/auto-resume`，恢复最近一次 AI 结果并从自动选片继续。
 - 已有 `transcripts/transcript.md` 或文本/字幕文件时优先复用；没有文本时才调用转写。
 - 转写文本只作为 AI 分析输入；全自动模式不执行加字幕、字幕样式渲染、字幕叠加或字幕烧录。
+- 自动选片数量读取 `tasks.candidate_clip_count`，时长上限读取 `tasks.max_clip_duration`；旧自动数量和最小/最大秒数只保留兼容，不再参与新任务决策。
 - 切片输出仍写入 `05_clips/`，并写入 `output_clip`；单个切片失败不会阻断其他成功切片生成文案和发布任务。
-- 发布任务只创建到 `publish_jobs`，真正按 `scheduled_at` 定时发送留到 v1.4.0。
+- `SCHEDULE_CREATING` 当前表示整理发送队列，不再自动计算发布时间。
+- 发布任务先以 `WAITING` / `NEED_REVIEW` 创建；用户在发送中心批量设置时间后进入 `SCHEDULED`，再由 v1.4.0 调度器执行。
 
 ## 4. 失败流转
 

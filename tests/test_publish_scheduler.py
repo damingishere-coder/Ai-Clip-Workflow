@@ -13,7 +13,7 @@ import pytest
 from app.core.config import settings
 from app.db.database import get_connection, init_db
 from app.services.auto_publish_service import create_auto_publish_jobs
-from app.services.publish_scheduler import PublishScheduler
+from app.services.publish_scheduler import PublishScheduler, build_batch_schedule_times
 from app.services.publish_service import get_publish_job
 
 
@@ -159,6 +159,13 @@ def test_need_review_is_not_auto_published(tmp_path):
     assert get_publish_job(job_id)["status"] == "NEED_REVIEW"
 
 
+def test_review_approval_without_schedule_returns_to_waiting(tmp_path):
+    job_id = _insert_job(tmp_path, status="NEED_REVIEW", risk_flags=["sensitive"], scheduled_at="")
+    result = PublishScheduler(interval_seconds=1).approve_review(job_id)
+    assert result["job"]["status"] == "WAITING"
+    assert result["job"]["scheduled_at"] == ""
+
+
 def test_cancelled_is_not_auto_published(tmp_path):
     job_id = _insert_job(tmp_path, status="CANCELLED", scheduled_at=_iso(-60))
     PublishScheduler(interval_seconds=1).run_once()
@@ -260,3 +267,45 @@ def test_v130_auto_publish_job_is_scanned_by_v140_scheduler(tmp_path):
     with get_connection() as connection:
         row = connection.execute("SELECT status FROM publish_jobs WHERE task_id = ?", (task_id,)).fetchone()
     assert row["status"] == "PUBLISHED"
+
+
+def test_batch_schedule_moves_overflow_to_next_daily_window(tmp_path):
+    first_job = _insert_job(tmp_path, status="WAITING", scheduled_at="")
+    second_job = _insert_job(tmp_path, status="WAITING", scheduled_at="")
+    third_job = _insert_job(tmp_path, status="WAITING", scheduled_at="")
+
+    result = PublishScheduler().update_batch_schedule(
+        [first_job, second_job, third_job],
+        action="apply",
+        start_at="2026-06-25T20:00:00+08:00",
+        interval_hours=3,
+        daily_start_time="09:00",
+        daily_end_time="21:00",
+    )
+
+    assert result["updated_count"] == 3
+    assert get_publish_job(first_job)["scheduled_at"] == "2026-06-25T20:00:00+08:00"
+    assert get_publish_job(second_job)["scheduled_at"] == "2026-06-26T09:00:00+08:00"
+    assert get_publish_job(third_job)["scheduled_at"] == "2026-06-26T12:00:00+08:00"
+    assert get_publish_job(first_job)["status"] == "SCHEDULED"
+
+
+def test_batch_schedule_can_be_cleared(tmp_path):
+    job_id = _insert_job(tmp_path, status="SCHEDULED", scheduled_at="2026-06-25T20:00:00+08:00")
+
+    result = PublishScheduler().update_batch_schedule([job_id], action="clear")
+
+    assert result["updated_count"] == 1
+    assert get_publish_job(job_id)["scheduled_at"] == ""
+    assert get_publish_job(job_id)["status"] == "WAITING"
+
+
+def test_batch_schedule_time_builder_rejects_invalid_daily_window():
+    with pytest.raises(ValueError, match="结束时间必须晚于"):
+        build_batch_schedule_times(
+            1,
+            start_at="2026-06-25T10:00:00+08:00",
+            interval_hours=3,
+            daily_start_time="21:00",
+            daily_end_time="09:00",
+        )
