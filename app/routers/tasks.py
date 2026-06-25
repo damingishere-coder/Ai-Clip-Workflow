@@ -11,6 +11,7 @@ from app.models.task import (
     TaskAIPromptPresetUpdate,
     TaskCandidateClipCountUpdate,
     TaskCreate,
+    TaskStatus,
     TaskStatusUpdate,
 )
 from app.services import task_service
@@ -315,6 +316,25 @@ async def process_auto_pipeline(
 async def retry_auto_pipeline(task_id: str, background_tasks: BackgroundTasks) -> dict:
     try:
         return start_auto_pipeline(task_id, background_tasks=background_tasks, retry=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/process/auto-resume")
+async def resume_auto_pipeline(task_id: str, background_tasks: BackgroundTasks) -> dict:
+    try:
+        task = task_service.get_task(task_id, include_video_probe=False)
+        if not task:
+            raise ValueError("任务不存在")
+        if not task.get("auto_mode"):
+            raise ValueError("该任务未开启全自动模式")
+        if not task.get("analysis_exists"):
+            raise ValueError("还没有可恢复的 AI 分析结果")
+        return start_auto_pipeline(
+            task_id,
+            background_tasks=background_tasks,
+            start_step=TaskStatus.CLIP_SELECTING,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

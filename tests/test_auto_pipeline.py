@@ -253,3 +253,66 @@ def test_prepare_source_uses_pathlib_and_writes_reference():
     reference_path = get_artifact_paths(task["id"])["task_dir"] / "source" / "source_reference.json"
     assert Path(result["source_path"]).exists()
     assert reference_path.exists()
+
+
+def test_auto_selection_uses_candidate_count_and_task_max_duration():
+    task_id = "test-auto-selection-rules"
+    video = _fake_video(f"{task_id}.mp4")
+    payload = TaskCreate(
+        task_name=task_id,
+        source_type="upload",
+        platform="general",
+        original_video_path=str(video),
+        max_clip_duration=3,
+        candidate_clip_count=2,
+        auto_mode=True,
+        auto_min_clip_seconds=120,
+        auto_max_clip_seconds=7200,
+    )
+    create_task_record(payload, task_id=task_id)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_connection() as connection:
+        for clip_id, start_time, end_time, confidence in [
+            ("short", "00:00", "00:30", 0.8),
+            ("medium", "01:00", "02:40", 0.9),
+            ("too-long", "03:00", "06:20", 1.0),
+        ]:
+            connection.execute(
+                """
+                INSERT INTO clip_candidates (
+                    id, task_id, clip_key, title, start_time, end_time, duration_seconds,
+                    summary, reason, highlight_reason, spread_value, suggested_editing,
+                    confidence_score, selected_by_default, enabled, reviewed, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 0, '', '', '', '', '', ?, 1, 1, 0, ?, ?)
+                """,
+                (f"{task_id}_{clip_id}", task_id, clip_id, clip_id, start_time, end_time, confidence, now, now),
+            )
+        connection.commit()
+
+    result = PipelineEngine()._select_clips(task_id, {"config": {}})
+
+    assert result["target_count"] == 2
+    assert result["selected_count"] == 2
+    assert {item["clip_id"] for item in result["selected"]} == {
+        f"{task_id}_short",
+        f"{task_id}_medium",
+    }
+    assert result["skipped_count"] == 1
+
+
+def test_auto_resume_endpoint_starts_from_clip_selection(monkeypatch):
+    task = _create_auto_task("test-auto-resume")
+    paths = get_artifact_paths(task["id"])
+    paths["analysis_path"].parent.mkdir(parents=True, exist_ok=True)
+    paths["analysis_path"].write_text('{"clips": []}', encoding="utf-8")
+    starter = Mock(return_value={"status": "started"})
+    monkeypatch.setattr("app.routers.tasks.start_auto_pipeline", starter)
+
+    with TestClient(app) as client:
+        response = client.post(f"/api/tasks/{task['id']}/process/auto-resume", headers=_headers())
+
+    assert response.status_code == 200
+    assert starter.call_args.args[0] == task["id"]
+    assert starter.call_args.kwargs["start_step"] == TaskStatus.CLIP_SELECTING
+    assert starter.call_args.kwargs["background_tasks"] is not None

@@ -71,21 +71,32 @@ DEFAULT_AUTO_CONFIG = {
 class PipelineEngine:
     """只做流程调度，复用现有转写、AI、切片和发布任务服务。"""
 
-    def run(self, task_id: str, retry: bool = False) -> dict:
+    def run(
+        self,
+        task_id: str,
+        retry: bool = False,
+        start_step: TaskStatus | str | None = None,
+    ) -> dict:
         task = self._get_task(task_id)
         if not task.get("auto_mode"):
             raise ValueError("该任务未开启 auto_mode，手动流程不会被自动流水线接管。")
 
         config = self._load_auto_config(task)
-        start_step = self._resolve_start_step(task, retry=retry)
-        if not retry:
+        resolved_start_step = (
+            start_step
+            if isinstance(start_step, TaskStatus)
+            else TaskStatus(start_step) if start_step else self._resolve_start_step(task, retry=retry)
+        )
+        if not retry and start_step is None:
             task_service.update_task_status(task_id, TaskStatus.CREATED)
             append_task_log(task_id, "全自动流水线启动")
+        elif start_step is not None:
+            append_task_log(task_id, f"从已有 AI 结果继续全自动流水线：{resolved_start_step.value}")
         else:
-            append_task_log(task_id, f"从失败步骤重试全自动流水线：{start_step.value}")
+            append_task_log(task_id, f"从失败步骤重试全自动流水线：{resolved_start_step.value}")
 
         context: dict[str, Any] = {"config": config}
-        steps = STEP_STATUSES[STEP_STATUSES.index(start_step) :]
+        steps = STEP_STATUSES[STEP_STATUSES.index(resolved_start_step) :]
         handlers = {
             TaskStatus.PREPARING_SOURCE: self._prepare_source,
             TaskStatus.TRANSCRIBING: self._transcribe_or_read_text,
@@ -141,12 +152,6 @@ class PipelineEngine:
             stored = {}
         if isinstance(stored, dict):
             config.update(stored)
-        min_seconds = int(config.get("auto_min_clip_seconds") or 15)
-        max_seconds = int(config.get("auto_max_clip_seconds") or 300)
-        if max_seconds < min_seconds:
-            raise ValueError("自动选片最大时长不能小于最小时长")
-        config["auto_min_clip_seconds"] = min_seconds
-        config["auto_max_clip_seconds"] = max_seconds
         config["auto_schedule_interval_hours"] = int(config.get("auto_schedule_interval_hours") or 3)
         config["auto_metadata_use_ai"] = bool(config.get("auto_metadata_use_ai"))
         return config
@@ -208,7 +213,17 @@ class PipelineEngine:
         task = self._get_task(task_id)
         config = context["config"]
         candidates = self._list_raw_candidates(task_id)
+        if not candidates:
+            latest_run = task_service.get_latest_ai_analysis_run(task_id)
+            if latest_run and latest_run.get("clips"):
+                task_service.restore_ai_analysis_run(task_id, latest_run["id"])
+                candidates = self._list_raw_candidates(task_id)
+                append_task_log(task_id, f"已从第 {latest_run['run_number']} 次 AI 历史恢复候选片段")
+        if not candidates:
+            raise ValueError("没有可用于自动切片的候选片段，请先重新运行 AI 分析")
+
         target_count = self._resolve_target_count(task, config)
+        max_duration_seconds = max(1, int(task.get("max_clip_duration") or 5)) * 60
         valid_candidates = []
         skipped = []
         for clip in candidates:
@@ -218,10 +233,8 @@ class PipelineEngine:
                 if end <= start:
                     raise ValueError("结束时间必须晚于开始时间")
                 duration = end - start
-                if duration < config["auto_min_clip_seconds"] or duration > config["auto_max_clip_seconds"]:
-                    raise ValueError(
-                        f"时长 {int(duration)} 秒不在 {config['auto_min_clip_seconds']}-{config['auto_max_clip_seconds']} 秒范围内"
-                    )
+                if duration > max_duration_seconds:
+                    raise ValueError(f"时长 {int(duration)} 秒超过单条切片最长 {max_duration_seconds} 秒")
             except Exception as exc:
                 skipped.append({"clip_id": clip.get("id") or "", "reason": str(exc)})
                 continue
@@ -230,7 +243,7 @@ class PipelineEngine:
         selected = sorted(valid_candidates, key=lambda item: float(item.get("confidence_score") or 0), reverse=True)
         selected = sorted(selected[:target_count], key=lambda item: float(item["start_seconds"]))
         if not selected:
-            raise ValueError("没有符合时间戳和时长要求的候选片段")
+            raise ValueError("候选片段的时间戳均无效或超过单条切片最长时长")
         selected_ids = {clip["id"] for clip in selected}
         self._update_selected_clips(task_id, selected_ids)
         payload = {
@@ -358,10 +371,7 @@ class PipelineEngine:
         return [dict(row) for row in rows]
 
     def _resolve_target_count(self, task: dict, config: dict) -> int:
-        raw_count = str(config.get("auto_clip_count") or "auto").strip().lower()
-        if raw_count == "auto":
-            return max(1, int(task.get("candidate_clip_count") or 5))
-        return max(1, min(50, int(raw_count)))
+        return max(1, min(50, int(task.get("candidate_clip_count") or 5)))
 
     def _update_selected_clips(self, task_id: str, selected_ids: set[str]) -> None:
         now = task_service._now_iso()
@@ -543,12 +553,21 @@ def build_schedule_times(count: int, config: dict, now: datetime | None = None) 
     return [(start + index * timedelta(hours=3)).isoformat(timespec="seconds") for index in range(count)]
 
 
-def run_auto_pipeline(task_id: str, retry: bool = False) -> dict:
-    return PipelineEngine().run(task_id, retry=retry)
+def run_auto_pipeline(
+    task_id: str,
+    retry: bool = False,
+    start_step: TaskStatus | str | None = None,
+) -> dict:
+    return PipelineEngine().run(task_id, retry=retry, start_step=start_step)
 
 
-def start_auto_pipeline(task_id: str, background_tasks: Any | None = None, retry: bool = False) -> dict:
+def start_auto_pipeline(
+    task_id: str,
+    background_tasks: Any | None = None,
+    retry: bool = False,
+    start_step: TaskStatus | str | None = None,
+) -> dict:
     if background_tasks is not None:
-        background_tasks.add_task(run_auto_pipeline, task_id, retry)
+        background_tasks.add_task(run_auto_pipeline, task_id, retry, start_step)
         return {"status": "started", "message": "全自动流水线已在后台启动。", "task_id": task_id}
-    return run_auto_pipeline(task_id, retry=retry)
+    return run_auto_pipeline(task_id, retry=retry, start_step=start_step)

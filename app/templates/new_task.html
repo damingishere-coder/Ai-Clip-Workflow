@@ -74,65 +74,12 @@
         <input name="auto_mode" type="checkbox" value="true">
         <span>新建后自动跑完整流水线</span>
       </label>
-      <div class="form-row">
-        <label>
-          <span>自动切片数量</span>
-          <select name="auto_clip_count">
-            <option value="auto">自动</option>
-            <option value="5">5 条</option>
-            <option value="10">10 条</option>
-            <option value="15">15 条</option>
-          </select>
-        </label>
-        <label>
-          <span>片段时长范围</span>
-          <span class="unit-input">
-            <input name="auto_min_clip_seconds" type="number" min="1" max="3600" step="1" value="15">
-            <small>秒起</small>
-          </span>
-          <span class="unit-input">
-            <input name="auto_max_clip_seconds" type="number" min="1" max="7200" step="1" value="300">
-            <small>秒内</small>
-          </span>
-        </label>
-      </div>
-      <div class="form-row">
-        <label>
-          <span>发布计划</span>
-          <select name="auto_schedule_mode">
-            <option value="default">默认排期</option>
-            <option value="immediate">立即发布</option>
-            <option value="interval">间隔发布</option>
-            <option value="daily_window">每天固定时段</option>
-          </select>
-        </label>
-        <label>
-          <span>间隔小时</span>
-          <input name="auto_schedule_interval_hours" type="number" min="1" max="168" step="1" value="3">
-        </label>
-      </div>
-      <div class="form-row">
-        <label>
-          <span>起始时间</span>
-          <input name="auto_schedule_start_at" type="datetime-local">
-        </label>
-        <label>
-          <span>固定时段</span>
-          <span class="unit-input">
-            <input name="auto_schedule_daily_start_time" type="time" value="09:00">
-            <small>开始</small>
-          </span>
-          <span class="unit-input">
-            <input name="auto_schedule_daily_end_time" type="time" value="21:00">
-            <small>结束</small>
-          </span>
-        </label>
-      </div>
+      <p class="form-hint">开启后，候选片段数量就是自动切片目标数量，单条切片最长就是时长上限。任务创建成功后会立即自动提取音频、转写、AI 分析并切片，无需进入详情页再次点击开始。</p>
     </fieldset>
 
     <div class="button-row align-end">
       <a class="secondary-button" href="/tasks">取消</a>
-      <button class="primary-button" type="submit">开始处理</button>
+      <button class="primary-button" id="new-task-submit-button" type="submit">创建任务</button>
     </div>
     <p class="form-hint" id="new-task-result"></p>
   </form>

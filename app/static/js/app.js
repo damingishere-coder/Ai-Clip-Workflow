@@ -1,4 +1,16 @@
 const newTaskForm = document.querySelector("#new-task-form");
+const newTaskAutoMode = newTaskForm?.querySelector("input[name='auto_mode']");
+const newTaskSubmitButton = document.querySelector("#new-task-submit-button");
+
+function updateNewTaskSubmitLabel() {
+  if (!newTaskSubmitButton) return;
+  newTaskSubmitButton.textContent = newTaskAutoMode?.checked ? "创建并自动处理" : "创建任务";
+}
+
+if (newTaskAutoMode) {
+  newTaskAutoMode.addEventListener("change", updateNewTaskSubmitLabel);
+  updateNewTaskSubmitLabel();
+}
 
 if (newTaskForm) {
   newTaskForm.addEventListener("submit", async (event) => {
@@ -23,14 +35,6 @@ if (newTaskForm) {
       uploadData.append("candidate_clip_count", payload.candidate_clip_count || "5");
       uploadData.append("ai_preference", "");
       uploadData.append("auto_mode", payload.auto_mode === "true" ? "true" : "false");
-      uploadData.append("auto_clip_count", payload.auto_clip_count || "auto");
-      uploadData.append("auto_min_clip_seconds", payload.auto_min_clip_seconds || "15");
-      uploadData.append("auto_max_clip_seconds", payload.auto_max_clip_seconds || "300");
-      uploadData.append("auto_schedule_mode", payload.auto_schedule_mode || "default");
-      uploadData.append("auto_schedule_start_at", payload.auto_schedule_start_at || "");
-      uploadData.append("auto_schedule_interval_hours", payload.auto_schedule_interval_hours || "3");
-      uploadData.append("auto_schedule_daily_start_time", payload.auto_schedule_daily_start_time || "09:00");
-      uploadData.append("auto_schedule_daily_end_time", payload.auto_schedule_daily_end_time || "21:00");
       uploadData.append("auto_metadata_use_ai", "false");
       uploadData.append("video_file", videoFileInput.files[0]);
       const response = await fetch("/api/tasks/upload", {
@@ -2317,6 +2321,11 @@ function updateSendFilter(filter) {
     const visible = normalizedFilter === "all" || normalizedFilter === platform || normalizedFilter === status;
     card.classList.toggle("is-hidden", !visible);
   });
+}
+
+const autoPipelineMonitor = document.querySelector("[data-auto-pipeline-monitor]");
+if (autoPipelineMonitor?.dataset.running === "true") {
+  window.setTimeout(() => window.location.reload(), 5000);
 }
 
 document.querySelectorAll("[data-send-filter]").forEach((button) => {

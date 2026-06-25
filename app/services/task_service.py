@@ -25,6 +25,7 @@ from app.services.ai_analysis_workflow_service import (
     _next_ai_analysis_run_number,
     _read_analysis_meta,
     _read_latest_ai_provider_from_log,
+    _replace_clip_candidates,
     _summarize_ai_error,
     _summarize_analysis_clips,
     _write_analysis_payload,
