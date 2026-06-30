@@ -166,39 +166,57 @@ def _insert_clip_candidates(task_id: str, clips: list[dict]) -> None:
 
     now = _now_iso()
     with get_connection() as connection:
-        for index, clip in enumerate(clips, start=1):
-            clip_key = str(clip["clip_id"])
-            database_id = f"{task_id}_{clip_key}"[:120]
-            selected_by_default = bool(clip.get("selected_by_default", True))
-            connection.execute(
-                """
-                INSERT INTO clip_candidates (
-                    id, task_id, clip_key, title, start_time, end_time, duration_seconds,
-                    summary, reason, highlight_reason, spread_value, suggested_editing,
-                    confidence_score, selected_by_default, enabled, reviewed, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-                """,
-                (
-                    database_id or f"{task_id}_clip_{index:03d}",
-                    task_id,
-                    clip_key,
-                    clip["title"],
-                    clip["start_time"],
-                    clip["end_time"],
-                    clip["duration_seconds"],
-                    clip["summary"],
-                    clip["highlight_reason"],
-                    clip["highlight_reason"],
-                    clip["spread_value"],
-                    clip["suggested_editing"],
-                    clip["confidence_score"],
-                    1 if selected_by_default else 0,
-                    1 if selected_by_default else 0,
-                    now,
-                    now,
-                ),
+        _insert_clip_candidates_with_connection(connection, task_id, clips, now)
+        connection.commit()
+
+
+def _insert_clip_candidates_with_connection(connection, task_id: str, clips: list[dict], now: str) -> None:
+    for index, clip in enumerate(clips, start=1):
+        clip_key = str(clip["clip_id"])
+        database_id = f"{task_id}_{clip_key}"[:120]
+        selected_by_default = bool(clip.get("selected_by_default", True))
+        connection.execute(
+            """
+            INSERT INTO clip_candidates (
+                id, task_id, clip_key, title, start_time, end_time, duration_seconds,
+                summary, reason, highlight_reason, spread_value, suggested_editing,
+                confidence_score, selected_by_default, enabled, reviewed, created_at, updated_at
             )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            """,
+            (
+                database_id or f"{task_id}_clip_{index:03d}",
+                task_id,
+                clip_key,
+                clip["title"],
+                clip["start_time"],
+                clip["end_time"],
+                clip["duration_seconds"],
+                clip["summary"],
+                clip["highlight_reason"],
+                clip["highlight_reason"],
+                clip["spread_value"],
+                clip["suggested_editing"],
+                clip["confidence_score"],
+                1 if selected_by_default else 0,
+                1 if selected_by_default else 0,
+                now,
+                now,
+            ),
+        )
+
+
+def _replace_clip_candidates(task_id: str, clips: list[dict]) -> None:
+    """在同一个事务里替换候选片段，失败时保留原结果。"""
+    from app.services.task_service import _now_iso
+
+    if not clips:
+        raise ValueError("AI 没有生成可保存的候选片段")
+
+    now = _now_iso()
+    with get_connection() as connection:
+        connection.execute("DELETE FROM clip_candidates WHERE task_id = ?", (task_id,))
+        _insert_clip_candidates_with_connection(connection, task_id, clips, now)
         connection.commit()
 
 
@@ -475,10 +493,8 @@ def restore_ai_analysis_run(task_id: str, run_id: str) -> dict:
     except json.JSONDecodeError as exc:
         raise ValueError("这条历史记录已损坏，无法恢复") from exc
 
+    _replace_clip_candidates(task_id, payload.get("clips") or [])
     _write_analysis_payload(task_id, payload)
-    # 先生成新结果，再清除旧的（安全顺序）
-    _insert_clip_candidates(task_id, payload.get("clips") or [])
-    _clear_clip_candidates(task_id)
     # 切换 active 到被恢复的 run
     with get_connection() as connection:
         connection.execute(
@@ -604,13 +620,11 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             "model": _ai_model_name(used_provider),
             "generated_at": _now_iso(),
         }
-        _write_analysis_payload(task_id, analysis_payload)
         prompt_preset = get_task_ai_prompt_preset(task_id)
         provider_label = _ai_provider_label(used_provider)
         model_name = _ai_model_name(used_provider)
-        # 先插入新候选片段，成功后再清除旧的（避免"先删后建"导致丢失）
-        _insert_clip_candidates(task_id, analysis_payload["clips"])
-        _clear_clip_candidates(task_id)
+        _replace_clip_candidates(task_id, analysis_payload["clips"])
+        _write_analysis_payload(task_id, analysis_payload)
         # 插入新的 AI 分析历史 run（自动标记 is_active=1，旧 run 取消激活）
         analysis_run = _insert_ai_analysis_run(
             task_id=task_id,

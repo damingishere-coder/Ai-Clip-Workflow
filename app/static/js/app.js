@@ -1,4 +1,16 @@
 const newTaskForm = document.querySelector("#new-task-form");
+const newTaskAutoMode = newTaskForm?.querySelector("input[name='auto_mode']");
+const newTaskSubmitButton = document.querySelector("#new-task-submit-button");
+
+function updateNewTaskSubmitLabel() {
+  if (!newTaskSubmitButton) return;
+  newTaskSubmitButton.textContent = newTaskAutoMode?.checked ? "创建并自动处理" : "创建任务";
+}
+
+if (newTaskAutoMode) {
+  newTaskAutoMode.addEventListener("change", updateNewTaskSubmitLabel);
+  updateNewTaskSubmitLabel();
+}
 
 if (newTaskForm) {
   newTaskForm.addEventListener("submit", async (event) => {
@@ -22,6 +34,8 @@ if (newTaskForm) {
       uploadData.append("max_clip_duration", payload.max_clip_duration || "5");
       uploadData.append("candidate_clip_count", payload.candidate_clip_count || "5");
       uploadData.append("ai_preference", "");
+      uploadData.append("auto_mode", payload.auto_mode === "true" ? "true" : "false");
+      uploadData.append("auto_metadata_use_ai", "false");
       uploadData.append("video_file", videoFileInput.files[0]);
       const response = await fetch("/api/tasks/upload", {
         method: "POST",
@@ -32,7 +46,7 @@ if (newTaskForm) {
       if (!response.ok) {
         throw new Error(data.detail || "任务创建失败");
       }
-      result.textContent = `${data.message} 正在进入详情页...`;
+      result.textContent = `${data.message}${payload.auto_mode === "true" ? " 全自动流水线已启动。" : ""} 正在进入详情页...`;
       window.location.href = data.detail_url;
     } catch (error) {
       result.textContent = `任务创建失败：${error.message}`;
@@ -2218,6 +2232,9 @@ document.querySelectorAll("[data-publish-job-action]").forEach((button) => {
 const sendCenterMessage = document.querySelector("#send-center-message");
 const sendPublishingOverlay = document.querySelector("[data-send-publishing-overlay]");
 const sendPreviewPanel = document.querySelector("[data-send-preview-panel]");
+const publishScheduleForm = document.querySelector("[data-publish-schedule-form]");
+const publishScheduleResult = document.querySelector("[data-publish-schedule-result]");
+const scheduleSelectedCount = document.querySelector("[data-schedule-selected-count]");
 
 function setSendCenterMessage(message, tone = "info") {
   if (!sendCenterMessage) return;
@@ -2239,6 +2256,143 @@ function showSendPublishingOverlay(title = "正在发布", text = "opencli 正�
 function hideSendPublishingOverlay() {
   if (sendPublishingOverlay) sendPublishingOverlay.hidden = true;
 }
+
+function publishScheduleCheckboxes() {
+  return Array.from(document.querySelectorAll("[data-publish-schedule-checkbox]"));
+}
+
+function selectedPublishScheduleJobIds() {
+  return Array.from(
+    new Set(
+      publishScheduleCheckboxes()
+        .filter((checkbox) => checkbox.checked)
+        .map((checkbox) => checkbox.value)
+        .filter(Boolean)
+    )
+  );
+}
+
+function updateScheduleSelectedCount() {
+  if (!scheduleSelectedCount) return;
+  scheduleSelectedCount.textContent = `已选 ${selectedPublishScheduleJobIds().length} 条`;
+}
+
+function localDatetimeValue(date) {
+  const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return offsetDate.toISOString().slice(0, 16);
+}
+
+function setScheduleResult(message, tone = "info") {
+  if (!publishScheduleResult) return;
+  publishScheduleResult.textContent = message;
+  publishScheduleResult.classList.toggle("error-text", tone === "error");
+}
+
+function formatScheduledTimes() {
+  document.querySelectorAll("[data-publish-scheduled-at]").forEach((node) => {
+    const value = node.dataset.publishScheduledAt || "";
+    if (!value) {
+      node.textContent = "未排期";
+      return;
+    }
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      node.textContent = parsed.toLocaleString([], {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+  });
+}
+
+async function submitBatchSchedule(action) {
+  if (!publishScheduleForm) return;
+  const jobIds = selectedPublishScheduleJobIds();
+  if (!jobIds.length) {
+    setScheduleResult("请先勾选至少一条未发布任务。", "error");
+    return;
+  }
+
+  const startValue = String(publishScheduleForm.elements.start_at?.value || "");
+  if (action === "apply" && !startValue) {
+    setScheduleResult("请先选择起始时间。", "error");
+    return;
+  }
+  const startDate = startValue ? new Date(startValue) : null;
+  if (action === "apply" && (!startDate || Number.isNaN(startDate.getTime()))) {
+    setScheduleResult("起始时间无效，请重新选择。", "error");
+    return;
+  }
+
+  setScheduleResult(action === "apply" ? "正在应用发布计划..." : "正在清除发布时间...");
+  const response = await fetch("/api/publish/jobs/schedule-batch", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      job_ids: jobIds,
+      action,
+      start_at: startDate ? startDate.toISOString() : "",
+      interval_hours: Number(publishScheduleForm.elements.interval_hours?.value || 3),
+      daily_start_time: String(publishScheduleForm.elements.daily_start_time?.value || "09:00"),
+      daily_end_time: String(publishScheduleForm.elements.daily_end_time?.value || "21:00"),
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || data.message || "发布计划保存失败");
+  }
+  setScheduleResult(data.message || "发布计划已更新。");
+  reloadSendCenter(700);
+}
+
+if (publishScheduleForm) {
+  const startInput = publishScheduleForm.elements.start_at;
+  if (startInput && !startInput.value) {
+    startInput.value = localDatetimeValue(new Date(Date.now() + 10 * 60 * 1000));
+  }
+  publishScheduleForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await submitBatchSchedule("apply");
+    } catch (error) {
+      setScheduleResult(`保存失败：${error.message}`, "error");
+    }
+  });
+}
+
+document.querySelectorAll("[data-publish-schedule-checkbox]").forEach((checkbox) => {
+  checkbox.addEventListener("change", () => {
+    publishScheduleCheckboxes()
+      .filter((item) => item.value === checkbox.value)
+      .forEach((item) => {
+        item.checked = checkbox.checked;
+      });
+    updateScheduleSelectedCount();
+  });
+});
+
+document.querySelector("[data-select-all-schedule]")?.addEventListener("click", () => {
+  const checkboxes = publishScheduleCheckboxes();
+  const shouldCheck = checkboxes.some((checkbox) => !checkbox.checked);
+  checkboxes.forEach((checkbox) => {
+    checkbox.checked = shouldCheck;
+  });
+  updateScheduleSelectedCount();
+});
+
+document.querySelector("[data-clear-batch-schedule]")?.addEventListener("click", async () => {
+  try {
+    await submitBatchSchedule("clear");
+  } catch (error) {
+    setScheduleResult(`清除失败：${error.message}`, "error");
+  }
+});
+
+formatScheduledTimes();
+updateScheduleSelectedCount();
 
 function sendJobPayload(form) {
   const formData = new FormData(form);
@@ -2300,12 +2454,18 @@ function activeSendJobIds() {
 }
 
 function updateSendFilter(filter) {
+  const normalizedFilter = (filter || "all").toLowerCase();
   document.querySelectorAll("[data-send-card]").forEach((card) => {
-    const platform = card.dataset.platform;
-    const status = card.dataset.status;
-    const visible = filter === "all" || filter === platform || filter === status;
+    const platform = (card.dataset.platform || "").toLowerCase();
+    const status = (card.dataset.status || "").toLowerCase();
+    const visible = normalizedFilter === "all" || normalizedFilter === platform || normalizedFilter === status;
     card.classList.toggle("is-hidden", !visible);
   });
+}
+
+const autoPipelineMonitor = document.querySelector("[data-auto-pipeline-monitor]");
+if (autoPipelineMonitor?.dataset.running === "true") {
+  window.setTimeout(() => window.location.reload(), 5000);
 }
 
 document.querySelectorAll("[data-send-filter]").forEach((button) => {
@@ -2558,10 +2718,11 @@ document.querySelectorAll("[data-send-select-all]").forEach((checkbox) => {
       const item = card.querySelector("[data-send-job-checkbox]");
       if (item && !item.disabled) item.checked = checkbox.checked;
     });
+    updateScheduleSelectedCount();
   });
 });
 
-if (document.querySelector("[data-send-card][data-status='publishing']")) {
+if (document.querySelector("[data-send-card][data-status='publishing'], [data-send-card][data-status='PUBLISHING']")) {
   showSendPublishingOverlay("正在发布", "已有任务正在发布中，页面会自动刷新状态。");
   window.setTimeout(() => window.location.reload(), 5000);
 }

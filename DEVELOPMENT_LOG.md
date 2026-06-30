@@ -1,5 +1,38 @@
 # Development Log
 
+## 2026-06-25 全自动切片修复与发送中心批量排期
+- 修复 AI 分析完成后候选片段“先写入、随后又被全部删除”的事务顺序错误；候选片段现在在单个 SQLite 事务内替换，任一新片段写入失败都会自动回滚并保留旧结果。
+- 修复历史全自动任务卡在 AI 分析后的问题：任务可从最近一次 AI 分析历史恢复候选片段，并从自动选片阶段继续，不需要重新消耗一次 AI 分析。
+- 自动选片不再读取独立的自动数量和 15-300 秒范围；目标数量统一使用任务的“候选片段数量”，时长上限统一使用“单条切片最长”，无效时间戳不会被强行送入 FFmpeg。
+- 新建任务页的全自动区精简为一个开关；创建成功后后台立即启动完整流水线，任务详情隐藏手动“开始处理”，处理中自动刷新，失败或历史中断时显示重试/继续按钮。
+- 全自动流水线生成的发布任务默认进入 `WAITING`，不再自行安排发布时间；旧 `auto_config_json` 字段继续保留，兼容历史任务和旧接口。
+- 发送中心新增批量发布计划：勾选未发布任务后可设置起始时间、间隔小时和每日允许时段，超过当日结束时间会顺延到次日开始；支持批量清除排期，并在任务卡片和发布记录中显示计划时间。
+- 新增批量排期 API `PATCH /api/publish/jobs/schedule-batch`；已发布和已取消任务禁止改期，`NEED_REVIEW` 可保存时间但仍保持人工复核状态。
+- 静态资源版本更新为 `20260625-auto-pipeline-schedule`，避免浏览器继续使用旧版 JavaScript / CSS。
+- 已验证：完整 232 项 pytest 测试通过；Python 编译、JavaScript 语法检查和 Ruff 检查通过；浏览器检查 `/tasks/new`、历史全自动任务详情和 `/publish` 正常。
+
+## 2026-06-23 v1.4.0 定时发送与自动发布执行器
+- 新增 `PublishScheduler`，应用启动时可自动后台扫描 `publish_jobs`，也支持 `python -m app.publish_scheduler run` 持续运行和 `python -m app.publish_scheduler run-once` 手动扫描一次。
+- `publish_jobs` 补齐 v1.4.0 字段：`clip_id`、`caption`、`hashtags`、`cover_text`、`video_path`、`risk_flags`、`publish_result`、`remote_video_id`、`attempt_count`、`published_at` 等；旧字段继续兼容。
+- 发布状态统一为 `DRAFT`、`SCHEDULED`、`WAITING`、`PUBLISHING`、`PUBLISHED`、`FAILED`、`CANCELLED`、`NEED_REVIEW`；没有 `scheduled_at` 的旧手动队列会进入 `WAITING`，避免被调度器误执行。
+- 新增 `BasePublisher`、`ManualExportPublisher`、`LocalBrowserPublisher`；本轮完整实现 `ManualExportPublisher`，到点后导出 `outputs/publish_packages/{task_id}/{clip_id}/` 发布包。
+- v1.3.0 自动流水线创建的发布任务现在默认写入 `manual_export` + `SCHEDULED`，到点后可由 v1.4.0 调度器自动导出发布包；有 `risk_flags` 的任务保持 `NEED_REVIEW`，不会自动发布。
+- 新增发布队列 API：队列快照、run-once、立即发布、取消、跳过、失败重试、复核通过、修改发布时间、修改标题文案后重新入队；发送中心同步识别新状态并展示发布记录。
+- 新增 `.env.example` 配置项：`PUBLISH_SCHEDULER_ENABLED`、`PUBLISH_SCHEDULER_INTERVAL_SECONDS`、`PUBLISH_SCHEDULER_DEFAULT_PLATFORM`、`PUBLISH_SCHEDULER_MAX_RETRY_COUNT`、`PUBLISH_SCHEDULER_EXPORT_DIR`、`PUBLISH_SCHEDULER_ALLOW_PUBLISH_WITHOUT_REVIEW`。
+- 当前默认不接真实平台 API，不写死账号密码、cookie、token；`LocalBrowserPublisher` 仅预留结构，后续可接 Playwright、Selenium、opencli 或平台 API。
+- 已验证：`.venv\Scripts\python.exe -m pytest tests\test_publish_scheduler.py -q` 通过，10 passed；`.venv\Scripts\python.exe -m pytest tests\test_publish_job_lifecycle.py tests\test_auto_pipeline.py -q` 通过，30 passed。Pydantic 旧 `@validator` 警告为既有警告。
+
+## 2026-06-23 v1.3.0 全自动任务流水线
+- 新增 `PipelineEngine`，把新建任务后的准备视频、读取/生成转写文本、AI 分析、自动选片、原片切割、标题文案、发布计划和发布任务创建串成一键全自动流程；引擎只做调度，继续复用现有转写、AI 分析、切片和发布任务数据结构。
+- `tasks` 表新增 `auto_mode`、`auto_config_json`、`last_error`；全自动模式新增 `CREATED`、`PREPARING_SOURCE`、`TRANSCRIBING`、`AI_ANALYZING`、`CLIP_SELECTING`、`VIDEO_CUTTING`、`METADATA_GENERATING`、`SCHEDULE_CREATING`、`PUBLISH_JOB_CREATING`、`READY_TO_PUBLISH`、`COMPLETED` 以及对应 `FAILED_*` 状态。
+- 新建任务页新增“全自动模式”开关、自动切片数量、片段时长范围和发布计划配置；`auto_mode=false` 时保留原手动流程，`auto_mode=true` 时通过后台任务自动启动流水线。
+- 全自动模式会优先读取 `transcripts/transcript.md` 或已有文本/字幕文件；没有文本时才调用现有转写流程。转写文本仅用于 AI 分析，本轮明确跳过加字幕、字幕样式渲染、字幕叠加和字幕烧录。
+- 自动选片会校验时间戳和最小/最大时长，跳过非法片段并记录原因；自动切片继续输出到 `05_clips/`，单个切片失败不会阻断其他成功切片进入后续文案和发布任务创建。
+- 新增 `MetadataGenerator` 和全自动发布任务创建服务，为每条成功切片生成结构化 `title`、`caption`、`hashtags`、`cover_text`、`platform`、`risk_flags`；有风险标记的发布任务进入 `NEED_REVIEW`，不影响其他切片。
+- 自动生成 `auto_publish_metadata.json`、`auto_publish_schedule.json`、`05_clips/clip_metadata.json` 和 `analysis/task_summary.json`；发布任务写入现有 `publish_jobs`，本轮只创建任务，不执行真实定时发送。
+- 新增 `tests/test_auto_pipeline.py` 覆盖：手动模式不触发、自动模式触发、已有转写跳过、无转写调用转写、切片跳过字幕、AI JSON 异常记录失败、单切片失败不阻断、默认排期、发布任务创建、Windows 路径引用。
+- 已验证：`.venv\Scripts\python.exe -m pytest tests\test_auto_pipeline.py -q` 通过，结果为 10 passed、3 个 Pydantic 既有弃用警告。
+
 ## 2026-06-15 v1.3 分支整理与集成发布
 - 新建并验证 `codex/branch-integration-20260611` 集成分支，按顺序整合 `fix/p0-security-and-stability`、`fix/p1-1-db-performance`、`fix/p1-2-query-refactor`、`feature/p1-3-job-queue`、`feature/p1-4-split-task-service`、`feature/p1-5-versioned-products-rollback`、`feature/p2-1-engineering` 和 `feature/p2-2-architecture-docs`。
 - 已处理分支之间的冲突：数据库初始化同时保留 `oauth_states`、`workflow_jobs`、`cut_runs` 等结构；`task_service.py` 保留兼容出口，页面查询实际迁移到 `task_query_service.py`；任务队列、服务拆分、产物版本化和工程化配置已统一集成。

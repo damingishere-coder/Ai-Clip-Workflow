@@ -181,6 +181,17 @@ class TestTaskLifecycle:
 # ---------------------------------------------------------------------------
 
 class TestAIAnalysisEntry:
+    @pytest.fixture(autouse=True)
+    def cleanup_ai_rows(self):
+        from app.db.database import get_connection
+
+        yield
+        with get_connection() as connection:
+            connection.execute("DELETE FROM clip_candidates WHERE task_id LIKE 'test-ai-%'")
+            connection.execute("DELETE FROM ai_analysis_runs WHERE task_id LIKE 'test-ai-%'")
+            connection.execute("DELETE FROM tasks WHERE id LIKE 'test-ai-%'")
+            connection.commit()
+
     def test_missing_transcript_triggers_error(self):
         """没有转写文件时 AI 分析应报错"""
         from app.services.ai_analysis_workflow_service import process_task_ai_analysis
@@ -220,6 +231,151 @@ class TestAIAnalysisEntry:
         assert status["status"] == "idle"
         assert status["analysis_exists"] is False
         assert status["is_running"] is False
+
+    def test_replace_clip_candidates_keeps_new_rows(self):
+        from app.services.ai_analysis_workflow_service import _replace_clip_candidates
+        from app.services.task_lifecycle_service import create_task_record
+        from app.services.task_service import list_clip_candidates
+
+        task_id = "test-ai-replace"
+        create_task_record(
+            TaskCreate(task_name="候选替换测试", source_type="upload", platform="general"),
+            task_id=task_id,
+        )
+        _replace_clip_candidates(
+            task_id,
+            [
+                {
+                    "clip_id": "clip-001",
+                    "title": "新片段",
+                    "start_time": "00:10",
+                    "end_time": "00:40",
+                    "duration_seconds": 30,
+                    "summary": "摘要",
+                    "highlight_reason": "亮点",
+                    "spread_value": "高",
+                    "suggested_editing": "直接切",
+                    "confidence_score": 0.9,
+                    "selected_by_default": True,
+                }
+            ],
+        )
+
+        clips = list_clip_candidates(task_id)
+        assert len(clips) == 1
+        assert clips[0]["title"] == "新片段"
+
+    def test_replace_clip_candidates_rolls_back_when_insert_fails(self):
+        import sqlite3
+
+        from app.db.database import get_connection
+        from app.services.ai_analysis_workflow_service import _replace_clip_candidates
+        from app.services.task_lifecycle_service import create_task_record
+        from app.services.task_service import _now_iso, list_clip_candidates
+
+        task_id = "test-ai-replace-rollback"
+        create_task_record(
+            TaskCreate(task_name="候选回滚测试", source_type="upload", platform="general"),
+            task_id=task_id,
+        )
+        now = _now_iso()
+        with get_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO clip_candidates (
+                    id, task_id, clip_key, title, start_time, end_time, duration_seconds,
+                    selected_by_default, enabled, reviewed, created_at, updated_at
+                )
+                VALUES (?, ?, 'old', '旧片段', '00:00', '00:20', 20, 1, 1, 0, ?, ?)
+                """,
+                (f"{task_id}_old", task_id, now, now),
+            )
+            connection.commit()
+
+        duplicate_clips = [
+            {
+                "clip_id": "same",
+                "title": "新片段",
+                "start_time": "00:10",
+                "end_time": "00:40",
+                "duration_seconds": 30,
+                "summary": "摘要",
+                "highlight_reason": "亮点",
+                "spread_value": "高",
+                "suggested_editing": "直接切",
+                "confidence_score": 0.9,
+                "selected_by_default": True,
+            },
+            {
+                "clip_id": "same",
+                "title": "重复片段",
+                "start_time": "00:50",
+                "end_time": "01:20",
+                "duration_seconds": 30,
+                "summary": "摘要",
+                "highlight_reason": "亮点",
+                "spread_value": "中",
+                "suggested_editing": "直接切",
+                "confidence_score": 0.8,
+                "selected_by_default": True,
+            },
+        ]
+
+        with pytest.raises(sqlite3.IntegrityError):
+            _replace_clip_candidates(task_id, duplicate_clips)
+
+        clips = list_clip_candidates(task_id)
+        assert len(clips) == 1
+        assert clips[0]["title"] == "旧片段"
+
+    def test_restore_ai_history_recreates_candidates(self):
+        from app.services.ai_analysis_workflow_service import (
+            _insert_ai_analysis_run,
+            restore_ai_analysis_run,
+        )
+        from app.services.task_lifecycle_service import create_task_record
+        from app.services.task_service import list_clip_candidates
+
+        task_id = "test-ai-restore-history"
+        create_task_record(
+            TaskCreate(task_name="历史恢复测试", source_type="upload", platform="general"),
+            task_id=task_id,
+        )
+        payload = {
+            "analysis_summary": "历史结果",
+            "clips": [
+                {
+                    "clip_id": "history-001",
+                    "title": "历史候选",
+                    "start_time": "00:20",
+                    "end_time": "01:00",
+                    "duration_seconds": 40,
+                    "summary": "摘要",
+                    "highlight_reason": "亮点",
+                    "spread_value": "高",
+                    "suggested_editing": "直接切",
+                    "confidence_score": 0.95,
+                    "selected_by_default": True,
+                }
+            ],
+        }
+        run = _insert_ai_analysis_run(
+            task_id=task_id,
+            analysis_payload=payload,
+            provider="remote",
+            provider_label="远程 AI",
+            model="test-model",
+            fallback_notice="",
+            prompt_preset={"id": "preset_001", "name": "测试 Prompt"},
+            requested_clip_count=1,
+        )
+
+        result = restore_ai_analysis_run(task_id, run["id"])
+
+        assert result["status"] == "ok"
+        clips = list_clip_candidates(task_id)
+        assert len(clips) == 1
+        assert clips[0]["title"] == "历史候选"
 
 
 # ---------------------------------------------------------------------------

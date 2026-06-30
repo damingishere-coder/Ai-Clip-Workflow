@@ -44,9 +44,12 @@ def init_db() -> None:
                 candidate_clip_count INTEGER NOT NULL DEFAULT 5,
                 ai_preference TEXT,
                 ai_prompt_preset_id TEXT NOT NULL DEFAULT 'preset_001',
+                auto_mode INTEGER NOT NULL DEFAULT 0,
+                auto_config_json TEXT,
                 status TEXT NOT NULL DEFAULT 'pending_video',
                 progress INTEGER NOT NULL DEFAULT 0,
                 error_message TEXT,
+                last_error TEXT,
                 is_deleted INTEGER NOT NULL DEFAULT 0,
                 deleted_at TEXT,
                 created_at TEXT NOT NULL,
@@ -191,14 +194,20 @@ def init_db() -> None:
                 id TEXT PRIMARY KEY,
                 task_id TEXT NOT NULL,
                 output_clip_id TEXT NOT NULL,
+                clip_id TEXT,
                 account_id TEXT,
                 platform TEXT NOT NULL,
                 publish_mode TEXT NOT NULL DEFAULT 'manual_review',
                 video_source TEXT NOT NULL DEFAULT 'original',
                 video_file_path TEXT NOT NULL DEFAULT '',
+                video_path TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 description TEXT,
+                caption TEXT,
                 tags TEXT,
+                hashtags TEXT,
+                cover_text TEXT,
+                risk_flags TEXT,
                 visibility TEXT NOT NULL DEFAULT 'public',
                 cover_mode TEXT NOT NULL DEFAULT 'auto',
                 cover_time_seconds REAL NOT NULL DEFAULT 0,
@@ -208,14 +217,19 @@ def init_db() -> None:
                 bilibili_source TEXT,
                 cover_file_path TEXT,
                 scheduled_at TEXT,
-                status TEXT NOT NULL DEFAULT 'ready',
+                status TEXT NOT NULL DEFAULT 'SCHEDULED',
                 audit_status TEXT NOT NULL DEFAULT 'not_submitted',
                 platform_item_id TEXT,
                 platform_upload_id TEXT,
+                remote_video_id TEXT,
                 error_code TEXT,
                 error_message TEXT,
+                last_error TEXT,
                 provider_response TEXT,
+                publish_result TEXT,
                 retry_count INTEGER NOT NULL DEFAULT 0,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                published_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(task_id) REFERENCES tasks(id),
@@ -300,6 +314,7 @@ def _create_indexes(connection: sqlite3.Connection) -> None:
         # 发布任务（按状态、平台、时间；按任务、输出切片）
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_status_platform_created ON publish_jobs(status, platform, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_task_output ON publish_jobs(task_id, output_clip_id)",
+        "CREATE INDEX IF NOT EXISTS idx_publish_jobs_status_scheduled ON publish_jobs(status, scheduled_at)",
         # OAuth state 过期清理
         "CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at)",
     ]
@@ -323,9 +338,12 @@ def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
         "candidate_clip_count": "ALTER TABLE tasks ADD COLUMN candidate_clip_count INTEGER NOT NULL DEFAULT 5",
         "ai_preference": "ALTER TABLE tasks ADD COLUMN ai_preference TEXT",
         "ai_prompt_preset_id": "ALTER TABLE tasks ADD COLUMN ai_prompt_preset_id TEXT NOT NULL DEFAULT 'preset_001'",
+        "auto_mode": "ALTER TABLE tasks ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0",
+        "auto_config_json": "ALTER TABLE tasks ADD COLUMN auto_config_json TEXT",
         "status": "ALTER TABLE tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'pending_video'",
         "progress": "ALTER TABLE tasks ADD COLUMN progress INTEGER NOT NULL DEFAULT 0",
         "error_message": "ALTER TABLE tasks ADD COLUMN error_message TEXT",
+        "last_error": "ALTER TABLE tasks ADD COLUMN last_error TEXT",
         "is_deleted": "ALTER TABLE tasks ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0",
         "deleted_at": "ALTER TABLE tasks ADD COLUMN deleted_at TEXT",
         "created_at": "ALTER TABLE tasks ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
@@ -407,6 +425,13 @@ def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
         UPDATE tasks SET status = 'completed_with_errors' WHERE status IN ('部分完成', 'completed_with_errors');
         UPDATE tasks SET status = 'failed' WHERE status IN ('失败', 'failed');
         UPDATE tasks SET status = 'pending_video' WHERE status NOT IN (
+            'CREATED', 'PREPARING_SOURCE', 'TRANSCRIBING', 'AI_ANALYZING',
+            'CLIP_SELECTING', 'VIDEO_CUTTING', 'METADATA_GENERATING',
+            'SCHEDULE_CREATING', 'PUBLISH_JOB_CREATING', 'READY_TO_PUBLISH',
+            'COMPLETED', 'FAILED_PREPARING_SOURCE', 'FAILED_TRANSCRIBING',
+            'FAILED_AI_ANALYZING', 'FAILED_CLIP_SELECTING', 'FAILED_VIDEO_CUTTING',
+            'FAILED_METADATA_GENERATING', 'FAILED_SCHEDULE_CREATING',
+            'FAILED_PUBLISH_JOB_CREATING',
             'pending_video', 'pending_processing', 'audio_extracting', 'transcribing',
             'pending_ai', 'ai_analyzing', 'pending_review', 'cutting',
             'completed', 'completed_with_errors', 'failed'
@@ -641,14 +666,20 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
         "id": "ALTER TABLE publish_jobs ADD COLUMN id TEXT",
         "task_id": "ALTER TABLE publish_jobs ADD COLUMN task_id TEXT",
         "output_clip_id": "ALTER TABLE publish_jobs ADD COLUMN output_clip_id TEXT",
+        "clip_id": "ALTER TABLE publish_jobs ADD COLUMN clip_id TEXT",
         "account_id": "ALTER TABLE publish_jobs ADD COLUMN account_id TEXT",
         "platform": "ALTER TABLE publish_jobs ADD COLUMN platform TEXT NOT NULL DEFAULT 'douyin'",
         "publish_mode": "ALTER TABLE publish_jobs ADD COLUMN publish_mode TEXT NOT NULL DEFAULT 'manual_review'",
         "video_source": "ALTER TABLE publish_jobs ADD COLUMN video_source TEXT NOT NULL DEFAULT 'original'",
         "video_file_path": "ALTER TABLE publish_jobs ADD COLUMN video_file_path TEXT NOT NULL DEFAULT ''",
+        "video_path": "ALTER TABLE publish_jobs ADD COLUMN video_path TEXT NOT NULL DEFAULT ''",
         "title": "ALTER TABLE publish_jobs ADD COLUMN title TEXT NOT NULL DEFAULT ''",
         "description": "ALTER TABLE publish_jobs ADD COLUMN description TEXT",
+        "caption": "ALTER TABLE publish_jobs ADD COLUMN caption TEXT",
         "tags": "ALTER TABLE publish_jobs ADD COLUMN tags TEXT",
+        "hashtags": "ALTER TABLE publish_jobs ADD COLUMN hashtags TEXT",
+        "cover_text": "ALTER TABLE publish_jobs ADD COLUMN cover_text TEXT",
+        "risk_flags": "ALTER TABLE publish_jobs ADD COLUMN risk_flags TEXT",
         "visibility": "ALTER TABLE publish_jobs ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'",
         "cover_mode": "ALTER TABLE publish_jobs ADD COLUMN cover_mode TEXT NOT NULL DEFAULT 'auto'",
         "cover_time_seconds": "ALTER TABLE publish_jobs ADD COLUMN cover_time_seconds REAL NOT NULL DEFAULT 0",
@@ -662,16 +693,65 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
         "audit_status": "ALTER TABLE publish_jobs ADD COLUMN audit_status TEXT NOT NULL DEFAULT 'not_submitted'",
         "platform_item_id": "ALTER TABLE publish_jobs ADD COLUMN platform_item_id TEXT",
         "platform_upload_id": "ALTER TABLE publish_jobs ADD COLUMN platform_upload_id TEXT",
+        "remote_video_id": "ALTER TABLE publish_jobs ADD COLUMN remote_video_id TEXT",
         "error_code": "ALTER TABLE publish_jobs ADD COLUMN error_code TEXT",
         "error_message": "ALTER TABLE publish_jobs ADD COLUMN error_message TEXT",
+        "last_error": "ALTER TABLE publish_jobs ADD COLUMN last_error TEXT",
         "provider_response": "ALTER TABLE publish_jobs ADD COLUMN provider_response TEXT",
+        "publish_result": "ALTER TABLE publish_jobs ADD COLUMN publish_result TEXT",
         "retry_count": "ALTER TABLE publish_jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+        "attempt_count": "ALTER TABLE publish_jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
+        "published_at": "ALTER TABLE publish_jobs ADD COLUMN published_at TEXT",
         "created_at": "ALTER TABLE publish_jobs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         "updated_at": "ALTER TABLE publish_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
     }
     for column, statement in migrations.items():
         if column not in columns:
             connection.execute(statement)
+
+    columns = _get_table_columns(connection, "publish_jobs")
+    if {"clip_id", "output_clip_id"}.issubset(columns):
+        connection.execute("UPDATE publish_jobs SET clip_id = output_clip_id WHERE clip_id IS NULL OR clip_id = ''")
+    if {"video_path", "video_file_path"}.issubset(columns):
+        connection.execute("UPDATE publish_jobs SET video_path = video_file_path WHERE video_path IS NULL OR video_path = ''")
+    if {"caption", "description"}.issubset(columns):
+        connection.execute("UPDATE publish_jobs SET caption = description WHERE caption IS NULL OR caption = ''")
+    if {"hashtags", "tags"}.issubset(columns):
+        connection.execute("UPDATE publish_jobs SET hashtags = tags WHERE hashtags IS NULL OR hashtags = ''")
+    if {"remote_video_id", "platform_item_id"}.issubset(columns):
+        connection.execute(
+            "UPDATE publish_jobs SET remote_video_id = platform_item_id WHERE remote_video_id IS NULL OR remote_video_id = ''"
+        )
+    if {"publish_result", "provider_response"}.issubset(columns):
+        connection.execute(
+            "UPDATE publish_jobs SET publish_result = provider_response WHERE publish_result IS NULL OR publish_result = ''"
+        )
+    if {"attempt_count", "retry_count"}.issubset(columns):
+        connection.execute(
+            "UPDATE publish_jobs SET attempt_count = retry_count WHERE attempt_count IS NULL OR attempt_count = 0"
+        )
+
+    if "status" in columns:
+        connection.executescript(
+            """
+            UPDATE publish_jobs SET status = 'DRAFT' WHERE status = 'draft';
+            UPDATE publish_jobs SET status = 'SCHEDULED' WHERE status IN ('ready', 'scheduled');
+            UPDATE publish_jobs SET status = 'PUBLISHING' WHERE status = 'publishing';
+            UPDATE publish_jobs SET status = 'PUBLISHED' WHERE status = 'published';
+            UPDATE publish_jobs SET status = 'FAILED' WHERE status = 'failed';
+            UPDATE publish_jobs SET status = 'CANCELLED' WHERE status = 'cancelled';
+            UPDATE publish_jobs SET status = 'NEED_REVIEW' WHERE status = 'need_review';
+            UPDATE publish_jobs
+            SET status = 'WAITING'
+            WHERE status = 'SCHEDULED' AND (scheduled_at IS NULL OR scheduled_at = '');
+            UPDATE publish_jobs
+            SET status = 'SCHEDULED'
+            WHERE status IS NULL OR status = '' OR status NOT IN (
+                'DRAFT', 'SCHEDULED', 'WAITING', 'PUBLISHING',
+                'PUBLISHED', 'FAILED', 'CANCELLED', 'NEED_REVIEW'
+            );
+            """
+        )
 
 
 def _migrate_workflow_jobs_table(connection: sqlite3.Connection) -> None:

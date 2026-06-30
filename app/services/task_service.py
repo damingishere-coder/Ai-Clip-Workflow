@@ -25,6 +25,7 @@ from app.services.ai_analysis_workflow_service import (
     _next_ai_analysis_run_number,
     _read_analysis_meta,
     _read_latest_ai_provider_from_log,
+    _replace_clip_candidates,
     _summarize_ai_error,
     _summarize_analysis_clips,
     _write_analysis_payload,
@@ -101,8 +102,40 @@ WORKFLOW_STEPS = [
     "输出完成",
 ]
 
+AUTO_WORKFLOW_STEPS = [
+    "任务创建",
+    "准备视频",
+    "转写文本",
+    "AI 分析",
+    "自动选片",
+    "原片切割",
+    "标题文案",
+    "发送队列",
+    "发布任务",
+    "待发布",
+]
+
 
 STATUS_LABELS = {
+    TaskStatus.CREATED.value: "全自动任务已创建",
+    TaskStatus.PREPARING_SOURCE.value: "准备视频中",
+    TaskStatus.TRANSCRIBING.value: "转写文本中",
+    TaskStatus.AI_ANALYZING.value: "AI 分析中",
+    TaskStatus.CLIP_SELECTING.value: "自动选片中",
+    TaskStatus.VIDEO_CUTTING.value: "原片切割中",
+    TaskStatus.METADATA_GENERATING.value: "生成标题文案中",
+    TaskStatus.SCHEDULE_CREATING.value: "准备发送队列中",
+    TaskStatus.PUBLISH_JOB_CREATING.value: "创建发布任务中",
+    TaskStatus.READY_TO_PUBLISH.value: "待人工确认发布",
+    TaskStatus.COMPLETED.value: "全自动流程完成",
+    TaskStatus.FAILED_PREPARING_SOURCE.value: "准备视频失败",
+    TaskStatus.FAILED_TRANSCRIBING.value: "转写失败",
+    TaskStatus.FAILED_AI_ANALYZING.value: "AI 分析失败",
+    TaskStatus.FAILED_CLIP_SELECTING.value: "自动选片失败",
+    TaskStatus.FAILED_VIDEO_CUTTING.value: "原片切割失败",
+    TaskStatus.FAILED_METADATA_GENERATING.value: "标题文案生成失败",
+    TaskStatus.FAILED_SCHEDULE_CREATING.value: "发送队列准备失败",
+    TaskStatus.FAILED_PUBLISH_JOB_CREATING.value: "发布任务创建失败",
     TaskStatus.pending_video.value: "待提交视频",
     TaskStatus.pending_processing.value: "待处理",
     TaskStatus.audio_extracting.value: "音频提取中",
@@ -117,6 +150,25 @@ STATUS_LABELS = {
 }
 
 STATUS_PROGRESS = {
+    TaskStatus.CREATED.value: 2,
+    TaskStatus.PREPARING_SOURCE.value: 8,
+    TaskStatus.TRANSCRIBING.value: 25,
+    TaskStatus.AI_ANALYZING.value: 45,
+    TaskStatus.CLIP_SELECTING.value: 58,
+    TaskStatus.VIDEO_CUTTING.value: 70,
+    TaskStatus.METADATA_GENERATING.value: 80,
+    TaskStatus.SCHEDULE_CREATING.value: 88,
+    TaskStatus.PUBLISH_JOB_CREATING.value: 94,
+    TaskStatus.READY_TO_PUBLISH.value: 100,
+    TaskStatus.COMPLETED.value: 100,
+    TaskStatus.FAILED_PREPARING_SOURCE.value: 8,
+    TaskStatus.FAILED_TRANSCRIBING.value: 25,
+    TaskStatus.FAILED_AI_ANALYZING.value: 45,
+    TaskStatus.FAILED_CLIP_SELECTING.value: 58,
+    TaskStatus.FAILED_VIDEO_CUTTING.value: 70,
+    TaskStatus.FAILED_METADATA_GENERATING.value: 80,
+    TaskStatus.FAILED_SCHEDULE_CREATING.value: 88,
+    TaskStatus.FAILED_PUBLISH_JOB_CREATING.value: 94,
     TaskStatus.pending_video.value: 0,
     TaskStatus.pending_processing.value: 5,
     TaskStatus.audio_extracting.value: 20,
@@ -158,6 +210,55 @@ def get_workflow_steps() -> list[str]:
 
 def get_task_workflow_steps(task: dict) -> list[dict[str, str]]:
     status = task.get("status") or TaskStatus.pending_video.value
+    if task.get("auto_mode"):
+        status_step_index = {
+            TaskStatus.CREATED.value: 1,
+            TaskStatus.PREPARING_SOURCE.value: 2,
+            TaskStatus.TRANSCRIBING.value: 3,
+            TaskStatus.AI_ANALYZING.value: 4,
+            TaskStatus.CLIP_SELECTING.value: 5,
+            TaskStatus.VIDEO_CUTTING.value: 6,
+            TaskStatus.METADATA_GENERATING.value: 7,
+            TaskStatus.SCHEDULE_CREATING.value: 8,
+            TaskStatus.PUBLISH_JOB_CREATING.value: 9,
+            TaskStatus.READY_TO_PUBLISH.value: 10,
+            TaskStatus.COMPLETED.value: 10,
+            TaskStatus.FAILED_PREPARING_SOURCE.value: 2,
+            TaskStatus.FAILED_TRANSCRIBING.value: 3,
+            TaskStatus.FAILED_AI_ANALYZING.value: 4,
+            TaskStatus.FAILED_CLIP_SELECTING.value: 5,
+            TaskStatus.FAILED_VIDEO_CUTTING.value: 6,
+            TaskStatus.FAILED_METADATA_GENERATING.value: 7,
+            TaskStatus.FAILED_SCHEDULE_CREATING.value: 8,
+            TaskStatus.FAILED_PUBLISH_JOB_CREATING.value: 9,
+        }
+        failed_statuses = {
+            TaskStatus.FAILED_PREPARING_SOURCE.value,
+            TaskStatus.FAILED_TRANSCRIBING.value,
+            TaskStatus.FAILED_AI_ANALYZING.value,
+            TaskStatus.FAILED_CLIP_SELECTING.value,
+            TaskStatus.FAILED_VIDEO_CUTTING.value,
+            TaskStatus.FAILED_METADATA_GENERATING.value,
+            TaskStatus.FAILED_SCHEDULE_CREATING.value,
+            TaskStatus.FAILED_PUBLISH_JOB_CREATING.value,
+        }
+        completed_statuses = {TaskStatus.READY_TO_PUBLISH.value, TaskStatus.COMPLETED.value}
+        current_index = status_step_index.get(status, 1)
+        steps = []
+        for index, name in enumerate(AUTO_WORKFLOW_STEPS, start=1):
+            if status in failed_statuses and index == current_index:
+                state = "warning"
+            elif status in completed_statuses:
+                state = "done"
+            elif index < current_index:
+                state = "done"
+            elif index == current_index:
+                state = "current"
+            else:
+                state = "pending"
+            steps.append({"name": name, "index": str(index), "state": state})
+        return steps
+
     status_step_index = {
         TaskStatus.pending_video.value: 1,
         TaskStatus.pending_processing.value: 2,
@@ -355,6 +456,9 @@ def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
         "created_at_raw": task.get("created_at"),
         "updated_at_raw": task.get("updated_at"),
         "error_message": task.get("error_message") or "",
+        "last_error": task.get("last_error") or task.get("error_message") or "",
+        "auto_mode": bool(task.get("auto_mode")),
+        "auto_config_json": task.get("auto_config_json") or "",
         "is_deleted": bool(task.get("is_deleted")),
         "deleted_at": _format_datetime(task.get("deleted_at")),
         "task_dir_name": task.get("task_dir_name") or task["id"],
@@ -381,8 +485,9 @@ def list_tasks(include_deleted: bool = False) -> list[dict]:
             f"""
             SELECT
                 id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path,
-                max_clip_duration, candidate_clip_count, ai_preference, ai_prompt_preset_id, status, progress,
-                error_message, is_deleted, deleted_at, created_at, updated_at
+                max_clip_duration, candidate_clip_count, ai_preference, ai_prompt_preset_id, auto_mode,
+                auto_config_json, status, progress, error_message, last_error,
+                is_deleted, deleted_at, created_at, updated_at
             FROM tasks
             {where_clause}
             ORDER BY created_at DESC
@@ -397,8 +502,9 @@ def get_task(task_id: str, include_video_probe: bool = True) -> dict | None:
             """
             SELECT
                 id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path,
-                max_clip_duration, candidate_clip_count, ai_preference, ai_prompt_preset_id, status, progress,
-                error_message, is_deleted, deleted_at, created_at, updated_at
+                max_clip_duration, candidate_clip_count, ai_preference, ai_prompt_preset_id, auto_mode,
+                auto_config_json, status, progress, error_message, last_error,
+                is_deleted, deleted_at, created_at, updated_at
             FROM tasks
             WHERE id = ?
             """,

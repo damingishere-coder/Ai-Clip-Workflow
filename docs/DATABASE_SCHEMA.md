@@ -1,5 +1,21 @@
 # 数据库结构说明
 
+## 2026-06-25：全自动配置兼容与发送中心排期
+
+- 不新增数据库列，也不执行破坏性迁移。
+- `tasks.auto_config_json` 中旧的 `auto_clip_count`、`auto_min_clip_seconds`、`auto_max_clip_seconds` 和排期字段继续保留，供历史任务和旧接口读取；新任务的自动选片以 `candidate_clip_count` 和 `max_clip_duration` 为准。
+- 全自动流水线新建的 `publish_jobs` 默认 `scheduled_at=''`、`status='WAITING'`；有风险标记时保持 `NEED_REVIEW`。
+- 发送中心批量排期会写入每条 `publish_jobs.scheduled_at` 并改为 `SCHEDULED`；清除排期后普通任务回到 `WAITING`。
+
+## 2026-06-23：v1.3.0 全自动流水线字段
+
+- `tasks` 表新增 `auto_mode`：标记任务是否由全自动流水线接管。
+- `tasks` 表新增 `auto_config_json`：保存自动切片数量、最小时长、最大时长、排期模式、间隔小时和是否使用 AI 生成发布文案等配置。
+- `tasks` 表新增 `last_error`：保存最近一次失败原因；为兼容旧页面，也会同步写入 `error_message`。
+- `publish_jobs` 表新增 `last_error`：给后续自动发布/重试调度预留最近失败原因字段。
+- 全自动流水线会生成 `analysis/auto_selected_clips.json`、`analysis/auto_publish_metadata.json`、`analysis/auto_publish_schedule.json`、`analysis/task_summary.json` 和 `05_clips/clip_metadata.json`。
+- v1.3.0 只创建发布任务，不真正定时发送；真正按 `scheduled_at` 执行发布计划留到 v1.4.0。
+
 ## 2026-05-27：任务目录改为项目名
 
 - `tasks` 表新增 `task_dir_name` 字段，用来记录任务在存储盘里的实际文件夹名。
@@ -55,12 +71,13 @@
 | `title` | TEXT | 标题 |
 | `description` | TEXT | 简介 / 正文 |
 | `tags` | TEXT | 标签 |
-| `status` | TEXT | `ready` / `publishing` / `published` / `failed` / `cancelled` |
+| `status` | TEXT | `ready` / `NEED_REVIEW` / `publishing` / `published` / `failed` / `cancelled` |
 | `audit_status` | TEXT | 平台审核状态 |
 | `platform_item_id` | TEXT | 平台稿件 / 视频 ID |
 | `platform_upload_id` | TEXT | 平台上传 ID |
 | `error_code` | TEXT | 平台错误码 |
 | `error_message` | TEXT | 错误说明 |
+| `last_error` | TEXT | 最近一次失败说明，供后续自动重试使用 |
 | `provider_response` | TEXT | 平台响应摘要 JSON |
 | `retry_count` | INTEGER | 重试次数 |
 | `scheduled_at` | TEXT | 计划发布时间（v1.2 仅字段预留，尚无后台定时调度器） |
@@ -131,9 +148,12 @@ data/workflow.sqlite3
 | `candidate_clip_count` | INTEGER | 希望 AI 输出的候选片段数量 |
 | `ai_preference` | TEXT | AI 片段选择偏好 |
 | `ai_prompt_preset_id` | TEXT | 当前使用的 AI Prompt 方案 ID |
+| `auto_mode` | INTEGER | 是否开启全自动模式，`1` 表示开启 |
+| `auto_config_json` | TEXT | 全自动模式配置 JSON |
 | `status` | TEXT | 当前任务状态 |
 | `progress` | INTEGER | 当前进度百分比，后续流水线推进时更新 |
 | `error_message` | TEXT | 异常信息 |
+| `last_error` | TEXT | 最近一次失败原因 |
 | `is_deleted` | INTEGER | 是否已从页面列表隐藏，`1` 表示隐藏，文件不会被删除 |
 | `deleted_at` | TEXT | 隐藏时间，ISO 格式 |
 | `created_at` | TEXT | 创建时间，ISO 格式 |
@@ -158,6 +178,32 @@ data/workflow.sqlite3
 | `failed` | 失败 |
 
 注意：`completed` / `completed_with_errors` 表示"自动切割阶段结束"，不是平台发布完成。字幕是 `subtitle_jobs` 独立流程，发送中心是 `publish_jobs` 独立流程，它们不直接混入 `tasks.status`。
+
+### 全自动模式状态值
+
+| 状态码 | 中文展示 |
+| --- | --- |
+| `CREATED` | 全自动任务已创建 |
+| `PREPARING_SOURCE` | 准备视频中 |
+| `TRANSCRIBING` | 转写文本中 |
+| `AI_ANALYZING` | AI 分析中 |
+| `CLIP_SELECTING` | 自动选片中 |
+| `VIDEO_CUTTING` | 原片切割中 |
+| `METADATA_GENERATING` | 生成标题文案中 |
+| `SCHEDULE_CREATING` | 生成发布计划中 |
+| `PUBLISH_JOB_CREATING` | 创建发布任务中 |
+| `READY_TO_PUBLISH` | 待人工确认发布 |
+| `COMPLETED` | 全自动流程完成 |
+| `FAILED_PREPARING_SOURCE` | 准备视频失败 |
+| `FAILED_TRANSCRIBING` | 转写失败 |
+| `FAILED_AI_ANALYZING` | AI 分析失败 |
+| `FAILED_CLIP_SELECTING` | 自动选片失败 |
+| `FAILED_VIDEO_CUTTING` | 原片切割失败 |
+| `FAILED_METADATA_GENERATING` | 标题文案生成失败 |
+| `FAILED_SCHEDULE_CREATING` | 发布计划生成失败 |
+| `FAILED_PUBLISH_JOB_CREATING` | 发布任务创建失败 |
+
+全自动模式失败后可以调用 `POST /api/tasks/{task_id}/process/auto-retry` 从失败步骤继续。
 
 ## output_clip 表
 
@@ -284,3 +330,11 @@ data/workflow.sqlite3
 - `publish_jobs.scheduled_at` 当前只是字段预留，可以保存计划发布时间，但 v1.2 还没有后台定时调度器，不会自动按 `scheduled_at` 发送。
 - 平台发送依赖 opencli 辅助浏览器操作，不绕过验证码、登录失效、风控和人工确认。
 - 代码中仍存在兼容性 `clips` 子目录（`TASK_SUBDIRECTORIES` 同时包含 `clips` 和 `05_clips`），新任务的正式输出目录是 `05_clips`。旧 `clips` 目录为兼容保留，不建议删除。
+# 2026-06-23：v1.4.0 定时发送字段
+
+- `publish_jobs` 已补齐定时发送字段：`clip_id`、`caption`、`hashtags`、`cover_text`、`video_path`、`risk_flags`、`publish_result`、`remote_video_id`、`attempt_count`、`published_at`。
+- 旧字段继续兼容：`output_clip_id` 等同于 `clip_id`，`description` 等同于 `caption`，`tags` 等同于 `hashtags`，`video_file_path` 等同于 `video_path`，`provider_response` 兼容 `publish_result`，`retry_count` 兼容 `attempt_count`。
+- 发布状态使用：`DRAFT`、`SCHEDULED`、`WAITING`、`PUBLISHING`、`PUBLISHED`、`FAILED`、`CANCELLED`、`NEED_REVIEW`。
+- 调度器只扫描 `status = SCHEDULED` 且 `scheduled_at <= 当前时间` 的任务；`NEED_REVIEW`、`CANCELLED`、`PUBLISHED` 不会自动发布。
+- 默认发布器为 `manual_export`，成功后写入 `published_at`、`publish_result`、`remote_video_id`；失败后写入 `FAILED`、`last_error`、`error_message`，并增加 `attempt_count`。
+- 没有 `scheduled_at` 的旧手动发送任务迁移为 `WAITING`，避免被自动调度器误执行。

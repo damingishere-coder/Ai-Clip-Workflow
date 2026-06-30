@@ -3,6 +3,7 @@
 从 task_service 中拆分出来的任务创建、状态更新、软删除和配置更新函数。
 """
 
+import json
 from uuid import uuid4
 
 from app.db.database import get_connection
@@ -29,10 +30,21 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
         if not valid:
             raise ValueError(error_message)
 
-    initial_status = (
+    initial_status = TaskStatus.CREATED.value if payload.auto_mode else (
         TaskStatus.pending_processing.value if has_source_file else TaskStatus.pending_video.value
     )
     progress = STATUS_PROGRESS[initial_status]
+    auto_config = {
+        "auto_clip_count": payload.auto_clip_count,
+        "auto_min_clip_seconds": payload.auto_min_clip_seconds,
+        "auto_max_clip_seconds": payload.auto_max_clip_seconds,
+        "auto_schedule_mode": payload.auto_schedule_mode,
+        "auto_schedule_start_at": payload.auto_schedule_start_at or "",
+        "auto_schedule_interval_hours": payload.auto_schedule_interval_hours,
+        "auto_schedule_daily_start_time": payload.auto_schedule_daily_start_time,
+        "auto_schedule_daily_end_time": payload.auto_schedule_daily_end_time,
+        "auto_metadata_use_ai": payload.auto_metadata_use_ai,
+    }
 
     with get_connection() as connection:
         existing_columns = {
@@ -50,9 +62,12 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
             "candidate_clip_count": payload.candidate_clip_count,
             "ai_preference": payload.ai_preference,
             "ai_prompt_preset_id": "preset_001",
+            "auto_mode": 1 if payload.auto_mode else 0,
+            "auto_config_json": json.dumps(auto_config, ensure_ascii=False),
             "status": initial_status,
             "progress": progress,
             "error_message": None,
+            "last_error": None,
             "is_deleted": 0,
             "deleted_at": None,
             "created_at": now,
@@ -77,12 +92,15 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
         connection.commit()
 
     append_task_log(resolved_task_id, "任务已创建")
+    if payload.auto_mode:
+        append_task_log(resolved_task_id, "已开启全自动模式，等待流水线启动")
     return {
         "id": resolved_task_id,
         "task_name": payload.task_name,
         "task_dir_name": resolved_task_dir_name,
         "status": initial_status,
         "status_label": get_status_label(initial_status),
+        "auto_mode": payload.auto_mode,
         "detail_url": f"/tasks/{resolved_task_id}",
         "message": "任务已创建并写入数据库。",
     }
@@ -103,10 +121,10 @@ def update_task_status(
         cursor = connection.execute(
             """
             UPDATE tasks
-            SET status = ?, progress = ?, error_message = ?, updated_at = ?
+            SET status = ?, progress = ?, error_message = ?, last_error = ?, updated_at = ?
             WHERE id = ?
             """,
-            (status_value, progress, error_message, now, task_id),
+            (status_value, progress, error_message, error_message, now, task_id),
         )
         connection.commit()
 

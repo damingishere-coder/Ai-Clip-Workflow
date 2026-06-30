@@ -15,7 +15,20 @@
   </div>
   {% set header_transcript_progress = task.transcript_progress or {} %}
   <div class="button-row">
-    {% if task.transcript_exists %}
+    {% if task.auto_mode %}
+      {% if task.status.startswith("FAILED_") %}
+      <button class="primary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/auto-retry">重试全自动流程</button>
+      {% elif task.status in ["pending_review", "completed", "completed_with_errors", "failed"] %}
+      <button class="primary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/auto-resume">继续全自动流程</button>
+      {% elif task.status in ["READY_TO_PUBLISH", "COMPLETED"] %}
+      <a class="primary-button" href="/publish">前往发送中心</a>
+      {% else %}
+      <button class="secondary-button" type="button" disabled>全自动处理中</button>
+      {% endif %}
+      {% if task.candidate_count > 0 %}
+      <a class="secondary-button" href="/tasks/{{ task.id }}/clips/review">检查候选片段</a>
+      {% endif %}
+    {% elif task.transcript_exists %}
     <button class="secondary-button" id="start-workflow-button" type="button" disabled>转写已完成</button>
     <button class="secondary-button js-process-action" type="button" data-confirm="重新生成会覆盖当前转写文件，并且需要重新等待转写完成。确认重新生成吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?force=true">重新生成转写</button>
     {% elif task.status == "transcribing" %}
@@ -24,10 +37,25 @@
     {% else %}
     <button class="secondary-button js-process-action" id="start-workflow-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow">{{ "继续处理" if task.audio_exists else "开始处理" }}</button>
     {% endif %}
+    {% if not task.auto_mode %}
     <button class="secondary-button js-process-action" id="local-transcript-button" type="button" data-confirm="远程转写失败后才建议使用本地模型。本地模型会占用电脑性能，速度可能更慢。确认改用本地模型转写吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?force=true&provider=local" {% if task.transcript_exists or header_transcript_progress.status != "failed" or header_transcript_progress.provider == "local" %}hidden{% endif %}>改用本地模型转写</button>
     <a class="primary-button" href="/tasks/{{ task.id }}/clips/review">进入片段审核</a>
+    {% endif %}
   </div>
 </section>
+
+{% if task.auto_mode %}
+<section
+  class="inline-alert tone-blue"
+  data-auto-pipeline-monitor
+  data-task-id="{{ task.id }}"
+  data-status="{{ task.status }}"
+  data-running="{{ 'true' if task.status in ['CREATED', 'PREPARING_SOURCE', 'TRANSCRIBING', 'AI_ANALYZING', 'CLIP_SELECTING', 'VIDEO_CUTTING', 'METADATA_GENERATING', 'SCHEDULE_CREATING', 'PUBLISH_JOB_CREATING'] else 'false' }}"
+>
+  <strong>全自动模式已接管这个任务。</strong>
+  <p>系统会自动推进音频提取、转写、AI 选片和视频切割；页面在处理中会自动刷新。只有失败或历史任务中断时才需要点击重试/继续。</p>
+</section>
+{% endif %}
 
 <section class="detail-grid">
   <article class="panel summary-card">

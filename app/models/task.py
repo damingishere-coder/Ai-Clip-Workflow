@@ -5,6 +5,25 @@ from pydantic import BaseModel, Field, validator
 
 
 class TaskStatus(str, Enum):
+    CREATED = "CREATED"
+    PREPARING_SOURCE = "PREPARING_SOURCE"
+    TRANSCRIBING = "TRANSCRIBING"
+    AI_ANALYZING = "AI_ANALYZING"
+    CLIP_SELECTING = "CLIP_SELECTING"
+    VIDEO_CUTTING = "VIDEO_CUTTING"
+    METADATA_GENERATING = "METADATA_GENERATING"
+    SCHEDULE_CREATING = "SCHEDULE_CREATING"
+    PUBLISH_JOB_CREATING = "PUBLISH_JOB_CREATING"
+    READY_TO_PUBLISH = "READY_TO_PUBLISH"
+    COMPLETED = "COMPLETED"
+    FAILED_PREPARING_SOURCE = "FAILED_PREPARING_SOURCE"
+    FAILED_TRANSCRIBING = "FAILED_TRANSCRIBING"
+    FAILED_AI_ANALYZING = "FAILED_AI_ANALYZING"
+    FAILED_CLIP_SELECTING = "FAILED_CLIP_SELECTING"
+    FAILED_VIDEO_CUTTING = "FAILED_VIDEO_CUTTING"
+    FAILED_METADATA_GENERATING = "FAILED_METADATA_GENERATING"
+    FAILED_SCHEDULE_CREATING = "FAILED_SCHEDULE_CREATING"
+    FAILED_PUBLISH_JOB_CREATING = "FAILED_PUBLISH_JOB_CREATING"
     pending_video = "pending_video"
     pending_processing = "pending_processing"
     audio_extracting = "audio_extracting"
@@ -27,6 +46,28 @@ class TaskCreate(BaseModel):
     max_clip_duration: int = Field(default=5, ge=1, le=60)
     candidate_clip_count: int = Field(default=5, ge=1, le=50)
     ai_preference: Optional[str] = None
+    auto_mode: bool = False
+    auto_clip_count: str = Field(default="auto", max_length=10)
+    auto_min_clip_seconds: int = Field(default=15, ge=1, le=3600)
+    auto_max_clip_seconds: int = Field(default=300, ge=1, le=7200)
+    auto_schedule_mode: Literal["default", "immediate", "interval", "daily_window"] = "default"
+    auto_schedule_start_at: Optional[str] = Field(default="", max_length=80)
+    auto_schedule_interval_hours: int = Field(default=3, ge=1, le=168)
+    auto_schedule_daily_start_time: str = Field(default="09:00", max_length=5)
+    auto_schedule_daily_end_time: str = Field(default="21:00", max_length=5)
+    auto_metadata_use_ai: bool = False
+
+    @validator("auto_clip_count")
+    def validate_auto_clip_count(cls, value: str) -> str:
+        text = str(value or "auto").strip().lower()
+        if text == "auto":
+            return text
+        if not text.isdigit():
+            raise ValueError("自动切片数量必须是 auto 或数字")
+        number = int(text)
+        if number not in {5, 10, 15} and not 1 <= number <= 50:
+            raise ValueError("自动切片数量必须是 auto、5、10、15 或 1-50 的数字")
+        return text
 
 
 class TaskSummary(BaseModel):
@@ -103,9 +144,9 @@ class PublishAccountCreate(BaseModel):
 class PublishJobCreate(BaseModel):
     task_id: str = Field(..., min_length=1, max_length=80)
     output_clip_id: str = Field(..., min_length=1, max_length=80)
-    platform: Literal["douyin", "bilibili"]
+    platform: Literal["douyin", "bilibili", "manual_export", "local_browser"]
     account_id: Optional[str] = Field(default="", max_length=80)
-    publish_mode: Literal["draft", "manual_review", "api_publish", "opencli_publish"] = "manual_review"
+    publish_mode: Literal["draft", "manual_review", "manual_export", "local_browser", "api_publish", "opencli_publish"] = "manual_review"
     video_source: Literal["original", "subtitled"] = "original"
     title: str = Field(..., min_length=1, max_length=120)
     description: Optional[str] = Field(default="", max_length=2000)
@@ -118,6 +159,34 @@ class PublishJobCreate(BaseModel):
     bilibili_tid: Optional[str] = Field(default="", max_length=80)
     bilibili_copyright: Literal["original", "repost"] = "original"
     bilibili_source: Optional[str] = Field(default="", max_length=300)
+    scheduled_at: Optional[str] = Field(default="", max_length=80)
+
+
+class PublishJobScheduleUpdate(BaseModel):
+    scheduled_at: str = Field(..., min_length=1, max_length=80)
+
+
+class PublishBatchScheduleUpdate(BaseModel):
+    job_ids: list[str] = Field(default_factory=list)
+    action: Literal["apply", "clear"] = "apply"
+    start_at: Optional[str] = Field(default="", max_length=80)
+    interval_hours: int = Field(default=3, ge=1, le=168)
+    daily_start_time: str = Field(default="09:00", min_length=5, max_length=5)
+    daily_end_time: str = Field(default="21:00", min_length=5, max_length=5)
+
+    @validator("job_ids")
+    def validate_schedule_job_ids(cls, value: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
+        if not normalized:
+            raise ValueError("至少选择一条发布任务")
+        return normalized
+
+
+class PublishJobContentUpdate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=120)
+    caption: str = Field(..., min_length=1, max_length=2000)
+    hashtags: Optional[str] = Field(default="", max_length=500)
+    cover_text: Optional[str] = Field(default="", max_length=500)
     scheduled_at: Optional[str] = Field(default="", max_length=80)
 
 

@@ -19,7 +19,9 @@ from app.models.task import (
     PublishBatchJobCreate,
     PublishCoverCreate,
     PublishCoverFrameBatchCreate,
+    PublishJobContentUpdate,
     PublishJobCreate,
+    PublishJobScheduleUpdate,
     PublishPlatformConfigUpdate,
     PublishSendJobUpdate,
     PublishSendStart,
@@ -43,6 +45,7 @@ PLATFORM_LABELS = {
 STATUS_LABELS = {
     "draft": "草稿",
     "ready": "待发送",
+    "NEED_REVIEW": "需人工复核",
     "publishing": "发送中",
     "published": "已发布",
     "failed": "发送失败",
@@ -52,6 +55,7 @@ STATUS_LABELS = {
 STATUS_TONES = {
     "draft": "amber",
     "ready": "blue",
+    "NEED_REVIEW": "amber",
     "publishing": "purple",
     "published": "green",
     "failed": "red",
@@ -68,6 +72,74 @@ PUBLISH_MODE_LABELS = {
     "manual_review": "人工发布任务",
     "api_publish": "真实接口发布",
     "opencli_publish": "opencli 网页发送",
+}
+
+PUBLISH_STATUS_DRAFT = "DRAFT"
+PUBLISH_STATUS_SCHEDULED = "SCHEDULED"
+PUBLISH_STATUS_WAITING = "WAITING"
+PUBLISH_STATUS_PUBLISHING = "PUBLISHING"
+PUBLISH_STATUS_PUBLISHED = "PUBLISHED"
+PUBLISH_STATUS_FAILED = "FAILED"
+PUBLISH_STATUS_CANCELLED = "CANCELLED"
+PUBLISH_STATUS_NEED_REVIEW = "NEED_REVIEW"
+
+LEGACY_STATUS_MAP = {
+    "draft": PUBLISH_STATUS_DRAFT,
+    "ready": PUBLISH_STATUS_SCHEDULED,
+    "scheduled": PUBLISH_STATUS_SCHEDULED,
+    "publishing": PUBLISH_STATUS_PUBLISHING,
+    "published": PUBLISH_STATUS_PUBLISHED,
+    "failed": PUBLISH_STATUS_FAILED,
+    "cancelled": PUBLISH_STATUS_CANCELLED,
+    "need_review": PUBLISH_STATUS_NEED_REVIEW,
+}
+
+PLATFORM_LABELS.update(
+    {
+        "manual_export": "发布包导出",
+        "local_browser": "本地浏览器",
+    }
+)
+
+PUBLISH_MODE_LABELS.update(
+    {
+        "manual_export": "手动发布包导出",
+        "local_browser": "本地浏览器发布",
+    }
+)
+
+STATUS_LABELS = {
+    PUBLISH_STATUS_DRAFT: "草稿",
+    PUBLISH_STATUS_SCHEDULED: "待发送",
+    PUBLISH_STATUS_WAITING: "等待处理",
+    PUBLISH_STATUS_PUBLISHING: "发布中",
+    PUBLISH_STATUS_PUBLISHED: "已发布",
+    PUBLISH_STATUS_FAILED: "发送失败",
+    PUBLISH_STATUS_CANCELLED: "已取消",
+    PUBLISH_STATUS_NEED_REVIEW: "需人工复核",
+    "draft": "草稿",
+    "ready": "待发送",
+    "publishing": "发送中",
+    "published": "已发布",
+    "failed": "发送失败",
+    "cancelled": "已取消",
+}
+
+STATUS_TONES = {
+    PUBLISH_STATUS_DRAFT: "amber",
+    PUBLISH_STATUS_SCHEDULED: "blue",
+    PUBLISH_STATUS_WAITING: "amber",
+    PUBLISH_STATUS_PUBLISHING: "purple",
+    PUBLISH_STATUS_PUBLISHED: "green",
+    PUBLISH_STATUS_FAILED: "red",
+    PUBLISH_STATUS_CANCELLED: "amber",
+    PUBLISH_STATUS_NEED_REVIEW: "amber",
+    "draft": "amber",
+    "ready": "blue",
+    "publishing": "purple",
+    "published": "green",
+    "failed": "red",
+    "cancelled": "amber",
 }
 
 COVER_WIDTH = 1280
@@ -417,17 +489,55 @@ def _normalize_account(row) -> dict:
     return account
 
 
+def _normalize_publish_status(status: str | None) -> str:
+    raw = (status or "").strip()
+    if not raw:
+        return PUBLISH_STATUS_SCHEDULED
+    if raw in STATUS_LABELS and raw.isupper():
+        return raw
+    return LEGACY_STATUS_MAP.get(raw.lower(), raw)
+
+
+def _format_publish_schedule(value: str | None) -> str:
+    text = (value or "").strip()
+    if not text:
+        return "未排期"
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return text
+
+
 def _normalize_job(row) -> dict:
     job = dict(row)
-    status = job.get("status") or "ready"
+    status = _normalize_publish_status(job.get("status"))
     provider_payload = _parse_json_text(job.get("provider_response"))
+    publish_result_payload = _parse_json_text(job.get("publish_result")) if "publish_result" in job else {}
+    caption = job.get("caption") or job.get("description") or ""
+    hashtags = job.get("hashtags") or job.get("tags") or ""
+    clip_id = job.get("clip_id") or job.get("output_clip_id") or ""
+    video_path = job.get("video_path") or job.get("video_file_path") or ""
+    error_message = job.get("error_message") or job.get("last_error") or ""
     job.update(
         {
+            "status": status,
+            "legacy_status": job.get("status") or "",
+            "clip_id": clip_id,
+            "video_path": video_path,
+            "video_file_path": job.get("video_file_path") or video_path,
+            "caption": caption,
+            "description": job.get("description") or caption,
+            "hashtags": hashtags,
+            "tags": job.get("tags") or hashtags,
+            "error_message": error_message,
+            "last_error": job.get("last_error") or error_message,
+            "attempt_count": int(job.get("attempt_count") or job.get("retry_count") or 0),
             "platform_label": PLATFORM_LABELS.get(job.get("platform"), job.get("platform")),
             "status_label": STATUS_LABELS.get(status, status),
             "status_tone": STATUS_TONES.get(status, "blue"),
             "video_source_label": VIDEO_SOURCE_LABELS.get(job.get("video_source"), job.get("video_source")),
             "publish_mode_label": PUBLISH_MODE_LABELS.get(job.get("publish_mode"), job.get("publish_mode")),
+            "scheduled_at_display": _format_publish_schedule(job.get("scheduled_at")),
             "account_name": job.get("account_name") or "未选择账号",
             "cover_media_url": _cover_media_url(job.get("task_id") or "", job.get("cover_file_path")),
             "video_media_url": _video_media_url(
@@ -436,6 +546,7 @@ def _normalize_job(row) -> dict:
                 job.get("video_source") or "original",
             ),
             "provider_payload": provider_payload,
+            "publish_result_payload": publish_result_payload,
             "platform_url": provider_payload.get("url") or provider_payload.get("platform_url") or "",
             "trace_path": provider_payload.get("trace_path") or "",
         }
@@ -967,7 +1078,7 @@ def _insert_opencli_job(item: dict, platform: str, metadata: dict, cover: dict |
                 status, audit_status, provider_response, created_at, updated_at
             )
             VALUES (?, ?, ?, '', ?, 'opencli_publish', 'original', ?, ?, ?, ?, 'public',
-                ?, ?, 1, ?, 'original', '', ?, '', 'ready', 'not_submitted', ?, ?, ?)
+                ?, ?, 1, ?, 'original', '', ?, '', 'WAITING', 'not_submitted', ?, ?, ?)
             """,
             (
                 job_id,
@@ -1363,9 +1474,11 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
 
     job_id = uuid4().hex[:12]
     now = _now_iso()
-    status = "draft" if payload.publish_mode == "draft" else "ready"
+    status = PUBLISH_STATUS_DRAFT if payload.publish_mode == "draft" else PUBLISH_STATUS_WAITING
+    if (payload.scheduled_at or "").strip():
+        status = PUBLISH_STATUS_SCHEDULED
     if payload.publish_mode == "api_publish":
-        status = "publishing"
+        status = PUBLISH_STATUS_PUBLISHING
     with get_connection() as connection:
         connection.execute(
             """
@@ -1480,16 +1593,19 @@ def list_publish_jobs(limit: int | None = 100) -> list[dict]:
 
 
 def update_publish_job_status(job_id: str, status: str, error_message: str = "") -> dict:
+    normalized_status = _normalize_publish_status(status)
+    published_at = _now_iso() if normalized_status == PUBLISH_STATUS_PUBLISHED else None
     if not get_publish_job(job_id):
         raise ValueError("发布任务不存在。")
     with get_connection() as connection:
         connection.execute(
             """
             UPDATE publish_jobs
-            SET status = ?, error_message = ?, updated_at = ?
+            SET status = ?, error_message = ?, last_error = ?,
+                published_at = COALESCE(?, published_at), updated_at = ?
             WHERE id = ?
             """,
-            (status, error_message, _now_iso(), job_id),
+            (normalized_status, error_message, error_message, published_at, _now_iso(), job_id),
         )
         connection.commit()
     return {"status": "ok", "message": "发布任务状态已更新。", "job": get_publish_job(job_id)}
@@ -1535,6 +1651,48 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
         )
         connection.commit()
     return {"status": "ok", "message": "发送内容已保存。", "job": get_publish_job(job_id)}
+
+
+def update_publish_job_schedule(job_id: str, payload: PublishJobScheduleUpdate) -> dict:
+    from app.services.publish_scheduler import PublishScheduler
+
+    return PublishScheduler().update_schedule(job_id, payload.scheduled_at)
+
+
+def update_publish_job_content(job_id: str, payload: PublishJobContentUpdate) -> dict:
+    job = get_publish_job(job_id)
+    if not job:
+        raise ValueError("publish job not found")
+    if job.get("status") == PUBLISH_STATUS_PUBLISHED:
+        raise ValueError("published jobs cannot be edited into the queue")
+
+    scheduled_at = (payload.scheduled_at or job.get("scheduled_at") or "").strip()
+    status = PUBLISH_STATUS_SCHEDULED if scheduled_at else PUBLISH_STATUS_WAITING
+    now = _now_iso()
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE publish_jobs
+            SET title = ?, description = ?, caption = ?, tags = ?, hashtags = ?,
+                cover_text = ?, scheduled_at = ?, status = ?, risk_flags = '',
+                error_code = '', error_message = '', last_error = '', updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                payload.title.strip(),
+                payload.caption.strip(),
+                payload.caption.strip(),
+                (payload.hashtags or "").strip(),
+                (payload.hashtags or "").strip(),
+                (payload.cover_text or "").strip(),
+                scheduled_at,
+                status,
+                now,
+                job_id,
+            ),
+        )
+        connection.commit()
+    return {"status": "ok", "message": "publish content saved", "job": get_publish_job(job_id)}
 
 
 def regenerate_send_job_metadata(job_id: str, use_ai: bool = True) -> dict:
@@ -2285,7 +2443,7 @@ def _mark_job_failed(job_id: str, error_code: str, message: str, payload: dict |
         connection.execute(
             """
             UPDATE publish_jobs
-            SET status = 'failed', audit_status = 'not_submitted', error_code = ?,
+            SET status = 'FAILED', audit_status = 'not_submitted', error_code = ?,
                 error_message = ?, provider_response = ?, updated_at = ?
             WHERE id = ?
             """,
@@ -2307,7 +2465,7 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
         raise ValueError("发送任务不存在。")
     if job.get("publish_mode") != "opencli_publish":
         raise ValueError("只能执行 opencli 发送任务。")
-    if job.get("status") == "published":
+    if job.get("status") == PUBLISH_STATUS_PUBLISHED:
         return {"status": "ok", "message": "这条任务已经标记为已发布。", "job": job}
 
     runner = runner or _default_command_runner
@@ -2315,7 +2473,7 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
         connection.execute(
             """
             UPDATE publish_jobs
-            SET status = 'publishing', error_code = '', error_message = '',
+            SET status = 'PUBLISHING', error_code = '', error_message = '',
                 provider_response = ?, updated_at = ?
             WHERE id = ?
             """,
@@ -2397,7 +2555,7 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
         connection.execute(
             """
             UPDATE publish_jobs
-            SET status = 'published', audit_status = 'submitted',
+            SET status = 'PUBLISHED', audit_status = 'submitted',
                 error_code = '', error_message = '', provider_response = ?, updated_at = ?
             WHERE id = ?
             """,
@@ -2409,7 +2567,7 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
 
 def _ready_opencli_job_ids(job_ids: list[str] | None = None) -> list[str]:
     params: list[str] = []
-    where = "publish_mode = 'opencli_publish' AND status IN ('ready', 'failed')"
+    where = "publish_mode = 'opencli_publish' AND status IN ('WAITING', 'FAILED', 'ready', 'failed')"
     if job_ids:
         placeholders = ",".join("?" for _ in job_ids)
         where += f" AND id IN ({placeholders})"
@@ -2459,6 +2617,17 @@ def retry_publish_job(job_id: str) -> dict:
     job = get_publish_job(job_id)
     if not job:
         raise ValueError("发布任务不存在。")
+    if (
+        job.get("platform") == "manual_export"
+        or job.get("publish_mode") == "manual_export"
+        or (
+            job.get("status") == PUBLISH_STATUS_FAILED
+            and settings.publish_scheduler_default_platform == "manual_export"
+        )
+    ):
+        from app.services.publish_scheduler import PublishScheduler
+
+        return PublishScheduler().retry_failed(job_id)
     if job.get("publish_mode") == "opencli_publish":
         return execute_opencli_send_job(job_id)
     if job.get("publish_mode") != "api_publish":
@@ -2475,7 +2644,7 @@ def retry_publish_job(job_id: str) -> dict:
         connection.execute(
             """
             UPDATE publish_jobs
-            SET status = 'publishing', retry_count = retry_count + 1,
+            SET status = 'PUBLISHING', retry_count = retry_count + 1,
                 error_code = '', error_message = '', updated_at = ?
             WHERE id = ?
             """,
@@ -2498,7 +2667,7 @@ def _execute_publish_job(job_id: str, config: dict, account: dict, video_path: P
             connection.execute(
                 """
                 UPDATE publish_jobs
-                SET status = 'failed', audit_status = 'not_submitted',
+                SET status = 'FAILED', audit_status = 'not_submitted',
                     error_code = ?, error_message = ?, provider_response = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -2517,7 +2686,7 @@ def _execute_publish_job(job_id: str, config: dict, account: dict, video_path: P
         connection.execute(
             """
             UPDATE publish_jobs
-            SET status = 'published', audit_status = ?, platform_item_id = ?,
+            SET status = 'PUBLISHED', audit_status = ?, platform_item_id = ?,
                 platform_upload_id = ?, error_code = '', error_message = '',
                 provider_response = ?, updated_at = ?
             WHERE id = ?
@@ -2609,15 +2778,16 @@ def get_publish_center_context() -> dict:
                     }
                 )
 
-    jobs = [job for job in list_publish_jobs(limit=200) if job.get("publish_mode") == "opencli_publish"]
+    jobs = list_publish_jobs(limit=200)
     jobs_by_platform = {
         platform: [job for job in jobs if job["platform"] == platform]
         for platform in PLATFORM_LABELS
     }
-    ready_count = sum(1 for job in jobs if job.get("status") == "ready")
-    sending_count = sum(1 for job in jobs if job.get("status") == "publishing")
-    published_count = sum(1 for job in jobs if job.get("status") == "published")
-    failed_count = sum(1 for job in jobs if job.get("status") == "failed")
+    ready_count = sum(1 for job in jobs if job.get("status") in {PUBLISH_STATUS_SCHEDULED, PUBLISH_STATUS_WAITING})
+    sending_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_PUBLISHING)
+    published_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_PUBLISHED)
+    failed_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_FAILED)
+    need_review_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_NEED_REVIEW)
     opencli_status = _opencli_status()
     return {
         "publish_items": publish_items,
@@ -2628,6 +2798,7 @@ def get_publish_center_context() -> dict:
         "opencli_available": opencli_status["available"],
         "opencli_status": opencli_status,
         "stats": [
+            {"label": "需复核", "value": need_review_count, "tone": "amber"},
             {"label": "可入队切片", "value": len(publish_items), "tone": "green"},
             {"label": "待发送", "value": ready_count, "tone": "blue"},
             {"label": "发送中", "value": sending_count, "tone": "purple"},
