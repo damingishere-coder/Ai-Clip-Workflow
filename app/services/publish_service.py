@@ -2565,13 +2565,22 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
     return {"status": "ok", "message": "opencli 发送流程已执行完成。", "job": get_publish_job(job_id)}
 
 
-def _ready_opencli_job_ids(job_ids: list[str] | None = None) -> list[str]:
-    params: list[str] = []
-    where = "publish_mode = 'opencli_publish' AND status IN ('WAITING', 'FAILED', 'ready', 'failed')"
-    if job_ids:
-        placeholders = ",".join("?" for _ in job_ids)
+def _normalize_opencli_job_ids(job_ids: list[str] | None = None) -> list[str]:
+    return list(dict.fromkeys(str(job_id).strip() for job_id in (job_ids or []) if str(job_id).strip()))
+
+
+def _ready_opencli_job_ids(job_ids: list[str] | None = None, *, include_scheduled: bool = False) -> list[str]:
+    normalized_ids = _normalize_opencli_job_ids(job_ids)
+    statuses = ["WAITING", "FAILED", "ready", "failed"]
+    if include_scheduled:
+        statuses.extend(["SCHEDULED", "scheduled"])
+    params: list[str] = statuses.copy()
+    status_placeholders = ",".join("?" for _ in statuses)
+    where = f"publish_mode = 'opencli_publish' AND status IN ({status_placeholders})"
+    if normalized_ids:
+        placeholders = ",".join("?" for _ in normalized_ids)
         where += f" AND id IN ({placeholders})"
-        params.extend(job_ids)
+        params.extend(normalized_ids)
     with get_connection() as connection:
         rows = connection.execute(
             f"SELECT id FROM publish_jobs WHERE {where} ORDER BY created_at ASC",
@@ -2580,11 +2589,18 @@ def _ready_opencli_job_ids(job_ids: list[str] | None = None) -> list[str]:
     return [row["id"] for row in rows]
 
 
+def _empty_opencli_send_message(has_explicit_job_ids: bool) -> str:
+    if has_explicit_job_ids:
+        return "已勾选的任务里没有可立即发送的 opencli 任务；已发布、已取消、需复核或非网页发送任务不会启动。"
+    return "当前没有等待处理或失败可重试的 opencli 任务；已排期任务不会被“开始发送全部”自动发送，请勾选后再立即发送。"
+
+
 def run_opencli_send_batch(job_ids: list[str] | None = None, runner: CommandRunner | None = None) -> dict:
     if not _SEND_LOCK.acquire(blocking=False):
         return {"status": "busy", "message": "发送队列正在运行，请等待当前批次结束。", "jobs": list_publish_jobs(limit=100)}
     try:
-        ids = _ready_opencli_job_ids(job_ids)
+        normalized_ids = _normalize_opencli_job_ids(job_ids)
+        ids = _ready_opencli_job_ids(normalized_ids or None, include_scheduled=bool(normalized_ids))
         results = [execute_opencli_send_job(job_id, runner=runner) for job_id in ids]
         return {"status": "ok", "message": f"发送批次已处理 {len(results)} 条任务。", "results": results, **get_publish_center_context()}
     finally:
@@ -2592,9 +2608,10 @@ def run_opencli_send_batch(job_ids: list[str] | None = None, runner: CommandRunn
 
 
 def start_opencli_send_batch(payload: PublishSendStart, background_tasks: Any | None = None) -> dict:
-    ids = _ready_opencli_job_ids(payload.job_ids)
+    explicit_job_ids = _normalize_opencli_job_ids(payload.job_ids)
+    ids = _ready_opencli_job_ids(explicit_job_ids or None, include_scheduled=bool(explicit_job_ids))
     if not ids:
-        return {"status": "empty", "message": "当前没有待发送或失败可重试的任务。", **get_publish_center_context()}
+        return {"status": "empty", "message": _empty_opencli_send_message(bool(explicit_job_ids)), **get_publish_center_context()}
     if _SEND_LOCK.locked():
         return {"status": "busy", "message": "发送队列正在运行，请稍后刷新查看进度。", **get_publish_center_context()}
     opencli_status = _opencli_status()
@@ -2609,7 +2626,8 @@ def start_opencli_send_batch(payload: PublishSendStart, background_tasks: Any | 
         }
     if background_tasks is not None:
         background_tasks.add_task(run_opencli_send_batch, ids)
-        return {"status": "started", "message": f"已开始后台发送 {len(ids)} 条任务。", **get_publish_center_context()}
+        scheduled_note = " 已勾选任务中如包含定时任务，会按本次操作立即发送。" if explicit_job_ids else ""
+        return {"status": "started", "message": f"已开始后台发送 {len(ids)} 条任务。{scheduled_note}", **get_publish_center_context()}
     return run_opencli_send_batch(ids)
 
 

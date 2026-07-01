@@ -2453,6 +2453,24 @@ function activeSendJobIds() {
   return Array.from(document.querySelectorAll("[data-send-job-checkbox]:checked")).map((checkbox) => checkbox.value);
 }
 
+function selectedSendJobStatusSummary() {
+  const checked = Array.from(document.querySelectorAll("[data-send-job-checkbox]:checked"));
+  return {
+    scheduledCount: checked.filter((checkbox) => {
+      const card = checkbox.closest("[data-send-card]");
+      return (card?.dataset.status || "").toUpperCase() === "SCHEDULED";
+    }).length,
+  };
+}
+
+function sendStartNeedsAttention(status) {
+  return ["empty", "missing_opencli", "busy"].includes(String(status || ""));
+}
+
+function shouldReloadAfterSendStart(status) {
+  return ["started", "ok"].includes(String(status || ""));
+}
+
 function updateSendFilter(filter) {
   const normalizedFilter = (filter || "all").toLowerCase();
   document.querySelectorAll("[data-send-card]").forEach((card) => {
@@ -2646,12 +2664,21 @@ document.querySelectorAll("[data-send-single-job]").forEach((button) => {
     const form = button.closest("[data-send-job-form]");
     const jobId = form?.dataset.jobId;
     if (!jobId) return;
-    if (!window.confirm("确认开始发送这一条吗？请先确认 Chrome 已登录对应平台。")) return;
+    const cardStatus = (form.closest("[data-send-card]")?.dataset.status || "").toUpperCase();
+    const scheduledNotice =
+      cardStatus === "SCHEDULED"
+        ? "\n\n注意：这条任务已经设置了发布时间，确认后会立即发送，不再等待原计划时间。"
+        : "";
+    if (!window.confirm(`确认开始发送这一条吗？请先确认 Chrome 已登录对应平台。${scheduledNotice}`)) return;
     const originalText = button.textContent;
     button.disabled = true;
     button.textContent = "发送中...";
     updateSendPreviewFromForm(form);
-    showSendPublishingOverlay("正在发布", "正在发送这一条，opencli 会打开平台页面并自动填写内容。");
+    const sendingText =
+      cardStatus === "SCHEDULED"
+        ? "这条定时任务正在按本次手动操作立即发送，opencli 会打开平台页面并自动填写内容。"
+        : "正在发送这一条，opencli 会打开平台页面并自动填写内容。";
+    showSendPublishingOverlay("正在发布", sendingText);
     setSendCenterMessage("已提交单条发送任务，opencli 会使用 Chrome 登录态打开平台页面。");
 
     try {
@@ -2660,11 +2687,15 @@ document.querySelectorAll("[data-send-single-job]").forEach((button) => {
       if (!response.ok) {
         throw new Error(data.detail || data.message || "发送启动失败");
       }
-      if (data.status === "empty") {
+      if (sendStartNeedsAttention(data.status)) {
         hideSendPublishingOverlay();
+        button.disabled = false;
+        button.textContent = originalText;
       }
-      setSendCenterMessage(data.message || "发送任务已开始。", "success");
-      reloadSendCenter(1400);
+      setSendCenterMessage(data.message || "发送任务已开始。", sendStartNeedsAttention(data.status) ? "error" : "success");
+      if (shouldReloadAfterSendStart(data.status)) {
+        reloadSendCenter(1400);
+      }
     } catch (error) {
       hideSendPublishingOverlay();
       setSendCenterMessage(`发送启动失败：${error.message}`, "error");
@@ -2677,12 +2708,22 @@ document.querySelectorAll("[data-send-single-job]").forEach((button) => {
 document.querySelectorAll("[data-start-send-queue]").forEach((button) => {
   button.addEventListener("click", async () => {
     const selectedIds = activeSendJobIds();
+    const selectedStatusSummary = selectedSendJobStatusSummary();
     const label = selectedIds.length ? `${selectedIds.length} 条已勾选任务` : "全部待发送/失败任务";
-    if (!window.confirm(`确认开始发送 ${label} 吗？\n\n请先确认 Chrome 已登录抖音创作者中心和 B站创作中心。`)) return;
+    const scheduledNotice =
+      selectedIds.length && selectedStatusSummary.scheduledCount
+        ? `\n\n其中 ${selectedStatusSummary.scheduledCount} 条已排期任务会立即发送，不再等待原计划时间。`
+        : "\n\n未勾选时只会发送等待处理/发送失败任务，不会发送未来排期任务。";
+    if (!window.confirm(`确认开始发送 ${label} 吗？\n\n请先确认 Chrome 已登录抖音创作者中心和 B站创作中心。${scheduledNotice}`)) return;
     const originalText = button.textContent;
     button.disabled = true;
     button.textContent = "启动中...";
-    showSendPublishingOverlay("正在发布", selectedIds.length ? `正在发送 ${selectedIds.length} 条已勾选任务，一次只会执行一条。` : "正在发送全部待发送任务，一次只会执行一条。");
+    showSendPublishingOverlay(
+      "正在发布",
+      selectedIds.length
+        ? `正在发送 ${selectedIds.length} 条已勾选任务，一次只会执行一条。`
+        : "正在发送全部等待处理/发送失败任务，一次只会执行一条。"
+    );
     setSendCenterMessage("正在启动发送队列，一次只会执行一条任务。");
 
     try {
@@ -2695,11 +2736,15 @@ document.querySelectorAll("[data-start-send-queue]").forEach((button) => {
       if (!response.ok) {
         throw new Error(data.detail || data.message || "启动队列失败");
       }
-      if (data.status === "empty") {
+      if (sendStartNeedsAttention(data.status)) {
         hideSendPublishingOverlay();
+        button.disabled = false;
+        button.textContent = originalText;
       }
-      setSendCenterMessage(data.message || "发送队列已启动。", data.status === "busy" ? "error" : "success");
-      reloadSendCenter(1400);
+      setSendCenterMessage(data.message || "发送队列已启动。", sendStartNeedsAttention(data.status) ? "error" : "success");
+      if (shouldReloadAfterSendStart(data.status)) {
+        reloadSendCenter(1400);
+      }
     } catch (error) {
       hideSendPublishingOverlay();
       setSendCenterMessage(`启动队列失败：${error.message}`, "error");
