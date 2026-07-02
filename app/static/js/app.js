@@ -2235,6 +2235,10 @@ const sendPreviewPanel = document.querySelector("[data-send-preview-panel]");
 const publishScheduleForm = document.querySelector("[data-publish-schedule-form]");
 const publishScheduleResult = document.querySelector("[data-publish-schedule-result]");
 const scheduleSelectedCount = document.querySelector("[data-schedule-selected-count]");
+const publishCalendarGrid = document.querySelector("[data-publish-calendar-grid]");
+const publishCalendarRange = document.querySelector("[data-publish-calendar-range]");
+let publishCalendarStartDate = null;
+let draggedScheduleJobId = "";
 
 function setSendCenterMessage(message, tone = "info") {
   if (!sendCenterMessage) return;
@@ -2286,6 +2290,218 @@ function setScheduleResult(message, tone = "info") {
   if (!publishScheduleResult) return;
   publishScheduleResult.textContent = message;
   publishScheduleResult.classList.toggle("error-text", tone === "error");
+}
+
+function padDatePart(value) {
+  return String(value).padStart(2, "0");
+}
+
+function localDateKey(date) {
+  return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
+}
+
+function localTimeKey(date) {
+  return `${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
+}
+
+function calendarSlotKey(date) {
+  return `${localDateKey(date)} ${localTimeKey(date)}`;
+}
+
+function localDayStart(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function localWeekStart(date) {
+  const start = localDayStart(date);
+  const offset = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - offset);
+  return start;
+}
+
+function addCalendarDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function parseScheduleClock(value, fallbackHour, fallbackMinute = 0) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return { hour: fallbackHour, minute: fallbackMinute };
+  const hour = Math.min(23, Math.max(0, Number(match[1])));
+  const minute = Math.min(59, Math.max(0, Number(match[2])));
+  return { hour, minute };
+}
+
+function scheduleIntervalHours() {
+  const value = Number(publishScheduleForm?.elements.interval_hours?.value || 3);
+  return Number.isFinite(value) ? Math.min(168, Math.max(1, value)) : 3;
+}
+
+function scheduleSlotTimes() {
+  const start = parseScheduleClock(publishScheduleForm?.elements.daily_start_time?.value, 9);
+  const end = parseScheduleClock(publishScheduleForm?.elements.daily_end_time?.value, 21);
+  const startMinutes = start.hour * 60 + start.minute;
+  const endMinutes = end.hour * 60 + end.minute;
+  if (endMinutes < startMinutes) {
+    return [{ hour: start.hour, minute: start.minute }];
+  }
+  const intervalMinutes = scheduleIntervalHours() * 60;
+  const slots = [];
+  for (let cursor = startMinutes; cursor <= endMinutes; cursor += intervalMinutes) {
+    slots.push({ hour: Math.floor(cursor / 60), minute: cursor % 60 });
+  }
+  return slots.length ? slots : [{ hour: start.hour, minute: start.minute }];
+}
+
+function scheduleCardInfo(card) {
+  const form = card?.querySelector("[data-send-job-form]");
+  const jobId = form?.dataset.jobId || "";
+  const title = form?.elements.title?.value || card?.querySelector(".send-card-header h3")?.textContent || "未命名任务";
+  const platformLabel = card?.querySelector(".status-pill")?.textContent || form?.dataset.platform || "任务";
+  const status = (card?.dataset.status || "").toUpperCase();
+  return { card, form, jobId, title: title.trim(), platformLabel: platformLabel.trim(), status };
+}
+
+function scheduledEntriesBySlot() {
+  const entries = new Map();
+  document.querySelectorAll("[data-send-card]").forEach((card) => {
+    const info = scheduleCardInfo(card);
+    if (!info.jobId) return;
+    const scheduledValue = card.querySelector("[data-publish-scheduled-at]")?.dataset.publishScheduledAt || "";
+    if (!scheduledValue) return;
+    const scheduledDate = new Date(scheduledValue);
+    if (Number.isNaN(scheduledDate.getTime())) return;
+    const key = calendarSlotKey(scheduledDate);
+    if (!entries.has(key)) entries.set(key, []);
+    entries.get(key).push({ ...info, scheduledDate });
+  });
+  return entries;
+}
+
+function calendarSeedDate() {
+  const today = localDayStart(new Date());
+  const scheduledDates = Array.from(document.querySelectorAll("[data-send-card] [data-publish-scheduled-at]"))
+    .map((node) => new Date(node.dataset.publishScheduledAt || ""))
+    .filter((date) => !Number.isNaN(date.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime());
+  const upcoming = scheduledDates.find((date) => date >= today);
+  return upcoming || today;
+}
+
+function formatCalendarRange(startDate) {
+  const endDate = addCalendarDays(startDate, 6);
+  const format = (date) => `${date.getFullYear()}/${padDatePart(date.getMonth() + 1)}/${padDatePart(date.getDate())}`;
+  return `${format(startDate)} - ${format(endDate)}`;
+}
+
+function platformCalendarTone(platformLabel) {
+  if (platformLabel.includes("抖音")) return "douyin";
+  if (platformLabel.includes("B站")) return "bilibili";
+  return "default";
+}
+
+function renderPublishCalendar() {
+  if (!publishCalendarGrid) return;
+  if (!publishCalendarStartDate) {
+    publishCalendarStartDate = localWeekStart(calendarSeedDate());
+  }
+
+  const slotTimes = scheduleSlotTimes();
+  const entries = scheduledEntriesBySlot();
+  publishCalendarGrid.replaceChildren();
+  publishCalendarGrid.style.setProperty("--calendar-slot-rows", String(slotTimes.length));
+  if (publishCalendarRange) {
+    publishCalendarRange.textContent = formatCalendarRange(publishCalendarStartDate);
+  }
+
+  const corner = document.createElement("div");
+  corner.className = "publish-calendar-corner";
+  corner.textContent = "时间";
+  publishCalendarGrid.append(corner);
+
+  for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+    const dayDate = addCalendarDays(publishCalendarStartDate, dayIndex);
+    const heading = document.createElement("div");
+    heading.className = "publish-calendar-day";
+    heading.innerHTML = `<strong>${dayDate.toLocaleDateString([], { weekday: "short" })}</strong><span>${padDatePart(
+      dayDate.getMonth() + 1
+    )}/${padDatePart(dayDate.getDate())}</span>`;
+    publishCalendarGrid.append(heading);
+  }
+
+  slotTimes.forEach((slotTime) => {
+    const timeCell = document.createElement("div");
+    timeCell.className = "publish-calendar-time";
+    timeCell.textContent = `${padDatePart(slotTime.hour)}:${padDatePart(slotTime.minute)}`;
+    publishCalendarGrid.append(timeCell);
+
+    for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+      const slotDate = addCalendarDays(publishCalendarStartDate, dayIndex);
+      slotDate.setHours(slotTime.hour, slotTime.minute, 0, 0);
+      const slotCell = document.createElement("div");
+      slotCell.className = "publish-calendar-slot";
+      slotCell.dataset.publishCalendarSlot = "true";
+      slotCell.dataset.slotStart = slotDate.toISOString();
+      const slotEntries = entries.get(calendarSlotKey(slotDate)) || [];
+      if (!slotEntries.length) {
+        const empty = document.createElement("span");
+        empty.className = "publish-calendar-empty";
+        empty.textContent = "空档";
+        slotCell.append(empty);
+      }
+      slotEntries.forEach((entry) => {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = `publish-calendar-chip tone-${platformCalendarTone(entry.platformLabel)}`;
+        chip.dataset.jobId = entry.jobId;
+        chip.innerHTML = `<span>${entry.platformLabel}</span><strong>${entry.title}</strong>`;
+        chip.addEventListener("click", () => {
+          entry.card?.scrollIntoView({ block: "center", behavior: "smooth" });
+          entry.card?.classList.add("is-previewing");
+          window.setTimeout(() => entry.card?.classList.remove("is-previewing"), 1600);
+        });
+        slotCell.append(chip);
+      });
+      publishCalendarGrid.append(slotCell);
+    }
+  });
+}
+
+async function scheduleJobAtSlot(jobId, slotStart) {
+  const slotDate = new Date(slotStart);
+  if (!jobId || Number.isNaN(slotDate.getTime())) {
+    setScheduleResult("没有识别到要排期的任务或时间。", "error");
+    return;
+  }
+  const card = Array.from(document.querySelectorAll("[data-send-card]")).find(
+    (item) => item.querySelector("[data-send-job-form]")?.dataset.jobId === jobId
+  );
+  const info = scheduleCardInfo(card);
+  setScheduleResult(`正在安排：${info.title} -> ${slotDate.toLocaleString([], { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`);
+
+  try {
+    const response = await fetch("/api/publish/jobs/schedule-batch", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_ids: [jobId],
+        action: "apply",
+        start_at: slotDate.toISOString(),
+        interval_hours: scheduleIntervalHours(),
+        daily_start_time: String(publishScheduleForm?.elements.daily_start_time?.value || "09:00"),
+        daily_end_time: String(publishScheduleForm?.elements.daily_end_time?.value || "21:00"),
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || data.message || "排期失败");
+    }
+    setScheduleResult(data.message || "已更新发布时间。");
+    reloadSendCenter(700);
+  } catch (error) {
+    setScheduleResult(`排期失败：${error.message}`, "error");
+  }
 }
 
 function formatScheduledTimes() {
@@ -2393,6 +2609,66 @@ document.querySelector("[data-clear-batch-schedule]")?.addEventListener("click",
 
 formatScheduledTimes();
 updateScheduleSelectedCount();
+renderPublishCalendar();
+
+document.querySelectorAll("[data-schedule-draggable]").forEach((card) => {
+  const info = scheduleCardInfo(card);
+  if (!info.jobId) return;
+  card.addEventListener("dragstart", (event) => {
+    draggedScheduleJobId = info.jobId;
+    card.classList.add("is-dragging");
+    event.dataTransfer?.setData("text/plain", info.jobId);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  });
+  card.addEventListener("dragend", () => {
+    draggedScheduleJobId = "";
+    card.classList.remove("is-dragging");
+    document.querySelectorAll(".publish-calendar-slot.is-drop-target").forEach((slot) => {
+      slot.classList.remove("is-drop-target");
+    });
+  });
+});
+
+publishCalendarGrid?.addEventListener("dragover", (event) => {
+  const slot = event.target.closest("[data-publish-calendar-slot]");
+  if (!slot) return;
+  event.preventDefault();
+  slot.classList.add("is-drop-target");
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+});
+
+publishCalendarGrid?.addEventListener("dragleave", (event) => {
+  const slot = event.target.closest("[data-publish-calendar-slot]");
+  if (slot && !slot.contains(event.relatedTarget)) {
+    slot.classList.remove("is-drop-target");
+  }
+});
+
+publishCalendarGrid?.addEventListener("drop", (event) => {
+  const slot = event.target.closest("[data-publish-calendar-slot]");
+  if (!slot) return;
+  event.preventDefault();
+  slot.classList.remove("is-drop-target");
+  const jobId = event.dataTransfer?.getData("text/plain") || draggedScheduleJobId;
+  scheduleJobAtSlot(jobId, slot.dataset.slotStart || "");
+});
+
+document.querySelectorAll("[data-publish-calendar-shift]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const days = Number(button.dataset.publishCalendarShift || 0);
+    publishCalendarStartDate = addCalendarDays(publishCalendarStartDate || localWeekStart(new Date()), days);
+    renderPublishCalendar();
+  });
+});
+
+document.querySelector("[data-publish-calendar-today]")?.addEventListener("click", () => {
+  publishCalendarStartDate = localWeekStart(new Date());
+  renderPublishCalendar();
+});
+
+["interval_hours", "daily_start_time", "daily_end_time"].forEach((fieldName) => {
+  publishScheduleForm?.elements[fieldName]?.addEventListener("change", renderPublishCalendar);
+});
 
 function sendJobPayload(form) {
   const formData = new FormData(form);

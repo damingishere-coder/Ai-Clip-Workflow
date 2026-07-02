@@ -85,6 +85,20 @@
       </div>
     </div>
   </form>
+  <div class="publish-calendar-shell" data-publish-calendar>
+    <div class="publish-calendar-toolbar">
+      <div>
+        <p class="eyebrow">Calendar Board</p>
+        <h3 data-publish-calendar-range>本周发布日历</h3>
+      </div>
+      <div class="button-row">
+        <button class="secondary-button" type="button" data-publish-calendar-shift="-7">上一周</button>
+        <button class="secondary-button" type="button" data-publish-calendar-today>本周</button>
+        <button class="secondary-button" type="button" data-publish-calendar-shift="7">下一周</button>
+      </div>
+    </div>
+    <div class="publish-calendar-grid" data-publish-calendar-grid aria-label="发布排期日历"></div>
+  </div>
 </section>
 
 <section class="send-center-grid">
@@ -115,7 +129,8 @@
 
     <div class="send-queue">
       {% for item in send_queue_items %}
-      <article class="send-card" data-send-card data-platform="{{ item.platform }}" data-status="{{ item.status }}">
+      {% set can_schedule_item = item.job_id and item.status in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}
+      <article class="send-card{% if can_schedule_item %} can-drag-schedule{% endif %}" data-send-card data-platform="{{ item.platform }}" data-status="{{ item.status }}" {% if can_schedule_item %}draggable="true" data-schedule-draggable="true"{% endif %}>
         <div class="send-card-media">
           <video controls preload="metadata" src="{{ item.video_media_url }}"></video>
           <div class="send-cover-preview{% if item.cover_media_url %} has-cover{% endif %}" data-cover-preview>
@@ -216,7 +231,12 @@
               <button type="submit" class="secondary-button" {% if not item.job_id %}disabled{% endif %}>保存</button>
               <button type="button" class="secondary-button" data-regenerate-send-metadata {% if not item.job_id %}disabled{% endif %}>重新生成标题/话题</button>
               <button type="button" class="secondary-button" data-generate-cover-frames>更换封面帧</button>
-              <button type="button" class="primary-button" data-send-single-job {% if not item.job_id or item.status not in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}disabled{% endif %}>发送此条</button>
+              <button
+                type="button"
+                class="primary-button"
+                data-send-single-job
+                {% if not item.job_id or item.status not in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}disabled title="{% if item.status == 'PUBLISHED' %}这条任务已发布，不能重复发送。{% elif item.status == 'PUBLISHING' %}这条任务正在发送中，请等待完成。{% elif item.status == 'NEED_REVIEW' %}这条任务需要先人工复核。{% else %}当前状态不能发送。{% endif %}"{% endif %}
+              >{% if item.status == "PUBLISHED" %}已发布{% else %}发送此条{% endif %}</button>
             </div>
           </div>
         </form>
