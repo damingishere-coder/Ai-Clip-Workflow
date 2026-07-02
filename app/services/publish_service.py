@@ -554,6 +554,74 @@ def _normalize_job(row) -> dict:
     return job
 
 
+def _send_item_can_schedule(item: dict) -> bool:
+    status = str(item.get("status") or "").upper()
+    return bool(item.get("job_id")) and status in {
+        PUBLISH_STATUS_WAITING,
+        PUBLISH_STATUS_SCHEDULED,
+        PUBLISH_STATUS_FAILED,
+        "READY",
+    }
+
+
+def _build_send_task_groups(queue_items: list[dict]) -> list[dict]:
+    groups: dict[str, dict] = {}
+    for item in queue_items:
+        task_id = item.get("task_id") or "unknown-task"
+        group = groups.get(task_id)
+        if not group:
+            group = {
+                "task_id": task_id,
+                "task_name": item.get("task_name") or "未命名任务",
+                "items": [],
+                "job_ids": [],
+                "schedule_job_ids": [],
+                "platform_labels": [],
+                "status_labels": [],
+                "output_clip_ids": [],
+                "scheduled_count": 0,
+                "published_count": 0,
+                "failed_count": 0,
+                "cover_media_url": item.get("cover_media_url") or "",
+                "video_media_url": item.get("video_media_url") or "",
+            }
+            groups[task_id] = group
+
+        group["items"].append(item)
+        if item.get("job_id"):
+            group["job_ids"].append(item["job_id"])
+        if _send_item_can_schedule(item):
+            group["schedule_job_ids"].append(item["job_id"])
+        if item.get("platform_label") and item["platform_label"] not in group["platform_labels"]:
+            group["platform_labels"].append(item["platform_label"])
+        if item.get("status_label") and item["status_label"] not in group["status_labels"]:
+            group["status_labels"].append(item["status_label"])
+        if item.get("output_clip_id") and item["output_clip_id"] not in group["output_clip_ids"]:
+            group["output_clip_ids"].append(item["output_clip_id"])
+        if not group.get("cover_media_url") and item.get("cover_media_url"):
+            group["cover_media_url"] = item["cover_media_url"]
+        if not group.get("video_media_url") and item.get("video_media_url"):
+            group["video_media_url"] = item["video_media_url"]
+
+        status = str(item.get("status") or "").upper()
+        if status == PUBLISH_STATUS_SCHEDULED:
+            group["scheduled_count"] += 1
+        if status == PUBLISH_STATUS_PUBLISHED:
+            group["published_count"] += 1
+        if status == PUBLISH_STATUS_FAILED:
+            group["failed_count"] += 1
+
+    for group in groups.values():
+        group["item_count"] = len(group["items"])
+        group["clip_count"] = len(group["output_clip_ids"])
+        group["can_schedule"] = bool(group["schedule_job_ids"])
+        group["platform_summary"] = " / ".join(group["platform_labels"]) or "未入队"
+        group["status_summary"] = " / ".join(group["status_labels"]) or "待入队"
+        group["schedule_job_ids_csv"] = ",".join(group["schedule_job_ids"])
+
+    return list(groups.values())
+
+
 def list_platform_configs() -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
@@ -2796,6 +2864,7 @@ def get_publish_center_context() -> dict:
                     }
                 )
 
+    task_groups = _build_send_task_groups(queue_items)
     jobs = list_publish_jobs(limit=200)
     jobs_by_platform = {
         platform: [job for job in jobs if job["platform"] == platform]
@@ -2810,6 +2879,7 @@ def get_publish_center_context() -> dict:
     return {
         "publish_items": publish_items,
         "send_queue_items": queue_items,
+        "send_task_groups": task_groups,
         "publish_jobs": jobs,
         "jobs_by_platform": jobs_by_platform,
         "platforms": [{"id": platform, "label": label} for platform, label in PLATFORM_LABELS.items()],

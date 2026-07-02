@@ -166,6 +166,12 @@ def test_send_center_frontend_publishing_overlay_resources() -> None:
     assert "updateSendPreviewFromForm" in js
     assert "data-send-preview-description" in html
     assert "is-previewing" in css
+    assert "send_task_groups" in html
+    assert "data-send-task-card" in html
+    assert "publish-date-board" in html
+    assert "schedule-date" in js
+    assert ".publish-date-column" in css
+    assert ".send-task-card" in css
     assert "opencli_status.restart_command" in html
     assert "请继续使用 Docker 主页面" in html
     assert "http://127.0.0.1:8001" in html

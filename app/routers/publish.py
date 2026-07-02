@@ -9,6 +9,7 @@ from app.models.task import (
     PublishBatchScheduleUpdate,
     PublishCoverCreate,
     PublishCoverFrameBatchCreate,
+    PublishDateScheduleUpdate,
     PublishJobContentUpdate,
     PublishJobCreate,
     PublishJobScheduleUpdate,
@@ -229,6 +230,19 @@ async def update_publish_jobs_schedule_batch(payload: PublishBatchScheduleUpdate
             interval_hours=payload.interval_hours,
             daily_start_time=payload.daily_start_time,
             daily_end_time=payload.daily_end_time,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/jobs/schedule-date")
+async def update_publish_jobs_schedule_date(payload: PublishDateScheduleUpdate) -> dict:
+    try:
+        return PublishScheduler().update_date_schedule(
+            payload.job_ids,
+            target_date=payload.target_date,
+            start_time=payload.start_time,
+            interval_hours=payload.interval_hours,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

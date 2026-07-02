@@ -15,7 +15,7 @@ from app.db.database import get_connection, init_db
 from app.models.task import PublishSendStart
 from app.services import publish_service
 from app.services.auto_publish_service import create_auto_publish_jobs
-from app.services.publish_scheduler import PublishScheduler, build_batch_schedule_times
+from app.services.publish_scheduler import PublishScheduler, build_batch_schedule_times, build_date_schedule_times
 from app.services.publish_service import get_publish_job
 
 
@@ -395,6 +395,23 @@ def test_batch_schedule_can_be_cleared(tmp_path):
     assert get_publish_job(job_id)["status"] == "WAITING"
 
 
+def test_date_schedule_keeps_task_group_on_selected_date(tmp_path):
+    first_job = _insert_job(tmp_path, status="WAITING", scheduled_at="")
+    second_job = _insert_job(tmp_path, status="WAITING", scheduled_at="")
+
+    result = PublishScheduler().update_date_schedule(
+        [first_job, second_job],
+        target_date="2026-06-25",
+        start_time="20:00",
+        interval_hours=3,
+    )
+
+    assert result["updated_count"] == 2
+    assert get_publish_job(first_job)["scheduled_at"].startswith("2026-06-25T20:00:00")
+    assert get_publish_job(second_job)["scheduled_at"].startswith("2026-06-25T23:00:00")
+    assert get_publish_job(first_job)["status"] == "SCHEDULED"
+
+
 def test_batch_schedule_time_builder_rejects_invalid_daily_window():
     with pytest.raises(ValueError, match="结束时间必须晚于"):
         build_batch_schedule_times(
@@ -404,3 +421,8 @@ def test_batch_schedule_time_builder_rejects_invalid_daily_window():
             daily_start_time="21:00",
             daily_end_time="09:00",
         )
+
+
+def test_date_schedule_time_builder_rejects_invalid_date():
+    with pytest.raises(ValueError, match="目标日期格式无效"):
+        build_date_schedule_times(1, target_date="2026/06/25", start_time="09:00", interval_hours=3)

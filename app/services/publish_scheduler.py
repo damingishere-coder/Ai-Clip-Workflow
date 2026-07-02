@@ -80,6 +80,28 @@ def build_batch_schedule_times(
     return scheduled
 
 
+def build_date_schedule_times(
+    count: int,
+    *,
+    target_date: str,
+    start_time: str,
+    interval_hours: int,
+) -> list[str]:
+    if count <= 0:
+        return []
+
+    clock = parse_clock(start_time, "当天开始时间")
+    try:
+        cursor = datetime.fromisoformat(f"{target_date.strip()}T{clock.isoformat(timespec='minutes')}")
+    except ValueError as exc:
+        raise ValueError("目标日期格式无效，请使用 YYYY-MM-DD") from exc
+    if cursor.tzinfo is None:
+        cursor = cursor.astimezone()
+
+    interval = timedelta(hours=max(1, int(interval_hours)))
+    return [(cursor + interval * index).isoformat(timespec="seconds") for index in range(count)]
+
+
 def _row_to_dict(row) -> dict[str, Any] | None:
     return dict(row) if row else None
 
@@ -369,6 +391,67 @@ class PublishScheduler:
                 if action == "apply"
                 else f"已清除 {len(normalized_ids)} 条任务的发布时间。"
             ),
+            "jobs": [get_publish_job_raw(job_id) for job_id in normalized_ids],
+        }
+
+    def update_date_schedule(
+        self,
+        job_ids: list[str],
+        *,
+        target_date: str,
+        start_time: str = "09:00",
+        interval_hours: int = 3,
+    ) -> dict[str, Any]:
+        normalized_ids = list(dict.fromkeys(str(job_id).strip() for job_id in job_ids if str(job_id).strip()))
+        if not normalized_ids:
+            raise ValueError("至少选择一条发布任务")
+
+        placeholders = ", ".join("?" for _ in normalized_ids)
+        with get_connection() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM publish_jobs WHERE id IN ({placeholders})",
+                normalized_ids,
+            ).fetchall()
+        jobs_by_id = {row["id"]: dict(row) for row in rows}
+        missing_ids = [job_id for job_id in normalized_ids if job_id not in jobs_by_id]
+        if missing_ids:
+            raise ValueError(f"有 {len(missing_ids)} 条发布任务不存在")
+        blocked = [
+            job_id
+            for job_id in normalized_ids
+            if str(jobs_by_id[job_id].get("status") or "").upper() in {"PUBLISHED", "CANCELLED"}
+        ]
+        if blocked:
+            raise ValueError("已发布或已取消的任务不能修改排期")
+
+        schedule_times = build_date_schedule_times(
+            len(normalized_ids),
+            target_date=target_date,
+            start_time=start_time,
+            interval_hours=interval_hours,
+        )
+
+        now = now_iso()
+        with get_connection() as connection:
+            for job_id, scheduled_at in zip(normalized_ids, schedule_times, strict=True):
+                current_status = str(jobs_by_id[job_id].get("status") or "").upper()
+                next_status = "NEED_REVIEW" if current_status == "NEED_REVIEW" else "SCHEDULED"
+                connection.execute(
+                    """
+                    UPDATE publish_jobs
+                    SET scheduled_at = ?, status = ?, updated_at = ?,
+                        error_code = '', error_message = '', last_error = ''
+                    WHERE id = ?
+                    """,
+                    (scheduled_at, next_status, now, job_id),
+                )
+            connection.commit()
+
+        return {
+            "status": "ok",
+            "action": "schedule_date",
+            "updated_count": len(normalized_ids),
+            "message": f"已把 {len(normalized_ids)} 条任务安排到 {target_date}。",
             "jobs": [get_publish_job_raw(job_id) for job_id in normalized_ids],
         }
 
