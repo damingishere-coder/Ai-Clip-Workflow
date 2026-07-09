@@ -166,13 +166,32 @@ def test_send_center_frontend_publishing_overlay_resources() -> None:
     assert "updateSendPreviewFromForm" in js
     assert "data-send-preview-description" in html
     assert "is-previewing" in css
-    assert "opencli_status.restart_command" in html
-    assert "请继续使用 Docker 主页面" in html
+    assert "send_task_groups" in html
+    assert "data-send-task-card" in html
+    assert "<details class=\"send-task-card" in html
+    assert "publish-date-board" in html
+    assert "schedule-date" in js
+    assert ".publish-date-column" in css
+    assert ".send-task-card" in css
+    assert "start_niuma_studio_docker.cmd" in html
     assert "http://127.0.0.1:8001" in html
     assert "OPENCLI_LOCAL_BASE_URL: http://127.0.0.1:8001" in compose
     assert "OPENCLI_HOST_BRIDGE_URL: http://host.docker.internal:8765" in compose
     assert "OPENCLI_LOCAL_BASE_URL=http://127.0.0.1:8001" in env_example
     assert "OPENCLI_HOST_BRIDGE_URL=http://host.docker.internal:8765" in env_example
+
+
+def test_send_center_is_douyin_first_for_now() -> None:
+    html = (PROJECT_ROOT / "app" / "templates" / "publish.html").read_text(encoding="utf-8")
+    js = (PROJECT_ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+    assert publish_service.SEND_CENTER_PLATFORMS == ("douyin",)
+    assert "抖音发送中心" in html
+    assert 'data-send-filter="bilibili"' not in html
+    assert 'name="bilibili_tid"' not in html
+    assert 'name="bilibili_copyright"' not in html
+    assert "Chrome 已登录抖音创作者中心和 B站创作中心" not in js
+    assert "Chrome 已登录抖音创作者中心" in js
 
 
 def test_douyin_description_copies_body_and_platform_topics_directly() -> None:
@@ -422,7 +441,7 @@ def test_opencli_missing_status_tells_user_how_to_restart() -> None:
         status = publish_service._opencli_status()  # noqa: SLF001
 
         assert not status["available"]
-        assert "start_docker_opencli.ps1" in status["restart_command"]
+        assert "start_niuma_studio_docker.cmd" in status["restart_command"]
         assert status["publish_url"].endswith("/publish")
         assert "Docker 页面已启动" in status["message"]
     finally:
@@ -513,6 +532,8 @@ def main() -> None:
     print("opencli cleanup leaves browser: OK")
     test_send_center_frontend_publishing_overlay_resources()
     print("send center frontend publishing overlay: OK")
+    test_send_center_is_douyin_first_for_now()
+    print("send center douyin-first scope: OK")
     test_douyin_description_copies_body_and_platform_topics_directly()
     print("douyin direct description topics: OK")
     test_bilibili_browser_commands()

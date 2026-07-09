@@ -2235,6 +2235,11 @@ const sendPreviewPanel = document.querySelector("[data-send-preview-panel]");
 const publishScheduleForm = document.querySelector("[data-publish-schedule-form]");
 const publishScheduleResult = document.querySelector("[data-publish-schedule-result]");
 const scheduleSelectedCount = document.querySelector("[data-schedule-selected-count]");
+const publishCalendarGrid = document.querySelector("[data-publish-calendar-grid]");
+const publishCalendarRange = document.querySelector("[data-publish-calendar-range]");
+let publishCalendarStartDate = null;
+let draggedScheduleJobIds = [];
+let draggedScheduleTaskCard = null;
 
 function setSendCenterMessage(message, tone = "info") {
   if (!sendCenterMessage) return;
@@ -2286,6 +2291,219 @@ function setScheduleResult(message, tone = "info") {
   if (!publishScheduleResult) return;
   publishScheduleResult.textContent = message;
   publishScheduleResult.classList.toggle("error-text", tone === "error");
+}
+
+function padDatePart(value) {
+  return String(value).padStart(2, "0");
+}
+
+function localDateKey(date) {
+  return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
+}
+
+function localDayStart(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function localWeekStart(date) {
+  const start = localDayStart(date);
+  const offset = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - offset);
+  return start;
+}
+
+function addCalendarDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function parseScheduleClock(value, fallbackHour, fallbackMinute = 0) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return { hour: fallbackHour, minute: fallbackMinute };
+  const hour = Math.min(23, Math.max(0, Number(match[1])));
+  const minute = Math.min(59, Math.max(0, Number(match[2])));
+  return { hour, minute };
+}
+
+function scheduleIntervalHours() {
+  const value = Number(publishScheduleForm?.elements.interval_hours?.value || 3);
+  return Number.isFinite(value) ? Math.min(168, Math.max(1, value)) : 3;
+}
+
+function scheduleCardInfo(card) {
+  const form = card?.querySelector("[data-send-job-form]");
+  const jobId = form?.dataset.jobId || "";
+  const title = form?.elements.title?.value || card?.querySelector(".send-card-header h3")?.textContent || "未命名任务";
+  const platformLabel = card?.querySelector(".status-pill")?.textContent || form?.dataset.platform || "任务";
+  const status = (card?.dataset.status || "").toUpperCase();
+  return { card, form, jobId, title: title.trim(), platformLabel: platformLabel.trim(), status };
+}
+
+function scheduleTaskTitle(taskCard) {
+  return taskCard?.querySelector(".send-task-summary h3")?.textContent?.trim() || "未命名任务";
+}
+
+function scheduleJobIdsForTask(taskCard) {
+  return String(taskCard?.dataset.scheduleJobIds || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function scheduledEntriesByDate() {
+  const entries = new Map();
+  document.querySelectorAll("[data-send-task-card]").forEach((taskCard) => {
+    const taskEntries = new Map();
+    taskCard.querySelectorAll("[data-send-card]").forEach((card) => {
+      const info = scheduleCardInfo(card);
+      if (!info.jobId) return;
+      const scheduledValue = card.querySelector("[data-publish-scheduled-at]")?.dataset.publishScheduledAt || "";
+      if (!scheduledValue) return;
+      const scheduledDate = new Date(scheduledValue);
+      if (Number.isNaN(scheduledDate.getTime())) return;
+      const key = localDateKey(scheduledDate);
+      if (!taskEntries.has(key)) taskEntries.set(key, []);
+      taskEntries.get(key).push({ ...info, scheduledDate });
+    });
+
+    taskEntries.forEach((items, dateKey) => {
+      if (!entries.has(dateKey)) entries.set(dateKey, []);
+      entries.get(dateKey).push({
+        taskCard,
+        taskTitle: scheduleTaskTitle(taskCard),
+        items,
+      });
+    });
+  });
+  return entries;
+}
+
+function calendarSeedDate() {
+  const today = localDayStart(new Date());
+  const scheduledDates = Array.from(document.querySelectorAll("[data-send-card] [data-publish-scheduled-at]"))
+    .map((node) => new Date(node.dataset.publishScheduledAt || ""))
+    .filter((date) => !Number.isNaN(date.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime());
+  const upcoming = scheduledDates.find((date) => date >= today);
+  return upcoming || today;
+}
+
+function formatCalendarRange(startDate) {
+  const endDate = addCalendarDays(startDate, 6);
+  const format = (date) => `${date.getFullYear()}/${padDatePart(date.getMonth() + 1)}/${padDatePart(date.getDate())}`;
+  return `${format(startDate)} - ${format(endDate)}`;
+}
+
+function platformCalendarTone(platformLabel) {
+  if (platformLabel.includes("抖音")) return "douyin";
+  return "default";
+}
+
+function formatEntryTimes(items) {
+  return items
+    .map((item) =>
+      item.scheduledDate.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    )
+    .join(" / ");
+}
+
+function renderPublishCalendar() {
+  if (!publishCalendarGrid) return;
+  if (!publishCalendarStartDate) {
+    publishCalendarStartDate = localWeekStart(calendarSeedDate());
+  }
+
+  const entries = scheduledEntriesByDate();
+  publishCalendarGrid.replaceChildren();
+  if (publishCalendarRange) {
+    publishCalendarRange.textContent = formatCalendarRange(publishCalendarStartDate);
+  }
+
+  for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+    const dayDate = addCalendarDays(publishCalendarStartDate, dayIndex);
+    const dateKey = localDateKey(dayDate);
+    const dayEntries = entries.get(dateKey) || [];
+    const column = document.createElement("section");
+    column.className = "publish-date-column";
+    column.dataset.publishDateColumn = "true";
+    column.dataset.targetDate = dateKey;
+
+    const heading = document.createElement("div");
+    heading.className = "publish-date-heading";
+    const weekday = document.createElement("strong");
+    weekday.textContent = dayDate.toLocaleDateString([], { weekday: "short" });
+    const dateText = document.createElement("span");
+    dateText.textContent = `${padDatePart(dayDate.getMonth() + 1)}/${padDatePart(dayDate.getDate())}`;
+    const count = document.createElement("small");
+    count.textContent = `${dayEntries.length} 个任务`;
+    heading.append(weekday, dateText, count);
+    column.append(heading);
+
+    const list = document.createElement("div");
+    list.className = "publish-date-list";
+    if (!dayEntries.length) {
+      const empty = document.createElement("span");
+      empty.className = "publish-date-empty";
+      empty.textContent = "把某一期拖到这里";
+      list.append(empty);
+    }
+    dayEntries.forEach((entry) => {
+      const platformText = Array.from(new Set(entry.items.map((item) => item.platformLabel))).join(" / ");
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = `publish-date-task tone-${platformCalendarTone(platformText)}`;
+      const meta = document.createElement("span");
+      meta.textContent = `${entry.items.length} 条 · ${formatEntryTimes(entry.items)}`;
+      const title = document.createElement("strong");
+      title.textContent = entry.taskTitle;
+      const platforms = document.createElement("small");
+      platforms.textContent = platformText;
+      chip.append(meta, title, platforms);
+      chip.addEventListener("click", () => {
+        entry.taskCard?.scrollIntoView({ block: "center", behavior: "smooth" });
+        entry.taskCard?.classList.add("is-previewing");
+        window.setTimeout(() => entry.taskCard?.classList.remove("is-previewing"), 1600);
+      });
+      list.append(chip);
+    });
+    column.append(list);
+    publishCalendarGrid.append(column);
+  }
+}
+
+async function scheduleJobIdsOnDate(jobIds, targetDate, taskCard = null) {
+  const normalizedJobIds = Array.from(new Set((jobIds || []).map((item) => String(item).trim()).filter(Boolean)));
+  if (!normalizedJobIds.length || !targetDate) {
+    setScheduleResult("没有识别到要排期的任务或日期。", "error");
+    return;
+  }
+  const title = scheduleTaskTitle(taskCard);
+  setScheduleResult(`正在安排：${title} -> ${targetDate}`);
+
+  try {
+    const response = await fetch("/api/publish/jobs/schedule-date", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_ids: normalizedJobIds,
+        target_date: targetDate,
+        start_time: String(publishScheduleForm?.elements.daily_start_time?.value || "09:00"),
+        interval_hours: scheduleIntervalHours(),
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || data.message || "排期失败");
+    }
+    setScheduleResult(data.message || "已更新发布时间。");
+    reloadSendCenter(700);
+  } catch (error) {
+    setScheduleResult(`排期失败：${error.message}`, "error");
+  }
 }
 
 function formatScheduledTimes() {
@@ -2393,6 +2611,93 @@ document.querySelector("[data-clear-batch-schedule]")?.addEventListener("click",
 
 formatScheduledTimes();
 updateScheduleSelectedCount();
+renderPublishCalendar();
+
+document.querySelectorAll("[data-schedule-date-input]").forEach((input) => {
+  if (!input.value) input.value = localDateKey(new Date());
+});
+
+document.querySelectorAll("[data-schedule-group-handle]").forEach((handle) => {
+  const taskCard = handle.closest("[data-send-task-card]");
+  const jobIds = scheduleJobIdsForTask(taskCard);
+  if (!jobIds.length) return;
+  handle.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  handle.addEventListener("dragstart", (event) => {
+    draggedScheduleJobIds = jobIds;
+    draggedScheduleTaskCard = taskCard;
+    taskCard?.classList.add("is-dragging");
+    event.dataTransfer?.setData("application/x-niuma-job-ids", jobIds.join(","));
+    event.dataTransfer?.setData("text/plain", jobIds.join(","));
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  });
+  handle.addEventListener("dragend", () => {
+    draggedScheduleJobIds = [];
+    draggedScheduleTaskCard = null;
+    taskCard?.classList.remove("is-dragging");
+    document.querySelectorAll(".publish-date-column.is-drop-target").forEach((column) => {
+      column.classList.remove("is-drop-target");
+    });
+  });
+});
+
+publishCalendarGrid?.addEventListener("dragover", (event) => {
+  const column = event.target.closest("[data-publish-date-column]");
+  if (!column) return;
+  event.preventDefault();
+  column.classList.add("is-drop-target");
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+});
+
+publishCalendarGrid?.addEventListener("dragleave", (event) => {
+  const column = event.target.closest("[data-publish-date-column]");
+  if (column && !column.contains(event.relatedTarget)) {
+    column.classList.remove("is-drop-target");
+  }
+});
+
+publishCalendarGrid?.addEventListener("drop", (event) => {
+  const column = event.target.closest("[data-publish-date-column]");
+  if (!column) return;
+  event.preventDefault();
+  column.classList.remove("is-drop-target");
+  const csv =
+    event.dataTransfer?.getData("application/x-niuma-job-ids") ||
+    event.dataTransfer?.getData("text/plain") ||
+    draggedScheduleJobIds.join(",");
+  const jobIds = csv
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  scheduleJobIdsOnDate(jobIds, column.dataset.targetDate || "", draggedScheduleTaskCard);
+});
+
+document.querySelectorAll("[data-schedule-group-date]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const taskCard = button.closest("[data-send-task-card]");
+    const input = taskCard?.querySelector("[data-schedule-date-input]");
+    scheduleJobIdsOnDate(scheduleJobIdsForTask(taskCard), input?.value || "", taskCard);
+  });
+});
+
+document.querySelectorAll("[data-publish-calendar-shift]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const days = Number(button.dataset.publishCalendarShift || 0);
+    publishCalendarStartDate = addCalendarDays(publishCalendarStartDate || localWeekStart(new Date()), days);
+    renderPublishCalendar();
+  });
+});
+
+document.querySelector("[data-publish-calendar-today]")?.addEventListener("click", () => {
+  publishCalendarStartDate = localWeekStart(new Date());
+  renderPublishCalendar();
+});
+
+["interval_hours", "daily_start_time", "daily_end_time"].forEach((fieldName) => {
+  publishScheduleForm?.elements[fieldName]?.addEventListener("change", renderPublishCalendar);
+});
 
 function sendJobPayload(form) {
   const formData = new FormData(form);
@@ -2453,13 +2758,36 @@ function activeSendJobIds() {
   return Array.from(document.querySelectorAll("[data-send-job-checkbox]:checked")).map((checkbox) => checkbox.value);
 }
 
+function selectedSendJobStatusSummary() {
+  const checked = Array.from(document.querySelectorAll("[data-send-job-checkbox]:checked"));
+  return {
+    scheduledCount: checked.filter((checkbox) => {
+      const card = checkbox.closest("[data-send-card]");
+      return (card?.dataset.status || "").toUpperCase() === "SCHEDULED";
+    }).length,
+  };
+}
+
+function sendStartNeedsAttention(status) {
+  return ["empty", "missing_opencli", "busy"].includes(String(status || ""));
+}
+
+function shouldReloadAfterSendStart(status) {
+  return ["started", "ok"].includes(String(status || ""));
+}
+
 function updateSendFilter(filter) {
   const normalizedFilter = (filter || "all").toLowerCase();
-  document.querySelectorAll("[data-send-card]").forEach((card) => {
-    const platform = (card.dataset.platform || "").toLowerCase();
-    const status = (card.dataset.status || "").toLowerCase();
-    const visible = normalizedFilter === "all" || normalizedFilter === platform || normalizedFilter === status;
-    card.classList.toggle("is-hidden", !visible);
+  document.querySelectorAll("[data-send-task-card]").forEach((taskCard) => {
+    let hasVisibleItem = false;
+    taskCard.querySelectorAll("[data-send-card]").forEach((card) => {
+      const platform = (card.dataset.platform || "").toLowerCase();
+      const status = (card.dataset.status || "").toLowerCase();
+      const visible = normalizedFilter === "all" || normalizedFilter === platform || normalizedFilter === status;
+      card.classList.toggle("is-hidden", !visible);
+      hasVisibleItem = hasVisibleItem || visible;
+    });
+    taskCard.classList.toggle("is-hidden", !hasVisibleItem);
   });
 }
 
@@ -2646,12 +2974,21 @@ document.querySelectorAll("[data-send-single-job]").forEach((button) => {
     const form = button.closest("[data-send-job-form]");
     const jobId = form?.dataset.jobId;
     if (!jobId) return;
-    if (!window.confirm("确认开始发送这一条吗？请先确认 Chrome 已登录对应平台。")) return;
+    const cardStatus = (form.closest("[data-send-card]")?.dataset.status || "").toUpperCase();
+    const scheduledNotice =
+      cardStatus === "SCHEDULED"
+        ? "\n\n注意：这条任务已经设置了发布时间，确认后会立即发送，不再等待原计划时间。"
+        : "";
+    if (!window.confirm(`确认开始发送这一条抖音任务吗？请先确认 Chrome 已登录抖音创作者中心。${scheduledNotice}`)) return;
     const originalText = button.textContent;
     button.disabled = true;
     button.textContent = "发送中...";
     updateSendPreviewFromForm(form);
-    showSendPublishingOverlay("正在发布", "正在发送这一条，opencli 会打开平台页面并自动填写内容。");
+    const sendingText =
+      cardStatus === "SCHEDULED"
+        ? "这条定时任务正在按本次手动操作立即发送，opencli 会打开平台页面并自动填写内容。"
+        : "正在发送这一条，opencli 会打开平台页面并自动填写内容。";
+    showSendPublishingOverlay("正在发布", sendingText);
     setSendCenterMessage("已提交单条发送任务，opencli 会使用 Chrome 登录态打开平台页面。");
 
     try {
@@ -2660,11 +2997,15 @@ document.querySelectorAll("[data-send-single-job]").forEach((button) => {
       if (!response.ok) {
         throw new Error(data.detail || data.message || "发送启动失败");
       }
-      if (data.status === "empty") {
+      if (sendStartNeedsAttention(data.status)) {
         hideSendPublishingOverlay();
+        button.disabled = false;
+        button.textContent = originalText;
       }
-      setSendCenterMessage(data.message || "发送任务已开始。", "success");
-      reloadSendCenter(1400);
+      setSendCenterMessage(data.message || "发送任务已开始。", sendStartNeedsAttention(data.status) ? "error" : "success");
+      if (shouldReloadAfterSendStart(data.status)) {
+        reloadSendCenter(1400);
+      }
     } catch (error) {
       hideSendPublishingOverlay();
       setSendCenterMessage(`发送启动失败：${error.message}`, "error");
@@ -2677,12 +3018,22 @@ document.querySelectorAll("[data-send-single-job]").forEach((button) => {
 document.querySelectorAll("[data-start-send-queue]").forEach((button) => {
   button.addEventListener("click", async () => {
     const selectedIds = activeSendJobIds();
+    const selectedStatusSummary = selectedSendJobStatusSummary();
     const label = selectedIds.length ? `${selectedIds.length} 条已勾选任务` : "全部待发送/失败任务";
-    if (!window.confirm(`确认开始发送 ${label} 吗？\n\n请先确认 Chrome 已登录抖音创作者中心和 B站创作中心。`)) return;
+    const scheduledNotice =
+      selectedIds.length && selectedStatusSummary.scheduledCount
+        ? `\n\n其中 ${selectedStatusSummary.scheduledCount} 条已排期任务会立即发送，不再等待原计划时间。`
+        : "\n\n未勾选时只会发送等待处理/发送失败任务，不会发送未来排期任务。";
+    if (!window.confirm(`确认开始发送 ${label} 吗？\n\n请先确认 Chrome 已登录抖音创作者中心。${scheduledNotice}`)) return;
     const originalText = button.textContent;
     button.disabled = true;
     button.textContent = "启动中...";
-    showSendPublishingOverlay("正在发布", selectedIds.length ? `正在发送 ${selectedIds.length} 条已勾选任务，一次只会执行一条。` : "正在发送全部待发送任务，一次只会执行一条。");
+    showSendPublishingOverlay(
+      "正在发布",
+      selectedIds.length
+        ? `正在发送 ${selectedIds.length} 条已勾选任务，一次只会执行一条。`
+        : "正在发送全部等待处理/发送失败任务，一次只会执行一条。"
+    );
     setSendCenterMessage("正在启动发送队列，一次只会执行一条任务。");
 
     try {
@@ -2695,11 +3046,15 @@ document.querySelectorAll("[data-start-send-queue]").forEach((button) => {
       if (!response.ok) {
         throw new Error(data.detail || data.message || "启动队列失败");
       }
-      if (data.status === "empty") {
+      if (sendStartNeedsAttention(data.status)) {
         hideSendPublishingOverlay();
+        button.disabled = false;
+        button.textContent = originalText;
       }
-      setSendCenterMessage(data.message || "发送队列已启动。", data.status === "busy" ? "error" : "success");
-      reloadSendCenter(1400);
+      setSendCenterMessage(data.message || "发送队列已启动。", sendStartNeedsAttention(data.status) ? "error" : "success");
+      if (shouldReloadAfterSendStart(data.status)) {
+        reloadSendCenter(1400);
+      }
     } catch (error) {
       hideSendPublishingOverlay();
       setSendCenterMessage(`启动队列失败：${error.message}`, "error");
@@ -2712,7 +3067,7 @@ document.querySelectorAll("[data-start-send-queue]").forEach((button) => {
 document.querySelectorAll("[data-send-select-all]").forEach((checkbox) => {
   checkbox.addEventListener("change", () => {
     const visibleCards = Array.from(document.querySelectorAll("[data-send-card]")).filter(
-      (card) => !card.classList.contains("is-hidden")
+      (card) => !card.classList.contains("is-hidden") && !card.closest("[data-send-task-card]")?.classList.contains("is-hidden")
     );
     visibleCards.forEach((card) => {
       const item = card.querySelector("[data-send-job-checkbox]");

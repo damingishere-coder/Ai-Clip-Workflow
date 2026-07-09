@@ -12,8 +12,10 @@ import pytest
 
 from app.core.config import settings
 from app.db.database import get_connection, init_db
+from app.models.task import PublishSendStart
+from app.services import publish_service
 from app.services.auto_publish_service import create_auto_publish_jobs
-from app.services.publish_scheduler import PublishScheduler, build_batch_schedule_times
+from app.services.publish_scheduler import PublishScheduler, build_batch_schedule_times, build_date_schedule_times
 from app.services.publish_service import get_publish_job
 
 
@@ -65,6 +67,8 @@ def _insert_job(
     title: str = "测试标题",
     caption: str = "测试文案",
     risk_flags: list[str] | None = None,
+    platform: str = "manual_export",
+    publish_mode: str = "manual_export",
 ) -> str:
     task_id = f"{TEST_PREFIX}{uuid4().hex[:8]}"
     clip_id = f"{TEST_PREFIX}clip-{uuid4().hex[:8]}"
@@ -97,7 +101,7 @@ def _insert_job(
                 tags, hashtags, cover_text, risk_flags, scheduled_at, status,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, 'manual_export', 'manual_export',
+            VALUES (?, ?, ?, ?, ?, ?,
                 'original', ?, ?, ?, ?, ?, '#测试', '#测试', '封面文案', ?, ?, ?, ?, ?)
             """,
             (
@@ -105,6 +109,8 @@ def _insert_job(
                 task_id,
                 clip_id,
                 clip_id,
+                platform,
+                publish_mode,
                 video,
                 video,
                 title,
@@ -119,6 +125,95 @@ def _insert_job(
         )
         connection.commit()
     return job_id
+
+
+class FakeBackgroundTasks:
+    def __init__(self) -> None:
+        self.tasks: list[tuple[object, tuple, dict]] = []
+
+    def add_task(self, func, *args, **kwargs) -> None:
+        self.tasks.append((func, args, kwargs))
+
+
+def _mark_opencli_available(monkeypatch) -> None:
+    monkeypatch.setattr(
+        publish_service,
+        "_opencli_status",
+        lambda: {
+            "available": True,
+            "message": "测试 opencli 可用",
+            "restart_command": ".\\scripts\\start_docker_opencli.ps1",
+        },
+    )
+
+
+def test_explicit_scheduled_opencli_job_can_start_now(tmp_path, monkeypatch):
+    job_id = _insert_job(
+        tmp_path,
+        platform="douyin",
+        publish_mode="opencli_publish",
+        status="SCHEDULED",
+        scheduled_at=_iso(3600),
+    )
+    background_tasks = FakeBackgroundTasks()
+    _mark_opencli_available(monkeypatch)
+
+    result = publish_service.start_opencli_send_batch(
+        PublishSendStart(job_ids=[job_id]),
+        background_tasks=background_tasks,
+    )
+
+    assert result["status"] == "started"
+    assert background_tasks.tasks[0][1] == ([job_id],)
+    assert "立即发送" in result["message"]
+
+
+def test_bulk_send_without_selection_does_not_start_future_scheduled_opencli_job(tmp_path, monkeypatch):
+    _insert_job(
+        tmp_path,
+        platform="douyin",
+        publish_mode="opencli_publish",
+        status="SCHEDULED",
+        scheduled_at=_iso(3600),
+    )
+    background_tasks = FakeBackgroundTasks()
+    _mark_opencli_available(monkeypatch)
+
+    result = publish_service.start_opencli_send_batch(
+        PublishSendStart(job_ids=[]),
+        background_tasks=background_tasks,
+    )
+
+    assert result["status"] == "empty"
+    assert background_tasks.tasks == []
+    assert "已排期任务不会" in result["message"]
+
+
+def test_bulk_send_still_starts_waiting_and_failed_opencli_jobs(tmp_path, monkeypatch):
+    waiting_job_id = _insert_job(
+        tmp_path,
+        platform="douyin",
+        publish_mode="opencli_publish",
+        status="WAITING",
+        scheduled_at="",
+    )
+    failed_job_id = _insert_job(
+        tmp_path,
+        platform="douyin",
+        publish_mode="opencli_publish",
+        status="FAILED",
+        scheduled_at="",
+    )
+    background_tasks = FakeBackgroundTasks()
+    _mark_opencli_available(monkeypatch)
+
+    result = publish_service.start_opencli_send_batch(
+        PublishSendStart(job_ids=[]),
+        background_tasks=background_tasks,
+    )
+
+    assert result["status"] == "started"
+    assert set(background_tasks.tasks[0][1][0]) == {waiting_job_id, failed_job_id}
 
 
 def test_future_scheduled_job_is_not_published(tmp_path):
@@ -300,6 +395,23 @@ def test_batch_schedule_can_be_cleared(tmp_path):
     assert get_publish_job(job_id)["status"] == "WAITING"
 
 
+def test_date_schedule_keeps_task_group_on_selected_date(tmp_path):
+    first_job = _insert_job(tmp_path, status="WAITING", scheduled_at="")
+    second_job = _insert_job(tmp_path, status="WAITING", scheduled_at="")
+
+    result = PublishScheduler().update_date_schedule(
+        [first_job, second_job],
+        target_date="2026-06-25",
+        start_time="20:00",
+        interval_hours=3,
+    )
+
+    assert result["updated_count"] == 2
+    assert get_publish_job(first_job)["scheduled_at"].startswith("2026-06-25T20:00:00")
+    assert get_publish_job(second_job)["scheduled_at"].startswith("2026-06-25T23:00:00")
+    assert get_publish_job(first_job)["status"] == "SCHEDULED"
+
+
 def test_batch_schedule_time_builder_rejects_invalid_daily_window():
     with pytest.raises(ValueError, match="结束时间必须晚于"):
         build_batch_schedule_times(
@@ -309,3 +421,8 @@ def test_batch_schedule_time_builder_rejects_invalid_daily_window():
             daily_start_time="21:00",
             daily_end_time="09:00",
         )
+
+
+def test_date_schedule_time_builder_rejects_invalid_date():
+    with pytest.raises(ValueError, match="目标日期格式无效"):
+        build_date_schedule_times(1, target_date="2026/06/25", start_time="09:00", interval_hours=3)

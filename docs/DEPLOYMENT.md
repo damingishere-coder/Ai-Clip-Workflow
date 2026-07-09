@@ -114,6 +114,16 @@ http://127.0.0.1:8001
 
 ### 3.3 构建并启动
 
+如果要使用发送中心自动发抖音，优先双击项目根目录的：
+
+```text
+start_niuma_studio_docker.cmd
+```
+
+它会先启动 Windows opencli 辅助服务，再刷新 Docker 页面。Docker 容器不能直接启动 Windows Chrome，所以需要这个宿主机辅助服务来复用你的抖音登录态。
+
+如果只启动 Docker 页面、不使用自动发送，可以运行：
+
 ```powershell
 docker compose up --build
 ```
@@ -144,7 +154,7 @@ docker compose down
 - **存储目录**：`docker-compose.yml` 默认将 `E:\直播间切片工作流存储` 挂载到容器内 `/workspace/tasks`。如果你的存储目录在其他位置，请修改 `docker-compose.yml` 中的 `volumes` 配置。
 - **代码热更新**：`app/` 和 `prompts/` 目录以 volume 方式挂载，修改代码后容器自动重载。
 - **Ollama 连接**：如果 Ollama 在宿主机运行，容器内通过 `http://host.docker.internal:11434/v1` 访问。
-- **opencli 桥接**：容器内通过 `http://host.docker.internal:8765` 访问宿主机上的 opencli 桥接服务。
+- **opencli 桥接**：容器内通过 `http://host.docker.internal:8765` 访问宿主机上的 opencli 桥接服务。推荐用 `start_niuma_studio_docker.cmd` 一起启动；如需开机自启，可运行一次 `.\scripts\install_opencli_helper_autostart.ps1`。
 
 ---
 

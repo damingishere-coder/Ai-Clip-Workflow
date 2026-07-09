@@ -5,14 +5,14 @@
 {% block content %}
 <section class="page-heading send-heading">
   <div>
-    <p class="eyebrow">Send Center 2.0</p>
-    <h1>抖音 + B站发送中心</h1>
-    <p>切好的视频、自动封面帧、AI 标题和平台 #话题在这里排队；确认后由 opencli 使用 Chrome 登录态逐条发送。</p>
+    <p class="eyebrow">Douyin Send Center</p>
+    <h1>抖音发送中心</h1>
+    <p>按创建任务归类管理每一期切片；确认标题、正文、#话题和封面后，由 opencli 使用 Windows Chrome 登录态逐条发送到抖音。</p>
   </div>
   <div class="button-row">
-    <button type="button" class="secondary-button" data-refresh-send-queue data-use-ai="false">刷新发送队列</button>
+    <button type="button" class="secondary-button" data-refresh-send-queue data-use-ai="false">刷新抖音队列</button>
     <button type="button" class="secondary-button" data-refresh-send-queue data-use-ai="true">AI 补齐标题/话题</button>
-    <button type="button" class="primary-button" data-start-send-queue>开始发送全部</button>
+    <button type="button" class="primary-button" data-start-send-queue>开始发送抖音队列</button>
   </div>
 </section>
 
@@ -21,11 +21,12 @@
 {% endif %}
 
 {% if not opencli_available %}
-<section class="inline-alert tone-red">
+<section class="inline-alert tone-amber">
   <strong>{{ opencli_status.message }}</strong>
-  <p>请继续使用 Docker 主页面 <code>http://127.0.0.1:8001</code>，不要切到第二个网页。</p>
-  <p>推荐处理：在项目目录运行 <code>{{ opencli_status.restart_command }}</code>，脚本会启动 Windows opencli 辅助服务、刷新 Docker，并打开 <code>{{ opencli_status.publish_url }}</code>。</p>
-  <p>页面打开后按 <code>Ctrl + F5</code> 强制刷新，再回到发送中心测试自动发送。</p>
+  <p>Docker 页面可以继续整理抖音队列和排期；真正自动发送时，仍需要 Windows 侧辅助服务来控制已经登录的 Chrome。</p>
+  <p>项目根目录已提供 <code>start_niuma_studio_docker.cmd</code>，以后双击它即可同时启动 Windows opencli 辅助服务和 Docker 页面，不需要每次手动输入命令。</p>
+  <p>如果双击后浏览器没有自动打开，请继续访问 Docker 主页面 <code>http://127.0.0.1:8001/publish</code>。</p>
+  <p>技术限制说明：Docker 容器不能直接启动 Windows Chrome，否则拿不到你的登录态；所以辅助服务必须运行在 Windows 宿主机上。</p>
 </section>
 {% endif %}
 
@@ -52,8 +53,8 @@
   <div class="panel-header">
     <div>
       <p class="eyebrow">Publish Schedule</p>
-      <h2>批量发布计划</h2>
-      <p>先勾选下方未发布任务，再统一设置起始时间、发布间隔和每天允许发布的时段。</p>
+      <h2>抖音发送日期表</h2>
+      <p>按“创建任务”整组排期：把某一期拖进某一天，系统会按当天开始时间和间隔安排这期下面的抖音切片。</p>
     </div>
     <span class="status-pill" data-schedule-selected-count>已选 0 条</span>
   </div>
@@ -68,11 +69,11 @@
         <input name="interval_hours" type="number" min="1" max="168" step="1" value="3" required>
       </label>
       <label>
-        <span>每日开始</span>
+        <span>当天开始</span>
         <input name="daily_start_time" type="time" value="09:00" required>
       </label>
       <label>
-        <span>每日结束</span>
+        <span>当天结束</span>
         <input name="daily_end_time" type="time" value="21:00" required>
       </label>
     </div>
@@ -85,6 +86,20 @@
       </div>
     </div>
   </form>
+  <div class="publish-calendar-shell" data-publish-calendar>
+    <div class="publish-calendar-toolbar">
+      <div>
+        <p class="eyebrow">Calendar Board</p>
+        <h3 data-publish-calendar-range>本周发送日期表</h3>
+      </div>
+      <div class="button-row">
+        <button class="secondary-button" type="button" data-publish-calendar-shift="-7">上一周</button>
+        <button class="secondary-button" type="button" data-publish-calendar-today>本周</button>
+        <button class="secondary-button" type="button" data-publish-calendar-shift="7">下一周</button>
+      </div>
+    </div>
+    <div class="publish-date-board" data-publish-calendar-grid aria-label="发送日期表"></div>
+  </div>
 </section>
 
 <section class="send-center-grid">
@@ -92,8 +107,8 @@
     <div class="panel-header">
       <div>
         <p class="eyebrow">待发送队列</p>
-        <h2>已完成切片自动入队</h2>
-        <p>默认每条切片生成抖音和 B站两条发送任务，发送时一次只跑一条，避免平台窗口互相抢焦点。</p>
+        <h2>按创建任务分组</h2>
+        <p>一组就是你创建的一期任务，例如“测试1”生成的 10 个视频会收在同一组里；默认只显示抖音任务，B站先不进入当前工作流。</p>
       </div>
       <label class="send-select-all">
         <input type="checkbox" data-send-select-all>
@@ -103,8 +118,6 @@
 
     <div class="send-toolbar">
       <button type="button" class="active" data-send-filter="all">全部</button>
-      <button type="button" data-send-filter="douyin">抖音</button>
-      <button type="button" data-send-filter="bilibili">B站</button>
       <button type="button" data-send-filter="waiting">等待</button>
       <button type="button" data-send-filter="scheduled">定时</button>
       <button type="button" data-send-filter="publishing">发送中</button>
@@ -114,113 +127,148 @@
     </div>
 
     <div class="send-queue">
-      {% for item in send_queue_items %}
-      <article class="send-card" data-send-card data-platform="{{ item.platform }}" data-status="{{ item.status }}">
-        <div class="send-card-media">
-          <video controls preload="metadata" src="{{ item.video_media_url }}"></video>
-          <div class="send-cover-preview{% if item.cover_media_url %} has-cover{% endif %}" data-cover-preview>
-            <img src="{{ item.cover_media_url }}" alt="封面预览" {% if not item.cover_media_url %}hidden{% endif %}>
-            <span {% if item.cover_media_url %}hidden{% endif %}>刷新队列后自动选帧</span>
-          </div>
-        </div>
-
-        <form class="send-card-form" data-send-job-form data-job-id="{{ item.job_id }}" data-task-id="{{ item.task_id }}" data-output-clip-id="{{ item.output_clip_id }}" data-platform="{{ item.platform }}">
-          <input type="hidden" name="cover_file_path" value="{{ item.cover_file_path }}">
-          <input type="hidden" name="cover_time_seconds" value="{{ item.job.cover_time_seconds if item.job else 0 }}">
-
-          <div class="send-card-header">
+      {% for group in send_task_groups %}
+      <details class="send-task-card{% if group.can_schedule %} can-drag-schedule{% endif %}" data-send-task-card data-task-id="{{ group.task_id }}" data-schedule-job-ids="{{ group.schedule_job_ids_csv }}" {% if loop.first %}open{% endif %}>
+        <summary class="send-task-card-header">
+          <div class="send-task-summary">
+            <div class="send-task-thumb">
+              {% if group.cover_media_url %}
+              <img src="{{ group.cover_media_url }}" alt="任务封面">
+              {% elif group.video_media_url %}
+              <video muted playsinline preload="metadata" src="{{ group.video_media_url }}"></video>
+              {% else %}
+              <span>待</span>
+              {% endif %}
+            </div>
             <div>
               <p class="send-meta-line">
-                <span class="status-pill tone-{{ item.status_tone }}">{{ item.platform_label }}</span>
-                <span class="status-pill tone-{{ item.status_tone }}">{{ item.status_label }}</span>
-                <span>{{ item.task_name or "未命名任务" }}</span>
-                {% if item.job_id %}
-                <span class="schedule-time-note">
-                  计划：
-                  <time data-publish-scheduled-at="{{ item.job.scheduled_at or '' }}" datetime="{{ item.job.scheduled_at or '' }}">{{ item.job.scheduled_at_display }}</time>
-                </span>
-                {% endif %}
+                <span class="status-pill tone-blue">{{ group.platform_summary }}</span>
+                <span class="status-pill tone-amber">{{ group.status_summary }}</span>
+                <span>{{ group.clip_count }} 条抖音切片 · {{ group.item_count }} 条发送任务</span>
               </p>
-              <h3>{{ item.title }}</h3>
-              <p>{{ item.output_file_name or item.output_clip_id }}</p>
-            </div>
-            {% if item.job_id and item.status in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}
-            <label class="send-checkbox">
-              <input type="checkbox" data-send-job-checkbox data-publish-schedule-checkbox value="{{ item.job_id }}">
-              选择
-            </label>
-            {% endif %}
-          </div>
-
-          <div class="send-fields">
-            <label>
-              <span>AI 标题</span>
-              <input name="title" value="{{ item.title }}" maxlength="120" required>
-            </label>
-            <label>
-              <span>平台 #话题</span>
-              <input name="tags" value="{{ item.tags }}" maxlength="500" placeholder="例如 #直播切片 #高能名场面">
-            </label>
-            <label class="span-2">
-              <span>正文 / 简介</span>
-              <textarea name="description" maxlength="2000" placeholder="抖音会作为正文话题，B站会作为简介">{{ item.description }}</textarea>
-            </label>
-          </div>
-
-          <div class="send-platform-options">
-            <label>
-              <span>可见范围</span>
-              <select name="visibility">
-                <option value="public" {% if not item.job or item.job.visibility == "public" %}selected{% endif %}>公开</option>
-                <option value="friends" {% if item.job and item.job.visibility == "friends" %}selected{% endif %}>好友可见</option>
-                <option value="private" {% if item.job and item.job.visibility == "private" %}selected{% endif %}>仅自己可见</option>
-              </select>
-            </label>
-            <label>
-              <span>B站分区</span>
-              <input name="bilibili_tid" value="{{ item.job.bilibili_tid if item.job and item.job.bilibili_tid else '娱乐' }}" maxlength="80">
-            </label>
-            <label>
-              <span>B站声明</span>
-              <select name="bilibili_copyright">
-                <option value="original" {% if not item.job or item.job.bilibili_copyright == "original" %}selected{% endif %}>原创</option>
-                <option value="repost" {% if item.job and item.job.bilibili_copyright == "repost" %}selected{% endif %}>转载</option>
-              </select>
-            </label>
-            <label>
-              <span>转载来源</span>
-              <input name="bilibili_source" value="{{ item.job.bilibili_source if item.job else '' }}" maxlength="300" placeholder="原创可留空">
-            </label>
-            <label class="toggle-line">
-              <input type="checkbox" name="allow_download" {% if not item.job or item.job.allow_download %}checked{% endif %}>
-              允许保存 / 下载
-            </label>
-          </div>
-
-          <div class="cover-frame-list" data-cover-frame-list>
-            <span>系统会先自动选一帧；需要更换时再生成候选帧。</span>
-          </div>
-
-          {% if item.error_message %}
-          <p class="error-text">{{ item.error_message }}</p>
-          {% endif %}
-          {% if item.platform_url %}
-          <a class="text-link" href="{{ item.platform_url }}" target="_blank" rel="noreferrer">查看平台链接</a>
-          {% endif %}
-
-          <div class="send-actions">
-            <p class="form-hint" data-send-job-result>
-              {% if item.job_id %}任务编号：{{ item.job_id }}{% else %}还未入队，先点“刷新发送队列”。{% endif %}
-            </p>
-            <div class="button-row">
-              <button type="submit" class="secondary-button" {% if not item.job_id %}disabled{% endif %}>保存</button>
-              <button type="button" class="secondary-button" data-regenerate-send-metadata {% if not item.job_id %}disabled{% endif %}>重新生成标题/话题</button>
-              <button type="button" class="secondary-button" data-generate-cover-frames>更换封面帧</button>
-              <button type="button" class="primary-button" data-send-single-job {% if not item.job_id or item.status not in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}disabled{% endif %}>发送此条</button>
+              <h3>{{ group.task_name }}</h3>
+              <p>任务 ID：{{ group.task_id }}</p>
             </div>
           </div>
-        </form>
-      </article>
+          <div class="send-task-summary-actions">
+            <span
+              class="secondary-button schedule-drag-handle{% if not group.can_schedule %} is-disabled{% endif %}"
+              data-schedule-group-handle
+              {% if group.can_schedule %}draggable="true"{% else %}aria-disabled="true" title="这个任务当前没有可排期的抖音发送条目。"{% endif %}
+            >拖到日期</span>
+            <span class="send-task-toggle-text">展开 / 收起</span>
+          </div>
+        </summary>
+
+        <div class="send-task-schedule-controls">
+          <label>
+            <span>兜底日期</span>
+            <input type="date" data-schedule-date-input {% if not group.can_schedule %}disabled{% endif %}>
+          </label>
+          <button type="button" class="secondary-button" data-schedule-group-date {% if not group.can_schedule %}disabled{% endif %}>安排这一期到这一天</button>
+        </div>
+
+        <div class="send-task-items">
+          {% for item in group["items"] %}
+          {% set can_schedule_item = item.job_id and item.status in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}
+          <article class="send-job-item{% if can_schedule_item %} can-schedule{% endif %}" data-send-card data-platform="{{ item.platform }}" data-status="{{ item.status }}">
+            <div class="send-card-media">
+              <video controls preload="metadata" src="{{ item.video_media_url }}"></video>
+              <div class="send-cover-preview{% if item.cover_media_url %} has-cover{% endif %}" data-cover-preview>
+                <img src="{{ item.cover_media_url }}" alt="封面预览" {% if not item.cover_media_url %}hidden{% endif %}>
+                <span {% if item.cover_media_url %}hidden{% endif %}>刷新队列后自动选帧</span>
+              </div>
+            </div>
+
+            <form class="send-card-form" data-send-job-form data-job-id="{{ item.job_id }}" data-task-id="{{ item.task_id }}" data-output-clip-id="{{ item.output_clip_id }}" data-platform="{{ item.platform }}">
+              <input type="hidden" name="cover_file_path" value="{{ item.cover_file_path }}">
+              <input type="hidden" name="cover_time_seconds" value="{{ item.job.cover_time_seconds if item.job else 0 }}">
+
+              <div class="send-card-header">
+                <div>
+                  <p class="send-meta-line">
+                    <span class="status-pill tone-{{ item.status_tone }}">{{ item.platform_label }}</span>
+                    <span class="status-pill tone-{{ item.status_tone }}">{{ item.status_label }}</span>
+                    {% if item.job_id %}
+                    <span class="schedule-time-note">
+                      计划：
+                      <time data-publish-scheduled-at="{{ item.job.scheduled_at or '' }}" datetime="{{ item.job.scheduled_at or '' }}">{{ item.job.scheduled_at_display }}</time>
+                    </span>
+                    {% endif %}
+                  </p>
+                  <h3>{{ item.title }}</h3>
+                  <p>{{ item.output_file_name or item.output_clip_id }}</p>
+                </div>
+                {% if item.job_id and item.status in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}
+                <label class="send-checkbox">
+                  <input type="checkbox" data-send-job-checkbox data-publish-schedule-checkbox value="{{ item.job_id }}">
+                  选择
+                </label>
+                {% endif %}
+              </div>
+
+              <div class="send-fields">
+                <label>
+                  <span>AI 标题</span>
+                  <input name="title" value="{{ item.title }}" maxlength="120" required>
+                </label>
+                <label>
+                  <span>平台 #话题</span>
+                  <input name="tags" value="{{ item.tags }}" maxlength="500" placeholder="例如 #直播切片 #高能名场面">
+                </label>
+                <label class="span-2">
+                  <span>正文 / 简介</span>
+                  <textarea name="description" maxlength="2000" placeholder="抖音会把这里作为作品描述，并追加平台 #话题">{{ item.description }}</textarea>
+                </label>
+              </div>
+
+              <div class="send-platform-options">
+                <label>
+                  <span>可见范围</span>
+                  <select name="visibility">
+                    <option value="public" {% if not item.job or item.job.visibility == "public" %}selected{% endif %}>公开</option>
+                    <option value="friends" {% if item.job and item.job.visibility == "friends" %}selected{% endif %}>好友可见</option>
+                    <option value="private" {% if item.job and item.job.visibility == "private" %}selected{% endif %}>仅自己可见</option>
+                  </select>
+                </label>
+                <label class="toggle-line">
+                  <input type="checkbox" name="allow_download" {% if not item.job or item.job.allow_download %}checked{% endif %}>
+                  允许保存 / 下载
+                </label>
+              </div>
+
+              <div class="cover-frame-list" data-cover-frame-list>
+                <span>系统会先自动选一帧；需要更换时再生成候选帧。</span>
+              </div>
+
+              {% if item.error_message %}
+              <p class="error-text">{{ item.error_message }}</p>
+              {% endif %}
+              {% if item.platform_url %}
+              <a class="text-link" href="{{ item.platform_url }}" target="_blank" rel="noreferrer">查看平台链接</a>
+              {% endif %}
+
+              <div class="send-actions">
+                <p class="form-hint" data-send-job-result>
+                  {% if item.job_id %}任务编号：{{ item.job_id }}{% else %}还未入队，先点“刷新发送队列”。{% endif %}
+                </p>
+                <div class="button-row">
+                  <button type="submit" class="secondary-button" {% if not item.job_id %}disabled{% endif %}>保存</button>
+                  <button type="button" class="secondary-button" data-regenerate-send-metadata {% if not item.job_id %}disabled{% endif %}>重新生成标题/话题</button>
+                  <button type="button" class="secondary-button" data-generate-cover-frames>更换封面帧</button>
+                  <button
+                    type="button"
+                    class="primary-button"
+                    data-send-single-job
+                    {% if not item.job_id or item.status not in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}disabled title="{% if item.status == 'PUBLISHED' %}这条任务已发布，不能重复发送。{% elif item.status == 'PUBLISHING' %}这条任务正在发送中，请等待完成。{% elif item.status == 'NEED_REVIEW' %}这条任务需要先人工复核。{% else %}当前状态不能发送。{% endif %}"{% endif %}
+                  >{% if item.status == "PUBLISHED" %}已发布{% else %}发送此条{% endif %}</button>
+                </div>
+              </div>
+            </form>
+          </article>
+          {% endfor %}
+        </div>
+      </details>
       {% else %}
       <div class="empty-state">
         <h3>还没有可发送的切片</h3>
@@ -253,7 +301,6 @@
     <div class="send-preview-copy">
       <p data-send-preview-description>{{ preview.description }}</p>
       <p><strong>抖音：</strong>上传视频，填写标题/正文 #话题，设置封面，点击发布。</p>
-      <p><strong>B站：</strong>上传视频，填写封面、标题、分区、标签、简介，点击立即投稿。</p>
       <p>遇到验证码、登录失效或风控弹窗时，任务会进入失败，等待人工处理。</p>
     </div>
     {% else %}
@@ -266,7 +313,7 @@
   <div class="panel-header">
     <div>
       <p class="eyebrow">发送记录</p>
-      <h2>opencli 任务状态</h2>
+      <h2>抖音 opencli 任务状态</h2>
     </div>
   </div>
 

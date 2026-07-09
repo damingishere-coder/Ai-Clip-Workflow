@@ -101,6 +101,9 @@ PLATFORM_LABELS.update(
     }
 )
 
+SEND_CENTER_PLATFORMS = ("douyin",)
+SEND_CENTER_PLATFORM_LABELS = {platform: PLATFORM_LABELS[platform] for platform in SEND_CENTER_PLATFORMS}
+
 PUBLISH_MODE_LABELS.update(
     {
         "manual_export": "手动发布包导出",
@@ -359,7 +362,7 @@ def _opencli_local_port() -> int:
 
 
 def _opencli_restart_command() -> str:
-    return ".\\scripts\\start_docker_opencli.ps1"
+    return "start_niuma_studio_docker.cmd"
 
 
 def _opencli_status() -> dict:
@@ -381,7 +384,7 @@ def _opencli_status() -> dict:
     elif bridge.get("available"):
         status["message"] = "Docker 8001 已连接 Windows opencli 辅助服务，可以使用发送中心自动发送。"
     else:
-        status["message"] = "Docker 页面已启动，但还没有连接到 Windows opencli 辅助服务。发送中心可以先整理队列，自动发送需要先启动辅助服务。"
+        status["message"] = "Docker 页面已启动，但还没有连接到 Windows opencli 辅助服务。发送中心可以先整理抖音队列，自动发送需要 Windows 辅助服务。"
     return status
 
 
@@ -552,6 +555,74 @@ def _normalize_job(row) -> dict:
         }
     )
     return job
+
+
+def _send_item_can_schedule(item: dict) -> bool:
+    status = str(item.get("status") or "").upper()
+    return bool(item.get("job_id")) and status in {
+        PUBLISH_STATUS_WAITING,
+        PUBLISH_STATUS_SCHEDULED,
+        PUBLISH_STATUS_FAILED,
+        "READY",
+    }
+
+
+def _build_send_task_groups(queue_items: list[dict]) -> list[dict]:
+    groups: dict[str, dict] = {}
+    for item in queue_items:
+        task_id = item.get("task_id") or "unknown-task"
+        group = groups.get(task_id)
+        if not group:
+            group = {
+                "task_id": task_id,
+                "task_name": item.get("task_name") or "未命名任务",
+                "items": [],
+                "job_ids": [],
+                "schedule_job_ids": [],
+                "platform_labels": [],
+                "status_labels": [],
+                "output_clip_ids": [],
+                "scheduled_count": 0,
+                "published_count": 0,
+                "failed_count": 0,
+                "cover_media_url": item.get("cover_media_url") or "",
+                "video_media_url": item.get("video_media_url") or "",
+            }
+            groups[task_id] = group
+
+        group["items"].append(item)
+        if item.get("job_id"):
+            group["job_ids"].append(item["job_id"])
+        if _send_item_can_schedule(item):
+            group["schedule_job_ids"].append(item["job_id"])
+        if item.get("platform_label") and item["platform_label"] not in group["platform_labels"]:
+            group["platform_labels"].append(item["platform_label"])
+        if item.get("status_label") and item["status_label"] not in group["status_labels"]:
+            group["status_labels"].append(item["status_label"])
+        if item.get("output_clip_id") and item["output_clip_id"] not in group["output_clip_ids"]:
+            group["output_clip_ids"].append(item["output_clip_id"])
+        if not group.get("cover_media_url") and item.get("cover_media_url"):
+            group["cover_media_url"] = item["cover_media_url"]
+        if not group.get("video_media_url") and item.get("video_media_url"):
+            group["video_media_url"] = item["video_media_url"]
+
+        status = str(item.get("status") or "").upper()
+        if status == PUBLISH_STATUS_SCHEDULED:
+            group["scheduled_count"] += 1
+        if status == PUBLISH_STATUS_PUBLISHED:
+            group["published_count"] += 1
+        if status == PUBLISH_STATUS_FAILED:
+            group["failed_count"] += 1
+
+    for group in groups.values():
+        group["item_count"] = len(group["items"])
+        group["clip_count"] = len(group["output_clip_ids"])
+        group["can_schedule"] = bool(group["schedule_job_ids"])
+        group["platform_summary"] = " / ".join(group["platform_labels"]) or "未入队"
+        group["status_summary"] = " / ".join(group["status_labels"]) or "待入队"
+        group["schedule_job_ids_csv"] = ",".join(group["schedule_job_ids"])
+
+    return list(groups.values())
 
 
 def list_platform_configs() -> list[dict]:
@@ -1121,7 +1192,7 @@ def refresh_send_queue(use_ai: bool = False) -> dict:
                     errors.append(f"{item.get('output_file_name') or item.get('output_clip_id')} / 自动封面：{exc}")
             return cover_state["cover"] or {}
 
-        for platform in PLATFORM_LABELS:
+        for platform in SEND_CENTER_PLATFORMS:
             existing_job = _find_opencli_job(item["output_clip_id"], platform)
             if existing_job:
                 skipped += 1
@@ -2565,13 +2636,22 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
     return {"status": "ok", "message": "opencli 发送流程已执行完成。", "job": get_publish_job(job_id)}
 
 
-def _ready_opencli_job_ids(job_ids: list[str] | None = None) -> list[str]:
-    params: list[str] = []
-    where = "publish_mode = 'opencli_publish' AND status IN ('WAITING', 'FAILED', 'ready', 'failed')"
-    if job_ids:
-        placeholders = ",".join("?" for _ in job_ids)
+def _normalize_opencli_job_ids(job_ids: list[str] | None = None) -> list[str]:
+    return list(dict.fromkeys(str(job_id).strip() for job_id in (job_ids or []) if str(job_id).strip()))
+
+
+def _ready_opencli_job_ids(job_ids: list[str] | None = None, *, include_scheduled: bool = False) -> list[str]:
+    normalized_ids = _normalize_opencli_job_ids(job_ids)
+    statuses = ["WAITING", "FAILED", "ready", "failed"]
+    if include_scheduled:
+        statuses.extend(["SCHEDULED", "scheduled"])
+    params: list[str] = statuses.copy()
+    status_placeholders = ",".join("?" for _ in statuses)
+    where = f"publish_mode = 'opencli_publish' AND status IN ({status_placeholders})"
+    if normalized_ids:
+        placeholders = ",".join("?" for _ in normalized_ids)
         where += f" AND id IN ({placeholders})"
-        params.extend(job_ids)
+        params.extend(normalized_ids)
     with get_connection() as connection:
         rows = connection.execute(
             f"SELECT id FROM publish_jobs WHERE {where} ORDER BY created_at ASC",
@@ -2580,11 +2660,18 @@ def _ready_opencli_job_ids(job_ids: list[str] | None = None) -> list[str]:
     return [row["id"] for row in rows]
 
 
+def _empty_opencli_send_message(has_explicit_job_ids: bool) -> str:
+    if has_explicit_job_ids:
+        return "已勾选的任务里没有可立即发送的 opencli 任务；已发布、已取消、需复核或非网页发送任务不会启动。"
+    return "当前没有等待处理或失败可重试的 opencli 任务；已排期任务不会被“开始发送全部”自动发送，请勾选后再立即发送。"
+
+
 def run_opencli_send_batch(job_ids: list[str] | None = None, runner: CommandRunner | None = None) -> dict:
     if not _SEND_LOCK.acquire(blocking=False):
         return {"status": "busy", "message": "发送队列正在运行，请等待当前批次结束。", "jobs": list_publish_jobs(limit=100)}
     try:
-        ids = _ready_opencli_job_ids(job_ids)
+        normalized_ids = _normalize_opencli_job_ids(job_ids)
+        ids = _ready_opencli_job_ids(normalized_ids or None, include_scheduled=bool(normalized_ids))
         results = [execute_opencli_send_job(job_id, runner=runner) for job_id in ids]
         return {"status": "ok", "message": f"发送批次已处理 {len(results)} 条任务。", "results": results, **get_publish_center_context()}
     finally:
@@ -2592,9 +2679,10 @@ def run_opencli_send_batch(job_ids: list[str] | None = None, runner: CommandRunn
 
 
 def start_opencli_send_batch(payload: PublishSendStart, background_tasks: Any | None = None) -> dict:
-    ids = _ready_opencli_job_ids(payload.job_ids)
+    explicit_job_ids = _normalize_opencli_job_ids(payload.job_ids)
+    ids = _ready_opencli_job_ids(explicit_job_ids or None, include_scheduled=bool(explicit_job_ids))
     if not ids:
-        return {"status": "empty", "message": "当前没有待发送或失败可重试的任务。", **get_publish_center_context()}
+        return {"status": "empty", "message": _empty_opencli_send_message(bool(explicit_job_ids)), **get_publish_center_context()}
     if _SEND_LOCK.locked():
         return {"status": "busy", "message": "发送队列正在运行，请稍后刷新查看进度。", **get_publish_center_context()}
     opencli_status = _opencli_status()
@@ -2609,7 +2697,8 @@ def start_opencli_send_batch(payload: PublishSendStart, background_tasks: Any | 
         }
     if background_tasks is not None:
         background_tasks.add_task(run_opencli_send_batch, ids)
-        return {"status": "started", "message": f"已开始后台发送 {len(ids)} 条任务。", **get_publish_center_context()}
+        scheduled_note = " 已勾选任务中如包含定时任务，会按本次操作立即发送。" if explicit_job_ids else ""
+        return {"status": "started", "message": f"已开始后台发送 {len(ids)} 条任务。{scheduled_note}", **get_publish_center_context()}
     return run_opencli_send_batch(ids)
 
 
@@ -2735,7 +2824,7 @@ def get_publish_center_context() -> dict:
         }
         publish_items.append(normalized_item)
         jobs_for_oc = opencli_jobs_map.get(item["output_clip_id"], {})
-        for platform in PLATFORM_LABELS:
+        for platform in SEND_CENTER_PLATFORMS:
             job = jobs_for_oc.get(platform)
             if job:
                 queue_items.append(
@@ -2778,10 +2867,15 @@ def get_publish_center_context() -> dict:
                     }
                 )
 
-    jobs = list_publish_jobs(limit=200)
+    task_groups = _build_send_task_groups(queue_items)
+    jobs = [
+        job
+        for job in list_publish_jobs(limit=200)
+        if job.get("platform") in SEND_CENTER_PLATFORMS
+    ]
     jobs_by_platform = {
         platform: [job for job in jobs if job["platform"] == platform]
-        for platform in PLATFORM_LABELS
+        for platform in SEND_CENTER_PLATFORMS
     }
     ready_count = sum(1 for job in jobs if job.get("status") in {PUBLISH_STATUS_SCHEDULED, PUBLISH_STATUS_WAITING})
     sending_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_PUBLISHING)
@@ -2792,9 +2886,10 @@ def get_publish_center_context() -> dict:
     return {
         "publish_items": publish_items,
         "send_queue_items": queue_items,
+        "send_task_groups": task_groups,
         "publish_jobs": jobs,
         "jobs_by_platform": jobs_by_platform,
-        "platforms": [{"id": platform, "label": label} for platform, label in PLATFORM_LABELS.items()],
+        "platforms": [{"id": platform, "label": label} for platform, label in SEND_CENTER_PLATFORM_LABELS.items()],
         "opencli_available": opencli_status["available"],
         "opencli_status": opencli_status,
         "stats": [
