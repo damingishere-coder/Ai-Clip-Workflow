@@ -2397,7 +2397,6 @@ function formatCalendarRange(startDate) {
 
 function platformCalendarTone(platformLabel) {
   if (platformLabel.includes("抖音")) return "douyin";
-  if (platformLabel.includes("B站")) return "bilibili";
   return "default";
 }
 
@@ -2449,7 +2448,7 @@ function renderPublishCalendar() {
     if (!dayEntries.length) {
       const empty = document.createElement("span");
       empty.className = "publish-date-empty";
-      empty.textContent = "把任务卡拖到这里";
+      empty.textContent = "把某一期拖到这里";
       list.append(empty);
     }
     dayEntries.forEach((entry) => {
@@ -2622,6 +2621,10 @@ document.querySelectorAll("[data-schedule-group-handle]").forEach((handle) => {
   const taskCard = handle.closest("[data-send-task-card]");
   const jobIds = scheduleJobIdsForTask(taskCard);
   if (!jobIds.length) return;
+  handle.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
   handle.addEventListener("dragstart", (event) => {
     draggedScheduleJobIds = jobIds;
     draggedScheduleTaskCard = taskCard;
@@ -2976,7 +2979,7 @@ document.querySelectorAll("[data-send-single-job]").forEach((button) => {
       cardStatus === "SCHEDULED"
         ? "\n\n注意：这条任务已经设置了发布时间，确认后会立即发送，不再等待原计划时间。"
         : "";
-    if (!window.confirm(`确认开始发送这一条吗？请先确认 Chrome 已登录对应平台。${scheduledNotice}`)) return;
+    if (!window.confirm(`确认开始发送这一条抖音任务吗？请先确认 Chrome 已登录抖音创作者中心。${scheduledNotice}`)) return;
     const originalText = button.textContent;
     button.disabled = true;
     button.textContent = "发送中...";
@@ -3021,7 +3024,7 @@ document.querySelectorAll("[data-start-send-queue]").forEach((button) => {
       selectedIds.length && selectedStatusSummary.scheduledCount
         ? `\n\n其中 ${selectedStatusSummary.scheduledCount} 条已排期任务会立即发送，不再等待原计划时间。`
         : "\n\n未勾选时只会发送等待处理/发送失败任务，不会发送未来排期任务。";
-    if (!window.confirm(`确认开始发送 ${label} 吗？\n\n请先确认 Chrome 已登录抖音创作者中心和 B站创作中心。${scheduledNotice}`)) return;
+    if (!window.confirm(`确认开始发送 ${label} 吗？\n\n请先确认 Chrome 已登录抖音创作者中心。${scheduledNotice}`)) return;
     const originalText = button.textContent;
     button.disabled = true;
     button.textContent = "启动中...";

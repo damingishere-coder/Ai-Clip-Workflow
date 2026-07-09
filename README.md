@@ -14,7 +14,7 @@ v1.4.0 已实现定时发送与自动发布执行器：系统会按 `publish_job
 - 视频处理：已接入 FFmpeg / FFprobe，用于音频提取、切片、封面帧和字幕成片。
 - 转写：支持火山引擎远程转写和本地 faster-whisper。
 - AI 分析：支持远程 OpenAI-compatible / DeepSeek 和本地 Ollama；长视频会按小段分析再合并候选片段。
-- 发送中心：支持生成抖音 / B站待发送队列、AI 标题 / 简介 / 话题、候选封面帧，并通过 opencli 调用已登录 Chrome 辅助投稿。
+- 发送中心：当前优先生成和管理抖音待发送队列，支持 AI 标题 / 简介 / 话题、候选封面帧，并通过 opencli 调用已登录 Chrome 辅助投稿；B站能力先保留在代码里，暂不显示在发送中心主流程。
 - 安全边界：不会绕过验证码、登录失效、平台风控或人工确认；不会保存账号密码、cookie 或真实 API Key。
 - 配置安全：真实 `.env` 已被 Git 忽略，不会提交真实 API Key。
 - 品牌说明：当前页面主名为“牛马片场”，英文代号为 `NiuMa Studio`，Docker 技术名为 `niuma-studio`。
@@ -121,7 +121,14 @@ pytest --cov=app --cov-report=term-missing
 
 ## Docker 启动
 
-推荐启动方式：Docker 一键启动。
+推荐启动方式：双击项目根目录的 `start_niuma_studio_docker.cmd`。
+
+这个启动器会同时做两件事：
+
+- 启动 Windows opencli 辅助服务，用来控制你已经登录的 Windows Chrome。
+- 刷新 Docker 服务并打开 `http://127.0.0.1:8001/publish`。
+
+如果你只想启动 Docker 页面、不使用发送中心自动发送，也可以手动运行：
 
 ```powershell
 docker compose up --build
@@ -144,6 +151,7 @@ Docker 启动说明：
 - `.env` 文件会被自动加载（如果存在）
 - 存储目录 `E:\直播间切片工作流存储` 会自动挂载到容器内
 - 代码目录和 prompts 目录以 volume 方式挂载，支持热更新
+- Docker 容器不能直接启动 Windows Chrome；抖音自动发送需要 Windows opencli 辅助服务，所以推荐使用根目录双击启动器。
 
 ---
 

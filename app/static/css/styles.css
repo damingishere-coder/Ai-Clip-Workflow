@@ -3005,6 +3005,12 @@ body.transcript-drawer-open .main-panel {
   color: var(--blue);
 }
 
+.inline-alert.tone-amber {
+  border-color: rgba(217, 134, 34, 0.2);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
 .publish-console {
   display: grid;
   gap: 18px;
@@ -3346,6 +3352,24 @@ body.transcript-drawer-open .main-panel {
   box-shadow: var(--shadow-soft);
 }
 
+.send-task-card > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.send-task-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.send-task-card:not([open]) {
+  gap: 0;
+}
+
+.send-task-card:not([open]) .send-task-card-header {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
 .send-task-card.is-previewing,
 .send-task-card.is-dragging {
   border-color: rgba(37, 111, 255, 0.34);
@@ -3410,12 +3434,37 @@ body.transcript-drawer-open .main-panel {
   overflow-wrap: anywhere;
 }
 
+.send-task-summary-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.send-task-toggle-text {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .send-task-schedule-controls {
   display: flex;
   align-items: end;
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
 }
 
 .send-task-schedule-controls label {
@@ -3436,6 +3485,12 @@ body.transcript-drawer-open .main-panel {
 
 .schedule-drag-handle[draggable="true"]:active {
   cursor: grabbing;
+}
+
+.schedule-drag-handle.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+  pointer-events: none;
 }
 
 .send-task-items {
@@ -4704,6 +4759,12 @@ fieldset input:focus {
   border-radius: 8px;
   background: rgba(234, 242, 255, 0.88);
   box-shadow: var(--shadow-soft);
+}
+
+.inline-alert.tone-amber {
+  border-color: rgba(217, 135, 36, 0.16);
+  background: rgba(255, 244, 223, 0.9);
+  color: var(--amber);
 }
 
 .empty-state {

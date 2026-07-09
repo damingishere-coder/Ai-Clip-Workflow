@@ -101,6 +101,9 @@ PLATFORM_LABELS.update(
     }
 )
 
+SEND_CENTER_PLATFORMS = ("douyin",)
+SEND_CENTER_PLATFORM_LABELS = {platform: PLATFORM_LABELS[platform] for platform in SEND_CENTER_PLATFORMS}
+
 PUBLISH_MODE_LABELS.update(
     {
         "manual_export": "手动发布包导出",
@@ -359,7 +362,7 @@ def _opencli_local_port() -> int:
 
 
 def _opencli_restart_command() -> str:
-    return ".\\scripts\\start_docker_opencli.ps1"
+    return "start_niuma_studio_docker.cmd"
 
 
 def _opencli_status() -> dict:
@@ -381,7 +384,7 @@ def _opencli_status() -> dict:
     elif bridge.get("available"):
         status["message"] = "Docker 8001 已连接 Windows opencli 辅助服务，可以使用发送中心自动发送。"
     else:
-        status["message"] = "Docker 页面已启动，但还没有连接到 Windows opencli 辅助服务。发送中心可以先整理队列，自动发送需要先启动辅助服务。"
+        status["message"] = "Docker 页面已启动，但还没有连接到 Windows opencli 辅助服务。发送中心可以先整理抖音队列，自动发送需要 Windows 辅助服务。"
     return status
 
 
@@ -1189,7 +1192,7 @@ def refresh_send_queue(use_ai: bool = False) -> dict:
                     errors.append(f"{item.get('output_file_name') or item.get('output_clip_id')} / 自动封面：{exc}")
             return cover_state["cover"] or {}
 
-        for platform in PLATFORM_LABELS:
+        for platform in SEND_CENTER_PLATFORMS:
             existing_job = _find_opencli_job(item["output_clip_id"], platform)
             if existing_job:
                 skipped += 1
@@ -2821,7 +2824,7 @@ def get_publish_center_context() -> dict:
         }
         publish_items.append(normalized_item)
         jobs_for_oc = opencli_jobs_map.get(item["output_clip_id"], {})
-        for platform in PLATFORM_LABELS:
+        for platform in SEND_CENTER_PLATFORMS:
             job = jobs_for_oc.get(platform)
             if job:
                 queue_items.append(
@@ -2865,10 +2868,14 @@ def get_publish_center_context() -> dict:
                 )
 
     task_groups = _build_send_task_groups(queue_items)
-    jobs = list_publish_jobs(limit=200)
+    jobs = [
+        job
+        for job in list_publish_jobs(limit=200)
+        if job.get("platform") in SEND_CENTER_PLATFORMS
+    ]
     jobs_by_platform = {
         platform: [job for job in jobs if job["platform"] == platform]
-        for platform in PLATFORM_LABELS
+        for platform in SEND_CENTER_PLATFORMS
     }
     ready_count = sum(1 for job in jobs if job.get("status") in {PUBLISH_STATUS_SCHEDULED, PUBLISH_STATUS_WAITING})
     sending_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_PUBLISHING)
@@ -2882,7 +2889,7 @@ def get_publish_center_context() -> dict:
         "send_task_groups": task_groups,
         "publish_jobs": jobs,
         "jobs_by_platform": jobs_by_platform,
-        "platforms": [{"id": platform, "label": label} for platform, label in PLATFORM_LABELS.items()],
+        "platforms": [{"id": platform, "label": label} for platform, label in SEND_CENTER_PLATFORM_LABELS.items()],
         "opencli_available": opencli_status["available"],
         "opencli_status": opencli_status,
         "stats": [

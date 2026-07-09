@@ -5,14 +5,14 @@
 {% block content %}
 <section class="page-heading send-heading">
   <div>
-    <p class="eyebrow">Send Center 2.0</p>
-    <h1>抖音 + B站发送中心</h1>
-    <p>切好的视频、自动封面帧、AI 标题和平台 #话题在这里排队；确认后由 opencli 使用 Chrome 登录态逐条发送。</p>
+    <p class="eyebrow">Douyin Send Center</p>
+    <h1>抖音发送中心</h1>
+    <p>按创建任务归类管理每一期切片；确认标题、正文、#话题和封面后，由 opencli 使用 Windows Chrome 登录态逐条发送到抖音。</p>
   </div>
   <div class="button-row">
-    <button type="button" class="secondary-button" data-refresh-send-queue data-use-ai="false">刷新发送队列</button>
+    <button type="button" class="secondary-button" data-refresh-send-queue data-use-ai="false">刷新抖音队列</button>
     <button type="button" class="secondary-button" data-refresh-send-queue data-use-ai="true">AI 补齐标题/话题</button>
-    <button type="button" class="primary-button" data-start-send-queue>开始发送全部</button>
+    <button type="button" class="primary-button" data-start-send-queue>开始发送抖音队列</button>
   </div>
 </section>
 
@@ -21,11 +21,12 @@
 {% endif %}
 
 {% if not opencli_available %}
-<section class="inline-alert tone-red">
+<section class="inline-alert tone-amber">
   <strong>{{ opencli_status.message }}</strong>
-  <p>请继续使用 Docker 主页面 <code>http://127.0.0.1:8001</code>，不要切到第二个网页。</p>
-  <p>推荐处理：在项目目录运行 <code>{{ opencli_status.restart_command }}</code>，脚本会启动 Windows opencli 辅助服务、刷新 Docker，并打开 <code>{{ opencli_status.publish_url }}</code>。</p>
-  <p>页面打开后按 <code>Ctrl + F5</code> 强制刷新，再回到发送中心测试自动发送。</p>
+  <p>Docker 页面可以继续整理抖音队列和排期；真正自动发送时，仍需要 Windows 侧辅助服务来控制已经登录的 Chrome。</p>
+  <p>项目根目录已提供 <code>start_niuma_studio_docker.cmd</code>，以后双击它即可同时启动 Windows opencli 辅助服务和 Docker 页面，不需要每次手动输入命令。</p>
+  <p>如果双击后浏览器没有自动打开，请继续访问 Docker 主页面 <code>http://127.0.0.1:8001/publish</code>。</p>
+  <p>技术限制说明：Docker 容器不能直接启动 Windows Chrome，否则拿不到你的登录态；所以辅助服务必须运行在 Windows 宿主机上。</p>
 </section>
 {% endif %}
 
@@ -52,8 +53,8 @@
   <div class="panel-header">
     <div>
       <p class="eyebrow">Publish Schedule</p>
-      <h2>发送日期表</h2>
-      <p>把下方“创建任务”卡片拖进某一天，系统会按当天开始时间和间隔自动安排这个任务下的可发送条目。</p>
+      <h2>抖音发送日期表</h2>
+      <p>按“创建任务”整组排期：把某一期拖进某一天，系统会按当天开始时间和间隔安排这期下面的抖音切片。</p>
     </div>
     <span class="status-pill" data-schedule-selected-count>已选 0 条</span>
   </div>
@@ -106,8 +107,8 @@
     <div class="panel-header">
       <div>
         <p class="eyebrow">待发送队列</p>
-        <h2>按创建任务管理</h2>
-        <p>每张大卡片代表一个创建任务；展开后可分别检查抖音、B站和各条切片发送内容。</p>
+        <h2>按创建任务分组</h2>
+        <p>一组就是你创建的一期任务，例如“测试1”生成的 10 个视频会收在同一组里；默认只显示抖音任务，B站先不进入当前工作流。</p>
       </div>
       <label class="send-select-all">
         <input type="checkbox" data-send-select-all>
@@ -117,8 +118,6 @@
 
     <div class="send-toolbar">
       <button type="button" class="active" data-send-filter="all">全部</button>
-      <button type="button" data-send-filter="douyin">抖音</button>
-      <button type="button" data-send-filter="bilibili">B站</button>
       <button type="button" data-send-filter="waiting">等待</button>
       <button type="button" data-send-filter="scheduled">定时</button>
       <button type="button" data-send-filter="publishing">发送中</button>
@@ -129,8 +128,8 @@
 
     <div class="send-queue">
       {% for group in send_task_groups %}
-      <article class="send-task-card{% if group.can_schedule %} can-drag-schedule{% endif %}" data-send-task-card data-task-id="{{ group.task_id }}" data-schedule-job-ids="{{ group.schedule_job_ids_csv }}">
-        <div class="send-task-card-header">
+      <details class="send-task-card{% if group.can_schedule %} can-drag-schedule{% endif %}" data-send-task-card data-task-id="{{ group.task_id }}" data-schedule-job-ids="{{ group.schedule_job_ids_csv }}" {% if loop.first %}open{% endif %}>
+        <summary class="send-task-card-header">
           <div class="send-task-summary">
             <div class="send-task-thumb">
               {% if group.cover_media_url %}
@@ -145,25 +144,28 @@
               <p class="send-meta-line">
                 <span class="status-pill tone-blue">{{ group.platform_summary }}</span>
                 <span class="status-pill tone-amber">{{ group.status_summary }}</span>
-                <span>{{ group.clip_count }} 条切片 · {{ group.item_count }} 条发送任务</span>
+                <span>{{ group.clip_count }} 条抖音切片 · {{ group.item_count }} 条发送任务</span>
               </p>
               <h3>{{ group.task_name }}</h3>
               <p>任务 ID：{{ group.task_id }}</p>
             </div>
           </div>
-          <div class="send-task-schedule-controls">
-            <button
-              type="button"
-              class="secondary-button schedule-drag-handle"
+          <div class="send-task-summary-actions">
+            <span
+              class="secondary-button schedule-drag-handle{% if not group.can_schedule %} is-disabled{% endif %}"
               data-schedule-group-handle
-              {% if group.can_schedule %}draggable="true"{% else %}disabled title="这个任务当前没有可排期的发送条目。"{% endif %}
-            >拖到日期</button>
-            <label>
-              <span>兜底日期</span>
-              <input type="date" data-schedule-date-input {% if not group.can_schedule %}disabled{% endif %}>
-            </label>
-            <button type="button" class="secondary-button" data-schedule-group-date {% if not group.can_schedule %}disabled{% endif %}>安排到这一天</button>
+              {% if group.can_schedule %}draggable="true"{% else %}aria-disabled="true" title="这个任务当前没有可排期的抖音发送条目。"{% endif %}
+            >拖到日期</span>
+            <span class="send-task-toggle-text">展开 / 收起</span>
           </div>
+        </summary>
+
+        <div class="send-task-schedule-controls">
+          <label>
+            <span>兜底日期</span>
+            <input type="date" data-schedule-date-input {% if not group.can_schedule %}disabled{% endif %}>
+          </label>
+          <button type="button" class="secondary-button" data-schedule-group-date {% if not group.can_schedule %}disabled{% endif %}>安排这一期到这一天</button>
         </div>
 
         <div class="send-task-items">
@@ -216,7 +218,7 @@
                 </label>
                 <label class="span-2">
                   <span>正文 / 简介</span>
-                  <textarea name="description" maxlength="2000" placeholder="抖音会作为正文话题，B站会作为简介">{{ item.description }}</textarea>
+                  <textarea name="description" maxlength="2000" placeholder="抖音会把这里作为作品描述，并追加平台 #话题">{{ item.description }}</textarea>
                 </label>
               </div>
 
@@ -228,21 +230,6 @@
                     <option value="friends" {% if item.job and item.job.visibility == "friends" %}selected{% endif %}>好友可见</option>
                     <option value="private" {% if item.job and item.job.visibility == "private" %}selected{% endif %}>仅自己可见</option>
                   </select>
-                </label>
-                <label>
-                  <span>B站分区</span>
-                  <input name="bilibili_tid" value="{{ item.job.bilibili_tid if item.job and item.job.bilibili_tid else '娱乐' }}" maxlength="80">
-                </label>
-                <label>
-                  <span>B站声明</span>
-                  <select name="bilibili_copyright">
-                    <option value="original" {% if not item.job or item.job.bilibili_copyright == "original" %}selected{% endif %}>原创</option>
-                    <option value="repost" {% if item.job and item.job.bilibili_copyright == "repost" %}selected{% endif %}>转载</option>
-                  </select>
-                </label>
-                <label>
-                  <span>转载来源</span>
-                  <input name="bilibili_source" value="{{ item.job.bilibili_source if item.job else '' }}" maxlength="300" placeholder="原创可留空">
                 </label>
                 <label class="toggle-line">
                   <input type="checkbox" name="allow_download" {% if not item.job or item.job.allow_download %}checked{% endif %}>
@@ -281,7 +268,7 @@
           </article>
           {% endfor %}
         </div>
-      </article>
+      </details>
       {% else %}
       <div class="empty-state">
         <h3>还没有可发送的切片</h3>
@@ -314,7 +301,6 @@
     <div class="send-preview-copy">
       <p data-send-preview-description>{{ preview.description }}</p>
       <p><strong>抖音：</strong>上传视频，填写标题/正文 #话题，设置封面，点击发布。</p>
-      <p><strong>B站：</strong>上传视频，填写封面、标题、分区、标签、简介，点击立即投稿。</p>
       <p>遇到验证码、登录失效或风控弹窗时，任务会进入失败，等待人工处理。</p>
     </div>
     {% else %}
@@ -327,7 +313,7 @@
   <div class="panel-header">
     <div>
       <p class="eyebrow">发送记录</p>
-      <h2>opencli 任务状态</h2>
+      <h2>抖音 opencli 任务状态</h2>
     </div>
   </div>
 

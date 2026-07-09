@@ -34,7 +34,15 @@ Docker 的好处是：不用每次手动激活 `.venv`，端口映射清楚，�
 
 第一次启动前，先确认 Docker Desktop 已经打开。
 
-然后打开 PowerShell，进入项目目录：
+如果你要用发送中心自动发抖音，最推荐的方式是直接双击项目根目录的：
+
+```text
+start_niuma_studio_docker.cmd
+```
+
+这个文件会同时启动 Windows opencli 辅助服务、刷新 Docker，并打开 Docker 主页面。你不需要每次手动输入 PowerShell 命令。
+
+如果你只想启动 Docker 页面、不使用自动发送，再打开 PowerShell，进入项目目录：
 
 ```powershell
 cd "C:\Users\10578\Documents\New project 2"
@@ -46,7 +54,7 @@ cd "C:\Users\10578\Documents\New project 2"
 docker compose up --build
 ```
 
-如果你要使用发送中心自动发送，推荐改用这一条。它会同时启动 Windows opencli 辅助服务和 Docker 主页面：
+如果你更习惯命令行，也可以运行这一条，效果和双击启动器一样：
 
 ```powershell
 .\scripts\start_docker_opencli.ps1
@@ -209,20 +217,30 @@ http://127.0.0.1:8001
 
 如果 AI 提示缺少 Key，先到系统状态页检查对应的三类接口：音频转写看火山引擎 Key，文字稿分析看 `AI_ANALYSIS_REMOTE_API_KEY`，发送中心文案看 `AI_PUBLISH_REMOTE_API_KEY`。
 
-如果发送中心提示“还没有连接到 Windows opencli 辅助服务”，先不要点“开始发送全部”。日常仍然只使用 Docker 主页面 `http://127.0.0.1:8001`，按下面顺序处理：
+如果发送中心提示“还没有连接到 Windows opencli 辅助服务”，先不要点“开始发送抖音队列”。日常仍然只使用 Docker 主页面 `http://127.0.0.1:8001`。
+
+最简单的处理方式：回到项目根目录，双击：
+
+```text
+start_niuma_studio_docker.cmd
+```
+
+如果你想以后开机后自动准备好辅助服务，可以只设置一次 Windows 自启动：
 
 ```powershell
 cd "C:\Users\10578\Documents\New project 2"
-.\scripts\start_docker_opencli.ps1
+.\scripts\install_opencli_helper_autostart.ps1
 ```
 
-脚本会自动检查 Windows opencli、启动 opencli 辅助服务、刷新 Docker，并打开 `http://127.0.0.1:8001/publish`。页面打开后按 `Ctrl + F5` 强制刷新。如果脚本提示“没有检测到 opencli”，再执行：
+注意：Docker 容器不能直接启动 Windows Chrome，否则拿不到抖音登录态；所以 opencli 辅助服务必须运行在 Windows 宿主机上。双击启动器负责把这两边一起拉起来。
+
+如果脚本提示“没有检测到 opencli”，再执行：
 
 ```powershell
 where opencli
 ```
 
-如果 `where opencli` 没有显示路径，说明 opencli 还没装好或没有加入 Windows PATH；如果能显示路径但页面仍报错，把页面红色提示和 `where opencli` 输出发给开发助手继续排查。
+如果 `where opencli` 没有显示路径，说明 opencli 还没装好或没有加入 Windows PATH；如果能显示路径但页面仍报错，把页面顶部 opencli 提示和 `where opencli` 输出发给开发助手继续排查。
 
 如果转写速度很慢，可能是没有使用 NVIDIA 显卡。可以在 `.env` 中把转写配置改成 CPU 模式，但速度会慢一些。
 
