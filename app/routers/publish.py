@@ -234,8 +234,26 @@ async def update_publish_jobs_schedule_batch(payload: PublishBatchScheduleUpdate
         return PublishScheduler().update_batch_schedule(
             payload.job_ids,
             action=payload.action,
-            start_at=payload.start_at or "",
-            interval_hours=payload.interval_hours,
+            start_at_local=payload.start_at_local or "",
+            timezone_name=payload.timezone,
+            interval_minutes=payload.interval_minutes,
+            daily_start_time=payload.daily_start_time,
+            daily_end_time=payload.daily_end_time,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/schedules/preview")
+async def preview_publish_jobs_schedule(payload: PublishBatchScheduleUpdate) -> dict:
+    if payload.action != "apply":
+        raise HTTPException(status_code=400, detail="排期预览只支持 apply")
+    try:
+        return PublishScheduler().preview_batch_schedule(
+            payload.job_ids,
+            start_at_local=payload.start_at_local or "",
+            timezone_name=payload.timezone,
+            interval_minutes=payload.interval_minutes,
             daily_start_time=payload.daily_start_time,
             daily_end_time=payload.daily_end_time,
         )

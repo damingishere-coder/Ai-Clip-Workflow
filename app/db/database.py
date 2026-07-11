@@ -694,6 +694,7 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
         "bilibili_source": "ALTER TABLE publish_jobs ADD COLUMN bilibili_source TEXT",
         "cover_file_path": "ALTER TABLE publish_jobs ADD COLUMN cover_file_path TEXT",
         "scheduled_at": "ALTER TABLE publish_jobs ADD COLUMN scheduled_at TEXT",
+        "schedule_timezone": "ALTER TABLE publish_jobs ADD COLUMN schedule_timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai'",
         "status": "ALTER TABLE publish_jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'",
         "audit_status": "ALTER TABLE publish_jobs ADD COLUMN audit_status TEXT NOT NULL DEFAULT 'not_submitted'",
         "platform_item_id": "ALTER TABLE publish_jobs ADD COLUMN platform_item_id TEXT",

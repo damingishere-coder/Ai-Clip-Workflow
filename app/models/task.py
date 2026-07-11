@@ -169,8 +169,9 @@ class PublishJobScheduleUpdate(BaseModel):
 class PublishBatchScheduleUpdate(BaseModel):
     job_ids: list[str] = Field(default_factory=list)
     action: Literal["apply", "clear"] = "apply"
-    start_at: Optional[str] = Field(default="", max_length=80)
-    interval_hours: int = Field(default=3, ge=1, le=168)
+    start_at_local: Optional[str] = Field(default="", max_length=80)
+    timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=80)
+    interval_minutes: int = Field(default=180, ge=1, le=10080)
     daily_start_time: str = Field(default="09:00", min_length=5, max_length=5)
     daily_end_time: str = Field(default="21:00", min_length=5, max_length=5)
 

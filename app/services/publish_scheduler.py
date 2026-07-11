@@ -5,6 +5,7 @@ import asyncio
 import json
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.core.config import settings
 from app.db.database import get_connection, init_db
@@ -47,16 +48,28 @@ def parse_clock(value: str, field_label: str) -> time:
 def build_batch_schedule_times(
     count: int,
     *,
-    start_at: str,
-    interval_hours: int,
+    start_at_local: str,
+    timezone_name: str,
+    interval_minutes: int,
     daily_start_time: str,
     daily_end_time: str,
 ) -> list[str]:
     if count <= 0:
         return []
 
-    cursor = parse_datetime(start_at)
-    interval = timedelta(hours=max(1, int(interval_hours)))
+    try:
+        schedule_zone = ZoneInfo((timezone_name or "").strip())
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError("时区无效，请使用例如 Asia/Shanghai 的 IANA 时区") from exc
+    start_text = (start_at_local or "").strip()
+    if not start_text:
+        raise ValueError("起始时间不能为空")
+    try:
+        cursor = datetime.fromisoformat(start_text)
+    except ValueError as exc:
+        raise ValueError("起始时间格式无效") from exc
+    cursor = cursor.replace(tzinfo=schedule_zone) if cursor.tzinfo is None else cursor.astimezone(schedule_zone)
+    interval = timedelta(minutes=max(1, int(interval_minutes)))
     window_start = parse_clock(daily_start_time, "每日开始时间")
     window_end = parse_clock(daily_end_time, "每日结束时间")
     if window_end <= window_start:
@@ -73,9 +86,44 @@ def build_batch_schedule_times(
                 tzinfo=cursor.tzinfo
             )
             continue
-        scheduled.append(cursor.isoformat(timespec="seconds"))
+        scheduled.append(
+            cursor.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        )
         cursor += interval
     return scheduled
+
+
+def build_batch_schedule_preview(
+    job_ids: list[str],
+    *,
+    start_at_local: str,
+    timezone_name: str,
+    interval_minutes: int,
+    daily_start_time: str,
+    daily_end_time: str,
+) -> list[dict[str, str]]:
+    utc_times = build_batch_schedule_times(
+        len(job_ids),
+        start_at_local=start_at_local,
+        timezone_name=timezone_name,
+        interval_minutes=interval_minutes,
+        daily_start_time=daily_start_time,
+        daily_end_time=daily_end_time,
+    )
+    schedule_zone = ZoneInfo(timezone_name)
+    preview = []
+    for job_id, utc_value in zip(job_ids, utc_times, strict=True):
+        local_value = parse_datetime(utc_value).astimezone(schedule_zone)
+        preview.append(
+            {
+                "job_id": job_id,
+                "scheduled_at_utc": utc_value,
+                "scheduled_at_local": local_value.isoformat(timespec="seconds"),
+                "scheduled_at_local_display": local_value.strftime("%Y-%m-%d %H:%M"),
+                "timezone": timezone_name,
+            }
+        )
+    return preview
 
 
 def _row_to_dict(row) -> dict[str, Any] | None:
@@ -320,10 +368,11 @@ class PublishScheduler:
         job = get_publish_job_raw(job_id)
         if not job:
             raise ValueError("publish job not found")
-        if str(job.get("status") or "").upper() == "PUBLISHED":
-            raise ValueError("published jobs cannot be rescheduled")
+        if str(job.get("status") or "").upper() in {"PUBLISHED", "EXPORTED", "CANCELLED"}:
+            raise ValueError("已完成或已取消的任务不能重新排期")
         now = now_iso()
         next_status = "NEED_REVIEW" if str(job.get("status") or "").upper() == "NEED_REVIEW" else "SCHEDULED"
+        scheduled_at_utc = parsed.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         with get_connection() as connection:
             connection.execute(
                 """
@@ -331,7 +380,7 @@ class PublishScheduler:
                 SET scheduled_at = ?, status = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (parsed.isoformat(timespec="seconds"), next_status, now, job_id),
+                (scheduled_at_utc, next_status, now, job_id),
             )
             connection.commit()
         return {"status": "ok", "job": get_publish_job_raw(job_id)}
@@ -341,8 +390,9 @@ class PublishScheduler:
         job_ids: list[str],
         *,
         action: str,
-        start_at: str = "",
-        interval_hours: int = 3,
+        start_at_local: str = "",
+        timezone_name: str = "Asia/Shanghai",
+        interval_minutes: int = 180,
         daily_start_time: str = "09:00",
         daily_end_time: str = "21:00",
     ) -> dict[str, Any]:
@@ -365,26 +415,37 @@ class PublishScheduler:
         blocked = [
             job_id
             for job_id in normalized_ids
-            if str(jobs_by_id[job_id].get("status") or "").upper() in {"PUBLISHED", "CANCELLED"}
+            if str(jobs_by_id[job_id].get("status") or "").upper() in {"PUBLISHED", "EXPORTED", "CANCELLED"}
         ]
         if blocked:
             raise ValueError("已发布或已取消的任务不能修改排期")
 
         schedule_times = (
-            build_batch_schedule_times(
-                len(normalized_ids),
-                start_at=start_at,
-                interval_hours=interval_hours,
+            build_batch_schedule_preview(
+                normalized_ids,
+                start_at_local=start_at_local,
+                timezone_name=timezone_name,
+                interval_minutes=interval_minutes,
                 daily_start_time=daily_start_time,
                 daily_end_time=daily_end_time,
             )
             if action == "apply"
-            else [""] * len(normalized_ids)
+            else [
+                {
+                    "job_id": job_id,
+                    "scheduled_at_utc": "",
+                    "scheduled_at_local": "",
+                    "scheduled_at_local_display": "未排期",
+                    "timezone": timezone_name,
+                }
+                for job_id in normalized_ids
+            ]
         )
 
         now = now_iso()
         with get_connection() as connection:
-            for job_id, scheduled_at in zip(normalized_ids, schedule_times, strict=True):
+            for job_id, schedule_item in zip(normalized_ids, schedule_times, strict=True):
+                scheduled_at = schedule_item["scheduled_at_utc"]
                 current_status = str(jobs_by_id[job_id].get("status") or "").upper()
                 if current_status == "NEED_REVIEW":
                     next_status = "NEED_REVIEW"
@@ -397,13 +458,13 @@ class PublishScheduler:
                 connection.execute(
                     """
                     UPDATE publish_jobs
-                    SET scheduled_at = ?, status = ?, updated_at = ?,
+                    SET scheduled_at = ?, schedule_timezone = ?, status = ?, updated_at = ?,
                         error_code = CASE WHEN ? = 'apply' THEN '' ELSE error_code END,
                         error_message = CASE WHEN ? = 'apply' THEN '' ELSE error_message END,
                         last_error = CASE WHEN ? = 'apply' THEN '' ELSE last_error END
                     WHERE id = ?
                     """,
-                    (scheduled_at, next_status, now, action, action, action, job_id),
+                    (scheduled_at, timezone_name, next_status, now, action, action, action, job_id),
                 )
             connection.commit()
 
@@ -417,10 +478,41 @@ class PublishScheduler:
                 else f"已清除 {len(normalized_ids)} 条任务的发布时间。"
             ),
             "jobs": [get_publish_job_raw(job_id) for job_id in normalized_ids],
+            "schedule": schedule_times,
         }
 
+    def preview_batch_schedule(
+        self,
+        job_ids: list[str],
+        *,
+        start_at_local: str,
+        timezone_name: str,
+        interval_minutes: int,
+        daily_start_time: str,
+        daily_end_time: str,
+    ) -> dict[str, Any]:
+        normalized_ids = list(dict.fromkeys(str(job_id).strip() for job_id in job_ids if str(job_id).strip()))
+        if not normalized_ids:
+            raise ValueError("至少选择一条发布任务")
+        with get_connection() as connection:
+            found = connection.execute(
+                f"SELECT COUNT(*) FROM publish_jobs WHERE id IN ({','.join('?' for _ in normalized_ids)})",
+                normalized_ids,
+            ).fetchone()[0]
+        if int(found) != len(normalized_ids):
+            raise ValueError("部分发布任务不存在")
+        schedule = build_batch_schedule_preview(
+            normalized_ids,
+            start_at_local=start_at_local,
+            timezone_name=timezone_name,
+            interval_minutes=interval_minutes,
+            daily_start_time=daily_start_time,
+            daily_end_time=daily_end_time,
+        )
+        return {"status": "ok", "timezone": timezone_name, "schedule": schedule}
+
     def _set_schedule_to_now(self, job_id: str) -> None:
-        now = now_iso()
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         with get_connection() as connection:
             connection.execute(
                 """

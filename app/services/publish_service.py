@@ -5,12 +5,13 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
 from urllib.parse import urlsplit
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.core.config import settings
 from app.db.database import get_connection
@@ -487,12 +488,19 @@ def _normalize_publish_status(status: str | None) -> str:
     return LEGACY_STATUS_MAP.get(raw.lower(), raw)
 
 
-def _format_publish_schedule(value: str | None) -> str:
+def _format_publish_schedule(value: str | None, timezone_name: str = "Asia/Shanghai") -> str:
     text = (value or "").strip()
     if not text:
         return "未排期"
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        try:
+            display_zone = ZoneInfo(timezone_name or "Asia/Shanghai")
+        except ZoneInfoNotFoundError:
+            display_zone = ZoneInfo("Asia/Shanghai")
+        return parsed.astimezone(display_zone).strftime("%Y-%m-%d %H:%M")
     except ValueError:
         return text
 
@@ -507,6 +515,17 @@ def _normalize_job(row) -> dict:
     clip_id = job.get("clip_id") or job.get("output_clip_id") or ""
     video_path = job.get("video_path") or job.get("video_file_path") or ""
     error_message = job.get("error_message") or job.get("last_error") or ""
+    schedule_timezone = job.get("schedule_timezone") or "Asia/Shanghai"
+    scheduled_at_utc = job.get("scheduled_at") or ""
+    scheduled_at_local = ""
+    if scheduled_at_utc:
+        try:
+            parse_datetime_value = datetime.fromisoformat(scheduled_at_utc.replace("Z", "+00:00"))
+            if parse_datetime_value.tzinfo is None:
+                parse_datetime_value = parse_datetime_value.replace(tzinfo=timezone.utc)
+            scheduled_at_local = parse_datetime_value.astimezone(ZoneInfo(schedule_timezone)).isoformat(timespec="seconds")
+        except (ValueError, ZoneInfoNotFoundError):
+            scheduled_at_local = scheduled_at_utc
     job.update(
         {
             "status": status,
@@ -526,7 +545,10 @@ def _normalize_job(row) -> dict:
             "status_tone": STATUS_TONES.get(status, "blue"),
             "video_source_label": VIDEO_SOURCE_LABELS.get(job.get("video_source"), job.get("video_source")),
             "publish_mode_label": PUBLISH_MODE_LABELS.get(job.get("publish_mode"), job.get("publish_mode")),
-            "scheduled_at_display": _format_publish_schedule(job.get("scheduled_at")),
+            "schedule_timezone": schedule_timezone,
+            "scheduled_at_utc": scheduled_at_utc,
+            "scheduled_at_local": scheduled_at_local,
+            "scheduled_at_display": _format_publish_schedule(scheduled_at_utc, schedule_timezone),
             "account_name": job.get("account_name") or "未选择账号",
             "cover_media_url": _cover_media_url(job.get("task_id") or "", job.get("cover_file_path")),
             "video_media_url": _video_media_url(
