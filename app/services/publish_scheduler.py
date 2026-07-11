@@ -316,6 +316,15 @@ class PublishScheduler:
 
         if result.get("status") == "exported":
             return self._mark_exported(job_id, result.get("payload") or {}, result.get("remote_video_id") or "")
+        current = get_publish_job_raw(job_id) or {}
+        if result.get("status") == "published" and str(current.get("status") or "").upper() == "PUBLISHING":
+            return self._mark_published(
+                job_id,
+                {"executor": str(current.get("publish_mode") or ""), "message": result.get("message") or ""},
+                str(current.get("remote_video_id") or ""),
+            )
+        if result.get("status") == "failed" and str(current.get("status") or "").upper() == "PUBLISHING":
+            return self._mark_failed(job_id, "publish_failed", result.get("message") or "发布执行失败")
         return result
 
     def publish_now(self, job_id: str, *, allow_republish: bool = False, runner=None) -> dict[str, Any]:
@@ -576,7 +585,7 @@ class PublishScheduler:
             )
             connection.commit()
         job = get_publish_job_raw(job_id) or {"task_id": ""}
-        self._append_log(job.get("task_id") or "", f"Publish job {job_id} completed by manual_export")
+        self._append_log(job.get("task_id") or "", f"Publish job {job_id} published successfully")
         return {"status": "published", "job_id": job_id, "publish_result": payload}
 
     def _mark_exported(self, job_id: str, payload: dict[str, Any], remote_video_id: str) -> dict[str, Any]:
