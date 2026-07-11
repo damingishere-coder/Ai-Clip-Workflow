@@ -2798,6 +2798,18 @@ def get_publish_center_context() -> dict:
                 )
 
     jobs = list_publish_jobs(limit=200)
+    pending_jobs = [
+        job for job in jobs
+        if job.get("status") in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_FAILED, PUBLISH_STATUS_NEED_REVIEW}
+    ]
+    scheduled_jobs = sorted(
+        [job for job in jobs if job.get("status") in {PUBLISH_STATUS_SCHEDULED, PUBLISH_STATUS_PUBLISHING}],
+        key=lambda job: (job.get("scheduled_at") or "", job.get("created_at") or ""),
+    )
+    history_jobs = [
+        job for job in jobs
+        if job.get("status") in {PUBLISH_STATUS_PUBLISHED, PUBLISH_STATUS_EXPORTED, PUBLISH_STATUS_FAILED, PUBLISH_STATUS_CANCELLED}
+    ]
     jobs_by_platform = {
         platform: [job for job in jobs if job["platform"] == platform]
         for platform in PLATFORM_LABELS
@@ -2808,14 +2820,20 @@ def get_publish_center_context() -> dict:
     failed_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_FAILED)
     need_review_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_NEED_REVIEW)
     opencli_status = _opencli_status()
+    from app.services.publish_scheduler import scheduler_health
+
     return {
         "publish_items": publish_items,
         "send_queue_items": queue_items,
         "publish_jobs": jobs,
+        "pending_jobs": pending_jobs,
+        "scheduled_jobs": scheduled_jobs,
+        "history_jobs": history_jobs,
         "jobs_by_platform": jobs_by_platform,
         "platforms": [{"id": platform, "label": label} for platform, label in PLATFORM_LABELS.items()],
         "opencli_available": opencli_status["available"],
         "opencli_status": opencli_status,
+        "scheduler_health": scheduler_health(),
         "stats": [
             {"label": "需复核", "value": need_review_count, "tone": "amber"},
             {"label": "可入队切片", "value": len(publish_items), "tone": "green"},

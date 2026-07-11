@@ -1,3 +1,29 @@
+async function apiFetch(url, options = {}) {
+  const requestOptions = { ...options };
+  const headers = new Headers(options.headers || {});
+  const token = document.querySelector('meta[name="local-admin-token"]')?.content || "";
+  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  requestOptions.headers = headers;
+  const response = await fetch(url, requestOptions);
+  let data = {};
+  try {
+    data = await response.json();
+  } catch (_error) {
+    data = {};
+  }
+  if (!response.ok) {
+    throw new Error(data.detail || data.message || `请求失败（HTTP ${response.status}）`);
+  }
+  return data;
+}
+
+window.apiFetch = apiFetch;
+
 const newTaskForm = document.querySelector("#new-task-form");
 const newTaskAutoMode = newTaskForm?.querySelector("input[name='auto_mode']");
 const newTaskSubmitButton = document.querySelector("#new-task-submit-button");

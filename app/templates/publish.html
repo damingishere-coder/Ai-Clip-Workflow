@@ -2,314 +2,134 @@
 
 {% block title %}发送中心 - {{ settings.app_name }}{% endblock %}
 
+{% macro compact_job(job, section) %}
+<article class="publish-compact-row" data-publish-row data-job-id="{{ job.id }}" data-status="{{ job.status }}" data-section="{{ section }}">
+  <label class="publish-row-select" aria-label="选择 {{ job.title }}">
+    {% if job.status in ["WAITING", "SCHEDULED", "FAILED", "NEED_REVIEW"] %}
+    <input type="checkbox" data-publish-select value="{{ job.id }}">
+    {% endif %}
+  </label>
+  <video class="publish-row-thumb" muted preload="metadata" src="{{ job.video_media_url }}"></video>
+  <div class="publish-row-main">
+    <p class="send-meta-line">
+      <span class="status-pill tone-{{ job.status_tone }}" data-row-platform>{{ job.platform_label }}</span>
+      <span class="status-pill tone-{{ job.status_tone }}" data-row-status>{{ job.status_label }}</span>
+      <span>{{ job.publish_mode_label }}</span>
+    </p>
+    <strong data-row-title>{{ job.title or job.output_file_name or job.id }}</strong>
+    <span>{{ job.task_name or "未命名任务" }} · {{ job.output_file_name or job.output_clip_id }}</span>
+  </div>
+  <div class="publish-row-time">
+    <small>计划时间</small>
+    <time data-row-schedule data-utc="{{ job.scheduled_at_utc }}" data-timezone="{{ job.schedule_timezone }}">{{ job.scheduled_at_display }}</time>
+  </div>
+  <div class="publish-row-actions">
+    {% if section == "pending" %}<button type="button" class="secondary-button" data-toggle-publish-editor>展开编辑</button>{% endif %}
+    {% if job.status in ["WAITING", "SCHEDULED", "FAILED"] %}<button type="button" class="primary-button" data-publish-now>立即发送</button>{% endif %}
+    {% if section == "scheduled" and job.status == "SCHEDULED" %}<button type="button" class="secondary-button" data-clear-schedule>取消排期</button>{% endif %}
+  </div>
+  {% if section == "pending" %}
+  <form class="publish-inline-editor" data-publish-editor hidden>
+    <input type="hidden" name="cover_file_path" value="{{ job.cover_file_path or '' }}">
+    <input type="hidden" name="cover_time_seconds" value="{{ job.cover_time_seconds or 0 }}">
+    <label><span>标题</span><input name="title" value="{{ job.title }}" maxlength="120" required></label>
+    <label><span>话题</span><input name="tags" value="{{ job.tags }}" maxlength="500"></label>
+    <label class="span-2"><span>正文 / 简介</span><textarea name="description" maxlength="2000">{{ job.description }}</textarea></label>
+    <details class="span-2">
+      <summary>平台高级设置</summary>
+      <div class="publish-advanced-grid">
+        <label><span>可见范围</span><select name="visibility"><option value="public" {% if job.visibility == "public" %}selected{% endif %}>公开</option><option value="friends" {% if job.visibility == "friends" %}selected{% endif %}>好友可见</option><option value="private" {% if job.visibility == "private" %}selected{% endif %}>仅自己可见</option></select></label>
+        <label><span>B站分区</span><input name="bilibili_tid" value="{{ job.bilibili_tid or '娱乐' }}"></label>
+        <label><span>B站声明</span><select name="bilibili_copyright"><option value="original" {% if job.bilibili_copyright == "original" %}selected{% endif %}>原创</option><option value="repost" {% if job.bilibili_copyright == "repost" %}selected{% endif %}>转载</option></select></label>
+        <label><span>转载来源</span><input name="bilibili_source" value="{{ job.bilibili_source or '' }}"></label>
+        <label class="toggle-line"><input type="checkbox" name="allow_download" {% if job.allow_download %}checked{% endif %}>允许保存 / 下载</label>
+      </div>
+    </details>
+    <div class="span-2 button-row"><button type="submit" class="primary-button">保存编辑</button><span class="form-hint" data-editor-result></span></div>
+  </form>
+  {% endif %}
+</article>
+{% endmacro %}
+
 {% block content %}
 <section class="page-heading send-heading">
   <div>
-    <p class="eyebrow">Send Center 2.0</p>
-    <h1>抖音 + B站发送中心</h1>
-    <p>切好的视频、自动封面帧、AI 标题和平台 #话题在这里排队；确认后由 opencli 使用 Chrome 登录态逐条发送。</p>
+    <p class="eyebrow">Send Center</p>
+    <h1>发送中心</h1>
+    <p>发布任务由全自动流程直接生成；在这里复核、排期，并通过已登录的 Windows Chrome 发送到目标平台。</p>
   </div>
-  <div class="button-row">
-    <button type="button" class="secondary-button" data-refresh-send-queue data-use-ai="false">刷新发送队列</button>
-    <button type="button" class="secondary-button" data-refresh-send-queue data-use-ai="true">AI 补齐标题/话题</button>
-    <button type="button" class="primary-button" data-start-send-queue>开始发送全部</button>
-  </div>
+  <button type="button" class="secondary-button" data-supplement-publish-jobs>补充缺失任务</button>
 </section>
-
-{% if publish_message %}
-<section class="inline-alert tone-blue">{{ publish_message }}</section>
-{% endif %}
-
-{% if not opencli_available %}
-<section class="inline-alert tone-red">
-  <strong>{{ opencli_status.message }}</strong>
-  <p>请继续使用 Docker 主页面 <code>http://127.0.0.1:8001</code>，不要切到第二个网页。</p>
-  <p>推荐处理：在项目目录运行 <code>{{ opencli_status.restart_command }}</code>，脚本会启动 Windows opencli 辅助服务、刷新 Docker，并打开 <code>{{ opencli_status.publish_url }}</code>。</p>
-  <p>页面打开后按 <code>Ctrl + F5</code> 强制刷新，再回到发送中心测试自动发送。</p>
-</section>
-{% endif %}
 
 <section id="send-center-message" class="inline-alert tone-blue" hidden></section>
 
-<section class="send-publishing-overlay" data-send-publishing-overlay hidden>
-  <div class="send-publishing-box" role="status" aria-live="polite">
-    <span class="send-publishing-spinner"></span>
-    <strong data-send-publishing-title>正在发布</strong>
-    <p data-send-publishing-text>opencli 正在操作平台页面，请不要关闭 Chrome 或本地后台。</p>
+<section class="scheduler-health-card" data-scheduler-health>
+  <div><span class="health-dot {{ 'is-ok' if scheduler_health.enabled and scheduler_health.running else '' }}"></span><strong>定时发送器</strong></div>
+  <span>运行：{{ '是' if scheduler_health.running else '否' }}</span>
+  <span>扫描间隔：{{ scheduler_health.interval_seconds }} 秒</span>
+  <span>已排期：{{ scheduler_health.scheduled_count }}</span>
+  <span>发送中：{{ scheduler_health.publishing_count }}</span>
+  <span>opencli：{{ '可用' if scheduler_health.opencli_available else '不可用' }}</span>
+  <small>{{ scheduler_health.opencli_message }}</small>
+</section>
+
+<nav class="publish-center-tabs" aria-label="发送中心分类">
+  <button type="button" class="active" data-center-tab="pending">待安排 <span>{{ pending_jobs|length }}</span></button>
+  <button type="button" data-center-tab="scheduled">已排期 <span>{{ scheduled_jobs|length }}</span></button>
+  <button type="button" data-center-tab="history">发送记录 <span>{{ history_jobs|length }}</span></button>
+</nav>
+
+<section class="panel publish-center-panel active" data-center-panel="pending">
+  <div class="panel-header"><div><h2>待安排</h2><p>勾选任务后可统一排期或立即发送；标题和平台高级设置默认折叠。</p></div></div>
+  <div class="publish-compact-list">
+    {% for job in pending_jobs %}{{ compact_job(job, "pending") }}{% else %}<p class="empty-state">没有待安排任务。</p>{% endfor %}
   </div>
 </section>
 
-<section class="stat-grid send-stat-grid">
-  {% for stat in stats %}
-  <article class="stat-card tone-{{ stat.tone }}">
-    <span>{{ stat.label }}</span>
-    <strong>{{ stat.value }}</strong>
-  </article>
-  {% endfor %}
-</section>
-
-<section class="panel publish-schedule-panel">
-  <div class="panel-header">
-    <div>
-      <p class="eyebrow">Publish Schedule</p>
-      <h2>批量发布计划</h2>
-      <p>先勾选下方未发布任务，再统一设置起始时间、发布间隔和每天允许发布的时段。</p>
-    </div>
-    <span class="status-pill" data-schedule-selected-count>已选 0 条</span>
+<section class="panel publish-center-panel" data-center-panel="scheduled" hidden>
+  <div class="panel-header"><div><h2>已排期</h2><p>按计划时间排序；“立即发送”会把计划时间改为当前时间后执行。</p></div></div>
+  <div class="publish-compact-list">
+    {% for job in scheduled_jobs %}{{ compact_job(job, "scheduled") }}{% else %}<p class="empty-state">还没有已排期任务。</p>{% endfor %}
   </div>
-  <form class="publish-schedule-form" data-publish-schedule-form>
-    <div class="publish-schedule-grid">
-      <label>
-        <span>起始时间</span>
-        <input name="start_at" type="datetime-local" required>
-      </label>
-      <label>
-        <span>间隔小时</span>
-        <input name="interval_hours" type="number" min="1" max="168" step="1" value="3" required>
-      </label>
-      <label>
-        <span>每日开始</span>
-        <input name="daily_start_time" type="time" value="09:00" required>
-      </label>
-      <label>
-        <span>每日结束</span>
-        <input name="daily_end_time" type="time" value="21:00" required>
-      </label>
-    </div>
-    <div class="publish-schedule-actions">
-      <p class="form-hint" data-publish-schedule-result>未排期任务会保持等待状态，不会被定时发送器自动执行。</p>
-      <div class="button-row">
-        <button class="secondary-button" type="button" data-select-all-schedule>选择全部未发布</button>
-        <button class="secondary-button" type="button" data-clear-batch-schedule>清除所选排期</button>
-        <button class="primary-button" type="submit">应用发布计划</button>
-      </div>
-    </div>
-  </form>
 </section>
 
-<section class="send-center-grid">
-  <section class="panel send-main-panel">
-    <div class="panel-header">
-      <div>
-        <p class="eyebrow">待发送队列</p>
-        <h2>已完成切片自动入队</h2>
-        <p>默认每条切片生成抖音和 B站两条发送任务，发送时一次只跑一条，避免平台窗口互相抢焦点。</p>
-      </div>
-      <label class="send-select-all">
-        <input type="checkbox" data-send-select-all>
-        全选可发送
-      </label>
-    </div>
-
-    <div class="send-toolbar">
-      <button type="button" class="active" data-send-filter="all">全部</button>
-      <button type="button" data-send-filter="douyin">抖音</button>
-      <button type="button" data-send-filter="bilibili">B站</button>
-      <button type="button" data-send-filter="waiting">等待</button>
-      <button type="button" data-send-filter="scheduled">定时</button>
-      <button type="button" data-send-filter="publishing">发送中</button>
-      <button type="button" data-send-filter="published">已发布</button>
-      <button type="button" data-send-filter="failed">失败</button>
-      <button type="button" data-send-filter="need_review">需复核</button>
-    </div>
-
-    <div class="send-queue">
-      {% for item in send_queue_items %}
-      <article class="send-card" data-send-card data-platform="{{ item.platform }}" data-status="{{ item.status }}">
-        <div class="send-card-media">
-          <video controls preload="metadata" src="{{ item.video_media_url }}"></video>
-          <div class="send-cover-preview{% if item.cover_media_url %} has-cover{% endif %}" data-cover-preview>
-            <img src="{{ item.cover_media_url }}" alt="封面预览" {% if not item.cover_media_url %}hidden{% endif %}>
-            <span {% if item.cover_media_url %}hidden{% endif %}>刷新队列后自动选帧</span>
-          </div>
-        </div>
-
-        <form class="send-card-form" data-send-job-form data-job-id="{{ item.job_id }}" data-task-id="{{ item.task_id }}" data-output-clip-id="{{ item.output_clip_id }}" data-platform="{{ item.platform }}">
-          <input type="hidden" name="cover_file_path" value="{{ item.cover_file_path }}">
-          <input type="hidden" name="cover_time_seconds" value="{{ item.job.cover_time_seconds if item.job else 0 }}">
-
-          <div class="send-card-header">
-            <div>
-              <p class="send-meta-line">
-                <span class="status-pill tone-{{ item.status_tone }}">{{ item.platform_label }}</span>
-                <span class="status-pill tone-{{ item.status_tone }}">{{ item.status_label }}</span>
-                <span>{{ item.task_name or "未命名任务" }}</span>
-                {% if item.job_id %}
-                <span class="schedule-time-note">
-                  计划：
-                  <time data-publish-scheduled-at="{{ item.job.scheduled_at or '' }}" datetime="{{ item.job.scheduled_at or '' }}">{{ item.job.scheduled_at_display }}</time>
-                </span>
-                {% endif %}
-              </p>
-              <h3>{{ item.title }}</h3>
-              <p>{{ item.output_file_name or item.output_clip_id }}</p>
-            </div>
-            {% if item.job_id and item.status in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}
-            <label class="send-checkbox">
-              <input type="checkbox" data-send-job-checkbox data-publish-schedule-checkbox value="{{ item.job_id }}">
-              选择
-            </label>
-            {% endif %}
-          </div>
-
-          <div class="send-fields">
-            <label>
-              <span>AI 标题</span>
-              <input name="title" value="{{ item.title }}" maxlength="120" required>
-            </label>
-            <label>
-              <span>平台 #话题</span>
-              <input name="tags" value="{{ item.tags }}" maxlength="500" placeholder="例如 #直播切片 #高能名场面">
-            </label>
-            <label class="span-2">
-              <span>正文 / 简介</span>
-              <textarea name="description" maxlength="2000" placeholder="抖音会作为正文话题，B站会作为简介">{{ item.description }}</textarea>
-            </label>
-          </div>
-
-          <div class="send-platform-options">
-            <label>
-              <span>可见范围</span>
-              <select name="visibility">
-                <option value="public" {% if not item.job or item.job.visibility == "public" %}selected{% endif %}>公开</option>
-                <option value="friends" {% if item.job and item.job.visibility == "friends" %}selected{% endif %}>好友可见</option>
-                <option value="private" {% if item.job and item.job.visibility == "private" %}selected{% endif %}>仅自己可见</option>
-              </select>
-            </label>
-            <label>
-              <span>B站分区</span>
-              <input name="bilibili_tid" value="{{ item.job.bilibili_tid if item.job and item.job.bilibili_tid else '娱乐' }}" maxlength="80">
-            </label>
-            <label>
-              <span>B站声明</span>
-              <select name="bilibili_copyright">
-                <option value="original" {% if not item.job or item.job.bilibili_copyright == "original" %}selected{% endif %}>原创</option>
-                <option value="repost" {% if item.job and item.job.bilibili_copyright == "repost" %}selected{% endif %}>转载</option>
-              </select>
-            </label>
-            <label>
-              <span>转载来源</span>
-              <input name="bilibili_source" value="{{ item.job.bilibili_source if item.job else '' }}" maxlength="300" placeholder="原创可留空">
-            </label>
-            <label class="toggle-line">
-              <input type="checkbox" name="allow_download" {% if not item.job or item.job.allow_download %}checked{% endif %}>
-              允许保存 / 下载
-            </label>
-          </div>
-
-          <div class="cover-frame-list" data-cover-frame-list>
-            <span>系统会先自动选一帧；需要更换时再生成候选帧。</span>
-          </div>
-
-          {% if item.error_message %}
-          <p class="error-text">{{ item.error_message }}</p>
-          {% endif %}
-          {% if item.platform_url %}
-          <a class="text-link" href="{{ item.platform_url }}" target="_blank" rel="noreferrer">查看平台链接</a>
-          {% endif %}
-
-          <div class="send-actions">
-            <p class="form-hint" data-send-job-result>
-              {% if item.job_id %}任务编号：{{ item.job_id }}{% else %}还未入队，先点“刷新发送队列”。{% endif %}
-            </p>
-            <div class="button-row">
-              <button type="submit" class="secondary-button" {% if not item.job_id %}disabled{% endif %}>保存</button>
-              <button type="button" class="secondary-button" data-regenerate-send-metadata {% if not item.job_id %}disabled{% endif %}>重新生成标题/话题</button>
-              <button type="button" class="secondary-button" data-generate-cover-frames>更换封面帧</button>
-              <button type="button" class="primary-button" data-send-single-job {% if not item.job_id or item.status not in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}disabled{% endif %}>发送此条</button>
-            </div>
-          </div>
-        </form>
-      </article>
-      {% else %}
-      <div class="empty-state">
-        <h3>还没有可发送的切片</h3>
-        <p>先在片段审核里完成切片，再回到这里刷新发送队列。</p>
-      </div>
-      {% endfor %}
-    </div>
-  </section>
-
-  <aside class="panel send-preview-panel" data-send-preview-panel>
-    <div class="panel-header">
-      <div>
-        <p class="eyebrow">平台投稿预览</p>
-        <h2>网页自动化会填写这些内容</h2>
-      </div>
-    </div>
-
-    {% set preview = send_queue_items[0] if send_queue_items else none %}
-    {% if preview %}
-    <div class="phone-preview">
-      <div class="phone-screen">
-        <img data-send-preview-image src="{{ preview.cover_media_url }}" alt="封面预览" {% if not preview.cover_media_url %}hidden{% endif %}>
-        <video data-send-preview-video muted loop playsinline preload="metadata" src="{{ preview.video_media_url }}" {% if preview.cover_media_url %}hidden{% endif %}></video>
-        <div class="phone-caption">
-          <strong data-send-preview-title>{{ preview.title }}</strong>
-          <span data-send-preview-tags>{{ preview.tags }}</span>
-        </div>
-      </div>
-    </div>
-    <div class="send-preview-copy">
-      <p data-send-preview-description>{{ preview.description }}</p>
-      <p><strong>抖音：</strong>上传视频，填写标题/正文 #话题，设置封面，点击发布。</p>
-      <p><strong>B站：</strong>上传视频，填写封面、标题、分区、标签、简介，点击立即投稿。</p>
-      <p>遇到验证码、登录失效或风控弹窗时，任务会进入失败，等待人工处理。</p>
-    </div>
-    {% else %}
-    <p class="form-hint">队列生成后，这里会显示第一条投稿预览。</p>
-    {% endif %}
-  </aside>
-</section>
-
-<section class="panel send-history-panel">
-  <div class="panel-header">
-    <div>
-      <p class="eyebrow">发送记录</p>
-      <h2>opencli 任务状态</h2>
-    </div>
-  </div>
-
-  <div class="publish-job-list">
-    {% for job in publish_jobs %}
-    <article class="publish-job-row" data-publish-job-id="{{ job.id }}">
-      <div>
-        <p class="send-meta-line">
-          <span class="status-pill tone-{{ job.status_tone }}">{{ job.platform_label }}</span>
-          <span class="status-pill tone-{{ job.status_tone }}">{{ job.status_label }}</span>
-          <span>{{ job.publish_mode_label }}</span>
-        </p>
-        <h3>{{ job.title or job.output_file_name or job.id }}</h3>
-        <p>{{ job.task_name or "未命名任务" }} · {{ job.updated_at or job.created_at }}</p>
-        <p class="schedule-time-note">
-          发布时间：
-          <time data-publish-scheduled-at="{{ job.scheduled_at or '' }}" datetime="{{ job.scheduled_at or '' }}">{{ job.scheduled_at_display }}</time>
-        </p>
-        {% if job.error_message %}<p class="error-text">{{ job.error_message }}</p>{% endif %}
-        {% if job.platform_url %}<a class="text-link" href="{{ job.platform_url }}" target="_blank" rel="noreferrer">平台链接</a>{% endif %}
-        {% if job.trace_path %}<p class="form-hint">Trace：{{ job.trace_path }}</p>{% endif %}
-      </div>
-      <div class="button-row">
-        {% if job.status not in ["PUBLISHED", "CANCELLED", "published", "cancelled"] %}
-        <label class="send-checkbox">
-          <input type="checkbox" data-publish-schedule-checkbox value="{{ job.id }}">
-          排期
-        </label>
-        {% endif %}
-        {% if job.status in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}
-        <button type="button" class="secondary-button" data-publish-job-action="retry">重试</button>
-        {% endif %}
-        {% if job.status not in ["PUBLISHED", "published"] %}
-        <button type="button" class="secondary-button" data-publish-job-action="mark-published">标记已发</button>
-        {% endif %}
-        {% if job.status not in ["FAILED", "PUBLISHED", "failed", "published"] %}
-        <button type="button" class="secondary-button" data-publish-job-action="mark-failed">标记失败</button>
-        {% endif %}
-      </div>
+<section class="panel publish-center-panel" data-center-panel="history" hidden>
+  <div class="panel-header"><div><h2>发送记录</h2><p>平台发送显示“已发布”；本地发布包只显示“已导出发布包”，两者不会混淆。</p></div></div>
+  <div class="publish-history-table">
+    {% for job in history_jobs %}
+    <article class="publish-history-row" data-publish-row data-job-id="{{ job.id }}" data-status="{{ job.status }}">
+      <time>{{ job.updated_at or job.created_at }}</time><span>{{ job.platform_label }}</span><strong>{{ job.title }}</strong><span>{{ job.publish_mode_label }}</span><span class="status-pill tone-{{ job.status_tone }}" data-row-status>{{ job.status_label }}</span>
+      {% if job.error_message %}<small class="error-text">{{ job.error_message }}</small>{% endif %}
+      {% if job.status == "FAILED" %}<button type="button" class="secondary-button" data-publish-now>立即重试</button>{% endif %}
     </article>
-    {% else %}
-    <p class="form-hint">暂无发送记录。</p>
-    {% endfor %}
+    {% else %}<p class="empty-state">暂无执行记录。</p>{% endfor %}
   </div>
 </section>
+
+<div class="publish-selection-bar" data-selection-bar hidden>
+  <strong>已选 <span data-selected-count>0</span> 条</strong>
+  <button type="button" class="primary-button" data-open-schedule-drawer>设置排期</button>
+  <button type="button" class="secondary-button" data-send-selected>立即发送</button>
+  <button type="button" class="secondary-button" data-expand-selected>批量编辑</button>
+  <button type="button" class="text-button" data-clear-selection>取消选择</button>
+</div>
+
+<div class="schedule-drawer-backdrop" data-schedule-backdrop hidden></div>
+<aside class="schedule-drawer" data-schedule-drawer hidden aria-label="设置排期">
+  <div class="schedule-drawer-header"><div><p class="eyebrow">Schedule</p><h2>设置排期</h2><p>已选 <strong data-drawer-count>0</strong> 条</p></div><button type="button" class="icon-button" data-close-schedule-drawer aria-label="关闭">×</button></div>
+  <form data-schedule-form>
+    <label><span>起始时间</span><input type="datetime-local" name="start_at_local" required></label>
+    <label><span>间隔</span><select name="interval_preset"><option value="60">1 小时</option><option value="120">2 小时</option><option value="180" selected>3 小时</option><option value="360">6 小时</option><option value="custom">自定义</option></select></label>
+    <label data-custom-interval hidden><span>自定义分钟</span><input type="number" name="interval_minutes" min="1" max="10080" value="180"></label>
+    <div class="schedule-window-grid"><label><span>每日开始</span><input type="time" name="daily_start_time" value="09:00" required></label><label><span>每日结束</span><input type="time" name="daily_end_time" value="21:00" required></label></div>
+    <p class="timezone-note">当前时区：<strong data-current-timezone>Asia/Shanghai</strong></p>
+    <button type="button" class="secondary-button" data-preview-schedule>预览排期</button>
+    <div class="schedule-preview-list" data-schedule-preview><p class="form-hint">请先生成预览，再确认排期。</p></div>
+    <button type="submit" class="primary-button" data-confirm-schedule disabled>确认排期</button>
+  </form>
+</aside>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260711-real-scheduling"></script>
 {% endblock %}
