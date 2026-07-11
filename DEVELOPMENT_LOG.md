@@ -1,5 +1,17 @@
 # Development Log
 
+## 2026-07-11 真实发布排期闭环与发送中心重构
+- 分离目标平台与执行方式：`platform` 仅允许 `douyin` / `bilibili`，`publish_mode` 独立表示 opencli、发布包、API 或未实现的本地浏览器执行器。
+- 全自动流水线直接创建最终 `opencli_publish` 任务，不再依赖“刷新发送队列”生成第二套记录；刷新操作只补缺，并尊重已有 `manual_export` / `local_browser` 任务。
+- 新增统一 `execute_publish_job(job_id, force=False)` 入口；调度器使用条件更新原子抢占，opencli/API 成功进入 `PUBLISHED`，发布包成功进入 `EXPORTED`，失败进入 `FAILED`。
+- `NEED_REVIEW` 可以保存排期但不能执行；“立即发送”支持 `WAITING`、`SCHEDULED`、`FAILED`，会先把 UTC 排期改为当前时间。
+- 排期请求改为 `start_at_local + timezone + interval_minutes`；新增 `POST /api/publish/schedules/preview`，预览和保存复用同一计算函数，跨日按用户时区的每日窗口顺延。
+- 数据库新增 `schedule_timezone` 与有效任务唯一索引；迁移旧平台/执行方式或重复任务前自动创建 SQLite 备份，保留已发布历史，只取消较旧的未发布重复项并记录原因。
+- 调度器只恢复超过 `PUBLISH_JOB_STALE_MINUTES` 且没有成功结果的陈旧 `PUBLISHING`；阻塞执行使用工作线程；新增 `GET /api/publish/scheduler/health`。
+- 发送中心改为“待安排 / 已排期 / 发送记录”三页签，使用紧凑列表、单一选择语义、底部批量栏和右侧排期抽屉；排期、取消和编辑均局部更新，不再整页刷新。
+- 新增统一 `apiFetch`，运行时自动携带本地管理员 token；真实 token 不写入静态 JavaScript。
+- 已验证：指定 36 项发布测试通过；全量 235 项 pytest 通过；Node 检查通过；真实 Chrome 浏览器集成测试与隔离页面可视化检查通过。
+
 ## 2026-06-25 全自动切片修复与发送中心批量排期
 - 修复 AI 分析完成后候选片段“先写入、随后又被全部删除”的事务顺序错误；候选片段现在在单个 SQLite 事务内替换，任一新片段写入失败都会自动回滚并保留旧结果。
 - 修复历史全自动任务卡在 AI 分析后的问题：任务可从最近一次 AI 分析历史恢复候选片段，并从自动选片阶段继续，不需要重新消耗一次 AI 分析。

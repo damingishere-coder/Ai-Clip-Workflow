@@ -1,5 +1,14 @@
 # 数据库结构说明
 
+## 2026-07-11：发布平台、执行方式、时区与去重迁移
+
+- `publish_jobs.platform` 只保存 `douyin` / `bilibili`；`manual_export`、`local_browser` 等值属于 `publish_mode`。
+- 新增 `schedule_timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai'`；`scheduled_at` 统一保存 UTC ISO 8601，页面按该时区转换显示。
+- 有效任务唯一索引 `uq_publish_jobs_active_clip_platform_mode` 约束同一 `output_clip_id + platform + publish_mode` 只能有一条未完成任务；`PUBLISHED`、`EXPORTED`、`CANCELLED` 历史不受该索引限制。
+- 初始化发现旧值或重复任务时，先通过 SQLite backup API 写入 `data/backups/workflow-before-publish-migration-*.sqlite3`，再迁移数据。
+- 旧 `platform=manual_export` 若 `provider_response.target_platform` 存在，会恢复真实目标平台，并按 `PUBLISH_DEFAULT_MODE` 设置执行方式；其他无效平台从任务平台恢复，最后才回退 `douyin`。
+- 未发布重复任务保留 `updated_at/created_at` 最新的一条，其他写为 `CANCELLED`，错误码为 `migration_duplicate_cancelled`，并在 `provider_response` 保存迁移原因；已发布历史不会删除。
+
 ## 2026-06-25：全自动配置兼容与发送中心排期
 
 - 不新增数据库列，也不执行破坏性迁移。
@@ -64,14 +73,14 @@
 | `task_id` | TEXT | 所属视频任务 ID |
 | `output_clip_id` | TEXT | 所属输出切片 ID |
 | `account_id` | TEXT | 发布账号 ID |
-| `platform` | TEXT | 发布平台 |
-| `publish_mode` | TEXT | `draft`、`manual_review`、`api_publish` 或 `opencli_publish` |
+| `platform` | TEXT | 目标平台，只允许 `douyin` / `bilibili` |
+| `publish_mode` | TEXT | 执行方式：`opencli_publish` / `manual_export` / `api_publish` / `local_browser` |
 | `video_source` | TEXT | `original` 或 `subtitled` |
 | `video_file_path` | TEXT | 本次发布使用的视频路径 |
 | `title` | TEXT | 标题 |
 | `description` | TEXT | 简介 / 正文 |
 | `tags` | TEXT | 标签 |
-| `status` | TEXT | `ready` / `NEED_REVIEW` / `publishing` / `published` / `failed` / `cancelled` |
+| `status` | TEXT | `DRAFT` / `WAITING` / `SCHEDULED` / `PUBLISHING` / `PUBLISHED` / `EXPORTED` / `FAILED` / `CANCELLED` / `NEED_REVIEW` |
 | `audit_status` | TEXT | 平台审核状态 |
 | `platform_item_id` | TEXT | 平台稿件 / 视频 ID |
 | `platform_upload_id` | TEXT | 平台上传 ID |
@@ -80,7 +89,8 @@
 | `last_error` | TEXT | 最近一次失败说明，供后续自动重试使用 |
 | `provider_response` | TEXT | 平台响应摘要 JSON |
 | `retry_count` | INTEGER | 重试次数 |
-| `scheduled_at` | TEXT | 计划发布时间（v1.2 仅字段预留，尚无后台定时调度器） |
+| `scheduled_at` | TEXT | UTC ISO 8601 计划发布时间，例如 `2026-07-12T01:00:00Z` |
+| `schedule_timezone` | TEXT | 排期计算和页面显示使用的 IANA 时区，例如 `Asia/Shanghai` |
 
 ## 2026-05-23：AI Prompt 方案
 
@@ -336,5 +346,5 @@ data/workflow.sqlite3
 - 旧字段继续兼容：`output_clip_id` 等同于 `clip_id`，`description` 等同于 `caption`，`tags` 等同于 `hashtags`，`video_file_path` 等同于 `video_path`，`provider_response` 兼容 `publish_result`，`retry_count` 兼容 `attempt_count`。
 - 发布状态使用：`DRAFT`、`SCHEDULED`、`WAITING`、`PUBLISHING`、`PUBLISHED`、`FAILED`、`CANCELLED`、`NEED_REVIEW`。
 - 调度器只扫描 `status = SCHEDULED` 且 `scheduled_at <= 当前时间` 的任务；`NEED_REVIEW`、`CANCELLED`、`PUBLISHED` 不会自动发布。
-- 默认发布器为 `manual_export`，成功后写入 `published_at`、`publish_result`、`remote_video_id`；失败后写入 `FAILED`、`last_error`、`error_message`，并增加 `attempt_count`。
+- 该 2026-06-23 版本曾默认使用 `manual_export`；2026-07-11 起默认改为 `opencli_publish`。发布包导出成功写 `EXPORTED` 且不写 `published_at`；只有平台确认提交成功才写 `PUBLISHED` 和 `published_at`。
 - 没有 `scheduled_at` 的旧手动发送任务迁移为 `WAITING`，避免被自动调度器误执行。

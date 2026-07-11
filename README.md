@@ -4,7 +4,45 @@
 
 当前版本：`1.4.0`。
 
-v1.4.0 已实现定时发送与自动发布执行器：系统会按 `publish_jobs.scheduled_at` 扫描到点任务，默认使用 `manual_export` 生成本地发布包，不调用真实平台 API。
+v1.4.0 已实现真实定时发送闭环：系统按 `publish_jobs.scheduled_at` 扫描到点任务，默认通过 `opencli_publish` 使用 Windows Chrome 的现有登录态向抖音或 B站投稿。`manual_export` 仍可选，但它只生成本地发布包，状态为 `EXPORTED`，不代表平台已发布。
+
+## 定时发送快速说明
+
+- `platform` 只表示目标平台：`douyin` / `bilibili`。
+- `publish_mode` 表示执行方式：`opencli_publish`、`manual_export`、`api_publish`、`local_browser`；其中 `local_browser` 尚未实现，会明确失败，不会静默导出发布包。
+- 默认执行方式由 `PUBLISH_DEFAULT_MODE=opencli_publish` 控制；旧的 `PUBLISH_SCHEDULER_DEFAULT_PLATFORM` 已废弃，只保留兼容读取。
+- 浏览器提交成功或 API 确认成功才进入 `PUBLISHED`；本地发布包导出成功进入 `EXPORTED`。
+- 排期在用户选择的 IANA 时区内计算，数据库统一保存 UTC ISO 8601；发送中心按任务的 `schedule_timezone` 转回本地时间展示。
+- 调度器健康状态：`GET /api/publish/scheduler/health`。
+- opencli 自动发送要求 Windows Chrome 保持目标平台登录；验证码、登录失效、风控和最终人工确认仍由用户处理。
+
+### 单条真实灰度发布
+
+1. 先启动 Windows opencli 辅助服务，并在 Chrome 登录目标平台。
+2. 打开发送中心，只勾选一条低风险测试视频。
+3. 展开编辑，确认标题、正文、话题、目标平台与 `opencli_publish`。
+4. 点击“立即发送”，观察状态依次进入 `PUBLISHING`，平台确认提交成功后进入 `PUBLISHED`。
+5. 同时打开 `/api/publish/scheduler/health` 检查调度器与 opencli 状态；若平台出现验证码或风控，停止批量任务并人工处理。
+
+### 排期 API
+
+预览与保存使用同一个请求体：
+
+```json
+{
+  "job_ids": ["job-a", "job-b"],
+  "action": "apply",
+  "start_at_local": "2026-07-12T09:00",
+  "timezone": "Asia/Shanghai",
+  "interval_minutes": 180,
+  "daily_start_time": "09:00",
+  "daily_end_time": "21:00"
+}
+```
+
+- 先调用 `POST /api/publish/schedules/preview`，读取每条任务的 `scheduled_at_local`、`scheduled_at_local_display` 和 `scheduled_at_utc`。
+- 用户确认后调用 `PATCH /api/publish/jobs/schedule-batch`；后端复用同一函数计算并写库，所以预览与保存结果一致。
+- 清除排期时提交 `action=clear`；普通任务回到 `WAITING`，`FAILED` 保持失败，`NEED_REVIEW` 保持复核状态。
 
 ## 当前状态
 
@@ -77,8 +115,8 @@ http://127.0.0.1:8001
 ## v1.4.0 定时发送
 
 - 应用启动时会自动启动 `PublishScheduler`，默认每 60 秒扫描一次 `publish_jobs`。
-- 默认发布方式是 `manual_export`，会把发布包导出到 `outputs/publish_packages/{task_id}/{clip_id}/`。
-- 发布包包含 `clip.mp4`、`title.txt`、`caption.txt`、`hashtags.txt`、`cover_text.txt`、`publish_plan.json` 和 `metadata.json`。
+- 默认发布方式是 `opencli_publish`，调用 Windows Chrome 的已有平台登录态；可通过 `PUBLISH_DEFAULT_MODE` 调整。
+- 可选的 `manual_export` 会把发布包导出到 `outputs/publish_packages/{task_id}/{clip_id}/`；发布包包含 `clip.mp4`、`title.txt`、`caption.txt`、`hashtags.txt`、`cover_text.txt`、`publish_plan.json` 和 `metadata.json`，成功状态为 `EXPORTED`。
 - 手动执行一次扫描：
 
 ```powershell
