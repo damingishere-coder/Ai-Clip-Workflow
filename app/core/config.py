@@ -163,7 +163,10 @@ class Settings:
     opencli_host_bridge_url: str = _env("OPENCLI_HOST_BRIDGE_URL", "")
     publish_scheduler_enabled: bool = _env_bool("PUBLISH_SCHEDULER_ENABLED", True)
     publish_scheduler_interval_seconds: int = int(_env("PUBLISH_SCHEDULER_INTERVAL_SECONDS", "60"))
+    publish_default_mode: str = _env("PUBLISH_DEFAULT_MODE", "opencli_publish")
+    # 已废弃：仅保留读取能力，旧值不再覆盖 publish_jobs.platform。
     publish_scheduler_default_platform: str = _env("PUBLISH_SCHEDULER_DEFAULT_PLATFORM", "manual_export")
+    publish_job_stale_minutes: int = int(_env("PUBLISH_JOB_STALE_MINUTES", "30"))
     publish_scheduler_max_retry_count: int = int(_env("PUBLISH_SCHEDULER_MAX_RETRY_COUNT", "3"))
     publish_scheduler_export_dir: Path = _env_path(
         "PUBLISH_SCHEDULER_EXPORT_DIR",

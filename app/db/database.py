@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import datetime
 from collections.abc import Iterator
@@ -315,6 +316,10 @@ def _create_indexes(connection: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_status_platform_created ON publish_jobs(status, platform, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_task_output ON publish_jobs(task_id, output_clip_id)",
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_status_scheduled ON publish_jobs(status, scheduled_at)",
+        """CREATE UNIQUE INDEX IF NOT EXISTS uq_publish_jobs_active_clip_platform_mode
+           ON publish_jobs(output_clip_id, platform, publish_mode)
+           WHERE status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
+             AND output_clip_id IS NOT NULL AND output_clip_id <> ''""",
         # OAuth state 过期清理
         "CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at)",
     ]
@@ -710,6 +715,8 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
             connection.execute(statement)
 
     columns = _get_table_columns(connection, "publish_jobs")
+    _backup_publish_database_before_data_migration(connection)
+    _migrate_publish_platform_and_mode_values(connection)
     if {"clip_id", "output_clip_id"}.issubset(columns):
         connection.execute("UPDATE publish_jobs SET clip_id = output_clip_id WHERE clip_id IS NULL OR clip_id = ''")
     if {"video_path", "video_file_path"}.issubset(columns):
@@ -738,6 +745,7 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
             UPDATE publish_jobs SET status = 'SCHEDULED' WHERE status IN ('ready', 'scheduled');
             UPDATE publish_jobs SET status = 'PUBLISHING' WHERE status = 'publishing';
             UPDATE publish_jobs SET status = 'PUBLISHED' WHERE status = 'published';
+            UPDATE publish_jobs SET status = 'EXPORTED' WHERE status = 'exported';
             UPDATE publish_jobs SET status = 'FAILED' WHERE status = 'failed';
             UPDATE publish_jobs SET status = 'CANCELLED' WHERE status = 'cancelled';
             UPDATE publish_jobs SET status = 'NEED_REVIEW' WHERE status = 'need_review';
@@ -748,10 +756,134 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
             SET status = 'SCHEDULED'
             WHERE status IS NULL OR status = '' OR status NOT IN (
                 'DRAFT', 'SCHEDULED', 'WAITING', 'PUBLISHING',
-                'PUBLISHED', 'FAILED', 'CANCELLED', 'NEED_REVIEW'
+                'PUBLISHED', 'EXPORTED', 'FAILED', 'CANCELLED', 'NEED_REVIEW'
             );
             """
         )
+    _cancel_duplicate_active_publish_jobs(connection)
+
+
+def _backup_publish_database_before_data_migration(connection: sqlite3.Connection) -> None:
+    """仅在发现旧值或有效重复任务时创建一次迁移前备份。"""
+    legacy_count = connection.execute(
+        """
+        SELECT COUNT(*)
+        FROM publish_jobs
+        WHERE platform NOT IN ('douyin', 'bilibili')
+           OR publish_mode NOT IN ('opencli_publish', 'manual_export', 'api_publish', 'local_browser')
+        """
+    ).fetchone()[0]
+    duplicate_count = connection.execute(
+        """
+        SELECT COUNT(*) FROM (
+            SELECT output_clip_id, platform, publish_mode
+            FROM publish_jobs
+            WHERE status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
+            GROUP BY output_clip_id, platform, publish_mode
+            HAVING COUNT(*) > 1
+        )
+        """
+    ).fetchone()[0]
+    if not legacy_count and not duplicate_count:
+        return
+    database_path = settings.database_path
+    if not database_path.exists():
+        return
+    backup_dir = settings.data_dir / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = backup_dir / f"workflow-before-publish-migration-{timestamp}.sqlite3"
+    if backup_path.exists():
+        return
+    with sqlite3.connect(str(backup_path)) as backup_connection:
+        connection.backup(backup_connection)
+
+
+def _provider_target_platform(raw_value: str | None) -> str:
+    try:
+        payload = json.loads(raw_value or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    target = str(payload.get("target_platform") or "").strip().lower()
+    return target if target in {"douyin", "bilibili"} else ""
+
+
+def _migrate_publish_platform_and_mode_values(connection: sqlite3.Connection) -> None:
+    default_mode = str(settings.publish_default_mode or "opencli_publish").strip().lower()
+    if default_mode not in {"opencli_publish", "manual_export", "api_publish", "local_browser"}:
+        default_mode = "opencli_publish"
+    rows = connection.execute(
+        """
+        SELECT publish_jobs.id, publish_jobs.platform, publish_jobs.publish_mode,
+               publish_jobs.provider_response, tasks.platform AS task_platform
+        FROM publish_jobs
+        LEFT JOIN tasks ON tasks.id = publish_jobs.task_id
+        WHERE publish_jobs.platform NOT IN ('douyin', 'bilibili')
+           OR publish_jobs.publish_mode NOT IN ('opencli_publish', 'manual_export', 'api_publish', 'local_browser')
+        """
+    ).fetchall()
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    for row in rows:
+        platform = _provider_target_platform(row["provider_response"])
+        if not platform:
+            task_platform = str(row["task_platform"] or "").strip().lower()
+            platform = task_platform if task_platform in {"douyin", "bilibili"} else "douyin"
+        old_platform = str(row["platform"] or "").strip().lower()
+        old_mode = str(row["publish_mode"] or "").strip().lower()
+        mode = old_mode if old_mode in {"opencli_publish", "manual_export", "api_publish", "local_browser"} else default_mode
+        if old_platform in {"manual_export", "local_browser"}:
+            mode = default_mode
+        connection.execute(
+            "UPDATE publish_jobs SET platform = ?, publish_mode = ?, updated_at = ? WHERE id = ?",
+            (platform, mode, now, row["id"]),
+        )
+
+
+def _cancel_duplicate_active_publish_jobs(connection: sqlite3.Connection) -> None:
+    groups = connection.execute(
+        """
+        SELECT output_clip_id, platform, publish_mode
+        FROM publish_jobs
+        WHERE status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
+        GROUP BY output_clip_id, platform, publish_mode
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    for group in groups:
+        rows = connection.execute(
+            """
+            SELECT id, provider_response
+            FROM publish_jobs
+            WHERE output_clip_id = ? AND platform = ? AND publish_mode = ?
+              AND status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
+            ORDER BY COALESCE(NULLIF(updated_at, ''), created_at) DESC, created_at DESC, id DESC
+            """,
+            (group["output_clip_id"], group["platform"], group["publish_mode"]),
+        ).fetchall()
+        for duplicate in rows[1:]:
+            migration_payload = {
+                "migration_reason": "duplicate_active_publish_job",
+                "message": "迁移时发现同一切片、平台和执行方式的重复未发布任务，已保留最新一条。",
+                "previous_provider_response": duplicate["provider_response"] or "",
+            }
+            connection.execute(
+                """
+                UPDATE publish_jobs
+                SET status = 'CANCELLED', error_code = 'migration_duplicate_cancelled',
+                    error_message = ?, last_error = ?, provider_response = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    migration_payload["message"],
+                    migration_payload["message"],
+                    json.dumps(migration_payload, ensure_ascii=False),
+                    now,
+                    duplicate["id"],
+                ),
+            )
 
 
 def _migrate_workflow_jobs_table(connection: sqlite3.Connection) -> None:

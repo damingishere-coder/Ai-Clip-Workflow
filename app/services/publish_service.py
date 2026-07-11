@@ -33,14 +33,12 @@ from app.services.publish_providers import (
     DouyinPublishProvider,
     PublishProviderError,
 )
+from app.services.publish_domain import PUBLISH_MODES, TARGET_PLATFORMS
 from app.services.storage_service import get_artifact_paths, resolve_video_file_path
 from app.services.video_cut_service import ensure_ffmpeg_available, sanitize_filename_part, summarize_stderr
 
 
-PLATFORM_LABELS = {
-    "douyin": "抖音",
-    "bilibili": "B站",
-}
+PLATFORM_LABELS = TARGET_PLATFORMS
 
 STATUS_LABELS = {
     "draft": "草稿",
@@ -79,6 +77,7 @@ PUBLISH_STATUS_SCHEDULED = "SCHEDULED"
 PUBLISH_STATUS_WAITING = "WAITING"
 PUBLISH_STATUS_PUBLISHING = "PUBLISHING"
 PUBLISH_STATUS_PUBLISHED = "PUBLISHED"
+PUBLISH_STATUS_EXPORTED = "EXPORTED"
 PUBLISH_STATUS_FAILED = "FAILED"
 PUBLISH_STATUS_CANCELLED = "CANCELLED"
 PUBLISH_STATUS_NEED_REVIEW = "NEED_REVIEW"
@@ -94,19 +93,7 @@ LEGACY_STATUS_MAP = {
     "need_review": PUBLISH_STATUS_NEED_REVIEW,
 }
 
-PLATFORM_LABELS.update(
-    {
-        "manual_export": "发布包导出",
-        "local_browser": "本地浏览器",
-    }
-)
-
-PUBLISH_MODE_LABELS.update(
-    {
-        "manual_export": "手动发布包导出",
-        "local_browser": "本地浏览器发布",
-    }
-)
+PUBLISH_MODE_LABELS.update(PUBLISH_MODES)
 
 STATUS_LABELS = {
     PUBLISH_STATUS_DRAFT: "草稿",
@@ -114,6 +101,7 @@ STATUS_LABELS = {
     PUBLISH_STATUS_WAITING: "等待处理",
     PUBLISH_STATUS_PUBLISHING: "发布中",
     PUBLISH_STATUS_PUBLISHED: "已发布",
+    PUBLISH_STATUS_EXPORTED: "已导出发布包",
     PUBLISH_STATUS_FAILED: "发送失败",
     PUBLISH_STATUS_CANCELLED: "已取消",
     PUBLISH_STATUS_NEED_REVIEW: "需人工复核",
@@ -131,6 +119,7 @@ STATUS_TONES = {
     PUBLISH_STATUS_WAITING: "amber",
     PUBLISH_STATUS_PUBLISHING: "purple",
     PUBLISH_STATUS_PUBLISHED: "green",
+    PUBLISH_STATUS_EXPORTED: "blue",
     PUBLISH_STATUS_FAILED: "red",
     PUBLISH_STATUS_CANCELLED: "amber",
     PUBLISH_STATUS_NEED_REVIEW: "amber",
@@ -998,7 +987,24 @@ def _find_opencli_job(output_clip_id: str, platform: str) -> dict | None:
             """
             SELECT * FROM publish_jobs
             WHERE output_clip_id = ? AND platform = ? AND publish_mode = 'opencli_publish'
+              AND status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
             ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (output_clip_id, platform),
+        ).fetchone()
+    return _normalize_job(row) if row else None
+
+
+def _find_active_publish_job(output_clip_id: str, platform: str) -> dict | None:
+    """查找任意执行方式的有效任务，避免刷新队列改变用户已选择的执行方式。"""
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT * FROM publish_jobs
+            WHERE output_clip_id = ? AND platform = ?
+              AND status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
+            ORDER BY COALESCE(NULLIF(updated_at, ''), created_at) DESC
             LIMIT 1
             """,
             (output_clip_id, platform),
@@ -1122,10 +1128,10 @@ def refresh_send_queue(use_ai: bool = False) -> dict:
             return cover_state["cover"] or {}
 
         for platform in PLATFORM_LABELS:
-            existing_job = _find_opencli_job(item["output_clip_id"], platform)
+            existing_job = _find_active_publish_job(item["output_clip_id"], platform)
             if existing_job:
                 skipped += 1
-                if not existing_job.get("cover_file_path"):
+                if existing_job.get("publish_mode") == "opencli_publish" and not existing_job.get("cover_file_path"):
                     cover = ensure_cover_for_item()
                     if cover.get("cover_file_path"):
                         _update_job_cover(existing_job["id"], cover)
@@ -1448,7 +1454,10 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
     cover_file_path = (payload.cover_file_path or "").strip()
     cover_time_seconds = float(payload.cover_time_seconds or 0)
     cover_mode = payload.cover_mode
-    provider_payload = "真实发布任务已创建，等待执行。" if payload.publish_mode == "api_publish" else "本地发布任务已创建，等待人工确认。"
+    existing = _find_active_publish_job(payload.output_clip_id, payload.platform)
+    if existing and existing.get("publish_mode") == payload.publish_mode:
+        return {"status": "exists", "message": "同一切片、平台和执行方式已有有效任务。", "job": existing}
+    provider_payload = "真实发布任务已创建，等待执行。"
     if not cover_file_path:
         try:
             auto_cover = _generate_default_publish_cover(
@@ -1474,11 +1483,11 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
 
     job_id = uuid4().hex[:12]
     now = _now_iso()
-    status = PUBLISH_STATUS_DRAFT if payload.publish_mode == "draft" else PUBLISH_STATUS_WAITING
+    status = PUBLISH_STATUS_WAITING
     if (payload.scheduled_at or "").strip():
         status = PUBLISH_STATUS_SCHEDULED
-    if payload.publish_mode == "api_publish":
-        status = PUBLISH_STATUS_PUBLISHING
+    if payload.publish_mode == "api_publish" and not (payload.scheduled_at or "").strip():
+        status = PUBLISH_STATUS_WAITING
     with get_connection() as connection:
         connection.execute(
             """
@@ -1521,8 +1530,6 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
         )
         connection.commit()
 
-    if payload.publish_mode == "api_publish" and config and account:
-        return _execute_publish_job(job_id, config=config, account=account, video_path=resolved_video_path)
     return {"status": "ok", "message": "发布任务已创建。", "job": get_publish_job(job_id)}
 
 

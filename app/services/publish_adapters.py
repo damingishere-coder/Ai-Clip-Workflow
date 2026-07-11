@@ -173,12 +173,12 @@ class LocalBrowserPublisher(BasePublisher):
 
 
 def publisher_for_job(job: dict[str, Any]) -> BasePublisher:
-    platform = str(job.get("platform") or "").strip().lower()
     publish_mode = str(job.get("publish_mode") or "").strip().lower()
-    if platform == "local_browser" or publish_mode == "local_browser":
+    if publish_mode == "local_browser":
         return LocalBrowserPublisher()
-    if platform == "manual_export" or publish_mode == "manual_export":
+    if publish_mode == "manual_export":
         return ManualExportPublisher()
-    if settings.publish_scheduler_default_platform == "manual_export":
-        return ManualExportPublisher()
-    return ManualExportPublisher()
+    raise PublishValidationError(
+        f"publish_mode={publish_mode or '(empty)'} 不能由本地发布包适配器执行",
+        "unsupported_publish_mode",
+    )

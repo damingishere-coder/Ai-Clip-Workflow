@@ -9,19 +9,8 @@ from typing import Any
 from app.core.config import settings
 from app.db.database import get_connection, init_db
 from app.services.publish_adapters import PublishValidationError, publisher_for_job
+from app.services.publish_domain import PUBLISH_STATUSES
 from app.services.task_log_service import append_task_log
-
-
-PUBLISH_STATUSES = {
-    "DRAFT",
-    "SCHEDULED",
-    "WAITING",
-    "PUBLISHING",
-    "PUBLISHED",
-    "FAILED",
-    "CANCELLED",
-    "NEED_REVIEW",
-}
 
 
 def now_iso() -> str:
@@ -547,6 +536,7 @@ def queue_snapshot(task_id: str | None = None) -> dict[str, Any]:
         "pending": by_status["SCHEDULED"] + by_status["WAITING"],
         "publishing": by_status["PUBLISHING"],
         "published": by_status["PUBLISHED"],
+        "exported": by_status["EXPORTED"],
         "failed": by_status["FAILED"],
         "need_review": by_status["NEED_REVIEW"],
         "cancelled": by_status["CANCELLED"],

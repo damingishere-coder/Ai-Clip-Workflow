@@ -8,6 +8,7 @@ from uuid import uuid4
 from app.core.config import settings
 from app.db.database import get_connection
 from app.services.publish_service import DEFAULT_BILIBILI_TID, get_publish_job
+from app.services.publish_domain import validate_publish_mode, validate_target_platform
 from app.services.task_service import _now_iso
 
 
@@ -31,17 +32,18 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
         for item in scheduled_items:
             output_clip = item["output_clip"]
             metadata = item["metadata"]
-            target_platform = metadata["platform"]
-            platform = settings.publish_scheduler_default_platform or target_platform
+            platform = validate_target_platform(metadata["platform"])
+            publish_mode = validate_publish_mode(settings.publish_default_mode)
             existing = connection.execute(
                 """
                 SELECT id
                 FROM publish_jobs
-                WHERE output_clip_id = ? AND platform = ? AND publish_mode = 'manual_export'
+                WHERE output_clip_id = ? AND platform = ? AND publish_mode = ?
+                  AND status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
-                (output_clip["id"], platform),
+                (output_clip["id"], platform, publish_mode),
             ).fetchone()
             if existing:
                 skipped_ids.append(existing["id"])
@@ -52,12 +54,13 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
             job_id = uuid4().hex[:12]
             provider_response = {
                 "source": "auto_pipeline",
-                "target_platform": target_platform,
+                "target_platform": platform,
                 "metadata_source": metadata.get("source") or "",
                 "metadata_error": metadata.get("error") or "",
                 "cover_text": metadata.get("cover_text") or "",
                 "risk_flags": metadata.get("risk_flags") or [],
-                "note": "全自动流水线只创建待发送任务，发布时间在发送中心统一设置。",
+                "publish_mode": publish_mode,
+                "note": "全自动流水线已直接创建最终发布任务，可在发送中心设置排期。",
             }
             connection.execute(
                 """
@@ -70,7 +73,7 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                     status, audit_status, error_message, last_error, provider_response, publish_result,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, NULL, ?, 'manual_export', 'original', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'public',
+                VALUES (?, ?, ?, ?, NULL, ?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'public',
                     'auto', 0, 1, ?, 'original', '', '', ?, ?, 'not_submitted', '', '', ?, '', ?, ?)
                 """,
                 (
@@ -79,6 +82,7 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                     output_clip["id"],
                     output_clip["id"],
                     platform,
+                    publish_mode,
                     output_clip.get("output_file_path") or "",
                     output_clip.get("output_file_path") or "",
                     metadata.get("title") or "精彩片段",
