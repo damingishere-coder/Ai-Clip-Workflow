@@ -17,7 +17,7 @@ from app.models.task import (
     PublishSendStart,
 )
 from app.services import publish_service
-from app.services.publish_scheduler import PublishScheduler, queue_snapshot
+from app.services.publish_scheduler import PublishScheduler, queue_snapshot, scheduler_health
 
 
 router = APIRouter(prefix="/api/publish", tags=["publish"])
@@ -93,7 +93,14 @@ async def get_publish_queue_snapshot(task_id: str | None = None) -> dict:
 
 @router.post("/scheduler/run-once")
 async def run_publish_scheduler_once() -> dict:
-    return PublishScheduler().run_once()
+    import asyncio
+
+    return await asyncio.to_thread(PublishScheduler().run_once)
+
+
+@router.get("/scheduler/health")
+async def get_publish_scheduler_health() -> dict:
+    return scheduler_health()
 
 
 @router.post("/queue/refresh")
@@ -189,8 +196,10 @@ async def retry_publish_job(job_id: str) -> dict:
 
 @router.post("/jobs/{job_id}/publish-now")
 async def publish_job_now(job_id: str) -> dict:
+    import asyncio
+
     try:
-        return PublishScheduler().publish_now(job_id)
+        return await asyncio.to_thread(PublishScheduler().publish_now, job_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

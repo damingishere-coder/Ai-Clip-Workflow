@@ -2563,10 +2563,11 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
             """
             UPDATE publish_jobs
             SET status = 'PUBLISHED', audit_status = 'submitted',
-                error_code = '', error_message = '', provider_response = ?, updated_at = ?
+                error_code = '', error_message = '', provider_response = ?,
+                published_at = ?, updated_at = ?
             WHERE id = ?
             """,
-            (json.dumps(response, ensure_ascii=False), now, job_id),
+            (json.dumps(response, ensure_ascii=False), now, now, job_id),
         )
         connection.commit()
     return {"status": "ok", "message": "opencli 发送流程已执行完成。", "job": get_publish_job(job_id)}
@@ -2574,7 +2575,7 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
 
 def _ready_opencli_job_ids(job_ids: list[str] | None = None) -> list[str]:
     params: list[str] = []
-    where = "publish_mode = 'opencli_publish' AND status IN ('WAITING', 'FAILED', 'ready', 'failed')"
+    where = "publish_mode = 'opencli_publish' AND status IN ('WAITING', 'SCHEDULED', 'FAILED', 'ready', 'scheduled', 'failed')"
     if job_ids:
         placeholders = ",".join("?" for _ in job_ids)
         where += f" AND id IN ({placeholders})"
@@ -2592,7 +2593,10 @@ def run_opencli_send_batch(job_ids: list[str] | None = None, runner: CommandRunn
         return {"status": "busy", "message": "发送队列正在运行，请等待当前批次结束。", "jobs": list_publish_jobs(limit=100)}
     try:
         ids = _ready_opencli_job_ids(job_ids)
-        results = [execute_opencli_send_job(job_id, runner=runner) for job_id in ids]
+        from app.services.publish_scheduler import PublishScheduler
+
+        scheduler = PublishScheduler()
+        results = [scheduler.publish_now(job_id, runner=runner) for job_id in ids]
         return {"status": "ok", "message": f"发送批次已处理 {len(results)} 条任务。", "results": results, **get_publish_center_context()}
     finally:
         _SEND_LOCK.release()
@@ -2624,21 +2628,17 @@ def retry_publish_job(job_id: str) -> dict:
     job = get_publish_job(job_id)
     if not job:
         raise ValueError("发布任务不存在。")
-    if (
-        job.get("platform") == "manual_export"
-        or job.get("publish_mode") == "manual_export"
-        or (
-            job.get("status") == PUBLISH_STATUS_FAILED
-            and settings.publish_scheduler_default_platform == "manual_export"
-        )
-    ):
-        from app.services.publish_scheduler import PublishScheduler
+    from app.services.publish_scheduler import PublishScheduler
 
-        return PublishScheduler().retry_failed(job_id)
-    if job.get("publish_mode") == "opencli_publish":
-        return execute_opencli_send_job(job_id)
+    return PublishScheduler().retry_failed(job_id)
+
+
+def execute_api_publish_job(job_id: str) -> dict:
+    job = get_publish_job(job_id)
+    if not job:
+        raise ValueError("发布任务不存在。")
     if job.get("publish_mode") != "api_publish":
-        raise ValueError("只有真实接口发布任务可以重试。")
+        raise ValueError("只能执行 api_publish 任务。")
     output_clip = _get_output_clip_for_publish(job["task_id"], job["output_clip_id"])
     if not output_clip:
         raise ValueError("切片记录不存在。")
@@ -2647,17 +2647,6 @@ def retry_publish_job(job_id: str) -> dict:
     account = get_account(job.get("account_id") or "")
     if not config or not account:
         raise ValueError("平台配置或账号不存在。")
-    with get_connection() as connection:
-        connection.execute(
-            """
-            UPDATE publish_jobs
-            SET status = 'PUBLISHING', retry_count = retry_count + 1,
-                error_code = '', error_message = '', updated_at = ?
-            WHERE id = ?
-            """,
-            (_now_iso(), job_id),
-        )
-        connection.commit()
     return _execute_publish_job(job_id, config=config, account=account, video_path=video_path)
 
 
@@ -2695,7 +2684,7 @@ def _execute_publish_job(job_id: str, config: dict, account: dict, video_path: P
             UPDATE publish_jobs
             SET status = 'PUBLISHED', audit_status = ?, platform_item_id = ?,
                 platform_upload_id = ?, error_code = '', error_message = '',
-                provider_response = ?, updated_at = ?
+                provider_response = ?, published_at = ?, updated_at = ?
             WHERE id = ?
             """,
             (
@@ -2703,6 +2692,7 @@ def _execute_publish_job(job_id: str, config: dict, account: dict, video_path: P
                 result.item_id,
                 result.upload_id,
                 json.dumps(result.response or {}, ensure_ascii=False),
+                now,
                 now,
                 job_id,
             ),

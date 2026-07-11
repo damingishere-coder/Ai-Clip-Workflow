@@ -789,6 +789,9 @@ def _backup_publish_database_before_data_migration(connection: sqlite3.Connectio
     database_path = settings.database_path
     if not database_path.exists():
         return
+    # sqlite backup 不能在源连接持有写事务时执行；这里只提交此前的建表/加列操作，
+    # 真正的数据修复尚未开始，因此备份仍然是数据迁移前快照。
+    connection.commit()
     backup_dir = settings.data_dir / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")

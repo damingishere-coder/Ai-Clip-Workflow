@@ -3,18 +3,27 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from app.core.config import settings
 from app.db.database import get_connection, init_db
-from app.services.publish_adapters import PublishValidationError, publisher_for_job
+from app.services.publish_adapters import PublishValidationError
 from app.services.publish_domain import PUBLISH_STATUSES
+from app.services.publish_executor import execute_publish_job
 from app.services.task_log_service import append_task_log
 
 
 def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+_SCHEDULER_HEALTH: dict[str, Any] = {
+    "running": False,
+    "scanning": False,
+    "last_scan_at": "",
+    "next_scan_at": "",
+}
 
 
 def parse_datetime(value: str | None) -> datetime:
@@ -112,49 +121,83 @@ class PublishScheduler:
 
     def run_once(self) -> dict[str, Any]:
         init_db()
-        self.recover_interrupted_jobs()
-        jobs = self.list_due_jobs()
-        results = [self.execute_job(job["id"]) for job in jobs]
-        return {
-            "status": "ok",
-            "checked_at": now_iso(),
-            "matched_count": len(jobs),
-            "published_count": sum(1 for item in results if item.get("status") == "published"),
-            "failed_count": sum(1 for item in results if item.get("status") == "failed"),
-            "skipped_count": sum(1 for item in results if item.get("status") == "skipped"),
-            "results": results,
-        }
+        _SCHEDULER_HEALTH["scanning"] = True
+        try:
+            self.recover_interrupted_jobs()
+            jobs = self.list_due_jobs()
+            results = [self.execute_job(job["id"]) for job in jobs]
+            checked_at = datetime.now().astimezone()
+            _SCHEDULER_HEALTH["last_scan_at"] = checked_at.isoformat(timespec="seconds")
+            _SCHEDULER_HEALTH["next_scan_at"] = (
+                checked_at + timedelta(seconds=self.interval_seconds)
+            ).isoformat(timespec="seconds")
+            return {
+                "status": "ok",
+                "checked_at": _SCHEDULER_HEALTH["last_scan_at"],
+                "matched_count": len(jobs),
+                "published_count": sum(1 for item in results if item.get("status") == "published"),
+                "exported_count": sum(1 for item in results if item.get("status") == "exported"),
+                "failed_count": sum(1 for item in results if item.get("status") == "failed"),
+                "skipped_count": sum(1 for item in results if item.get("status") == "skipped"),
+                "results": results,
+            }
+        finally:
+            _SCHEDULER_HEALTH["scanning"] = False
 
     async def run_forever(self) -> None:
         init_db()
         self._stop_event = asyncio.Event()
-        while not self._stop_event.is_set():
-            self.run_once()
-            try:
-                await asyncio.wait_for(self._stop_event.wait(), timeout=self.interval_seconds)
-            except TimeoutError:
-                continue
+        _SCHEDULER_HEALTH["running"] = True
+        try:
+            while not self._stop_event.is_set():
+                await asyncio.to_thread(self.run_once)
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=self.interval_seconds)
+                except TimeoutError:
+                    continue
+        finally:
+            _SCHEDULER_HEALTH["running"] = False
 
     def stop(self) -> None:
         if self._stop_event:
             self._stop_event.set()
 
     def recover_interrupted_jobs(self) -> int:
-        now = now_iso()
+        now = datetime.now(timezone.utc)
+        stale_before = now - timedelta(minutes=max(1, int(settings.publish_job_stale_minutes)))
+        recovered = 0
         with get_connection() as connection:
-            cursor = connection.execute(
+            rows = connection.execute(
                 """
-                UPDATE publish_jobs
-                SET status = 'SCHEDULED',
-                    last_error = COALESCE(NULLIF(last_error, ''), 'Recovered from interrupted PUBLISHING state'),
-                    error_message = COALESCE(NULLIF(error_message, ''), 'Recovered from interrupted PUBLISHING state'),
-                    updated_at = ?
-                WHERE status = 'PUBLISHING' AND published_at IS NULL
-                """,
-                (now,),
-            )
+                SELECT id, updated_at, provider_response, publish_result
+                FROM publish_jobs
+                WHERE status = 'PUBLISHING' AND (published_at IS NULL OR published_at = '')
+                  AND (platform_item_id IS NULL OR platform_item_id = '')
+                  AND (remote_video_id IS NULL OR remote_video_id = '')
+                """
+            ).fetchall()
+            for row in rows:
+                try:
+                    updated_at = parse_datetime(row["updated_at"]).astimezone(timezone.utc)
+                except ValueError:
+                    continue
+                success_text = f"{row['provider_response'] or ''} {row['publish_result'] or ''}".lower()
+                if updated_at > stale_before or any(marker in success_text for marker in ('"completed"', '"success"', 'published')):
+                    continue
+                cursor = connection.execute(
+                    """
+                    UPDATE publish_jobs
+                    SET status = 'SCHEDULED',
+                        last_error = '陈旧 PUBLISHING 任务已恢复，等待重新执行',
+                        error_message = '陈旧 PUBLISHING 任务已恢复，等待重新执行',
+                        updated_at = ?
+                    WHERE id = ? AND status = 'PUBLISHING' AND updated_at = ?
+                    """,
+                    (now.isoformat(timespec="seconds"), row["id"], row["updated_at"]),
+                )
+                recovered += int(cursor.rowcount or 0)
             connection.commit()
-        return int(cursor.rowcount or 0)
+        return recovered
 
     def list_due_jobs(self) -> list[dict[str, Any]]:
         current = datetime.now().astimezone()
@@ -179,7 +222,14 @@ class PublishScheduler:
                 due.append(job)
         return due
 
-    def execute_job(self, job_id: str, *, force: bool = False, allow_republish: bool = False) -> dict[str, Any]:
+    def execute_job(
+        self,
+        job_id: str,
+        *,
+        force: bool = False,
+        allow_republish: bool = False,
+        runner=None,
+    ) -> dict[str, Any]:
         job = get_publish_job_raw(job_id)
         if not job:
             return {"status": "failed", "job_id": job_id, "message": "publish job not found"}
@@ -189,7 +239,7 @@ class PublishScheduler:
             return {"status": "skipped", "job_id": job_id, "message": "already published"}
         if status in {"CANCELLED", "NEED_REVIEW"}:
             return {"status": "skipped", "job_id": job_id, "message": f"status is {status}"}
-        if status not in {"SCHEDULED", "FAILED", "PUBLISHING"} and not force:
+        if status != "SCHEDULED":
             return {"status": "skipped", "job_id": job_id, "message": f"status is {status}"}
 
         if _risk_flags(job) and not settings.publish_scheduler_allow_publish_without_review:
@@ -207,20 +257,27 @@ class PublishScheduler:
         if not force and attempts >= self.max_retry_count:
             return self._mark_failed(job_id, "max_retry_exceeded", "max retry count exceeded")
 
-        self._mark_publishing(job_id)
-        job = get_publish_job_raw(job_id) or job
+        if not self._claim_scheduled_job(job_id):
+            return {"status": "skipped", "job_id": job_id, "message": "job was claimed by another scheduler"}
         try:
-            result = publisher_for_job(job).publish(job)
+            result = execute_publish_job(job_id, force=force, runner=runner)
         except PublishValidationError as exc:
             return self._mark_failed(job_id, exc.error_code, exc.message)
         except Exception as exc:
             return self._mark_failed(job_id, "publish_failed", str(exc) or exc.__class__.__name__)
 
-        return self._mark_published(job_id, result.payload, result.remote_video_id)
+        if result.get("status") == "exported":
+            return self._mark_exported(job_id, result.get("payload") or {}, result.get("remote_video_id") or "")
+        return result
 
-    def publish_now(self, job_id: str, *, allow_republish: bool = False) -> dict[str, Any]:
+    def publish_now(self, job_id: str, *, allow_republish: bool = False, runner=None) -> dict[str, Any]:
+        job = get_publish_job_raw(job_id)
+        if not job:
+            raise ValueError("publish job not found")
+        if str(job.get("status") or "").upper() not in {"WAITING", "SCHEDULED", "FAILED"}:
+            return {"status": "skipped", "job_id": job_id, "message": f"status is {job.get('status')}"}
         self._set_schedule_to_now(job_id)
-        return self.execute_job(job_id, force=True, allow_republish=allow_republish)
+        return self.execute_job(job_id, force=True, allow_republish=allow_republish, runner=runner)
 
     def retry_failed(self, job_id: str) -> dict[str, Any]:
         job = get_publish_job_raw(job_id)
@@ -266,14 +323,15 @@ class PublishScheduler:
         if str(job.get("status") or "").upper() == "PUBLISHED":
             raise ValueError("published jobs cannot be rescheduled")
         now = now_iso()
+        next_status = "NEED_REVIEW" if str(job.get("status") or "").upper() == "NEED_REVIEW" else "SCHEDULED"
         with get_connection() as connection:
             connection.execute(
                 """
                 UPDATE publish_jobs
-                SET scheduled_at = ?, status = 'SCHEDULED', updated_at = ?
+                SET scheduled_at = ?, status = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (parsed.isoformat(timespec="seconds"), now, job_id),
+                (parsed.isoformat(timespec="seconds"), next_status, now, job_id),
             )
             connection.commit()
         return {"status": "ok", "job": get_publish_job_raw(job_id)}
@@ -380,11 +438,11 @@ class PublishScheduler:
             )
             connection.commit()
 
-    def _mark_publishing(self, job_id: str) -> None:
+    def _claim_scheduled_job(self, job_id: str) -> bool:
         now = now_iso()
         payload = json.dumps({"publisher": "started", "started_at": now}, ensure_ascii=False)
         with get_connection() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE publish_jobs
                 SET status = 'PUBLISHING',
@@ -395,11 +453,12 @@ class PublishScheduler:
                     publish_result = ?,
                     provider_response = ?,
                     updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status = 'SCHEDULED'
                 """,
                 (payload, payload, now, job_id),
             )
             connection.commit()
+        return int(cursor.rowcount or 0) == 1
 
     def _mark_published(self, job_id: str, payload: dict[str, Any], remote_video_id: str) -> dict[str, Any]:
         now = now_iso()
@@ -427,6 +486,25 @@ class PublishScheduler:
         job = get_publish_job_raw(job_id) or {"task_id": ""}
         self._append_log(job.get("task_id") or "", f"Publish job {job_id} completed by manual_export")
         return {"status": "published", "job_id": job_id, "publish_result": payload}
+
+    def _mark_exported(self, job_id: str, payload: dict[str, Any], remote_video_id: str) -> dict[str, Any]:
+        now = now_iso()
+        publish_result = json.dumps(payload, ensure_ascii=False)
+        with get_connection() as connection:
+            connection.execute(
+                """
+                UPDATE publish_jobs
+                SET status = 'EXPORTED', publish_result = ?, provider_response = ?,
+                    remote_video_id = ?, published_at = NULL, audit_status = 'not_submitted',
+                    last_error = '', error_message = '', error_code = '', updated_at = ?
+                WHERE id = ? AND status = 'PUBLISHING'
+                """,
+                (publish_result, publish_result, remote_video_id, now, job_id),
+            )
+            connection.commit()
+        job = get_publish_job_raw(job_id) or {"task_id": ""}
+        self._append_log(job.get("task_id") or "", f"Publish job {job_id} exported a local package")
+        return {"status": "exported", "job_id": job_id, "publish_result": payload}
 
     def _mark_failed(self, job_id: str, error_code: str, message: str) -> dict[str, Any]:
         now = now_iso()
@@ -542,6 +620,33 @@ def queue_snapshot(task_id: str | None = None) -> dict[str, Any]:
         "cancelled": by_status["CANCELLED"],
         "today": today_jobs,
         "counts": {status: len(items) for status, items in by_status.items()},
+    }
+
+
+def scheduler_health() -> dict[str, Any]:
+    from app.services.publish_service import _opencli_status
+
+    with get_connection() as connection:
+        counts = connection.execute(
+            """
+            SELECT
+                SUM(CASE WHEN status = 'SCHEDULED' THEN 1 ELSE 0 END) AS scheduled_count,
+                SUM(CASE WHEN status = 'PUBLISHING' THEN 1 ELSE 0 END) AS publishing_count
+            FROM publish_jobs
+            """
+        ).fetchone()
+    opencli = _opencli_status()
+    return {
+        "enabled": bool(settings.publish_scheduler_enabled),
+        "running": bool(_SCHEDULER_HEALTH["running"]),
+        "scanning": bool(_SCHEDULER_HEALTH["scanning"]),
+        "last_scan_at": _SCHEDULER_HEALTH["last_scan_at"],
+        "next_scan_at": _SCHEDULER_HEALTH["next_scan_at"],
+        "interval_seconds": int(settings.publish_scheduler_interval_seconds),
+        "scheduled_count": int(counts["scheduled_count"] or 0),
+        "publishing_count": int(counts["publishing_count"] or 0),
+        "opencli_available": bool(opencli["available"]),
+        "opencli_message": opencli["message"],
     }
 
 
