@@ -10,6 +10,15 @@ __pycache__/
 data/*
 !data/.gitkeep
 
+# 发布浏览器登录态、执行日志和失败截图（只允许保存在本机）
+data/browser_profiles/
+data/publish_worker/
+data/publish_artifacts/
+outputs/publish_packages/
+playwright/.auth/
+*.storage-state.json
+cookies*.json
+
 tasks/*
 !tasks/.gitkeep
 
