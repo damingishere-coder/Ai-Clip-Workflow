@@ -18,11 +18,13 @@ from app.db.database import get_connection
 from app.models.task import (
     PublishAccountCreate,
     PublishBatchJobCreate,
+    PublishBatchTargetUpdate,
     PublishCoverCreate,
     PublishCoverFrameBatchCreate,
     PublishJobContentUpdate,
     PublishJobCreate,
     PublishJobScheduleUpdate,
+    PublishJobTargetUpdate,
     PublishPlatformConfigUpdate,
     PublishSendJobUpdate,
     PublishSendStart,
@@ -325,7 +327,10 @@ def _opencli_bridge_command_runner(command: list[str]) -> subprocess.CompletedPr
             {"command": command, "timeout": OPENCLI_TIMEOUT_SECONDS},
             ensure_ascii=False,
         ).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.publish_worker_token}",
+        },
         method="POST",
     )
     try:
@@ -474,6 +479,9 @@ def _normalize_account(row) -> dict:
             "access_token_masked": _mask_secret(account.get("access_token")),
             "refresh_token_masked": _mask_secret(account.get("refresh_token")),
             "is_authorized": account.get("authorization_status") == "authorized",
+            "auth_type": account.get("auth_type") or "browser_profile",
+            "login_status": account.get("login_status") or "login_required",
+            "login_message": account.get("login_message") or "",
         }
     )
     return account
@@ -526,6 +534,22 @@ def _normalize_job(row) -> dict:
             scheduled_at_local = parse_datetime_value.astimezone(ZoneInfo(schedule_timezone)).isoformat(timespec="seconds")
         except (ValueError, ZoneInfoNotFoundError):
             scheduled_at_local = scheduled_at_utc
+    missing_fields: list[str] = []
+    if not str(job.get("title") or "").strip():
+        missing_fields.append("标题")
+    if not str(caption).strip():
+        missing_fields.append("正文/简介")
+    if not str(hashtags).strip():
+        missing_fields.append("话题/标签")
+    if not str(job.get("cover_file_path") or "").strip():
+        missing_fields.append("封面")
+    if str(job.get("publish_mode") or "") == "local_browser" and not str(job.get("account_id") or "").strip():
+        missing_fields.append("发布账号")
+    if str(job.get("platform") or "") == "bilibili":
+        if not str(job.get("bilibili_tid") or "").strip():
+            missing_fields.append("B站分区")
+        if job.get("bilibili_copyright") == "repost" and not str(job.get("bilibili_source") or "").strip():
+            missing_fields.append("转载来源")
     job.update(
         {
             "status": status,
@@ -558,8 +582,12 @@ def _normalize_job(row) -> dict:
             ),
             "provider_payload": provider_payload,
             "publish_result_payload": publish_result_payload,
-            "platform_url": provider_payload.get("url") or provider_payload.get("platform_url") or "",
+            "platform_url": job.get("platform_url") or provider_payload.get("url") or provider_payload.get("platform_url") or "",
             "trace_path": provider_payload.get("trace_path") or "",
+            "content_complete": not missing_fields,
+            "missing_fields": missing_fields,
+            "account_login_status": job.get("account_login_status") or "login_required",
+            "account_login_message": job.get("account_login_message") or "",
         }
     )
     return job
@@ -678,9 +706,9 @@ def create_account(payload: PublishAccountCreate) -> dict:
             INSERT INTO publish_accounts (
                 id, platform, account_name, account_uid, open_id, access_token,
                 refresh_token, token_expires_at, refresh_expires_at, authorization_status,
-                scopes, remark, created_at, updated_at
+                auth_type, login_status, login_message, scopes, remark, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 account_id,
@@ -693,6 +721,9 @@ def create_account(payload: PublishAccountCreate) -> dict:
                 (payload.token_expires_at or "").strip(),
                 (payload.refresh_expires_at or "").strip(),
                 auth_status,
+                "oauth" if auth_status == "authorized" else "browser_profile",
+                "normal" if auth_status == "authorized" else "login_required",
+                "已保存平台 OAuth 授权" if auth_status == "authorized" else "请打开独立 Chrome 完成登录",
                 (payload.scopes or "").strip(),
                 (payload.remark or "").strip(),
                 now,
@@ -701,6 +732,45 @@ def create_account(payload: PublishAccountCreate) -> dict:
         )
         connection.commit()
     return {"status": "ok", "message": "发布账号已保存。", "account": get_account(account_id)}
+
+
+def check_browser_account(account_id: str) -> dict:
+    account = get_account(account_id)
+    if not account:
+        raise ValueError("发布账号不存在")
+    from app.services.publish_repository import PublishRepository
+    from app.services.publishers.worker_client import PublishWorkerClient
+
+    result = PublishWorkerClient().check_account(account["platform"], account_id)
+    normal = str(result.get("login_status") or "") == "normal"
+    previous_login = str(account.get("login_status") or "") == "normal" or bool(account.get("last_login_at"))
+    PublishRepository().update_account_status(
+        account_id,
+        "normal" if normal else ("invalid" if previous_login else "login_required"),
+        str(result.get("message") or ""),
+        logged_in=normal,
+    )
+    return {"status": "ok", "account": get_account(account_id), "worker_result": result}
+
+
+def start_browser_account_login(account_id: str) -> dict:
+    account = get_account(account_id)
+    if not account:
+        raise ValueError("发布账号不存在")
+    from app.services.publishers.worker_client import PublishWorkerClient
+
+    result = PublishWorkerClient().start_login(account["platform"], account_id)
+    return {"status": "started", "message": result.get("message") or "已打开登录窗口", "account": account}
+
+
+def open_browser_creator_center(account_id: str) -> dict:
+    account = get_account(account_id)
+    if not account:
+        raise ValueError("发布账号不存在")
+    from app.services.publishers.worker_client import PublishWorkerClient
+
+    result = PublishWorkerClient().open_creator_center(account["platform"], account_id)
+    return {"status": "started", "message": result.get("message") or "已打开创作者中心", "account": account}
 
 
 def build_douyin_oauth_url() -> dict:
@@ -1025,7 +1095,7 @@ def _find_active_publish_job(output_clip_id: str, platform: str) -> dict | None:
             """
             SELECT * FROM publish_jobs
             WHERE output_clip_id = ? AND platform = ?
-              AND status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
+              AND status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'PUBLISHING', 'NEED_REVIEW')
             ORDER BY COALESCE(NULLIF(updated_at, ''), created_at) DESC
             LIMIT 1
             """,
@@ -1066,6 +1136,30 @@ def _batch_find_opencli_jobs(output_clip_ids: list[str]) -> dict[str, dict[str, 
     return result
 
 
+def _batch_find_publish_jobs(output_clip_ids: list[str]) -> dict[str, dict[str, dict]]:
+    """返回每个切片、每个平台最新的一条发布任务，不限定执行方式。"""
+    if not output_clip_ids:
+        return {}
+    placeholders = ",".join("?" for _ in output_clip_ids)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT * FROM publish_jobs
+            WHERE output_clip_id IN ({placeholders})
+            ORDER BY COALESCE(NULLIF(updated_at, ''), created_at) DESC, created_at DESC
+            """,
+            output_clip_ids,
+        ).fetchall()
+    result: dict[str, dict[str, dict]] = {}
+    for row in rows:
+        job = _normalize_job(row)
+        output_id = str(job.get("output_clip_id") or "")
+        platform = str(job.get("platform") or "")
+        if output_id and platform:
+            result.setdefault(output_id, {}).setdefault(platform, job)
+    return result
+
+
 def _publish_provider_payload(metadata: dict, cover: dict | None = None) -> str:
     cover = cover or {}
     return json.dumps(
@@ -1095,33 +1189,53 @@ def _insert_opencli_job(item: dict, platform: str, metadata: dict, cover: dict |
     cover_file_path = str(cover.get("cover_file_path") or "")
     cover_mode = "time" if cover_file_path else "auto"
     cover_time_seconds = float(cover.get("cover_time_seconds") or 0)
+    publish_mode = settings.publish_default_mode
     with get_connection() as connection:
+        account = connection.execute(
+            """
+            SELECT id FROM publish_accounts
+            WHERE platform = ? AND login_status = 'normal'
+            ORDER BY COALESCE(last_login_at, updated_at) DESC LIMIT 1
+            """,
+            (platform,),
+        ).fetchone()
+        account_id = account["id"] if account else None
         connection.execute(
             """
             INSERT INTO publish_jobs (
-                id, task_id, output_clip_id, account_id, platform, publish_mode,
-                video_source, video_file_path, title, description, tags, visibility,
+                id, task_id, output_clip_id, clip_id, account_id, platform, publish_mode,
+                video_source, video_file_path, video_path, title, description, caption, tags, hashtags, visibility,
                 cover_mode, cover_time_seconds, allow_download, bilibili_tid,
                 bilibili_copyright, bilibili_source, cover_file_path, scheduled_at,
-                status, audit_status, provider_response, created_at, updated_at
+                schedule_timezone, timezone, status, audit_status, provider_response,
+                max_attempts, created_at, updated_at
             )
-            VALUES (?, ?, ?, '', ?, 'opencli_publish', 'original', ?, ?, ?, ?, 'public',
-                ?, ?, 1, ?, 'original', '', ?, '', 'WAITING', 'not_submitted', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, 'public',
+                ?, ?, 1, ?, 'original', '', ?, '', ?, ?, 'WAITING', 'not_submitted', ?, ?, ?, ?)
             """,
             (
                 job_id,
                 item["task_id"],
                 item["output_clip_id"],
+                item["output_clip_id"],
+                account_id,
                 platform,
+                publish_mode,
+                raw_video_path,
                 raw_video_path,
                 metadata["title"],
                 metadata["description"],
+                metadata["description"],
+                metadata["tags"],
                 metadata["tags"],
                 cover_mode,
                 cover_time_seconds,
                 DEFAULT_BILIBILI_TID,
                 cover_file_path,
+                settings.app_timezone,
+                settings.app_timezone,
                 _publish_provider_payload(metadata, cover),
+                settings.publish_scheduler_max_retry_count,
                 now,
                 now,
             ),
@@ -1502,11 +1616,24 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
     account = None
     if payload.publish_mode == "api_publish":
         config, account = _validate_api_publish_ready(payload)
+    elif payload.publish_mode == "local_browser":
+        account = get_account(payload.account_id or "")
+        if not account:
+            raise ValueError("真实浏览器发布必须先选择一个发布账号")
+        if account.get("platform") != payload.platform:
+            raise ValueError("发布账号与目标平台不一致")
+
+    from app.services.publish_time import ensure_future, to_utc_iso
+
+    scheduled_at = ""
+    if (payload.scheduled_at or "").strip():
+        ensure_future(payload.scheduled_at, settings.app_timezone)
+        scheduled_at = to_utc_iso(payload.scheduled_at, settings.app_timezone)
 
     job_id = uuid4().hex[:12]
     now = _now_iso()
     status = PUBLISH_STATUS_WAITING
-    if (payload.scheduled_at or "").strip():
+    if scheduled_at:
         status = PUBLISH_STATUS_SCHEDULED
     if payload.publish_mode == "api_publish" and not (payload.scheduled_at or "").strip():
         status = PUBLISH_STATUS_WAITING
@@ -1514,25 +1641,30 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
         connection.execute(
             """
             INSERT INTO publish_jobs (
-                id, task_id, output_clip_id, account_id, platform, publish_mode,
-                video_source, video_file_path, title, description, tags, visibility,
+                id, task_id, output_clip_id, clip_id, account_id, platform, publish_mode,
+                video_source, video_file_path, video_path, title, description, caption, tags, hashtags, visibility,
                 cover_mode, cover_time_seconds, allow_download, bilibili_tid,
                 bilibili_copyright, bilibili_source, cover_file_path, scheduled_at,
-                status, audit_status, provider_response, created_at, updated_at
+                schedule_timezone, timezone, status, audit_status, provider_response,
+                max_attempts, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
                 payload.task_id,
+                payload.output_clip_id,
                 payload.output_clip_id,
                 payload.account_id or "",
                 payload.platform,
                 payload.publish_mode,
                 payload.video_source,
                 raw_video_path,
+                raw_video_path,
                 safe_content["title"],
                 safe_content["description"],
+                safe_content["description"],
+                safe_content["tags"],
                 safe_content["tags"],
                 payload.visibility,
                 cover_mode,
@@ -1542,10 +1674,13 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
                 payload.bilibili_copyright,
                 (payload.bilibili_source or "").strip(),
                 cover_file_path,
-                (payload.scheduled_at or "").strip(),
+                scheduled_at,
+                settings.app_timezone,
+                settings.app_timezone,
                 status,
                 "not_submitted",
                 provider_payload,
+                settings.publish_scheduler_max_retry_count,
                 now,
                 now,
             ),
@@ -1587,7 +1722,9 @@ def get_publish_job(job_id: str) -> dict | None:
                 publish_jobs.*,
                 tasks.task_name,
                 output_clip.output_file_name,
-                publish_accounts.account_name
+                publish_accounts.account_name,
+                publish_accounts.login_status AS account_login_status,
+                publish_accounts.login_message AS account_login_message
             FROM publish_jobs
             LEFT JOIN tasks ON tasks.id = publish_jobs.task_id
             LEFT JOIN output_clip ON output_clip.id = publish_jobs.output_clip_id
@@ -1605,7 +1742,9 @@ def list_publish_jobs(limit: int | None = 100) -> list[dict]:
             publish_jobs.*,
             tasks.task_name,
             output_clip.output_file_name,
-            publish_accounts.account_name
+            publish_accounts.account_name,
+            publish_accounts.login_status AS account_login_status,
+            publish_accounts.login_message AS account_login_message
         FROM publish_jobs
         LEFT JOIN tasks ON tasks.id = publish_jobs.task_id
         LEFT JOIN output_clip ON output_clip.id = publish_jobs.output_clip_id
@@ -1644,8 +1783,8 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
     job = get_publish_job(job_id)
     if not job:
         raise ValueError("发送任务不存在。")
-    if job.get("publish_mode") != "opencli_publish":
-        raise ValueError("只能编辑 opencli 发送任务。")
+    if job.get("status") not in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_SCHEDULED}:
+        raise ValueError("只有草稿、等待或已排期任务可以编辑；失败任务请先创建重试任务。")
     safe_content = _sanitize_publish_content(
         payload.title,
         payload.tags,
@@ -1657,7 +1796,7 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
         connection.execute(
             """
             UPDATE publish_jobs
-            SET title = ?, description = ?, tags = ?, visibility = ?,
+            SET title = ?, description = ?, caption = ?, tags = ?, hashtags = ?, visibility = ?,
                 cover_file_path = ?, cover_time_seconds = ?, allow_download = ?,
                 bilibili_tid = ?, bilibili_copyright = ?, bilibili_source = ?,
                 updated_at = ?
@@ -1666,6 +1805,8 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
             (
                 safe_content["title"],
                 safe_content["description"],
+                safe_content["description"],
+                safe_content["tags"],
                 safe_content["tags"],
                 payload.visibility,
                 (payload.cover_file_path or "").strip(),
@@ -1688,14 +1829,61 @@ def update_publish_job_schedule(job_id: str, payload: PublishJobScheduleUpdate) 
     return PublishScheduler().update_schedule(job_id, payload.scheduled_at)
 
 
+def update_publish_job_target(job_id: str, payload: PublishJobTargetUpdate) -> dict:
+    job = get_publish_job(job_id)
+    if not job:
+        raise ValueError("发布任务不存在")
+    if job.get("status") not in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_SCHEDULED}:
+        raise ValueError("当前状态不能修改发布平台或账号")
+    account_id = (payload.account_id or "").strip()
+    if payload.publish_mode == "local_browser":
+        account = get_account(account_id)
+        if not account:
+            raise ValueError("真实浏览器发布必须选择账号")
+        if account.get("platform") != payload.platform:
+            raise ValueError("账号与目标平台不一致")
+    try:
+        with get_connection() as connection:
+            connection.execute(
+                """
+                UPDATE publish_jobs SET platform = ?, account_id = ?, publish_mode = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (payload.platform, account_id or None, payload.publish_mode, _now_iso(), job_id),
+            )
+            connection.commit()
+    except Exception as exc:
+        if "UNIQUE constraint" in str(exc):
+            raise ValueError("同一切片在该平台已有未完成任务") from exc
+        raise
+    return {"status": "ok", "job": get_publish_job(job_id)}
+
+
+def update_publish_jobs_target_batch(payload: PublishBatchTargetUpdate) -> dict:
+    updated = []
+    single = PublishJobTargetUpdate(
+        platform=payload.platform,
+        account_id=payload.account_id,
+        publish_mode=payload.publish_mode,
+    )
+    for job_id in payload.job_ids:
+        updated.append(update_publish_job_target(job_id, single)["job"])
+    return {"status": "ok", "updated_count": len(updated), "jobs": updated}
+
+
 def update_publish_job_content(job_id: str, payload: PublishJobContentUpdate) -> dict:
     job = get_publish_job(job_id)
     if not job:
         raise ValueError("publish job not found")
-    if job.get("status") == PUBLISH_STATUS_PUBLISHED:
-        raise ValueError("published jobs cannot be edited into the queue")
+    if job.get("status") not in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_SCHEDULED}:
+        raise ValueError("当前状态不能直接编辑；失败任务请先创建重试任务，需复核任务请先人工确认。")
 
-    scheduled_at = (payload.scheduled_at or job.get("scheduled_at") or "").strip()
+    scheduled_at = (job.get("scheduled_at") or "").strip()
+    if (payload.scheduled_at or "").strip():
+        from app.services.publish_time import ensure_future, to_utc_iso
+
+        ensure_future(payload.scheduled_at, settings.app_timezone)
+        scheduled_at = to_utc_iso(payload.scheduled_at, settings.app_timezone)
     status = PUBLISH_STATUS_SCHEDULED if scheduled_at else PUBLISH_STATUS_WAITING
     now = _now_iso()
     with get_connection() as connection:
@@ -2494,27 +2682,12 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
         raise ValueError("发送任务不存在。")
     if job.get("publish_mode") != "opencli_publish":
         raise ValueError("只能执行 opencli 发送任务。")
-    if job.get("status") == PUBLISH_STATUS_PUBLISHED:
-        return {"status": "ok", "message": "这条任务已经标记为已发布。", "job": job}
-
     runner = runner or _default_command_runner
-    with get_connection() as connection:
-        connection.execute(
-            """
-            UPDATE publish_jobs
-            SET status = 'PUBLISHING', error_code = '', error_message = '',
-                provider_response = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (json.dumps({"opencli": "started"}, ensure_ascii=False), _now_iso(), job_id),
-        )
-        connection.commit()
 
     try:
-        commands = _opencli_commands_for_job(get_publish_job(job_id))
+        commands = _opencli_commands_for_job(job)
     except Exception as exc:
-        failed_job = _mark_job_failed(job_id, "prepare_failed", str(exc), {"stage": "prepare"})
-        return {"status": "failed", "message": str(exc), "job": failed_job}
+        return {"status": "failed", "message": str(exc), "error_code": "prepare_failed", "job": job}
 
     outputs: list[dict[str, Any]] = []
     for index, command in enumerate(commands, start=1):
@@ -2524,12 +2697,10 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
                 result = runner(command)
             except subprocess.TimeoutExpired:
                 message = f"opencli 第 {index} 步超时：{_command_summary(command)}"
-                failed_job = _mark_job_failed(job_id, "opencli_timeout", message, {"outputs": outputs})
-                return {"status": "failed", "message": message, "job": failed_job}
+                return {"status": "failed", "message": message, "error_code": "opencli_timeout", "outputs": outputs, "job": job}
             except Exception as exc:
                 message = f"opencli 第 {index} 步启动失败：{exc}"
-                failed_job = _mark_job_failed(job_id, "opencli_start_failed", message, {"outputs": outputs})
-                return {"status": "failed", "message": message, "job": failed_job}
+                return {"status": "failed", "message": message, "error_code": "opencli_start_failed", "outputs": outputs, "job": job}
 
             output = {
                 "step": index,
@@ -2547,8 +2718,7 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
                 attempt += 1
                 continue
             message = output["stderr"] or output["stdout"] or f"opencli 第 {index} 步失败"
-            failed_job = _mark_job_failed(job_id, "opencli_failed", message[:1000], {"outputs": outputs})
-            return {"status": "failed", "message": message, "job": failed_job}
+            return {"status": "failed", "message": message, "error_code": "opencli_failed", "outputs": outputs, "job": job}
 
     cleanup_outputs: list[dict[str, Any]] = []
     for command in _opencli_cleanup_commands_for_job(get_publish_job(job_id)):
@@ -2580,24 +2750,18 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
         "cleanup_outputs": cleanup_outputs,
         "completed_at": now,
     }
-    with get_connection() as connection:
-        connection.execute(
-            """
-            UPDATE publish_jobs
-            SET status = 'PUBLISHED', audit_status = 'submitted',
-                error_code = '', error_message = '', provider_response = ?,
-                published_at = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (json.dumps(response, ensure_ascii=False), now, now, job_id),
-        )
-        connection.commit()
-    return {"status": "ok", "message": "opencli 发送流程已执行完成。", "job": get_publish_job(job_id)}
+    return {
+        "status": "ok",
+        "confirmed": True,
+        "message": "opencli 已完成平台结果确认步骤。",
+        "provider_response": response,
+        "job": job,
+    }
 
 
 def _ready_opencli_job_ids(job_ids: list[str] | None = None) -> list[str]:
     params: list[str] = []
-    where = "publish_mode = 'opencli_publish' AND status IN ('WAITING', 'SCHEDULED', 'FAILED', 'ready', 'scheduled', 'failed')"
+    where = "status IN ('DRAFT', 'WAITING', 'SCHEDULED')"
     if job_ids:
         placeholders = ",".join("?" for _ in job_ids)
         where += f" AND id IN ({placeholders})"
@@ -2611,39 +2775,38 @@ def _ready_opencli_job_ids(job_ids: list[str] | None = None) -> list[str]:
 
 
 def run_opencli_send_batch(job_ids: list[str] | None = None, runner: CommandRunner | None = None) -> dict:
-    if not _SEND_LOCK.acquire(blocking=False):
-        return {"status": "busy", "message": "发送队列正在运行，请等待当前批次结束。", "jobs": list_publish_jobs(limit=100)}
-    try:
-        ids = _ready_opencli_job_ids(job_ids)
-        from app.services.publish_scheduler import PublishScheduler
+    del runner
+    ids = _ready_opencli_job_ids(job_ids)
+    from app.services.publish_scheduler import PublishScheduler
 
-        scheduler = PublishScheduler()
-        results = [scheduler.publish_now(job_id, runner=runner) for job_id in ids]
-        return {"status": "ok", "message": f"发送批次已处理 {len(results)} 条任务。", "results": results, **get_publish_center_context()}
-    finally:
-        _SEND_LOCK.release()
+    scheduler = PublishScheduler()
+    results = [scheduler.publish_now(job_id) for job_id in ids]
+    scan = scheduler.run_once()
+    return {
+        "status": "ok",
+        "message": f"已通过统一调度器处理 {len(results)} 条任务。",
+        "results": results,
+        "scheduler_result": scan,
+        **get_publish_center_context(),
+    }
 
 
 def start_opencli_send_batch(payload: PublishSendStart, background_tasks: Any | None = None) -> dict:
     ids = _ready_opencli_job_ids(payload.job_ids)
     if not ids:
-        return {"status": "empty", "message": "当前没有待发送或失败可重试的任务。", **get_publish_center_context()}
-    if _SEND_LOCK.locked():
-        return {"status": "busy", "message": "发送队列正在运行，请稍后刷新查看进度。", **get_publish_center_context()}
-    opencli_status = _opencli_status()
-    if not opencli_status["available"]:
-        return {
-            "status": "missing_opencli",
-            "message": (
-                f"{opencli_status['message']} 如果你刚安装或更新过 opencli，"
-                f"请运行 {opencli_status['restart_command']} 重启 Windows 本地后台后再试。"
-            ),
-            **get_publish_center_context(),
-        }
+        return {"status": "empty", "message": "当前没有可加入调度器的任务。", **get_publish_center_context()}
+    from app.services.publish_scheduler import PublishScheduler
+
+    scheduler = PublishScheduler()
+    results = [scheduler.publish_now(job_id) for job_id in ids]
     if background_tasks is not None:
-        background_tasks.add_task(run_opencli_send_batch, ids)
-        return {"status": "started", "message": f"已开始后台发送 {len(ids)} 条任务。", **get_publish_center_context()}
-    return run_opencli_send_batch(ids)
+        background_tasks.add_task(PublishScheduler().run_once)
+    return {
+        "status": "scheduled",
+        "message": f"已将 {len(ids)} 条任务加入统一发布调度器。",
+        "results": results,
+        **get_publish_center_context(),
+    }
 
 
 def retry_publish_job(job_id: str) -> dict:
@@ -2681,46 +2844,23 @@ def _execute_publish_job(job_id: str, config: dict, account: dict, video_path: P
     try:
         result = provider.publish(account, job, video_path)
     except PublishProviderError as exc:
-        with get_connection() as connection:
-            connection.execute(
-                """
-                UPDATE publish_jobs
-                SET status = 'FAILED', audit_status = 'not_submitted',
-                    error_code = ?, error_message = ?, provider_response = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    exc.error_code,
-                    exc.message,
-                    json.dumps(exc.response, ensure_ascii=False),
-                    now,
-                    job_id,
-                ),
-            )
-            connection.commit()
-        return {"status": "failed", "message": exc.message, "job": get_publish_job(job_id)}
+        return {
+            "status": "failed",
+            "message": exc.message,
+            "error_code": exc.error_code,
+            "provider_response": exc.response,
+            "job": job,
+        }
 
-    with get_connection() as connection:
-        connection.execute(
-            """
-            UPDATE publish_jobs
-            SET status = 'PUBLISHED', audit_status = ?, platform_item_id = ?,
-                platform_upload_id = ?, error_code = '', error_message = '',
-                provider_response = ?, published_at = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                result.audit_status,
-                result.item_id,
-                result.upload_id,
-                json.dumps(result.response or {}, ensure_ascii=False),
-                now,
-                now,
-                job_id,
-            ),
-        )
-        connection.commit()
-    return {"status": "ok", "message": "平台发布请求已提交。", "job": get_publish_job(job_id)}
+    return {
+        "status": "ok",
+        "message": "平台发布请求已提交。",
+        "remote_video_id": result.item_id,
+        "platform_upload_id": result.upload_id,
+        "published_at": now,
+        "provider_response": result.response or {},
+        "job": job,
+    }
 
 
 def _get_provider(platform: str, config: dict):
@@ -2736,7 +2876,7 @@ def get_publish_center_context() -> dict:
     queue_items = []
     raw_items = _list_completed_publish_clips()
     output_clip_ids = [item["output_clip_id"] for item in raw_items]
-    opencli_jobs_map = _batch_find_opencli_jobs(output_clip_ids)
+    publish_jobs_map = _batch_find_publish_jobs(output_clip_ids)
     for item in raw_items:
         original_path = resolve_video_file_path(item.get("output_file_path") or "")
         subtitled_path = resolve_video_file_path(item.get("subtitled_output_file_path") or "")
@@ -2753,7 +2893,7 @@ def get_publish_center_context() -> dict:
             "video_media_url": _video_media_url(item["task_id"], item["output_clip_id"], "original"),
         }
         publish_items.append(normalized_item)
-        jobs_for_oc = opencli_jobs_map.get(item["output_clip_id"], {})
+        jobs_for_oc = publish_jobs_map.get(item["output_clip_id"], {})
         for platform in PLATFORM_LABELS:
             job = jobs_for_oc.get(platform)
             if job:
@@ -2831,6 +2971,8 @@ def get_publish_center_context() -> dict:
         "history_jobs": history_jobs,
         "jobs_by_platform": jobs_by_platform,
         "platforms": [{"id": platform, "label": label} for platform, label in PLATFORM_LABELS.items()],
+        "accounts": list_accounts(),
+        "app_timezone": settings.app_timezone,
         "opencli_available": opencli_status["available"],
         "opencli_status": opencli_status,
         "scheduler_health": scheduler_health(),

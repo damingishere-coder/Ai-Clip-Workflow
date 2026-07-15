@@ -7,17 +7,22 @@ from app.models.task import (
     PublishAccountCreate,
     PublishBatchJobCreate,
     PublishBatchScheduleUpdate,
+    PublishBatchTargetUpdate,
     PublishCoverCreate,
     PublishCoverFrameBatchCreate,
     PublishJobContentUpdate,
     PublishJobCreate,
     PublishJobScheduleUpdate,
+    PublishJobTargetUpdate,
+    PublishMarkPublishedRequest,
     PublishPlatformConfigUpdate,
+    PublishRetryRequest,
     PublishSendJobUpdate,
     PublishSendStart,
 )
 from app.services import publish_service
 from app.services.publish_scheduler import PublishScheduler, queue_snapshot, scheduler_health
+from app.services.publishers.base import PublishError
 
 
 router = APIRouter(prefix="/api/publish", tags=["publish"])
@@ -76,9 +81,43 @@ async def create_account(payload: PublishAccountCreate) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/accounts/{account_id}/login", status_code=202)
+async def login_browser_account(account_id: str) -> dict:
+    try:
+        return publish_service.start_browser_account_login(account_id)
+    except (ValueError, PublishError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/accounts/{account_id}/check")
+async def check_browser_account(account_id: str) -> dict:
+    try:
+        return publish_service.check_browser_account(account_id)
+    except (ValueError, PublishError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/accounts/{account_id}/open-center", status_code=202)
+async def open_browser_creator_center(account_id: str) -> dict:
+    try:
+        return publish_service.open_browser_creator_center(account_id)
+    except (ValueError, PublishError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/jobs")
 async def list_publish_jobs() -> dict:
     return {"jobs": publish_service.list_publish_jobs()}
+
+
+@router.get("/jobs/{job_id}/events")
+async def list_publish_job_events(job_id: str) -> dict:
+    from app.services.publish_repository import PublishRepository
+
+    repository = PublishRepository()
+    if not repository.get_job(job_id):
+        raise HTTPException(status_code=404, detail="发布任务不存在")
+    return {"events": repository.list_events(job_id)}
 
 
 @router.get("/queue")
@@ -187,19 +226,19 @@ async def start_send_queue(payload: PublishSendStart, background_tasks: Backgrou
 
 
 @router.post("/jobs/{job_id}/retry")
-async def retry_publish_job(job_id: str) -> dict:
+async def retry_publish_job(job_id: str, payload: PublishRetryRequest | None = None) -> dict:
     try:
-        return publish_service.retry_publish_job(job_id)
+        return PublishScheduler().retry_failed(job_id, (payload.scheduled_at if payload else "") or None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/jobs/{job_id}/publish-now")
-async def publish_job_now(job_id: str) -> dict:
-    import asyncio
-
+async def publish_job_now(job_id: str, background_tasks: BackgroundTasks) -> dict:
     try:
-        return await asyncio.to_thread(PublishScheduler().publish_now, job_id)
+        result = PublishScheduler().publish_now(job_id)
+        background_tasks.add_task(PublishScheduler().run_once)
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -213,9 +252,9 @@ async def skip_publish_job(job_id: str) -> dict:
 
 
 @router.post("/jobs/{job_id}/approve-review")
-async def approve_review_publish_job(job_id: str) -> dict:
+async def approve_review_publish_job(job_id: str, payload: PublishMarkPublishedRequest) -> dict:
     try:
-        return PublishScheduler().approve_review(job_id)
+        return PublishScheduler().approve_review(job_id, payload.platform_url)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -239,6 +278,7 @@ async def update_publish_jobs_schedule_batch(payload: PublishBatchScheduleUpdate
             interval_minutes=payload.interval_minutes,
             daily_start_time=payload.daily_start_time,
             daily_end_time=payload.daily_end_time,
+            confirmed_schedule=payload.confirmed_schedule,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -269,10 +309,26 @@ async def update_publish_job_content(job_id: str, payload: PublishJobContentUpda
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/jobs/{job_id}/mark-published")
-async def mark_publish_job_published(job_id: str) -> dict:
+@router.patch("/jobs/{job_id}/target")
+async def update_publish_job_target(job_id: str, payload: PublishJobTargetUpdate) -> dict:
     try:
-        return publish_service.update_publish_job_status(job_id, "published")
+        return publish_service.update_publish_job_target(job_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/jobs/target-batch")
+async def update_publish_jobs_target_batch(payload: PublishBatchTargetUpdate) -> dict:
+    try:
+        return publish_service.update_publish_jobs_target_batch(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/mark-published")
+async def mark_publish_job_published(job_id: str, payload: PublishMarkPublishedRequest) -> dict:
+    try:
+        return PublishScheduler().mark_published_manually(job_id, payload.platform_url)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -280,7 +336,7 @@ async def mark_publish_job_published(job_id: str) -> dict:
 @router.post("/jobs/{job_id}/mark-failed")
 async def mark_publish_job_failed(job_id: str) -> dict:
     try:
-        return publish_service.update_publish_job_status(job_id, "failed", "人工标记失败")
+        return PublishScheduler().mark_failed_manually(job_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

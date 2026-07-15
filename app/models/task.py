@@ -146,7 +146,7 @@ class PublishJobCreate(BaseModel):
     output_clip_id: str = Field(..., min_length=1, max_length=80)
     platform: Literal["douyin", "bilibili"]
     account_id: Optional[str] = Field(default="", max_length=80)
-    publish_mode: Literal["manual_export", "local_browser", "api_publish", "opencli_publish"] = "opencli_publish"
+    publish_mode: Literal["manual_export", "local_browser", "api_publish", "opencli_publish"] = "local_browser"
     video_source: Literal["original", "subtitled"] = "original"
     title: str = Field(..., min_length=1, max_length=120)
     description: Optional[str] = Field(default="", max_length=2000)
@@ -174,6 +174,7 @@ class PublishBatchScheduleUpdate(BaseModel):
     interval_minutes: int = Field(default=180, ge=1, le=10080)
     daily_start_time: str = Field(default="09:00", min_length=5, max_length=5)
     daily_end_time: str = Field(default="21:00", min_length=5, max_length=5)
+    confirmed_schedule: list[dict[str, str]] = Field(default_factory=list)
 
     @validator("job_ids")
     def validate_schedule_job_ids(cls, value: list[str]) -> list[str]:
@@ -195,7 +196,7 @@ class PublishBatchJobCreate(BaseModel):
     output_clip_ids: list[str] = Field(default_factory=list)
     platform: Literal["douyin", "bilibili"]
     account_id: Optional[str] = Field(default="", max_length=80)
-    publish_mode: Literal["manual_export", "local_browser", "api_publish", "opencli_publish"] = "opencli_publish"
+    publish_mode: Literal["manual_export", "local_browser", "api_publish", "opencli_publish"] = "local_browser"
     video_source: Literal["original", "subtitled"] = "original"
     title_prefix: Optional[str] = Field(default="", max_length=80)
     description: Optional[str] = Field(default="", max_length=2000)
@@ -231,6 +232,31 @@ class PublishSendJobUpdate(BaseModel):
 
 class PublishSendStart(BaseModel):
     job_ids: list[str] = Field(default_factory=list)
+
+
+class PublishRetryRequest(BaseModel):
+    scheduled_at: Optional[str] = Field(default="", max_length=80)
+
+
+class PublishMarkPublishedRequest(BaseModel):
+    platform_url: str = Field(..., min_length=8, max_length=2000)
+
+
+class PublishJobTargetUpdate(BaseModel):
+    platform: Literal["douyin", "bilibili"]
+    account_id: Optional[str] = Field(default="", max_length=80)
+    publish_mode: Literal["manual_export", "local_browser"] = "local_browser"
+
+
+class PublishBatchTargetUpdate(PublishJobTargetUpdate):
+    job_ids: list[str] = Field(default_factory=list)
+
+    @validator("job_ids")
+    def validate_target_job_ids(cls, value: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
+        if not normalized:
+            raise ValueError("至少选择一条发布任务")
+        return normalized
 
 
 class PublishCoverFrameBatchCreate(BaseModel):

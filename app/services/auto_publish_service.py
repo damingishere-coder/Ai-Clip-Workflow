@@ -39,7 +39,7 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                 SELECT id
                 FROM publish_jobs
                 WHERE output_clip_id = ? AND platform = ? AND publish_mode = ?
-                  AND status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
+                  AND status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'PUBLISHING', 'NEED_REVIEW')
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -49,8 +49,23 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                 skipped_ids.append(existing["id"])
                 continue
 
+            account = connection.execute(
+                """
+                SELECT id FROM publish_accounts
+                WHERE platform = ? AND login_status = 'normal'
+                ORDER BY COALESCE(last_login_at, updated_at) DESC LIMIT 1
+                """,
+                (platform,),
+            ).fetchone()
+            account_id = account["id"] if account else None
             scheduled_at = str(item.get("scheduled_at") or "").strip()
-            status = "NEED_REVIEW" if metadata.get("risk_flags") else ("SCHEDULED" if scheduled_at else "WAITING")
+            if scheduled_at:
+                from app.services.publish_time import to_utc_iso
+
+                scheduled_at = to_utc_iso(scheduled_at, settings.app_timezone)
+            status = "NEED_REVIEW" if metadata.get("risk_flags") else (
+                "SCHEDULED" if scheduled_at and (publish_mode != "local_browser" or account_id) else "WAITING"
+            )
             job_id = uuid4().hex[:12]
             provider_response = {
                 "source": "auto_pipeline",
@@ -70,17 +85,18 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                     tags, hashtags, cover_text, risk_flags, visibility,
                     cover_mode, cover_time_seconds, allow_download, bilibili_tid,
                     bilibili_copyright, bilibili_source, cover_file_path, scheduled_at,
-                    status, audit_status, error_message, last_error, provider_response, publish_result,
-                    created_at, updated_at
+                    schedule_timezone, timezone, status, audit_status, error_message, last_error,
+                    provider_response, publish_result, max_attempts, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, NULL, ?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'public',
-                    'auto', 0, 1, ?, 'original', '', '', ?, ?, 'not_submitted', '', '', ?, '', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'public',
+                    'auto', 0, 1, ?, 'original', '', '', ?, ?, ?, ?, 'not_submitted', '', '', ?, '', ?, ?, ?)
                 """,
                 (
                     job_id,
                     task["id"],
                     output_clip["id"],
                     output_clip["id"],
+                    account_id,
                     platform,
                     publish_mode,
                     output_clip.get("output_file_path") or "",
@@ -94,8 +110,11 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                     json.dumps(metadata.get("risk_flags") or [], ensure_ascii=False),
                     DEFAULT_BILIBILI_TID,
                     scheduled_at,
+                    settings.app_timezone,
+                    settings.app_timezone,
                     status,
                     json.dumps(provider_response, ensure_ascii=False),
+                    settings.publish_scheduler_max_retry_count,
                     now,
                     now,
                 ),

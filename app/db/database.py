@@ -185,6 +185,11 @@ def init_db() -> None:
                 token_expires_at TEXT,
                 refresh_expires_at TEXT,
                 authorization_status TEXT NOT NULL DEFAULT 'manual',
+                auth_type TEXT NOT NULL DEFAULT 'browser_profile',
+                login_status TEXT NOT NULL DEFAULT 'login_required',
+                login_checked_at TEXT,
+                login_message TEXT,
+                last_login_at TEXT,
                 scopes TEXT,
                 remark TEXT,
                 created_at TEXT NOT NULL,
@@ -218,6 +223,9 @@ def init_db() -> None:
                 bilibili_source TEXT,
                 cover_file_path TEXT,
                 scheduled_at TEXT,
+                schedule_timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+                timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+                next_attempt_at TEXT,
                 status TEXT NOT NULL DEFAULT 'SCHEDULED',
                 audit_status TEXT NOT NULL DEFAULT 'not_submitted',
                 platform_item_id TEXT,
@@ -230,12 +238,36 @@ def init_db() -> None:
                 publish_result TEXT,
                 retry_count INTEGER NOT NULL DEFAULT 0,
                 attempt_count INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 3,
+                claimed_at TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                worker_id TEXT,
+                execution_id TEXT,
+                execution_phase TEXT,
+                retry_of_job_id TEXT,
+                platform_url TEXT,
+                needs_manual_review INTEGER NOT NULL DEFAULT 0,
                 published_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(task_id) REFERENCES tasks(id),
                 FOREIGN KEY(output_clip_id) REFERENCES output_clip(id),
                 FOREIGN KEY(account_id) REFERENCES publish_accounts(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS publish_job_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                from_status TEXT,
+                to_status TEXT,
+                worker_id TEXT,
+                error_code TEXT,
+                message TEXT,
+                payload TEXT,
+                occurred_at TEXT NOT NULL,
+                FOREIGN KEY(job_id) REFERENCES publish_jobs(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS oauth_states (
@@ -284,6 +316,7 @@ def init_db() -> None:
         _migrate_publish_platform_configs_table(connection)
         _migrate_publish_accounts_table(connection)
         _migrate_publish_jobs_table(connection)
+        _migrate_publish_job_events_table(connection)
         _migrate_workflow_jobs_table(connection)
         _migrate_cut_runs_table(connection)
         _seed_ai_prompt_presets(connection)
@@ -300,6 +333,8 @@ def _get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[s
 
 def _create_indexes(connection: sqlite3.Connection) -> None:
     """创建常用查询索引（IF NOT EXISTS 语法兼容 SQLite 3.27+）。"""
+    # v1.4 的索引把 FAILED 也视为活动任务，导致无法为失败记录创建新的重试任务。
+    connection.execute("DROP INDEX IF EXISTS uq_publish_jobs_active_clip_platform_mode")
     indexes = [
         # 任务列表与状态筛选
         "CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at)",
@@ -316,9 +351,12 @@ def _create_indexes(connection: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_status_platform_created ON publish_jobs(status, platform, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_task_output ON publish_jobs(task_id, output_clip_id)",
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_status_scheduled ON publish_jobs(status, scheduled_at)",
+        "CREATE INDEX IF NOT EXISTS idx_publish_jobs_due_retry ON publish_jobs(status, next_attempt_at, scheduled_at)",
+        "CREATE INDEX IF NOT EXISTS idx_publish_jobs_execution ON publish_jobs(execution_id)",
+        "CREATE INDEX IF NOT EXISTS idx_publish_job_events_job_time ON publish_job_events(job_id, occurred_at)",
         """CREATE UNIQUE INDEX IF NOT EXISTS uq_publish_jobs_active_clip_platform_mode
            ON publish_jobs(output_clip_id, platform, publish_mode)
-           WHERE status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
+           WHERE status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'PUBLISHING', 'NEED_REVIEW')
              AND output_clip_id IS NOT NULL AND output_clip_id <> ''""",
         # OAuth state 过期清理
         "CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at)",
@@ -652,6 +690,11 @@ def _migrate_publish_accounts_table(connection: sqlite3.Connection) -> None:
         "token_expires_at": "ALTER TABLE publish_accounts ADD COLUMN token_expires_at TEXT",
         "refresh_expires_at": "ALTER TABLE publish_accounts ADD COLUMN refresh_expires_at TEXT",
         "authorization_status": "ALTER TABLE publish_accounts ADD COLUMN authorization_status TEXT NOT NULL DEFAULT 'manual'",
+        "auth_type": "ALTER TABLE publish_accounts ADD COLUMN auth_type TEXT NOT NULL DEFAULT 'browser_profile'",
+        "login_status": "ALTER TABLE publish_accounts ADD COLUMN login_status TEXT NOT NULL DEFAULT 'login_required'",
+        "login_checked_at": "ALTER TABLE publish_accounts ADD COLUMN login_checked_at TEXT",
+        "login_message": "ALTER TABLE publish_accounts ADD COLUMN login_message TEXT",
+        "last_login_at": "ALTER TABLE publish_accounts ADD COLUMN last_login_at TEXT",
         "scopes": "ALTER TABLE publish_accounts ADD COLUMN scopes TEXT",
         "remark": "ALTER TABLE publish_accounts ADD COLUMN remark TEXT",
         "created_at": "ALTER TABLE publish_accounts ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
@@ -695,6 +738,8 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
         "cover_file_path": "ALTER TABLE publish_jobs ADD COLUMN cover_file_path TEXT",
         "scheduled_at": "ALTER TABLE publish_jobs ADD COLUMN scheduled_at TEXT",
         "schedule_timezone": "ALTER TABLE publish_jobs ADD COLUMN schedule_timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai'",
+        "timezone": "ALTER TABLE publish_jobs ADD COLUMN timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai'",
+        "next_attempt_at": "ALTER TABLE publish_jobs ADD COLUMN next_attempt_at TEXT",
         "status": "ALTER TABLE publish_jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'",
         "audit_status": "ALTER TABLE publish_jobs ADD COLUMN audit_status TEXT NOT NULL DEFAULT 'not_submitted'",
         "platform_item_id": "ALTER TABLE publish_jobs ADD COLUMN platform_item_id TEXT",
@@ -707,6 +752,16 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
         "publish_result": "ALTER TABLE publish_jobs ADD COLUMN publish_result TEXT",
         "retry_count": "ALTER TABLE publish_jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
         "attempt_count": "ALTER TABLE publish_jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
+        "max_attempts": "ALTER TABLE publish_jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3",
+        "claimed_at": "ALTER TABLE publish_jobs ADD COLUMN claimed_at TEXT",
+        "started_at": "ALTER TABLE publish_jobs ADD COLUMN started_at TEXT",
+        "finished_at": "ALTER TABLE publish_jobs ADD COLUMN finished_at TEXT",
+        "worker_id": "ALTER TABLE publish_jobs ADD COLUMN worker_id TEXT",
+        "execution_id": "ALTER TABLE publish_jobs ADD COLUMN execution_id TEXT",
+        "execution_phase": "ALTER TABLE publish_jobs ADD COLUMN execution_phase TEXT",
+        "retry_of_job_id": "ALTER TABLE publish_jobs ADD COLUMN retry_of_job_id TEXT",
+        "platform_url": "ALTER TABLE publish_jobs ADD COLUMN platform_url TEXT",
+        "needs_manual_review": "ALTER TABLE publish_jobs ADD COLUMN needs_manual_review INTEGER NOT NULL DEFAULT 0",
         "published_at": "ALTER TABLE publish_jobs ADD COLUMN published_at TEXT",
         "created_at": "ALTER TABLE publish_jobs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         "updated_at": "ALTER TABLE publish_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
@@ -762,6 +817,26 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
             """
         )
     _cancel_duplicate_active_publish_jobs(connection)
+
+
+def _migrate_publish_job_events_table(connection: sqlite3.Connection) -> None:
+    columns = _get_table_columns(connection, "publish_job_events")
+    if not columns:
+        return
+    migrations = {
+        "job_id": "ALTER TABLE publish_job_events ADD COLUMN job_id TEXT NOT NULL DEFAULT ''",
+        "event_type": "ALTER TABLE publish_job_events ADD COLUMN event_type TEXT NOT NULL DEFAULT ''",
+        "from_status": "ALTER TABLE publish_job_events ADD COLUMN from_status TEXT",
+        "to_status": "ALTER TABLE publish_job_events ADD COLUMN to_status TEXT",
+        "worker_id": "ALTER TABLE publish_job_events ADD COLUMN worker_id TEXT",
+        "error_code": "ALTER TABLE publish_job_events ADD COLUMN error_code TEXT",
+        "message": "ALTER TABLE publish_job_events ADD COLUMN message TEXT",
+        "payload": "ALTER TABLE publish_job_events ADD COLUMN payload TEXT",
+        "occurred_at": "ALTER TABLE publish_job_events ADD COLUMN occurred_at TEXT NOT NULL DEFAULT ''",
+    }
+    for column, statement in migrations.items():
+        if column not in columns:
+            connection.execute(statement)
 
 
 def _backup_publish_database_before_data_migration(connection: sqlite3.Connection) -> None:

@@ -6,10 +6,10 @@ TARGET_PLATFORMS = {
 }
 
 PUBLISH_MODES = {
-    "opencli_publish": "opencli 网页发送",
+    "opencli_publish": "opencli 兼容发送（需显式开启）",
     "manual_export": "本地发布包导出",
     "api_publish": "平台 API 发布",
-    "local_browser": "本地浏览器发布（未实现）",
+    "local_browser": "Windows Chrome 真实发布",
 }
 
 PUBLISH_STATUSES = {

@@ -1,48 +1,42 @@
+"""SQLite 发布调度器：立即发送和定时发送共用此状态机。"""
+
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
-from datetime import datetime, time, timedelta, timezone
+import os
+import socket
+from datetime import datetime, timedelta, timezone
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from uuid import uuid4
 
 from app.core.config import settings
 from app.db.database import get_connection, init_db
-from app.services.publish_adapters import PublishValidationError
-from app.services.publish_domain import PUBLISH_STATUSES
 from app.services.publish_executor import execute_publish_job
+from app.services.publish_repository import PublishRepository
+from app.services.publish_time import (
+    app_zone,
+    build_schedule_times,
+    ensure_future,
+    local_display,
+    parse_datetime,
+    to_utc_iso,
+    utc_now,
+    utc_now_iso,
+)
+from app.services.publishers.base import (
+    PublishError,
+    PublishOutcome,
+    PublishResult,
+    PublishWorkerUnavailable,
+)
+from app.services.publishers.worker_client import PublishWorkerClient
 from app.services.task_log_service import append_task_log
 
 
 def now_iso() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
-
-
-_SCHEDULER_HEALTH: dict[str, Any] = {
-    "running": False,
-    "scanning": False,
-    "last_scan_at": "",
-    "next_scan_at": "",
-}
-
-
-def parse_datetime(value: str | None) -> datetime:
-    text = (value or "").strip()
-    if not text:
-        raise ValueError("scheduled_at is empty")
-    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        return parsed.astimezone()
-    return parsed
-
-
-def parse_clock(value: str, field_label: str) -> time:
-    try:
-        parsed = time.fromisoformat((value or "").strip())
-    except ValueError as exc:
-        raise ValueError(f"{field_label}格式无效，请使用 HH:MM") from exc
-    return parsed.replace(second=0, microsecond=0)
+    return utc_now_iso()
 
 
 def build_batch_schedule_times(
@@ -53,44 +47,17 @@ def build_batch_schedule_times(
     interval_minutes: int,
     daily_start_time: str,
     daily_end_time: str,
+    reject_past: bool = True,
 ) -> list[str]:
-    if count <= 0:
-        return []
-
-    try:
-        schedule_zone = ZoneInfo((timezone_name or "").strip())
-    except ZoneInfoNotFoundError as exc:
-        raise ValueError("时区无效，请使用例如 Asia/Shanghai 的 IANA 时区") from exc
-    start_text = (start_at_local or "").strip()
-    if not start_text:
-        raise ValueError("起始时间不能为空")
-    try:
-        cursor = datetime.fromisoformat(start_text)
-    except ValueError as exc:
-        raise ValueError("起始时间格式无效") from exc
-    cursor = cursor.replace(tzinfo=schedule_zone) if cursor.tzinfo is None else cursor.astimezone(schedule_zone)
-    interval = timedelta(minutes=max(1, int(interval_minutes)))
-    window_start = parse_clock(daily_start_time, "每日开始时间")
-    window_end = parse_clock(daily_end_time, "每日结束时间")
-    if window_end <= window_start:
-        raise ValueError("每日结束时间必须晚于每日开始时间")
-
-    scheduled: list[str] = []
-    while len(scheduled) < count:
-        day_start = datetime.combine(cursor.date(), window_start).replace(tzinfo=cursor.tzinfo)
-        day_end = datetime.combine(cursor.date(), window_end).replace(tzinfo=cursor.tzinfo)
-        if cursor < day_start:
-            cursor = day_start
-        if cursor > day_end:
-            cursor = datetime.combine(cursor.date() + timedelta(days=1), window_start).replace(
-                tzinfo=cursor.tzinfo
-            )
-            continue
-        scheduled.append(
-            cursor.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-        )
-        cursor += interval
-    return scheduled
+    return build_schedule_times(
+        count,
+        start_at_local=start_at_local,
+        timezone_name=timezone_name,
+        interval_minutes=interval_minutes,
+        daily_start_time=daily_start_time,
+        daily_end_time=daily_end_time,
+        reject_past=reject_past,
+    )
 
 
 def build_batch_schedule_preview(
@@ -101,6 +68,7 @@ def build_batch_schedule_preview(
     interval_minutes: int,
     daily_start_time: str,
     daily_end_time: str,
+    reject_past: bool = True,
 ) -> list[dict[str, str]]:
     utc_times = build_batch_schedule_times(
         len(job_ids),
@@ -109,52 +77,39 @@ def build_batch_schedule_preview(
         interval_minutes=interval_minutes,
         daily_start_time=daily_start_time,
         daily_end_time=daily_end_time,
+        reject_past=reject_past,
     )
-    schedule_zone = ZoneInfo(timezone_name)
-    preview = []
-    for job_id, utc_value in zip(job_ids, utc_times, strict=True):
-        local_value = parse_datetime(utc_value).astimezone(schedule_zone)
-        preview.append(
-            {
-                "job_id": job_id,
-                "scheduled_at_utc": utc_value,
-                "scheduled_at_local": local_value.isoformat(timespec="seconds"),
-                "scheduled_at_local_display": local_value.strftime("%Y-%m-%d %H:%M"),
-                "timezone": timezone_name,
-            }
-        )
-    return preview
-
-
-def _row_to_dict(row) -> dict[str, Any] | None:
-    return dict(row) if row else None
-
-
-def _parse_json(value: str | None) -> Any:
-    if not value:
-        return None
-    try:
-        return json.loads(value)
-    except json.JSONDecodeError:
-        return value
-
-
-def _risk_flags(job: dict[str, Any]) -> list[Any]:
-    direct = _parse_json(job.get("risk_flags"))
-    if isinstance(direct, list):
-        return [item for item in direct if item]
-    if isinstance(direct, str) and direct.strip():
-        return [direct.strip()]
-    provider = _parse_json(job.get("provider_response"))
-    if isinstance(provider, dict) and isinstance(provider.get("risk_flags"), list):
-        return [item for item in provider["risk_flags"] if item]
-    return []
+    return [
+        {
+            "job_id": job_id,
+            "scheduled_at_utc": scheduled,
+            "scheduled_at_local": parse_datetime(scheduled).astimezone(app_zone(timezone_name)).isoformat(timespec="seconds"),
+            "scheduled_at_local_display": local_display(scheduled, timezone_name),
+            "timezone": timezone_name,
+        }
+        for job_id, scheduled in zip(job_ids, utc_times, strict=True)
+    ]
 
 
 def get_publish_job_raw(job_id: str) -> dict[str, Any] | None:
-    with get_connection() as connection:
-        row = connection.execute("SELECT * FROM publish_jobs WHERE id = ?", (job_id,)).fetchone()
-    return _row_to_dict(row)
+    return PublishRepository().get_job(job_id)
+
+
+_SCHEDULER_HEALTH: dict[str, Any] = {
+    "running": False,
+    "scanning": False,
+    "last_scan_at": "",
+    "next_scan_at": "",
+}
+_ACTIVE_SCHEDULER: "PublishScheduler | None" = None
+
+
+def wake_scheduler() -> bool:
+    scheduler = _ACTIVE_SCHEDULER
+    if not scheduler:
+        return False
+    scheduler.wake()
+    return True
 
 
 class PublishScheduler:
@@ -162,19 +117,33 @@ class PublishScheduler:
         self,
         interval_seconds: int | None = None,
         max_retry_count: int | None = None,
+        *,
+        executor=execute_publish_job,
+        repository: PublishRepository | None = None,
+        worker_client: PublishWorkerClient | None = None,
+        worker_id: str | None = None,
     ) -> None:
         self.interval_seconds = max(1, int(interval_seconds or settings.publish_scheduler_interval_seconds))
-        self.max_retry_count = max(0, int(max_retry_count if max_retry_count is not None else settings.publish_scheduler_max_retry_count))
+        self.max_retry_count = max(
+            1,
+            int(max_retry_count if max_retry_count is not None else settings.publish_scheduler_max_retry_count),
+        )
+        self.executor = executor
+        self.repository = repository or PublishRepository()
+        self.worker_client = worker_client or PublishWorkerClient()
+        self.worker_id = worker_id or f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
         self._stop_event: asyncio.Event | None = None
+        self._wake_event: asyncio.Event | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def run_once(self) -> dict[str, Any]:
         init_db()
         _SCHEDULER_HEALTH["scanning"] = True
         try:
-            self.recover_interrupted_jobs()
+            recovered = self.recover_interrupted_jobs()
             jobs = self.list_due_jobs()
             results = [self.execute_job(job["id"]) for job in jobs]
-            checked_at = datetime.now().astimezone()
+            checked_at = utc_now()
             _SCHEDULER_HEALTH["last_scan_at"] = checked_at.isoformat(timespec="seconds")
             _SCHEDULER_HEALTH["next_scan_at"] = (
                 checked_at + timedelta(seconds=self.interval_seconds)
@@ -182,313 +151,271 @@ class PublishScheduler:
             return {
                 "status": "ok",
                 "checked_at": _SCHEDULER_HEALTH["last_scan_at"],
+                "recovered_count": recovered,
                 "matched_count": len(jobs),
-                "published_count": sum(1 for item in results if item.get("status") == "published"),
-                "exported_count": sum(1 for item in results if item.get("status") == "exported"),
-                "failed_count": sum(1 for item in results if item.get("status") == "failed"),
-                "skipped_count": sum(1 for item in results if item.get("status") == "skipped"),
+                "published_count": sum(item.get("status") == "published" for item in results),
+                "exported_count": sum(item.get("status") == "exported" for item in results),
+                "failed_count": sum(item.get("status") == "failed" for item in results),
+                "need_review_count": sum(item.get("status") == "need_review" for item in results),
+                "rescheduled_count": sum(item.get("status") == "rescheduled" for item in results),
+                "skipped_count": sum(item.get("status") == "skipped" for item in results),
                 "results": results,
             }
         finally:
             _SCHEDULER_HEALTH["scanning"] = False
 
     async def run_forever(self) -> None:
+        global _ACTIVE_SCHEDULER
         init_db()
+        self._loop = asyncio.get_running_loop()
         self._stop_event = asyncio.Event()
+        self._wake_event = asyncio.Event()
+        _ACTIVE_SCHEDULER = self
         _SCHEDULER_HEALTH["running"] = True
         try:
             while not self._stop_event.is_set():
                 await asyncio.to_thread(self.run_once)
+                self._wake_event.clear()
                 try:
-                    await asyncio.wait_for(self._stop_event.wait(), timeout=self.interval_seconds)
+                    await asyncio.wait_for(self._wake_event.wait(), timeout=self.interval_seconds)
                 except TimeoutError:
-                    continue
+                    pass
         finally:
+            if _ACTIVE_SCHEDULER is self:
+                _ACTIVE_SCHEDULER = None
             _SCHEDULER_HEALTH["running"] = False
 
-    def stop(self) -> None:
-        if self._stop_event:
-            self._stop_event.set()
+    def wake(self) -> None:
+        if self._loop and self._wake_event:
+            self._loop.call_soon_threadsafe(self._wake_event.set)
 
-    def recover_interrupted_jobs(self) -> int:
-        now = datetime.now(timezone.utc)
-        stale_before = now - timedelta(minutes=max(1, int(settings.publish_job_stale_minutes)))
-        recovered = 0
-        with get_connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT id, updated_at, provider_response, publish_result
-                FROM publish_jobs
-                WHERE status = 'PUBLISHING' AND (published_at IS NULL OR published_at = '')
-                  AND (platform_item_id IS NULL OR platform_item_id = '')
-                  AND (remote_video_id IS NULL OR remote_video_id = '')
-                """
-            ).fetchall()
-            for row in rows:
-                try:
-                    updated_at = parse_datetime(row["updated_at"]).astimezone(timezone.utc)
-                except ValueError:
-                    continue
-                success_text = f"{row['provider_response'] or ''} {row['publish_result'] or ''}".lower()
-                if updated_at > stale_before or any(marker in success_text for marker in ('"completed"', '"success"', 'published')):
-                    continue
-                cursor = connection.execute(
-                    """
-                    UPDATE publish_jobs
-                    SET status = 'SCHEDULED',
-                        last_error = '陈旧 PUBLISHING 任务已恢复，等待重新执行',
-                        error_message = '陈旧 PUBLISHING 任务已恢复，等待重新执行',
-                        updated_at = ?
-                    WHERE id = ? AND status = 'PUBLISHING' AND updated_at = ?
-                    """,
-                    (now.isoformat(timespec="seconds"), row["id"], row["updated_at"]),
-                )
-                recovered += int(cursor.rowcount or 0)
-            connection.commit()
-        return recovered
+    def stop(self) -> None:
+        if self._loop and self._stop_event:
+            self._loop.call_soon_threadsafe(self._stop_event.set)
+            if self._wake_event:
+                self._loop.call_soon_threadsafe(self._wake_event.set)
 
     def list_due_jobs(self) -> list[dict[str, Any]]:
-        current = datetime.now().astimezone()
+        now = utc_now()
         due: list[dict[str, Any]] = []
         with get_connection() as connection:
             rows = connection.execute(
                 """
-                SELECT *
-                FROM publish_jobs
+                SELECT * FROM publish_jobs
                 WHERE status = 'SCHEDULED'
-                ORDER BY scheduled_at ASC, created_at ASC
+                ORDER BY COALESCE(next_attempt_at, scheduled_at), created_at
                 """
             ).fetchall()
         for row in rows:
             job = dict(row)
+            due_value = job.get("next_attempt_at") or job.get("scheduled_at")
             try:
-                scheduled_at = parse_datetime(job.get("scheduled_at"))
-            except ValueError as exc:
-                due.append({**job, "_invalid_schedule_error": str(exc)})
+                due_at = parse_datetime(due_value).astimezone(timezone.utc)
+            except ValueError:
+                due.append(job)
                 continue
-            if scheduled_at <= current:
+            if due_at <= now:
                 due.append(job)
         return due
 
-    def execute_job(
-        self,
-        job_id: str,
-        *,
-        force: bool = False,
-        allow_republish: bool = False,
-        runner=None,
-    ) -> dict[str, Any]:
-        job = get_publish_job_raw(job_id)
+    def execute_job(self, job_id: str, *, force: bool = False, runner=None) -> dict[str, Any]:
+        job = self.repository.get_job(job_id)
         if not job:
-            return {"status": "failed", "job_id": job_id, "message": "publish job not found"}
-
+            return {"status": "failed", "job_id": job_id, "message": "发布任务不存在"}
         status = str(job.get("status") or "").upper()
-        if status == "PUBLISHED" and not allow_republish:
-            return {"status": "skipped", "job_id": job_id, "message": "already published"}
-        if status in {"CANCELLED", "NEED_REVIEW"}:
-            return {"status": "skipped", "job_id": job_id, "message": f"status is {status}"}
+        if status in {"PUBLISHED", "EXPORTED", "CANCELLED", "PUBLISHING", "NEED_REVIEW"}:
+            return {"status": "skipped", "job_id": job_id, "message": f"任务状态为 {status}，不能领取"}
         if status != "SCHEDULED":
-            return {"status": "skipped", "job_id": job_id, "message": f"status is {status}"}
+            return {"status": "skipped", "job_id": job_id, "message": f"任务状态为 {status}"}
 
-        if _risk_flags(job) and not settings.publish_scheduler_allow_publish_without_review:
-            self._mark_need_review(job_id, _risk_flags(job))
-            return {"status": "skipped", "job_id": job_id, "message": "risk flags require review"}
-
+        risk_flags = self._risk_flags(job)
+        if risk_flags and not settings.publish_scheduler_allow_publish_without_review:
+            return self._mark_need_review(job_id, "risk_flags_require_review", f"内容风险标记需要人工复核：{risk_flags}")
         try:
-            scheduled_at = parse_datetime(job.get("scheduled_at"))
+            due_at = parse_datetime(job.get("next_attempt_at") or job.get("scheduled_at"))
         except ValueError as exc:
             return self._mark_failed(job_id, "invalid_scheduled_at", str(exc))
-        if not force and scheduled_at > datetime.now().astimezone():
-            return {"status": "skipped", "job_id": job_id, "message": "scheduled_at is in the future"}
+        if not force and due_at > utc_now():
+            return {"status": "skipped", "job_id": job_id, "message": "尚未到计划发布时间"}
 
-        attempts = int(job.get("attempt_count") or job.get("retry_count") or 0)
-        if not force and attempts >= self.max_retry_count:
-            return self._mark_failed(job_id, "max_retry_exceeded", "max retry count exceeded")
-
+        max_attempts = max(1, int(job.get("max_attempts") or self.max_retry_count))
+        if not force and int(job.get("attempt_count") or 0) >= max_attempts:
+            return self._mark_failed(job_id, "max_retry_exceeded", "上传前安全重试次数已用完")
         if not self._claim_scheduled_job(job_id):
-            return {"status": "skipped", "job_id": job_id, "message": "job was claimed by another scheduler"}
+            return {"status": "skipped", "job_id": job_id, "message": "任务已被另一个调度器领取"}
+        claimed = self.repository.get_job(job_id) or job
         try:
-            result = execute_publish_job(job_id, force=force, runner=runner)
-        except PublishValidationError as exc:
+            raw_result = self.executor(
+                job_id,
+                force=force,
+                runner=runner,
+                repository=self.repository,
+                worker_client=self.worker_client,
+            )
+            result = PublishResult.from_dict(raw_result)
+        except PublishWorkerUnavailable as exc:
+            return self._handle_worker_unavailable(claimed, exc)
+        except PublishError as exc:
+            if exc.needs_manual_review:
+                return self._mark_need_review(job_id, exc.error_code, exc.message)
             return self._mark_failed(job_id, exc.error_code, exc.message)
         except Exception as exc:
-            return self._mark_failed(job_id, "publish_failed", str(exc) or exc.__class__.__name__)
-
-        if result.get("status") == "exported":
-            return self._mark_exported(job_id, result.get("payload") or {}, result.get("remote_video_id") or "")
-        current = get_publish_job_raw(job_id) or {}
-        if result.get("status") == "published" and str(current.get("status") or "").upper() == "PUBLISHING":
-            return self._mark_published(
+            return self._mark_need_review(
                 job_id,
-                {"executor": str(current.get("publish_mode") or ""), "message": result.get("message") or ""},
-                str(current.get("remote_video_id") or ""),
+                "publish_result_uncertain",
+                f"执行器异常且无法确定是否已上传，请人工核对：{exc}",
             )
-        if result.get("status") == "failed" and str(current.get("status") or "").upper() == "PUBLISHING":
-            return self._mark_failed(job_id, "publish_failed", result.get("message") or "发布执行失败")
-        return result
 
-    def publish_now(self, job_id: str, *, allow_republish: bool = False, runner=None) -> dict[str, Any]:
-        job = get_publish_job_raw(job_id)
+        if result.outcome == PublishOutcome.PUBLISHED:
+            return self._mark_published(job_id, result)
+        if result.outcome == PublishOutcome.EXPORTED:
+            return self._mark_exported(job_id, result)
+        if result.outcome == PublishOutcome.NEED_REVIEW or result.needs_manual_review:
+            return self._mark_need_review(job_id, result.error_code or "manual_review_required", result.message, result)
+        return self._mark_failed(job_id, result.error_code or "publish_failed", result.message, result)
+
+    def publish_now(self, job_id: str) -> dict[str, Any]:
+        job = self.repository.get_job(job_id)
         if not job:
-            raise ValueError("publish job not found")
-        if str(job.get("status") or "").upper() not in {"WAITING", "SCHEDULED", "FAILED"}:
-            return {"status": "skipped", "job_id": job_id, "message": f"status is {job.get('status')}"}
-        self._set_schedule_to_now(job_id)
-        return self.execute_job(job_id, force=True, allow_republish=allow_republish, runner=runner)
-
-    def retry_failed(self, job_id: str) -> dict[str, Any]:
-        job = get_publish_job_raw(job_id)
-        if not job:
-            raise ValueError("publish job not found")
-        if str(job.get("status") or "").upper() != "FAILED":
-            raise ValueError("only FAILED publish jobs can be retried")
-        self._set_schedule_to_now(job_id)
-        return self.execute_job(job_id, force=True)
-
-    def cancel_job(self, job_id: str) -> dict[str, Any]:
-        return self._update_status(job_id, "CANCELLED", "cancelled manually")
-
-    def skip_job(self, job_id: str) -> dict[str, Any]:
-        return self._update_status(job_id, "CANCELLED", "skipped manually", {"action": "skip"})
-
-    def approve_review(self, job_id: str) -> dict[str, Any]:
-        job = get_publish_job_raw(job_id)
-        if not job:
-            raise ValueError("publish job not found")
-        if str(job.get("status") or "").upper() != "NEED_REVIEW":
-            raise ValueError("only NEED_REVIEW jobs can be approved")
-        now = now_iso()
-        next_status = "SCHEDULED" if (job.get("scheduled_at") or "").strip() else "WAITING"
+            raise ValueError("发布任务不存在")
+        if str(job.get("status") or "").upper() not in {"DRAFT", "WAITING", "SCHEDULED"}:
+            raise ValueError("只有草稿、等待或已排期任务可以立即发送")
+        now = utc_now_iso()
         with get_connection() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE publish_jobs
-                SET status = ?, risk_flags = '', last_error = '',
-                    error_message = '', updated_at = ?
-                WHERE id = ?
+                SET scheduled_at = ?, next_attempt_at = NULL, timezone = ?, schedule_timezone = ?,
+                    status = 'SCHEDULED', error_code = '', error_message = '', last_error = '',
+                    needs_manual_review = 0, updated_at = ?
+                WHERE id = ? AND status IN ('DRAFT', 'WAITING', 'SCHEDULED')
                 """,
-                (next_status, now, job_id),
+                (now, settings.app_timezone, settings.app_timezone, now, job_id),
             )
-            connection.commit()
-        return {"status": "ok", "job": get_publish_job_raw(job_id)}
-
-    def update_schedule(self, job_id: str, scheduled_at: str) -> dict[str, Any]:
-        parsed = parse_datetime(scheduled_at)
-        job = get_publish_job_raw(job_id)
-        if not job:
-            raise ValueError("publish job not found")
-        if str(job.get("status") or "").upper() in {"PUBLISHED", "EXPORTED", "CANCELLED"}:
-            raise ValueError("已完成或已取消的任务不能重新排期")
-        now = now_iso()
-        next_status = "NEED_REVIEW" if str(job.get("status") or "").upper() == "NEED_REVIEW" else "SCHEDULED"
-        scheduled_at_utc = parsed.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-        with get_connection() as connection:
-            connection.execute(
-                """
-                UPDATE publish_jobs
-                SET scheduled_at = ?, status = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (scheduled_at_utc, next_status, now, job_id),
-            )
-            connection.commit()
-        return {"status": "ok", "job": get_publish_job_raw(job_id)}
-
-    def update_batch_schedule(
-        self,
-        job_ids: list[str],
-        *,
-        action: str,
-        start_at_local: str = "",
-        timezone_name: str = "Asia/Shanghai",
-        interval_minutes: int = 180,
-        daily_start_time: str = "09:00",
-        daily_end_time: str = "21:00",
-    ) -> dict[str, Any]:
-        normalized_ids = list(dict.fromkeys(str(job_id).strip() for job_id in job_ids if str(job_id).strip()))
-        if not normalized_ids:
-            raise ValueError("至少选择一条发布任务")
-        if action not in {"apply", "clear"}:
-            raise ValueError("不支持的排期操作")
-
-        placeholders = ", ".join("?" for _ in normalized_ids)
-        with get_connection() as connection:
-            rows = connection.execute(
-                f"SELECT * FROM publish_jobs WHERE id IN ({placeholders})",
-                normalized_ids,
-            ).fetchall()
-        jobs_by_id = {row["id"]: dict(row) for row in rows}
-        missing_ids = [job_id for job_id in normalized_ids if job_id not in jobs_by_id]
-        if missing_ids:
-            raise ValueError(f"有 {len(missing_ids)} 条发布任务不存在")
-        blocked = [
-            job_id
-            for job_id in normalized_ids
-            if str(jobs_by_id[job_id].get("status") or "").upper() in {"PUBLISHED", "EXPORTED", "CANCELLED"}
-        ]
-        if blocked:
-            raise ValueError("已发布或已取消的任务不能修改排期")
-
-        schedule_times = (
-            build_batch_schedule_preview(
-                normalized_ids,
-                start_at_local=start_at_local,
-                timezone_name=timezone_name,
-                interval_minutes=interval_minutes,
-                daily_start_time=daily_start_time,
-                daily_end_time=daily_end_time,
-            )
-            if action == "apply"
-            else [
-                {
-                    "job_id": job_id,
-                    "scheduled_at_utc": "",
-                    "scheduled_at_local": "",
-                    "scheduled_at_local_display": "未排期",
-                    "timezone": timezone_name,
-                }
-                for job_id in normalized_ids
-            ]
-        )
-
-        now = now_iso()
-        with get_connection() as connection:
-            for job_id, schedule_item in zip(normalized_ids, schedule_times, strict=True):
-                scheduled_at = schedule_item["scheduled_at_utc"]
-                current_status = str(jobs_by_id[job_id].get("status") or "").upper()
-                if current_status == "NEED_REVIEW":
-                    next_status = "NEED_REVIEW"
-                elif action == "apply":
-                    next_status = "SCHEDULED"
-                elif current_status == "FAILED":
-                    next_status = "FAILED"
-                else:
-                    next_status = "WAITING"
-                connection.execute(
-                    """
-                    UPDATE publish_jobs
-                    SET scheduled_at = ?, schedule_timezone = ?, status = ?, updated_at = ?,
-                        error_code = CASE WHEN ? = 'apply' THEN '' ELSE error_code END,
-                        error_message = CASE WHEN ? = 'apply' THEN '' ELSE error_message END,
-                        last_error = CASE WHEN ? = 'apply' THEN '' ELSE last_error END
-                    WHERE id = ?
-                    """,
-                    (scheduled_at, timezone_name, next_status, now, action, action, action, job_id),
+            if cursor.rowcount:
+                self.repository.add_event(
+                    job_id, "publish_now", from_status=str(job.get("status") or ""),
+                    to_status="SCHEDULED", message="立即发送已进入统一调度队列", connection=connection,
                 )
             connection.commit()
+        if not cursor.rowcount:
+            raise ValueError("任务状态已变化，请刷新页面后重试")
+        wake_scheduler()
+        return {"status": "scheduled", "job_id": job_id, "scheduled_at": now, "job": self.repository.get_job(job_id)}
 
-        return {
-            "status": "ok",
-            "action": action,
-            "updated_count": len(normalized_ids),
-            "message": (
-                f"已为 {len(normalized_ids)} 条任务设置发布时间。"
-                if action == "apply"
-                else f"已清除 {len(normalized_ids)} 条任务的发布时间。"
-            ),
-            "jobs": [get_publish_job_raw(job_id) for job_id in normalized_ids],
-            "schedule": schedule_times,
+    def retry_failed(self, job_id: str, scheduled_at: str | None = None) -> dict[str, Any]:
+        source = self.repository.get_job(job_id)
+        if not source:
+            raise ValueError("发布任务不存在")
+        if str(source.get("status") or "").upper() != "FAILED":
+            raise ValueError("只有明确失败的任务可以重试；需复核任务请先确认平台未发布并标记失败")
+        new_id = f"pub_{uuid4().hex}"
+        schedule = to_utc_iso(scheduled_at, settings.app_timezone) if scheduled_at else utc_now_iso()
+        if scheduled_at:
+            ensure_future(scheduled_at, settings.app_timezone)
+        columns_to_clear = {
+            "id", "status", "scheduled_at", "next_attempt_at", "attempt_count", "retry_count",
+            "claimed_at", "started_at", "finished_at", "worker_id", "execution_id", "execution_phase",
+            "platform_item_id", "platform_upload_id", "remote_video_id", "platform_url", "error_code",
+            "error_message", "last_error", "provider_response", "publish_result", "published_at",
+            "needs_manual_review", "created_at", "updated_at", "retry_of_job_id",
         }
+        with get_connection() as connection:
+            available = {row["name"] for row in connection.execute("PRAGMA table_info(publish_jobs)").fetchall()}
+            values = {key: value for key, value in source.items() if key in available and key not in columns_to_clear}
+            values.update({
+                "id": new_id,
+                "status": "SCHEDULED",
+                "scheduled_at": schedule,
+                "timezone": source.get("timezone") or settings.app_timezone,
+                "schedule_timezone": source.get("schedule_timezone") or settings.app_timezone,
+                "attempt_count": 0,
+                "retry_count": 0,
+                "max_attempts": source.get("max_attempts") or self.max_retry_count,
+                "needs_manual_review": 0,
+                "retry_of_job_id": job_id,
+                "created_at": utc_now_iso(),
+                "updated_at": utc_now_iso(),
+            })
+            columns = list(values)
+            connection.execute(
+                f"INSERT INTO publish_jobs ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                [values[column] for column in columns],
+            )
+            self.repository.add_event(
+                new_id, "manual_retry_created", from_status="FAILED", to_status="SCHEDULED",
+                message=f"由失败任务 {job_id} 创建", payload={"retry_of_job_id": job_id}, connection=connection,
+            )
+            connection.commit()
+        wake_scheduler()
+        return {"status": "scheduled", "job_id": new_id, "retry_of_job_id": job_id, "job": self.repository.get_job(new_id)}
+
+    def recover_interrupted_jobs(self) -> int:
+        stale_before = utc_now() - timedelta(minutes=max(1, int(settings.publish_job_stale_minutes)))
+        with get_connection() as connection:
+            rows = connection.execute("SELECT * FROM publish_jobs WHERE status = 'PUBLISHING'").fetchall()
+        recovered = 0
+        for raw in rows:
+            job = dict(raw)
+            try:
+                updated_at = parse_datetime(job.get("updated_at")).astimezone(timezone.utc)
+            except ValueError:
+                updated_at = datetime.min.replace(tzinfo=timezone.utc)
+            if updated_at > stale_before:
+                continue
+            execution_id = str(job.get("execution_id") or "")
+            phase = str(job.get("execution_phase") or "unknown")
+            details: dict[str, Any] = {}
+            if execution_id:
+                try:
+                    execution = self.worker_client.execution(execution_id)
+                    phase = str(execution.get("phase") or phase)
+                    details = execution.get("details") if isinstance(execution.get("details"), dict) else {}
+                except PublishError:
+                    pass
+            if phase == "confirmed_success" and details:
+                try:
+                    self._mark_published(job["id"], PublishResult.from_dict(details))
+                except Exception:
+                    self._mark_need_review(job["id"], "recovery_result_uncertain", "Worker 记录成功但结果数据不完整，请人工确认")
+                recovered += 1
+            elif phase in {"received", "browser_opening", "browser_opened", "rejected"} and execution_id:
+                self._reschedule_before_upload(job["id"], "应用重启后确认尚未开始上传，已安全重新排队")
+                recovered += 1
+            else:
+                self._mark_need_review(
+                    job["id"],
+                    "interrupted_publish_uncertain",
+                    "应用重启前的发布结果不确定，为避免重复投稿已停止自动重试",
+                )
+                recovered += 1
+        return recovered
+
+    def update_schedule(self, job_id: str, scheduled_at: str) -> dict[str, Any]:
+        parsed = ensure_future(scheduled_at, settings.app_timezone)
+        job = self.repository.get_job(job_id)
+        if not job:
+            raise ValueError("发布任务不存在")
+        if str(job.get("status") or "").upper() not in {"DRAFT", "WAITING", "SCHEDULED"}:
+            raise ValueError("当前状态不能修改排期；失败任务请使用重试，需复核任务请先人工确认")
+        stored = to_utc_iso(parsed)
+        now = utc_now_iso()
+        with get_connection() as connection:
+            connection.execute(
+                """
+                UPDATE publish_jobs SET scheduled_at = ?, next_attempt_at = NULL,
+                    timezone = ?, schedule_timezone = ?, status = 'SCHEDULED', updated_at = ?
+                WHERE id = ?
+                """,
+                (stored, settings.app_timezone, settings.app_timezone, now, job_id),
+            )
+            self.repository.add_event(
+                job_id, "schedule_updated", from_status=str(job.get("status") or ""),
+                to_status="SCHEDULED", payload={"scheduled_at": stored}, connection=connection,
+            )
+            connection.commit()
+        wake_scheduler()
+        return {"status": "ok", "job": self.repository.get_job(job_id)}
 
     def preview_batch_schedule(
         self,
@@ -500,18 +427,9 @@ class PublishScheduler:
         daily_start_time: str,
         daily_end_time: str,
     ) -> dict[str, Any]:
-        normalized_ids = list(dict.fromkeys(str(job_id).strip() for job_id in job_ids if str(job_id).strip()))
-        if not normalized_ids:
-            raise ValueError("至少选择一条发布任务")
-        with get_connection() as connection:
-            found = connection.execute(
-                f"SELECT COUNT(*) FROM publish_jobs WHERE id IN ({','.join('?' for _ in normalized_ids)})",
-                normalized_ids,
-            ).fetchone()[0]
-        if int(found) != len(normalized_ids):
-            raise ValueError("部分发布任务不存在")
+        ids = self._validate_batch_jobs(job_ids)
         schedule = build_batch_schedule_preview(
-            normalized_ids,
+            ids,
             start_at_local=start_at_local,
             timezone_name=timezone_name,
             interval_minutes=interval_minutes,
@@ -520,168 +438,370 @@ class PublishScheduler:
         )
         return {"status": "ok", "timezone": timezone_name, "schedule": schedule}
 
-    def _set_schedule_to_now(self, job_id: str) -> None:
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-        with get_connection() as connection:
-            connection.execute(
-                """
-                UPDATE publish_jobs
-                SET scheduled_at = ?, status = CASE
-                    WHEN status = 'PUBLISHED' THEN status
-                    WHEN status = 'CANCELLED' THEN status
-                    WHEN status = 'NEED_REVIEW' THEN status
-                    ELSE 'SCHEDULED'
-                END,
-                updated_at = ?
-                WHERE id = ?
-                """,
-                (now, now, job_id),
+    def update_batch_schedule(
+        self,
+        job_ids: list[str],
+        *,
+        action: str,
+        start_at_local: str = "",
+        timezone_name: str = "Asia/Shanghai",
+        interval_minutes: int = 180,
+        daily_start_time: str = "09:00",
+        daily_end_time: str = "21:00",
+        confirmed_schedule: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        ids = self._validate_batch_jobs(job_ids)
+        if action not in {"apply", "clear"}:
+            raise ValueError("不支持的排期操作")
+        if action == "apply" and confirmed_schedule:
+            schedule_map = {str(item.get("job_id") or ""): str(item.get("scheduled_at_utc") or "") for item in confirmed_schedule}
+            if set(schedule_map) != set(ids):
+                raise ValueError("确认排期与所选任务不一致，请重新预览")
+            schedule = []
+            for job_id in ids:
+                parsed = ensure_future(schedule_map[job_id], timezone_name)
+                stored = to_utc_iso(parsed)
+                schedule.append({
+                    "job_id": job_id,
+                    "scheduled_at_utc": stored,
+                    "scheduled_at_local": parsed.astimezone(app_zone(timezone_name)).isoformat(timespec="seconds"),
+                    "scheduled_at_local_display": local_display(parsed, timezone_name),
+                    "timezone": timezone_name,
+                })
+        elif action == "apply":
+            schedule = build_batch_schedule_preview(
+                ids,
+                start_at_local=start_at_local,
+                timezone_name=timezone_name,
+                interval_minutes=interval_minutes,
+                daily_start_time=daily_start_time,
+                daily_end_time=daily_end_time,
             )
+        else:
+            schedule = [{
+                "job_id": job_id, "scheduled_at_utc": "", "scheduled_at_local": "",
+                "scheduled_at_local_display": "未排期", "timezone": timezone_name,
+            } for job_id in ids]
+        now = utc_now_iso()
+        with get_connection() as connection:
+            rows = connection.execute(
+                f"SELECT id, status FROM publish_jobs WHERE id IN ({','.join('?' for _ in ids)})", ids
+            ).fetchall()
+            status_map = {row["id"]: str(row["status"] or "").upper() for row in rows}
+            for item in schedule:
+                job_id = item["job_id"]
+                status = status_map[job_id]
+                if status not in {"DRAFT", "WAITING", "SCHEDULED"}:
+                    raise ValueError(f"任务 {job_id} 当前状态不能修改排期")
+                next_status = "SCHEDULED" if action == "apply" else "WAITING"
+                connection.execute(
+                    """
+                    UPDATE publish_jobs SET scheduled_at = ?, next_attempt_at = NULL,
+                        timezone = ?, schedule_timezone = ?, status = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (item["scheduled_at_utc"], timezone_name, timezone_name, next_status, now, job_id),
+                )
+                self.repository.add_event(
+                    job_id, "batch_schedule_applied" if action == "apply" else "schedule_cleared",
+                    from_status=status, to_status=next_status, payload=item, connection=connection,
+                )
             connection.commit()
+        if action == "apply":
+            wake_scheduler()
+        return {
+            "status": "ok", "action": action, "updated_count": len(ids),
+            "message": f"已保存 {len(ids)} 条任务的具体排期" if action == "apply" else f"已清除 {len(ids)} 条任务的排期",
+            "schedule": schedule,
+            "jobs": [self.repository.get_job(job_id) for job_id in ids],
+        }
+
+    def cancel_job(self, job_id: str) -> dict[str, Any]:
+        return self._transition_user_status(job_id, "CANCELLED", "用户取消任务")
+
+    def skip_job(self, job_id: str) -> dict[str, Any]:
+        return self.cancel_job(job_id)
+
+    def mark_failed_manually(self, job_id: str, message: str = "人工确认平台未发布") -> dict[str, Any]:
+        job = self.repository.get_job(job_id)
+        if not job:
+            raise ValueError("发布任务不存在")
+        if str(job.get("status") or "").upper() not in {"NEED_REVIEW", "SCHEDULED", "WAITING"}:
+            raise ValueError("当前任务不能人工标记失败")
+        return self._mark_failed(job_id, "manually_marked_failed", message)
+
+    def mark_published_manually(self, job_id: str, platform_url: str) -> dict[str, Any]:
+        job = self.repository.get_job(job_id)
+        if not job:
+            raise ValueError("发布任务不存在")
+        if str(job.get("status") or "").upper() != "NEED_REVIEW":
+            raise ValueError("只有需复核任务可以人工标记已发布")
+        url = str(platform_url or "").strip()
+        expected_domain = "douyin.com" if job.get("platform") == "douyin" else "bilibili.com"
+        if not url.startswith(("http://", "https://")) or expected_domain not in url.lower():
+            raise ValueError(f"请填写有效的 {expected_domain} 作品链接")
+        result = PublishResult(
+            outcome=PublishOutcome.PUBLISHED,
+            message="人工核对平台后标记为已发布",
+            remote_video_id="",
+            platform_url=url,
+            published_at=utc_now_iso(),
+            provider_response={"manual_confirmation": True, "platform_url": url},
+        )
+        return self._mark_published(job_id, result, require_publishing=False)
+
+    def approve_review(self, job_id: str, platform_url: str = "") -> dict[str, Any]:
+        return self.mark_published_manually(job_id, platform_url)
+
+    def _validate_batch_jobs(self, job_ids: list[str]) -> list[str]:
+        ids = list(dict.fromkeys(str(job_id).strip() for job_id in job_ids if str(job_id).strip()))
+        if not ids:
+            raise ValueError("至少选择一条发布任务")
+        with get_connection() as connection:
+            count = connection.execute(
+                f"SELECT COUNT(*) FROM publish_jobs WHERE id IN ({','.join('?' for _ in ids)})", ids
+            ).fetchone()[0]
+        if int(count) != len(ids):
+            raise ValueError("部分发布任务不存在")
+        return ids
 
     def _claim_scheduled_job(self, job_id: str) -> bool:
-        now = now_iso()
-        payload = json.dumps({"publisher": "started", "started_at": now}, ensure_ascii=False)
+        now = utc_now_iso()
+        execution_id = uuid4().hex
         with get_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """
                 UPDATE publish_jobs
-                SET status = 'PUBLISHING',
+                SET status = 'PUBLISHING', claimed_at = ?, started_at = ?, finished_at = NULL,
+                    worker_id = ?, execution_id = ?, execution_phase = 'claimed',
                     attempt_count = COALESCE(attempt_count, 0) + 1,
                     retry_count = COALESCE(retry_count, 0) + 1,
-                    last_error = '',
-                    error_message = '',
-                    publish_result = ?,
-                    provider_response = ?,
-                    updated_at = ?
+                    next_attempt_at = NULL, last_error = '', error_message = '',
+                    needs_manual_review = 0, updated_at = ?
                 WHERE id = ? AND status = 'SCHEDULED'
                 """,
-                (payload, payload, now, job_id),
+                (now, now, self.worker_id, execution_id, now, job_id),
             )
+            if cursor.rowcount:
+                self.repository.add_event(
+                    job_id, "claimed", from_status="SCHEDULED", to_status="PUBLISHING",
+                    worker_id=self.worker_id, payload={"execution_id": execution_id}, connection=connection,
+                )
             connection.commit()
         return int(cursor.rowcount or 0) == 1
 
-    def _mark_published(self, job_id: str, payload: dict[str, Any], remote_video_id: str) -> dict[str, Any]:
-        now = now_iso()
-        publish_result = json.dumps(payload, ensure_ascii=False)
+    def _handle_worker_unavailable(self, job: dict[str, Any], exc: PublishWorkerUnavailable) -> dict[str, Any]:
+        execution_id = str(job.get("execution_id") or "")
+        if exc.request_may_have_been_received and execution_id:
+            try:
+                execution = self.worker_client.execution(execution_id)
+                phase = str(execution.get("phase") or "unknown")
+                details = execution.get("details") if isinstance(execution.get("details"), dict) else {}
+                if phase == "confirmed_success" and details:
+                    return self._mark_published(str(job["id"]), PublishResult.from_dict(details))
+                if phase not in {"received", "browser_opening", "browser_opened", "rejected"}:
+                    return self._mark_need_review(
+                        str(job["id"]), "publish_worker_result_uncertain",
+                        "Worker 连接中断且任务可能已经上传，请人工确认平台结果",
+                    )
+            except PublishError:
+                return self._mark_need_review(
+                    str(job["id"]), "publish_worker_result_uncertain",
+                    "Worker 超时后无法读取执行阶段，为避免重复投稿已停止自动重试",
+                )
+        attempts = int((self.repository.get_job(str(job["id"])) or job).get("attempt_count") or 0)
+        max_attempts = max(1, int(job.get("max_attempts") or self.max_retry_count))
+        if attempts >= max_attempts:
+            return self._mark_failed(str(job["id"]), exc.error_code, f"{exc.message}；3 次上传前安全重试已用完")
+        delays = (30, 120, 300)
+        delay = delays[min(max(0, attempts - 1), len(delays) - 1)]
+        next_attempt = (utc_now() + timedelta(seconds=delay)).isoformat(timespec="seconds")
+        now = utc_now_iso()
         with get_connection() as connection:
             connection.execute(
                 """
-                UPDATE publish_jobs
-                SET status = 'PUBLISHED',
-                    publish_result = ?,
-                    provider_response = ?,
-                    remote_video_id = ?,
-                    platform_item_id = ?,
-                    published_at = ?,
-                    last_error = '',
-                    error_message = '',
-                    error_code = '',
-                    audit_status = 'submitted',
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (publish_result, publish_result, remote_video_id, remote_video_id, now, now, job_id),
-            )
-            connection.commit()
-        job = get_publish_job_raw(job_id) or {"task_id": ""}
-        self._append_log(job.get("task_id") or "", f"Publish job {job_id} published successfully")
-        return {"status": "published", "job_id": job_id, "publish_result": payload}
-
-    def _mark_exported(self, job_id: str, payload: dict[str, Any], remote_video_id: str) -> dict[str, Any]:
-        now = now_iso()
-        publish_result = json.dumps(payload, ensure_ascii=False)
-        with get_connection() as connection:
-            connection.execute(
-                """
-                UPDATE publish_jobs
-                SET status = 'EXPORTED', publish_result = ?, provider_response = ?,
-                    remote_video_id = ?, published_at = NULL, audit_status = 'not_submitted',
-                    last_error = '', error_message = '', error_code = '', updated_at = ?
+                UPDATE publish_jobs SET status = 'SCHEDULED', next_attempt_at = ?,
+                    error_code = ?, error_message = ?, last_error = ?,
+                    execution_phase = 'worker_unavailable_before_upload', updated_at = ?
                 WHERE id = ? AND status = 'PUBLISHING'
                 """,
-                (publish_result, publish_result, remote_video_id, now, job_id),
+                (next_attempt, exc.error_code, exc.message, exc.message, now, job["id"]),
+            )
+            self.repository.add_event(
+                str(job["id"]), "safe_retry_scheduled", from_status="PUBLISHING", to_status="SCHEDULED",
+                worker_id=self.worker_id, error_code=exc.error_code, message=exc.message,
+                payload={"next_attempt_at": next_attempt, "attempt_count": attempts}, connection=connection,
             )
             connection.commit()
-        job = get_publish_job_raw(job_id) or {"task_id": ""}
-        self._append_log(job.get("task_id") or "", f"Publish job {job_id} exported a local package")
-        return {"status": "exported", "job_id": job_id, "publish_result": payload}
+        return {"status": "rescheduled", "job_id": job["id"], "next_attempt_at": next_attempt, "message": exc.message}
 
-    def _mark_failed(self, job_id: str, error_code: str, message: str) -> dict[str, Any]:
-        now = now_iso()
-        payload = json.dumps(
-            {"error_code": error_code, "message": message, "failed_at": now},
-            ensure_ascii=False,
-        )
+    def _reschedule_before_upload(self, job_id: str, message: str) -> None:
+        now = utc_now_iso()
         with get_connection() as connection:
             connection.execute(
                 """
-                UPDATE publish_jobs
-                SET status = 'FAILED',
-                    error_code = ?,
-                    error_message = ?,
-                    last_error = ?,
-                    publish_result = ?,
-                    provider_response = ?,
-                    updated_at = ?
-                WHERE id = ?
+                UPDATE publish_jobs SET status = 'SCHEDULED', next_attempt_at = ?,
+                    execution_phase = 'recovered_before_upload', last_error = ?, error_message = ?, updated_at = ?
+                WHERE id = ? AND status = 'PUBLISHING'
                 """,
-                (error_code, message, message, payload, payload, now, job_id),
+                (now, message, message, now, job_id),
+            )
+            self.repository.add_event(
+                job_id, "recovered_before_upload", from_status="PUBLISHING", to_status="SCHEDULED",
+                message=message, connection=connection,
             )
             connection.commit()
-        job = get_publish_job_raw(job_id) or {"task_id": ""}
-        self._append_log(job.get("task_id") or "", f"Publish job {job_id} failed: {message}")
+
+    def _mark_published(self, job_id: str, result: PublishResult, *, require_publishing: bool = True) -> dict[str, Any]:
+        self.repository.record_provider_result(job_id, result)
+        now = utc_now_iso()
+        condition = "AND status = 'PUBLISHING'" if require_publishing else "AND status = 'NEED_REVIEW'"
+        with get_connection() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE publish_jobs SET status = 'PUBLISHED', published_at = ?, finished_at = ?,
+                    platform_url = ?, remote_video_id = ?, platform_item_id = ?,
+                    audit_status = 'submitted', needs_manual_review = 0,
+                    error_code = '', error_message = '', last_error = '',
+                    execution_phase = 'confirmed_success', updated_at = ?
+                WHERE id = ? {condition}
+                """,
+                (result.published_at or now, now, result.platform_url, result.remote_video_id,
+                 result.remote_video_id, now, job_id),
+            )
+            if cursor.rowcount:
+                self.repository.add_event(
+                    job_id, "published", from_status="PUBLISHING" if require_publishing else "NEED_REVIEW",
+                    to_status="PUBLISHED", worker_id=self.worker_id, payload=result.as_dict(), connection=connection,
+                )
+            connection.commit()
+        if not cursor.rowcount:
+            return {"status": "skipped", "job_id": job_id, "message": "任务状态已变化，未覆盖最新状态"}
+        self._append_log(job_id, "平台已确认投稿成功")
+        return {"status": "published", "job_id": job_id, "publish_result": result.as_dict()}
+
+    def _mark_exported(self, job_id: str, result: PublishResult) -> dict[str, Any]:
+        self.repository.record_provider_result(job_id, result)
+        now = utc_now_iso()
+        with get_connection() as connection:
+            connection.execute(
+                """
+                UPDATE publish_jobs SET status = 'EXPORTED', finished_at = ?, published_at = NULL,
+                    audit_status = 'not_submitted', execution_phase = 'exported', updated_at = ?
+                WHERE id = ? AND status = 'PUBLISHING'
+                """,
+                (now, now, job_id),
+            )
+            self.repository.add_event(
+                job_id, "exported", from_status="PUBLISHING", to_status="EXPORTED",
+                payload=result.as_dict(), connection=connection,
+            )
+            connection.commit()
+        return {"status": "exported", "job_id": job_id, "publish_result": result.as_dict()}
+
+    def _mark_failed(
+        self, job_id: str, error_code: str, message: str, result: PublishResult | None = None
+    ) -> dict[str, Any]:
+        if result:
+            self.repository.record_provider_result(job_id, result)
+        now = utc_now_iso()
+        with get_connection() as connection:
+            row = connection.execute("SELECT status FROM publish_jobs WHERE id = ?", (job_id,)).fetchone()
+            from_status = str(row["status"] if row else "")
+            connection.execute(
+                """
+                UPDATE publish_jobs SET status = 'FAILED', finished_at = ?, error_code = ?,
+                    error_message = ?, last_error = ?, needs_manual_review = 0,
+                    execution_phase = 'failed', updated_at = ?
+                WHERE id = ? AND status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
+                """,
+                (now, error_code, message, message, now, job_id),
+            )
+            self.repository.add_event(
+                job_id, "failed", from_status=from_status, to_status="FAILED",
+                worker_id=self.worker_id, error_code=error_code, message=message, connection=connection,
+            )
+            connection.commit()
+        self._append_log(job_id, f"发布失败：{message}")
         return {"status": "failed", "job_id": job_id, "error_code": error_code, "message": message}
 
-    def _mark_need_review(self, job_id: str, risk_flags: list[Any]) -> None:
-        now = now_iso()
-        message = f"risk flags require manual review: {risk_flags}"
-        with get_connection() as connection:
-            connection.execute(
-                """
-                UPDATE publish_jobs
-                SET status = 'NEED_REVIEW', last_error = ?, error_message = ?,
-                    risk_flags = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (message, message, json.dumps(risk_flags, ensure_ascii=False), now, job_id),
-            )
-            connection.commit()
-
-    def _update_status(
-        self,
-        job_id: str,
-        status: str,
-        message: str = "",
-        result_payload: dict[str, Any] | None = None,
+    def _mark_need_review(
+        self, job_id: str, error_code: str, message: str, result: PublishResult | None = None
     ) -> dict[str, Any]:
-        job = get_publish_job_raw(job_id)
-        if not job:
-            raise ValueError("publish job not found")
-        if str(job.get("status") or "").upper() == "PUBLISHED" and status != "PUBLISHED":
-            raise ValueError("published jobs cannot be changed by this operation")
-        now = now_iso()
-        payload = json.dumps(result_payload or {"message": message, "updated_at": now}, ensure_ascii=False)
+        if result:
+            self.repository.record_provider_result(job_id, result)
+        now = utc_now_iso()
         with get_connection() as connection:
+            row = connection.execute("SELECT status FROM publish_jobs WHERE id = ?", (job_id,)).fetchone()
+            from_status = str(row["status"] if row else "")
             connection.execute(
                 """
-                UPDATE publish_jobs
-                SET status = ?, last_error = ?, error_message = ?,
-                    publish_result = ?, provider_response = ?, updated_at = ?
-                WHERE id = ?
+                UPDATE publish_jobs SET status = 'NEED_REVIEW', finished_at = ?, error_code = ?,
+                    error_message = ?, last_error = ?, needs_manual_review = 1,
+                    execution_phase = 'manual_review', updated_at = ?
+                WHERE id = ? AND status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
                 """,
-                (status, message, message, payload, payload, now, job_id),
+                (now, error_code, message, message, now, job_id),
+            )
+            self.repository.add_event(
+                job_id, "needs_review", from_status=from_status, to_status="NEED_REVIEW",
+                worker_id=self.worker_id, error_code=error_code, message=message, connection=connection,
             )
             connection.commit()
-        return {"status": "ok", "job": get_publish_job_raw(job_id)}
+        self._append_log(job_id, f"发布需要人工复核：{message}")
+        return {"status": "need_review", "job_id": job_id, "error_code": error_code, "message": message}
 
-    def _append_log(self, task_id: str, message: str) -> None:
+    def _transition_user_status(self, job_id: str, target: str, message: str) -> dict[str, Any]:
+        job = self.repository.get_job(job_id)
+        if not job:
+            raise ValueError("发布任务不存在")
+        source = str(job.get("status") or "").upper()
+        if source not in {"DRAFT", "WAITING", "SCHEDULED", "FAILED", "NEED_REVIEW"}:
+            raise ValueError("当前状态不能取消")
+        now = utc_now_iso()
+        with get_connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE publish_jobs SET status = ?, finished_at = ?, last_error = ?,
+                    error_message = ?, updated_at = ? WHERE id = ? AND status = ?
+                """,
+                (target, now, message, message, now, job_id, source),
+            )
+            if cursor.rowcount:
+                self.repository.add_event(
+                    job_id, "cancelled", from_status=source, to_status=target,
+                    message=message, connection=connection,
+                )
+            connection.commit()
+        if not cursor.rowcount:
+            raise ValueError("任务状态已变化，请刷新后重试")
+        return {"status": "ok", "job": self.repository.get_job(job_id)}
+
+    @staticmethod
+    def _risk_flags(job: dict[str, Any]) -> list[Any]:
+        for value in (job.get("risk_flags"), job.get("provider_response")):
+            if not value:
+                continue
+            try:
+                parsed = json.loads(value) if isinstance(value, str) else value
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, list):
+                return [item for item in parsed if item]
+            if isinstance(parsed, dict) and isinstance(parsed.get("risk_flags"), list):
+                return [item for item in parsed["risk_flags"] if item]
+        return []
+
+    def _append_log(self, job_id: str, message: str) -> None:
+        job = self.repository.get_job(job_id) or {}
+        task_id = str(job.get("task_id") or "")
         if not task_id:
             return
         try:
-            append_task_log(task_id, message)
+            append_task_log(task_id, f"Publish job {job_id}: {message}")
         except Exception:
-            return
+            pass
 
 
 def queue_snapshot(task_id: str | None = None) -> dict[str, Any]:
@@ -692,27 +812,24 @@ def queue_snapshot(task_id: str | None = None) -> dict[str, Any]:
         params.append(task_id)
     with get_connection() as connection:
         rows = connection.execute(
-            f"""
-            SELECT *
-            FROM publish_jobs
-            {where}
-            ORDER BY scheduled_at ASC, created_at DESC
-            """,
+            f"SELECT * FROM publish_jobs {where} ORDER BY COALESCE(scheduled_at, created_at), created_at DESC",
             params,
         ).fetchall()
     jobs = [dict(row) for row in rows]
-    by_status = {status: [job for job in jobs if str(job.get("status") or "").upper() == status] for status in PUBLISH_STATUSES}
-    today = datetime.now().astimezone().date()
+    statuses = ("DRAFT", "WAITING", "SCHEDULED", "PUBLISHING", "PUBLISHED", "EXPORTED", "FAILED", "NEED_REVIEW", "CANCELLED")
+    by_status = {status: [job for job in jobs if str(job.get("status") or "").upper() == status] for status in statuses}
+    today = utc_now().astimezone(app_zone()).date()
     today_jobs = []
     for job in jobs:
         try:
-            if parse_datetime(job.get("scheduled_at")).date() == today:
+            if parse_datetime(job.get("scheduled_at")).astimezone(app_zone()).date() == today:
                 today_jobs.append(job)
         except ValueError:
-            continue
+            pass
     return {
         "all": jobs,
-        "pending": by_status["SCHEDULED"] + by_status["WAITING"],
+        "pending": by_status["DRAFT"] + by_status["WAITING"],
+        "scheduled": by_status["SCHEDULED"],
         "publishing": by_status["PUBLISHING"],
         "published": by_status["PUBLISHED"],
         "exported": by_status["EXPORTED"],
@@ -721,22 +838,26 @@ def queue_snapshot(task_id: str | None = None) -> dict[str, Any]:
         "cancelled": by_status["CANCELLED"],
         "today": today_jobs,
         "counts": {status: len(items) for status, items in by_status.items()},
+        "timezone": settings.app_timezone,
     }
 
 
 def scheduler_health() -> dict[str, Any]:
-    from app.services.publish_service import _opencli_status
-
     with get_connection() as connection:
         counts = connection.execute(
             """
-            SELECT
-                SUM(CASE WHEN status = 'SCHEDULED' THEN 1 ELSE 0 END) AS scheduled_count,
-                SUM(CASE WHEN status = 'PUBLISHING' THEN 1 ELSE 0 END) AS publishing_count
+            SELECT SUM(CASE WHEN status = 'SCHEDULED' THEN 1 ELSE 0 END) scheduled_count,
+                   SUM(CASE WHEN status = 'PUBLISHING' THEN 1 ELSE 0 END) publishing_count
             FROM publish_jobs
             """
         ).fetchone()
-    opencli = _opencli_status()
+    try:
+        worker = PublishWorkerClient(timeout=2).health()
+        worker_available = worker.get("status") == "ok"
+        worker_message = "Windows 发布 Worker 正常"
+    except PublishError as exc:
+        worker_available = False
+        worker_message = exc.message
     return {
         "enabled": bool(settings.publish_scheduler_enabled),
         "running": bool(_SCHEDULER_HEALTH["running"]),
@@ -746,8 +867,9 @@ def scheduler_health() -> dict[str, Any]:
         "interval_seconds": int(settings.publish_scheduler_interval_seconds),
         "scheduled_count": int(counts["scheduled_count"] or 0),
         "publishing_count": int(counts["publishing_count"] or 0),
-        "opencli_available": bool(opencli["available"]),
-        "opencli_message": opencli["message"],
+        "worker_available": worker_available,
+        "worker_message": worker_message,
+        "timezone": settings.app_timezone,
     }
 
 
@@ -763,7 +885,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="NiuMa Studio publish scheduler")
     parser.add_argument("command", choices=["run", "run-once", "snapshot"])
     args = parser.parse_args(argv)
-
     scheduler = PublishScheduler()
     if args.command == "run-once":
         print(json.dumps(scheduler.run_once(), ensure_ascii=False, indent=2))
@@ -772,11 +893,7 @@ def main(argv: list[str] | None = None) -> int:
         init_db()
         print(json.dumps(queue_snapshot(), ensure_ascii=False, indent=2))
         return 0
-
-    async def _runner() -> None:
-        await scheduler.run_forever()
-
-    asyncio.run(_runner())
+    asyncio.run(scheduler.run_forever())
     return 0
 
 
