@@ -2,27 +2,29 @@
 
 牛马片场是一个运行在 Windows 本地的 AI 高光生产后台，用来把直播录像、综艺访谈、长视频素材整理成可转写、可分析、可审核、可切割、可加字幕、可进入发送中心的短视频生产任务。
 
-当前版本：`1.4.0`。
+当前版本：`1.5.0`。
 
-v1.4.0 已实现真实定时发送闭环：系统按 `publish_jobs.scheduled_at` 扫描到点任务，默认通过 `opencli_publish` 使用 Windows Chrome 的现有登录态向抖音或 B站投稿。`manual_export` 仍可选，但它只生成本地发布包，状态为 `EXPORTED`，不代表平台已发布。
+v1.5.0 将抖音和 B站的立即发送、定时发送统一到 `PublishScheduler → Registry → LocalBrowserPublisher → Windows Worker → 平台 Publisher`。FastAPI 或 Docker 负责排期，Windows Worker 使用系统 Chrome 的独立账号目录执行真实投稿。只有读取到平台作品 ID、稿件 ID 或明确成功链接才进入 `PUBLISHED`；登录失效、验证码、风控和结果不确定进入 `NEED_REVIEW`，不会自动重复上传。
 
 ## 定时发送快速说明
 
 - `platform` 只表示目标平台：`douyin` / `bilibili`。
-- `publish_mode` 表示执行方式：`opencli_publish`、`manual_export`、`api_publish`、`local_browser`；其中 `local_browser` 尚未实现，会明确失败，不会静默导出发布包。
-- 默认执行方式由 `PUBLISH_DEFAULT_MODE=opencli_publish` 控制；旧的 `PUBLISH_SCHEDULER_DEFAULT_PLATFORM` 已废弃，只保留兼容读取。
-- 浏览器提交成功或 API 确认成功才进入 `PUBLISHED`；本地发布包导出成功进入 `EXPORTED`。
-- 排期在用户选择的 IANA 时区内计算，数据库统一保存 UTC ISO 8601；发送中心按任务的 `schedule_timezone` 转回本地时间展示。
+- `publish_mode` 表示执行方式：默认 `local_browser`；`manual_export` 只能显式选择；旧 `opencli_publish` 只有设置 `PUBLISH_ENABLE_OPENCLI_FALLBACK=true` 才能执行。
+- `local_browser` 会按 `platform` 选择 `DouyinPublisher` 或 `BilibiliPublisher`，失败时绝不静默回退到 `manual_export`。
+- 浏览器取得平台成功证据才进入 `PUBLISHED`；本地发布包导出成功进入 `EXPORTED`，两者含义不同。
+- 前端固定显示北京时间；无时区输入按 `Asia/Shanghai` 解释，数据库统一保存带 `+00:00` 的 UTC ISO 8601。
+- “立即发送”只写入当前时间并设为 `SCHEDULED`；到点后与未来排期使用同一个 Scheduler 和 Publisher。
 - 调度器健康状态：`GET /api/publish/scheduler/health`。
-- opencli 自动发送要求 Windows Chrome 保持目标平台登录；验证码、登录失效、风控和最终人工确认仍由用户处理。
+- 浏览器账号使用 `data/browser_profiles/{platform}/{account_id}` 独立目录；Cookie、storage state、截图和 Worker 日志均被 Git 忽略。
 
 ### 单条真实灰度发布
 
-1. 先启动 Windows opencli 辅助服务，并在 Chrome 登录目标平台。
-2. 打开发送中心，只勾选一条低风险测试视频。
-3. 展开编辑，确认标题、正文、话题、目标平台与 `opencli_publish`。
-4. 点击“立即发送”，观察状态依次进入 `PUBLISHING`，平台确认提交成功后进入 `PUBLISHED`。
-5. 同时打开 `/api/publish/scheduler/health` 检查调度器与 opencli 状态；若平台出现验证码或风控，停止批量任务并人工处理。
+1. 在项目目录运行 `./scripts/start_publish_worker.ps1`，启动带 Token 的 Windows Worker。
+2. 打开 `/publish` 的“内容准备 → 账号管理”，分别新增抖音和 B站账号，再点击“打开登录窗口”。
+3. 在系统 Chrome 独立窗口内完成二维码、短信或平台要求的人工验证，然后回到页面点击“检查登录”。
+4. 只选择一条用户确认可发布的短测试视频，核对标题、正文、话题、封面、平台账号和可见范围。
+5. 点击“立即发送”后，任务先进入 `SCHEDULED`，再由 Scheduler 领取为 `PUBLISHING`；平台确认成功后进入 `PUBLISHED`。
+6. 若出现登录、验证码、风控或结果不确定，任务应进入 `NEED_REVIEW`，先打开平台创作者中心核对，不能直接重试。
 
 ### 排期 API
 
@@ -36,23 +38,24 @@ v1.4.0 已实现真实定时发送闭环：系统按 `publish_jobs.scheduled_at`
   "timezone": "Asia/Shanghai",
   "interval_minutes": 180,
   "daily_start_time": "09:00",
-  "daily_end_time": "21:00"
+  "daily_end_time": "21:00",
+  "confirmed_schedule": []
 }
 ```
 
 - 先调用 `POST /api/publish/schedules/preview`，读取每条任务的 `scheduled_at_local`、`scheduled_at_local_display` 和 `scheduled_at_utc`。
-- 用户确认后调用 `PATCH /api/publish/jobs/schedule-batch`；后端复用同一函数计算并写库，所以预览与保存结果一致。
+- 用户确认后，将预览返回的精确时间列表作为 `confirmed_schedule` 调用 `PATCH /api/publish/jobs/schedule-batch`，后端逐条校验后写库。
 - 清除排期时提交 `action=clear`；普通任务回到 `WAITING`，`FAILED` 保持失败，`NEED_REVIEW` 保持复核状态。
 
 ## 当前状态
 
-- 后端：FastAPI 可启动，当前 API 版本为 `1.4.0`。
+- 后端：FastAPI 可启动，当前 API 版本为 `1.5.0`。
 - 前端：HTML + CSS + JavaScript + Jinja2 后台页面，已完成 Apple 风格全页面美化。
 - 数据库：SQLite，保存任务、候选片段、输出片段、字幕任务、发送任务和 AI 配置等信息。
 - 视频处理：已接入 FFmpeg / FFprobe，用于音频提取、切片、封面帧和字幕成片。
 - 转写：支持火山引擎远程转写和本地 faster-whisper。
 - AI 分析：支持远程 OpenAI-compatible / DeepSeek 和本地 Ollama；长视频会按小段分析再合并候选片段。
-- 发送中心：支持生成抖音 / B站待发送队列、AI 标题 / 简介 / 话题、候选封面帧，并通过 opencli 调用已登录 Chrome 辅助投稿。
+- 发送中心：分为内容准备、排期计划、执行记录；抖音 / B站真实发布由统一 Scheduler 和 Windows Chrome Worker 执行。
 - 安全边界：不会绕过验证码、登录失效、平台风控或人工确认；不会保存账号密码、cookie 或真实 API Key。
 - 配置安全：真实 `.env` 已被 Git 忽略，不会提交真实 API Key。
 - 品牌说明：当前页面主名为“牛马片场”，英文代号为 `NiuMa Studio`，Docker 技术名为 `niuma-studio`。
@@ -112,10 +115,11 @@ http://127.0.0.1:8001
 
 ---
 
-## v1.4.0 定时发送
+## v1.5.0 统一真实发布
 
-- 应用启动时会自动启动 `PublishScheduler`，默认每 60 秒扫描一次 `publish_jobs`。
-- 默认发布方式是 `opencli_publish`，调用 Windows Chrome 的已有平台登录态；可通过 `PUBLISH_DEFAULT_MODE` 调整。
+- 应用启动时会自动启动 `PublishScheduler`，默认每 5 秒扫描一次 `publish_jobs`。
+- 默认发布方式是 `local_browser`；Docker 中的 FastAPI 通过 `PUBLISH_WORKER_URL=http://host.docker.internal:8765` 调用 Windows Worker。
+- 一键启动 Worker：`./scripts/start_publish_worker.ps1`；兼容脚本 `./scripts/start_docker_opencli.ps1` 现在也会先启动同一个 Worker，再启动 Docker。
 - 可选的 `manual_export` 会把发布包导出到 `outputs/publish_packages/{task_id}/{clip_id}/`；发布包包含 `clip.mp4`、`title.txt`、`caption.txt`、`hashtags.txt`、`cover_text.txt`、`publish_plan.json` 和 `metadata.json`，成功状态为 `EXPORTED`。
 - 手动执行一次扫描：
 
@@ -129,9 +133,9 @@ http://127.0.0.1:8001
 .\.venv\Scripts\python.exe -m app.publish_scheduler run
 ```
 
-- `NEED_REVIEW` 表示文案或风险标记需要人工复核，不会自动发布；复核通过后可通过发布 API 或页面操作重新进入 `SCHEDULED` 队列。
+- `NEED_REVIEW` 表示登录、验证、风控或平台结果不确定；必须先核对平台结果。确认未发布后标记失败，再创建新的重试任务。
 - 当前仍然跳过加字幕、烧录字幕和字幕叠加，自动发布使用原片切割结果。
-- 真实平台发布器仍是预留扩展点，后续需要平台账号授权、上传接口、风控边界和人工确认策略后才能接入。
+- 平台页面可能改版，真实灰度发布前必须用单条、低风险测试素材人工确认；自动测试全部使用 Mock，不会打开真实浏览器。
 
 ---
 
@@ -179,6 +183,7 @@ docker compose down
 
 Docker 启动说明：
 - 容器内 Python 3.12，已预装 FFmpeg
+- Windows Worker 必须在宿主机运行，容器不会保存 Chrome 登录态
 - `.env` 文件会被自动加载（如果存在）
 - 存储目录 `E:\直播间切片工作流存储` 会自动挂载到容器内
 - 代码目录和 prompts 目录以 volume 方式挂载，支持热更新

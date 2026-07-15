@@ -179,18 +179,20 @@ output_clip 生成成功
 
 ```text
 output_clip 生成成功
-→ 全自动流程按 metadata.platform 直接创建最终 publish_jobs
-→ WAITING / NEED_REVIEW
-→ 用户在“待安排”复核内容并选择任务
+→ 全自动流程按 metadata.platform 创建 publish_jobs
+→ DRAFT / WAITING
+→ 用户在“内容准备”复核内容、平台和账号
 → 排期抽屉先调用 POST /api/publish/schedules/preview
-→ 确认后 PATCH /api/publish/jobs/schedule-batch
-→ SCHEDULED（scheduled_at 保存 UTC，schedule_timezone 保存显示时区）
-→ 调度器到点原子抢占为 PUBLISHING
-→ execute_publish_job 按 publish_mode 分发
-   ├─ opencli_publish → Windows Chrome 平台投稿 → PUBLISHED / FAILED
-   ├─ api_publish → 平台 API → PUBLISHED / FAILED
+→ 确认后将精确时间列表提交 PATCH /api/publish/jobs/schedule-batch
+→ SCHEDULED（scheduled_at 保存 UTC +00:00，timezone 保存 Asia/Shanghai）
+→ 调度器到点使用 BEGIN IMMEDIATE 原子领取为 PUBLISHING
+→ Registry 按 platform + publish_mode 分发
+   ├─ local_browser → Windows Worker → DouyinPublisher / BilibiliPublisher
+   │    ├─ 平台确认成功 → PUBLISHED
+   │    ├─ 明确失败 → FAILED
+   │    └─ 登录/验证/风控/结果不确定 → NEED_REVIEW
    ├─ manual_export → 本地发布包 → EXPORTED / FAILED
-   └─ local_browser → 明确未实现 → FAILED
+   └─ opencli_publish → 显式兼容开关 → PUBLISHED / FAILED / NEED_REVIEW
 ```
 
 `platform` 只能是 `douyin` / `bilibili`；`publish_mode` 只能表示执行方式，禁止互相混用。发送中心的“补充缺失任务”只补缺，不覆盖已有任务的执行方式。
@@ -202,24 +204,26 @@ output_clip 生成成功
 | `DRAFT` | 草稿，尚未进入排期或执行 |
 | `WAITING` | 内容已生成，等待排期或立即发送 |
 | `SCHEDULED` | 已保存 UTC 计划时间，等待调度器扫描 |
-| `NEED_REVIEW` | 全自动文案含风险标记，需要人工复核后再发送 |
+| `NEED_REVIEW` | 登录、验证码、风控或平台结果不确定，需要人工核对 |
 | `PUBLISHING` | 已被一个调度器原子领取，正在执行 |
-| `PUBLISHED` | opencli 或 API 已确认平台提交成功 |
+| `PUBLISHED` | 平台 Publisher 已取得作品 ID、稿件 ID、作品链接或明确成功证据 |
 | `EXPORTED` | 本地发布包已导出，不代表平台已发布 |
-| `FAILED` | 执行失败，错误字段记录具体原因，可立即重试 |
+| `FAILED` | 明确失败；手动重试会创建带 `retry_of_job_id` 的新任务并保留旧记录 |
 | `CANCELLED` | 用户取消，或迁移时取消了较旧的未发布重复任务 |
 
 ### 排期与立即发送
 
-- 浏览器提交 `start_at_local` 和 `timezone`；后端在该 IANA 时区内应用每日开始/结束窗口，跨日后顺延到次日开始时间。
+- 浏览器提交北京时间 `start_at_local`；后端按 `Asia/Shanghai` 应用每日开始/结束窗口，跨日后顺延到次日开始时间。
 - `scheduled_at` 统一存 UTC ISO 8601，API 同时返回 `scheduled_at_utc` 与 `scheduled_at_local`。
 - 自动调度只读取到期的 `SCHEDULED`；`NEED_REVIEW` 即使有时间也不能执行。
-- “立即发送”允许 `WAITING`、`SCHEDULED`、`FAILED`，先把 `scheduled_at` 更新为当前 UTC，再走同一执行器。
-- 领取任务使用条件更新：`UPDATE publish_jobs SET status='PUBLISHING' WHERE id=? AND status='SCHEDULED'`，只有 `rowcount=1` 的进程能执行。
-- 启动恢复只处理超过 `PUBLISH_JOB_STALE_MINUTES`、没有 `published_at`、没有平台 ID 和成功结果的陈旧 `PUBLISHING`。
+- “立即发送”允许 `DRAFT`、`WAITING`、`SCHEDULED`，只把 `scheduled_at` 更新为当前 UTC 并唤醒 Scheduler；不直接调用 opencli 或平台页面。
+- 领取任务使用 `BEGIN IMMEDIATE` 与条件更新；只有 `SCHEDULED → PUBLISHING` 更新成功的 Worker 能执行。
+- Worker 未接收任务前的连接故障最多安全重试 3 次；上传开始、点击提交或执行阶段未知时禁止自动重试。
+- 启动恢复会查询 Worker 执行日志；确认未上传才重新排队，旧版未知 `PUBLISHING` 直接进入 `NEED_REVIEW`。
 
 ### 安全边界
 
-- 默认 `opencli_publish` 依赖 Windows Chrome 保持平台登录；健康状态见 `GET /api/publish/scheduler/health`。
+- 默认 `local_browser` 依赖 Windows Worker 和专属 Chrome 登录目录；健康状态见 `GET /api/publish/scheduler/health`。
 - 不绕过验证码、登录失效、风控和人工确认。
-- 遇到平台验证提示时，任务会标记为 `FAILED` 并记录具体原因，等待人工处理。
+- 遇到平台验证提示或发布结果不确定时进入 `NEED_REVIEW`，不会标记为已发布，也不会自动重传。
+- 人工标记 `PUBLISHED` 必须从 `NEED_REVIEW` 操作并填写对应平台作品链接。

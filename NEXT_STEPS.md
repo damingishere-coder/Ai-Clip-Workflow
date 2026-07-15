@@ -1,19 +1,22 @@
 # Next Steps
 
-## 2026-07-11 真实单条灰度发布（下一步优先做）
-1. 在 Windows Chrome 分别登录抖音创作者中心和 B站创作中心；不要使用无痕窗口，也不要清理登录 cookie。
-2. 在项目目录运行 `\.\scripts\start_docker_opencli.ps1`，再打开 `http://127.0.0.1:8001/api/publish/scheduler/health`。
-3. 确认 `enabled=true`、`running=true`、`opencli_available=true`；如果不是，先按 `opencli_message` 排查，不要创建批量真实排期。
-4. 打开 `/publish`，只选一条没有风险标记的短测试视频，确认目标平台正确、执行方式显示“opencli 网页发送”。
-5. 展开编辑并检查标题、正文、话题和平台高级设置；点击“立即发送”。
-6. 正常状态为 `WAITING/SCHEDULED → PUBLISHING → PUBLISHED`；只有平台页面出现明确提交成功信号才算发布成功。
-7. 如果测试 `manual_export`，正确结果是 `EXPORTED`，只检查本地发布包，不能把它当成平台已发布。
-8. 遇到验证码、登录失效、风控弹窗或页面结构变化时停止批量发送，保留 `FAILED` 错误信息用于排查。
+## 2026-07-15 v1.5.0 真实单条灰度发布（下一步优先做）
+
+1. 在项目根目录运行 `\.\scripts\start_publish_worker.ps1`。成功时会显示 Worker 地址和健康检查结果；脚本生成的 Token 只写本地 `.env`，不会提交 Git。
+2. 如果使用 Docker，再运行 `docker compose up --build`；也可使用兼容脚本 `\.\scripts\start_docker_opencli.ps1` 一次启动 Worker 和 Docker。
+3. 打开 `http://127.0.0.1:8001/publish`，进入“内容准备 → 账号管理”，为抖音和 B站分别新增账号。
+4. 点击“打开登录窗口”，在弹出的专属 Chrome 中人工完成二维码、短信或平台验证；回到页面点击“检查登录”，应显示“正常”。
+5. 先选一条用户确认可投稿的短测试片。抖音建议设置“仅自己可见”；B站稿件即使测试也可能进入审核或公开展示，点击最终投稿前必须再次确认。
+6. 核对标题、正文/简介、话题/标签、封面和账号；B站还要核对分区、原创/转载，转载必须填来源。
+7. 点击“立即发送”，预期状态为 `WAITING → SCHEDULED → PUBLISHING → PUBLISHED`；平台链接应出现在执行记录。
+8. 再用另一条测试片预览未来北京时间排期，确认逐条时间后应用；重启应用，任务仍应保留并在到点后走同一个 Publisher。
+9. 如果出现验证码、登录失效、风控或结果不确定，正确状态是 `NEED_REVIEW`。先打开平台创作者中心核对，确认未发布后才能标记失败并创建重试任务。
+10. `manual_export` 只能显式选择，正确结果是 `EXPORTED`；它不会变成 `PUBLISHED`，真实发送失败也不会自动导出发布包。
 
 ## 后续风险收敛
-1. 用抖音、B站各做一次单条灰度，记录 opencli 页面选择器因平台改版产生的失败点。
+1. 用抖音、B站各做一次单条灰度，记录平台页面选择器因改版产生的失败点。
 2. 增加调度器健康状态的定时前端刷新和异常通知；当前页面展示最近一次服务端状态。
-3. API 发布仍取决于平台开放权限与账号授权；`local_browser` 仍明确未实现。
+3. 观察 Windows Worker 的 `execution_phase` 和本地日志，确认上传前连接重试与上传后禁止重试符合真实网络环境。
 4. 观察历史数据库迁移备份与重复任务取消结果，确认后再考虑更严格的数据清理工具；不要删除已发布记录。
 
 ## 2026-06-25 全自动流程修复后怎么测试
@@ -31,18 +34,19 @@
 1. 在项目目录启动后台：`.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001`。
 2. 打开 `http://127.0.0.1:8001/tasks/new`，新建任务并勾选“新建后自动跑完整流水线”。
 3. 等任务自动完成准备视频、转写/读取文本、AI 分析、自动选片、原片切割、生成标题文案和创建待发送任务。
-4. 到发送中心批量设置发布时间；到点后调度器会自动扫描 `SCHEDULED` 任务并执行 `manual_export`，也可以手动运行一次：`.\.venv\Scripts\python.exe -m app.publish_scheduler run-once`。
+4. 该段是 v1.4.0 历史测试记录。当时默认 `manual_export`；v1.5.0 当前默认 `local_browser`，到点后会调用 Windows Worker 真实投稿。手动扫描命令仍是 `.\.venv\Scripts\python.exe -m app.publish_scheduler run-once`。
 5. 发布包默认在 `outputs/publish_packages/{task_id}/{clip_id}/`，应能看到 `clip.mp4`、`title.txt`、`caption.txt`、`hashtags.txt`、`cover_text.txt`、`publish_plan.json`、`metadata.json`。
 6. 打开 `/publish`，在发布记录里查看 `SCHEDULED`、`PUBLISHING`、`PUBLISHED`、`FAILED`、`NEED_REVIEW` 等状态；也可以访问 `/api/publish/queue/snapshot` 查看队列快照。
 7. 失败任务可以调用 `POST /api/publish/jobs/{job_id}/retry` 重试；立即发布可以调用 `POST /api/publish/jobs/{job_id}/publish-now`；取消和跳过分别调用 `/cancel`、`/skip`。
 8. `NEED_REVIEW` 表示任务带风险标记或需要人工复核，不会自动发布；复核后调用 `POST /api/publish/jobs/{job_id}/approve-review` 可回到 `SCHEDULED`。
 9. 本轮仍然跳过加字幕、烧录字幕和字幕叠加，自动发布使用 `05_clips/` 的原片切割结果。
 
-## v1.4.0 后续真实平台发布还差什么
-1. 抖音 / B站真实发布器需要明确账号授权方式、上传接口、发布接口、审核回调或查询方式。
-2. 需要确定 token、cookie、账号授权等敏感信息只走本地 `.env` 或本机安全存储，不写入代码和 Git。
-3. 浏览器自动化版需要选择 Playwright、Selenium 或继续 opencli，并保留验证码、登录失效、风控和人工确认边界。
-4. 真实平台发布前需要加入单条灰度测试、失败重试上限、重复发布确认和人工撤销机制。
+## v1.5.0 仍需真实环境确认
+
+1. 自动测试已经覆盖 Registry、状态机、时间、Worker 客户端和页面流程，但没有使用真实账号点击平台最终投稿。
+2. 抖音/B站平台页面会持续改版，真实灰度时若选择器变化，必须按错误阶段修正，不能伪造成功。
+3. 作品审核、限流、账号权限与平台规则属于外部状态；系统只在取得成功证据时写 `PUBLISHED`。
+4. opencli 仅作为显式兼容模式保留，默认关闭，不再作为立即发送专用链路。
 
 ## 2026-06-23 v1.3.0 全自动流水线怎么测试
 1. 启动本地后台后打开 `http://127.0.0.1:8001/tasks/new`。

@@ -1,5 +1,15 @@
 # 数据库结构说明
 
+## 2026-07-15：v1.5.0 统一真实发布迁移
+
+- 迁移继续使用启动时 `CREATE TABLE IF NOT EXISTS` 和逐列 `ALTER TABLE ADD COLUMN`；不删除旧字段、不重建表、不清空历史数据。
+- `publish_jobs` 新增：`claimed_at`、`started_at`、`finished_at`、`max_attempts DEFAULT 3`、`worker_id`、`platform_url`、`needs_manual_review DEFAULT 0`、`timezone DEFAULT 'Asia/Shanghai'`、`next_attempt_at`、`execution_id`、`execution_phase`、`retry_of_job_id`。
+- 保留并规范：`publish_mode`、`scheduled_at`、`published_at`、`attempt_count`、`last_error`、`error_code`、`remote_video_id`、`provider_response`、`publish_result`、`schedule_timezone`。
+- `publish_accounts` 新增：`login_status`、`login_checked_at`、`login_message`、`last_login_at`、`auth_type`。浏览器账号只记录本地登录状态，不保存账号密码或 Cookie。
+- 新增 `publish_job_events`，记录状态流转、原子领取、恢复、安全重试、平台结果及人工操作。
+- 新索引：`idx_publish_jobs_due_retry`、`idx_publish_jobs_execution`、`idx_publish_job_events_job_time`；活跃唯一索引只约束 `DRAFT / WAITING / SCHEDULED / PUBLISHING / NEED_REVIEW`，允许失败任务保留并创建重试副本。
+- 数据库时间统一为带 `+00:00` 的 UTC ISO 8601；业务时区固定记录为 `Asia/Shanghai`。
+
 ## 2026-07-11：发布平台、执行方式、时区与去重迁移
 
 - `publish_jobs.platform` 只保存 `douyin` / `bilibili`；`manual_export`、`local_browser` 等值属于 `publish_mode`。
@@ -62,7 +72,12 @@
 | `open_id` | TEXT | 开放平台 open_id |
 | `access_token` | TEXT | 接口访问 token |
 | `refresh_token` | TEXT | 刷新 token |
-| `authorization_status` | TEXT | 授权状态：`manual` / `authorized` |
+| `authorization_status` | TEXT | 兼容授权状态：`manual` / `authorized` |
+| `auth_type` | TEXT | 授权方式，浏览器账号默认 `browser_profile` |
+| `login_status` | TEXT | `normal` / `login_required` / `invalid` |
+| `login_checked_at` | TEXT | 最近一次登录态检查时间（UTC） |
+| `login_message` | TEXT | 登录态说明，不包含 Cookie 或账号密码 |
+| `last_login_at` | TEXT | 最近一次确认登录成功时间（UTC） |
 | `remark` | TEXT | 备注 |
 
 ### publish_jobs 表
@@ -89,8 +104,35 @@
 | `last_error` | TEXT | 最近一次失败说明，供后续自动重试使用 |
 | `provider_response` | TEXT | 平台响应摘要 JSON |
 | `retry_count` | INTEGER | 重试次数 |
-| `scheduled_at` | TEXT | UTC ISO 8601 计划发布时间，例如 `2026-07-12T01:00:00Z` |
+| `attempt_count` | INTEGER | 实际领取执行次数 |
+| `max_attempts` | INTEGER | 上传前安全重试上限，默认 3 |
+| `scheduled_at` | TEXT | UTC ISO 8601 计划发布时间，例如 `2026-07-16T01:00:00+00:00` |
 | `schedule_timezone` | TEXT | 排期计算和页面显示使用的 IANA 时区，例如 `Asia/Shanghai` |
+| `timezone` | TEXT | 当前业务时区，默认 `Asia/Shanghai` |
+| `next_attempt_at` | TEXT | Worker 未接收前连接失败的下一次安全重试时间 |
+| `claimed_at` | TEXT | Scheduler 原子领取时间 |
+| `started_at` | TEXT | 开始执行时间 |
+| `finished_at` | TEXT | 完成、失败或进入人工复核时间 |
+| `worker_id` | TEXT | 成功领取任务的 Scheduler 标识 |
+| `execution_id` | TEXT | Windows Worker 执行日志 ID |
+| `execution_phase` | TEXT | `claimed`、`upload_started`、`submit_clicked` 等阶段 |
+| `retry_of_job_id` | TEXT | 手动重试来源任务 ID |
+| `remote_video_id` | TEXT | 平台作品 / 稿件 ID |
+| `platform_url` | TEXT | 平台作品 / 稿件链接 |
+| `needs_manual_review` | INTEGER | 是否必须人工核对平台结果 |
+| `published_at` | TEXT | 平台确认投稿成功时间；`EXPORTED` 不写此字段 |
+
+### publish_job_events 表
+
+| 字段 | 说明 |
+| --- | --- |
+| `job_id` | 对应发布任务 |
+| `event_type` | 领取、排期、重试、结果或人工操作类型 |
+| `from_status` / `to_status` | 本次状态流转 |
+| `worker_id` | 执行该事件的 Scheduler |
+| `error_code` / `message` | 错误或说明 |
+| `payload` | 已脱敏的 JSON 摘要 |
+| `occurred_at` | UTC ISO 8601 事件时间 |
 
 ## 2026-05-23：AI Prompt 方案
 
@@ -336,9 +378,8 @@ data/workflow.sqlite3
 
 ## 2026-06-09 v1.2 补充说明
 
-- 发送中心当前已有发送队列和 opencli 辅助投稿能力，但还没有真正的定时调度器。
-- `publish_jobs.scheduled_at` 当前只是字段预留，可以保存计划发布时间，但 v1.2 还没有后台定时调度器，不会自动按 `scheduled_at` 发送。
-- 平台发送依赖 opencli 辅助浏览器操作，不绕过验证码、登录失效、风控和人工确认。
+- 以上 v1.2 说明仅是历史记录。v1.5.0 已由 `PublishScheduler` 执行到期任务，并通过 Windows Worker 调用抖音/B站 Publisher。
+- 平台发送不绕过验证码、登录失效、风控和人工确认；结果不确定写 `NEED_REVIEW`。
 - 代码中仍存在兼容性 `clips` 子目录（`TASK_SUBDIRECTORIES` 同时包含 `clips` 和 `05_clips`），新任务的正式输出目录是 `05_clips`。旧 `clips` 目录为兼容保留，不建议删除。
 # 2026-06-23：v1.4.0 定时发送字段
 
@@ -346,5 +387,5 @@ data/workflow.sqlite3
 - 旧字段继续兼容：`output_clip_id` 等同于 `clip_id`，`description` 等同于 `caption`，`tags` 等同于 `hashtags`，`video_file_path` 等同于 `video_path`，`provider_response` 兼容 `publish_result`，`retry_count` 兼容 `attempt_count`。
 - 发布状态使用：`DRAFT`、`SCHEDULED`、`WAITING`、`PUBLISHING`、`PUBLISHED`、`FAILED`、`CANCELLED`、`NEED_REVIEW`。
 - 调度器只扫描 `status = SCHEDULED` 且 `scheduled_at <= 当前时间` 的任务；`NEED_REVIEW`、`CANCELLED`、`PUBLISHED` 不会自动发布。
-- 该 2026-06-23 版本曾默认使用 `manual_export`；2026-07-11 起默认改为 `opencli_publish`。发布包导出成功写 `EXPORTED` 且不写 `published_at`；只有平台确认提交成功才写 `PUBLISHED` 和 `published_at`。
+- 该 2026-06-23 版本曾默认使用 `manual_export`，2026-07-11 曾改为 `opencli_publish`；v1.5.0 当前默认是 `local_browser`。发布包导出成功写 `EXPORTED` 且不写 `published_at`；只有平台确认提交成功才写 `PUBLISHED` 和 `published_at`。
 - 没有 `scheduled_at` 的旧手动发送任务迁移为 `WAITING`，避免被自动调度器误执行。

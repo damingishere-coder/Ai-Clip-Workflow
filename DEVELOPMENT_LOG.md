@@ -1,5 +1,20 @@
 # Development Log
 
+## 2026-07-15 v1.5.0 统一真实发布重构
+
+- 新增 `app/services/publishers/` 分层和 Registry：`local_browser`、`manual_export`、显式 `opencli_publish` 兼容模式与抖音/B站平台 Publisher 职责分离；未知平台直接失败，不回退导出包。
+- 实现 `LocalBrowserPublisher`：任务校验、平台注册、账号登录预检、Windows Worker 调用、统一结果转换和脱敏写回。
+- 新增 `scripts/publish_host_worker.py` 和 `start_publish_worker.ps1`：使用系统 Chrome 持久化上下文、每个平台/账号独立目录、同账号串行锁、路径白名单、Docker `/workspace/tasks` 到 Windows `TASKS_DIR` 的映射、Bearer Token 与执行阶段日志。
+- 实现抖音和 B站 Playwright 投稿流程，包含视频/内容校验、登录态、上传、平台表单、封面、发布按钮和成功证据判断；不绕过二维码、短信、滑块、验证码或风控。
+- 立即发送和未来排期统一为 `SCHEDULED → PublishScheduler → Registry → Publisher`；SQLite 使用 `BEGIN IMMEDIATE` 和条件更新原子领取。
+- 新增上传前安全重试和上传后禁止自动重试规则；重启时读取 Worker 执行日志，未知旧 `PUBLISHING` 进入 `NEED_REVIEW`。
+- 手动重试会创建带 `retry_of_job_id` 的新任务；人工标记已发布只允许 `NEED_REVIEW` 且必须填写对应平台作品链接。
+- 数据库兼容新增 Worker、阶段、时区、复核、时间和重试字段；账号增加登录态字段；新增 `publish_job_events` 事件表。迁移不删除旧字段和历史数据。
+- 发送中心重构为“内容准备 / 排期计划 / 执行记录”，新增账号抽屉、精确排期预览确认、状态筛选和人工复核操作，保留 Jinja2 + 原生 JavaScript。
+- 默认配置改为 `APP_TIMEZONE=Asia/Shanghai`、`PUBLISH_DEFAULT_MODE=local_browser`、5 秒 Scheduler；浏览器 Profile、Worker 日志、storage state 和发布产物加入 Git 忽略。
+- 新增 37 项专项测试；全量结果 `272 passed, 0 failed, 0 skipped`。同时通过 `python -m compileall -q app scripts`、`node --check app/static/js/publish-center.js`、`ruff check app scripts tests` 和 `docker compose config --quiet`。
+- 未执行真实平台最终投稿：当前没有本轮用户明确授权的账号和测试素材；必须按 `NEXT_STEPS.md` 逐平台单条灰度并在最终点击前确认。
+
 ## 2026-07-11 真实发布排期闭环与发送中心重构
 - 分离目标平台与执行方式：`platform` 仅允许 `douyin` / `bilibili`，`publish_mode` 独立表示 opencli、发布包、API 或未实现的本地浏览器执行器。
 - 全自动流水线直接创建最终 `opencli_publish` 任务，不再依赖“刷新发送队列”生成第二套记录；刷新操作只补缺，并尊重已有 `manual_export` / `local_browser` 任务。
