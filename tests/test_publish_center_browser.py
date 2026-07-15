@@ -4,7 +4,7 @@ import socket
 import threading
 import time
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,10 +13,10 @@ import uvicorn
 
 playwright = pytest.importorskip("playwright.sync_api")
 
-from app.core.config import settings
-from app.db.database import get_connection, init_db
-from app.main import app
-from app.services import publish_service
+from app.core.config import settings  # noqa: E402
+from app.db.database import get_connection, init_db  # noqa: E402
+from app.main import app  # noqa: E402
+from app.services import publish_service  # noqa: E402
 
 
 PREFIX = "test-browser-publish-"
@@ -76,9 +76,14 @@ def test_publish_center_schedule_preview_confirm_and_publish(monkeypatch, tmp_pa
 
     def mocked_opencli(job_id: str, runner=None):
         opencli_calls.append(job_id)
-        return {"status": "ok", "message": "mock opencli submitted", "job": {"id": job_id}}
+        return {"status": "ok", "confirmed": True, "message": "mock opencli submitted", "job": {"id": job_id}}
 
     monkeypatch.setattr(publish_service, "execute_opencli_send_job", mocked_opencli)
+    original_opencli_fallback = settings.publish_enable_opencli_fallback
+    object.__setattr__(settings, "publish_enable_opencli_fallback", True)
+    future_start = datetime.now() + timedelta(days=2)
+    future_day = future_start.strftime("%Y-%m-%d")
+    following_day = (future_start + timedelta(days=1)).strftime("%Y-%m-%d")
     port = _free_port()
     server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
@@ -100,27 +105,29 @@ def test_publish_center_schedule_preview_confirm_and_publish(monkeypatch, tmp_pa
             page = context.new_page()
             page.goto(f"http://127.0.0.1:{port}/publish", wait_until="networkidle")
 
-            page.locator(f'[data-publish-row][data-job-id="{first}"] [data-publish-select]').check()
-            page.locator(f'[data-publish-row][data-job-id="{second}"] [data-publish-select]').check()
+            page.locator('[data-center-tab="schedule"]').click()
+            page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{first}"] [data-publish-select]').check()
+            page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{second}"] [data-publish-select]').check()
             page.locator("[data-open-schedule-drawer]").click()
-            page.locator('[name="start_at_local"]').fill("2026-07-12T20:00")
+            page.locator('[name="start_at_local"]').fill(f"{future_day}T20:00")
             page.locator('[name="daily_start_time"]').fill("09:00")
             page.locator('[name="daily_end_time"]').fill("21:00")
             page.locator("[data-preview-schedule]").click()
             page.locator("[data-confirm-schedule]:not([disabled])").wait_for()
             preview_text = page.locator("[data-schedule-preview]").inner_text()
-            assert "2026-07-12 20:00" in preview_text
-            assert "2026-07-13 09:00" in preview_text
+            assert f"{future_day} 20:00" in preview_text
+            assert f"{following_day} 09:00" in preview_text
 
             page.locator("[data-confirm-schedule]").click()
             page.locator("[data-schedule-drawer]").wait_for(state="hidden")
-            assert "2026-07-12 20:00" in page.locator(
-                f'[data-publish-row][data-job-id="{first}"] [data-row-schedule]'
+            assert f"{future_day} 20:00" in page.locator(
+                f'[data-publish-row][data-section="schedule"][data-job-id="{first}"] [data-row-schedule]'
             ).inner_text()
 
-            page.locator(f'[data-publish-row][data-job-id="{first}"] [data-publish-now]').click()
+            page.on("dialog", lambda dialog: dialog.accept())
+            page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{first}"] [data-publish-now]').click()
             page.wait_for_function(
-                "jobId => document.querySelector(`[data-publish-row][data-job-id=\"${jobId}\"]`).dataset.status === 'PUBLISHED'",
+                "jobId => document.querySelector(`[data-publish-row][data-section=\"history\"][data-job-id=\"${jobId}\"]`).dataset.status === 'PUBLISHED'",
                 arg=first,
             )
             assert opencli_calls == [first]
@@ -129,4 +136,5 @@ def test_publish_center_schedule_preview_confirm_and_publish(monkeypatch, tmp_pa
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+        object.__setattr__(settings, "publish_enable_opencli_fallback", original_opencli_fallback)
         _cleanup()

@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -31,15 +32,18 @@ def clean_publish_data(tmp_path):
     original_export = settings.publish_scheduler_export_dir
     original_default_mode = settings.publish_default_mode
     original_stale = settings.publish_job_stale_minutes
+    original_opencli_fallback = settings.publish_enable_opencli_fallback
     object.__setattr__(settings, "publish_scheduler_export_dir", tmp_path / "exports")
     object.__setattr__(settings, "publish_default_mode", "opencli_publish")
     object.__setattr__(settings, "publish_job_stale_minutes", 30)
+    object.__setattr__(settings, "publish_enable_opencli_fallback", True)
     _cleanup()
     yield
     _cleanup()
     object.__setattr__(settings, "publish_scheduler_export_dir", original_export)
     object.__setattr__(settings, "publish_default_mode", original_default_mode)
     object.__setattr__(settings, "publish_job_stale_minutes", original_stale)
+    object.__setattr__(settings, "publish_enable_opencli_fallback", original_opencli_fallback)
 
 
 def _cleanup():
@@ -107,7 +111,7 @@ def _raw(job_id: str) -> dict:
 def _mock_opencli_success(monkeypatch, calls: list[str]):
     def execute(job_id, runner=None):
         calls.append(job_id)
-        return {"status": "ok", "message": "mock submitted", "job": _raw(job_id)}
+        return {"status": "ok", "confirmed": True, "message": "mock submitted", "job": _raw(job_id)}
     monkeypatch.setattr(publish_service, "execute_opencli_send_job", execute)
 
 
@@ -146,17 +150,17 @@ def test_refresh_queue_does_not_turn_manual_export_into_platform(monkeypatch, tm
 def test_shanghai_local_time_is_stored_as_utc():
     result = build_batch_schedule_times(
         1, start_at_local="2026-07-12T09:00", timezone_name="Asia/Shanghai",
-        interval_minutes=180, daily_start_time="09:00", daily_end_time="21:00",
+        interval_minutes=180, daily_start_time="09:00", daily_end_time="21:00", reject_past=False,
     )
-    assert result == ["2026-07-12T01:00:00Z"]
+    assert result == ["2026-07-12T01:00:00+00:00"]
 
 
 def test_daily_window_overflow_moves_to_next_local_day():
     result = build_batch_schedule_times(
         3, start_at_local="2026-07-12T20:00", timezone_name="Asia/Shanghai",
-        interval_minutes=180, daily_start_time="09:00", daily_end_time="21:00",
+        interval_minutes=180, daily_start_time="09:00", daily_end_time="21:00", reject_past=False,
     )
-    assert result == ["2026-07-12T12:00:00Z", "2026-07-13T01:00:00Z", "2026-07-13T04:00:00Z"]
+    assert result == ["2026-07-12T12:00:00+00:00", "2026-07-13T01:00:00+00:00", "2026-07-13T04:00:00+00:00"]
 
 
 def test_scheduled_job_can_publish_now(monkeypatch, tmp_path):
@@ -164,7 +168,8 @@ def test_scheduled_job_can_publish_now(monkeypatch, tmp_path):
     _mock_opencli_success(monkeypatch, calls)
     job_id = _insert_job(tmp_path, status="SCHEDULED", scheduled_at=_utc(3600))
     result = PublishScheduler().publish_now(job_id)
-    assert result["status"] == "published"
+    assert result["status"] == "scheduled"
+    PublishScheduler().run_once()
     assert calls == [job_id]
     assert _raw(job_id)["status"] == "PUBLISHED"
 
@@ -222,7 +227,7 @@ def test_only_stale_publishing_job_is_recovered(tmp_path):
     fresh = _insert_job(tmp_path, status="PUBLISHING", updated_at=_utc(-60))
     recovered = PublishScheduler().recover_interrupted_jobs()
     assert recovered == 1
-    assert _raw(stale)["status"] == "SCHEDULED"
+    assert _raw(stale)["status"] == "NEED_REVIEW"
     assert _raw(fresh)["status"] == "PUBLISHING"
 
 
@@ -230,8 +235,9 @@ def test_preview_and_save_use_identical_schedule(tmp_path):
     first = _insert_job(tmp_path, status="WAITING", scheduled_at="")
     second = _insert_job(tmp_path, status="WAITING", scheduled_at="")
     scheduler = PublishScheduler()
+    future_day = (datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(days=2)).strftime("%Y-%m-%d")
     params = dict(
-        start_at_local="2026-07-12T20:00", timezone_name="Asia/Shanghai",
+        start_at_local=f"{future_day}T20:00", timezone_name="Asia/Shanghai",
         interval_minutes=180, daily_start_time="09:00", daily_end_time="21:00",
     )
     preview = scheduler.preview_batch_schedule([first, second], **params)
@@ -245,8 +251,9 @@ def test_preview_and_save_use_identical_schedule(tmp_path):
 def test_schedule_preview_api_matches_save_api(tmp_path):
     first = _insert_job(tmp_path, status="WAITING", scheduled_at="")
     second = _insert_job(tmp_path, status="WAITING", scheduled_at="")
+    future_day = (datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(days=2)).strftime("%Y-%m-%d")
     payload = {
-        "job_ids": [first, second], "action": "apply", "start_at_local": "2026-07-12T20:00",
+        "job_ids": [first, second], "action": "apply", "start_at_local": f"{future_day}T20:00",
         "timezone": "Asia/Shanghai", "interval_minutes": 180,
         "daily_start_time": "09:00", "daily_end_time": "21:00",
     }

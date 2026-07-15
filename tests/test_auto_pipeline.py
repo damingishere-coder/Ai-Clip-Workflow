@@ -243,7 +243,8 @@ def test_create_auto_publish_job_records_scheduled_at():
             (task["id"],),
         ).fetchone()
     assert row["scheduled_at"] == "2026-06-23T08:10:00+00:00"
-    assert row["status"] == "SCHEDULED"
+    # local_browser 需要明确账号；没有可用账号时保留计划时间，但先停在 WAITING，避免到点直接失败。
+    assert row["status"] == "WAITING"
     assert row["video_source"] == "original"
 
 
