@@ -80,6 +80,7 @@ def test_worker_offline_before_connection_is_safe_retry(monkeypatch):
     with pytest.raises(PublishWorkerUnavailable) as caught:
         PublishWorkerClient("http://127.0.0.1:8765", "token", 2).health()
     assert caught.value.request_may_have_been_received is False
+    assert r".\scripts\start_publish_worker.ps1" in caught.value.message
 
 
 def test_worker_maps_docker_tasks_path_to_windows_storage(tmp_path):

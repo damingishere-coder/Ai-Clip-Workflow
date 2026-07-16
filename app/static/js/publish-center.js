@@ -15,8 +15,15 @@ if (publishCenterRoot) {
   const previewList = document.querySelector("[data-schedule-preview]");
   const confirmScheduleButton = document.querySelector("[data-confirm-schedule]");
   const historyFilter = document.querySelector("[data-history-filter]");
+  const calendarNode = document.querySelector("[data-schedule-calendar]");
+  const calendarTitle = document.querySelector("[data-calendar-title]");
+  const scheduleEmpty = document.querySelector("[data-schedule-empty]");
+  const platformListTitle = document.querySelector("[data-platform-list-title]");
   let latestPreviewSignature = "";
   let latestPreviewItems = [];
+  let activeSchedulePlatform = "douyin";
+  let calendarMonth = currentBeijingMonth();
+  let scheduleRefreshFrame = 0;
 
   function showMessage(message, tone = "info") {
     if (!messageNode) return;
@@ -46,6 +53,132 @@ if (publishCenterRoot) {
     }).formatToParts(new Date(value));
     const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
     return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}`;
+  }
+
+  function beijingDateParts(value = new Date()) {
+    const parts = new Intl.DateTimeFormat("zh-CN", {
+      timeZone: APP_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(value));
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return { year: Number(values.year), month: Number(values.month), day: Number(values.day) };
+  }
+
+  function currentBeijingMonth() {
+    const today = beijingDateParts();
+    return { year: today.year, month: today.month };
+  }
+
+  function beijingDateKey(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    const parts = beijingDateParts(date);
+    return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+  }
+
+  function scheduleRows() {
+    return Array.from(document.querySelectorAll('[data-publish-row][data-section="schedule"]'));
+  }
+
+  function renderPlatformSchedule() {
+    const rows = scheduleRows();
+    ["douyin", "bilibili"].forEach((platform) => {
+      const available = rows.filter((row) => sectionAllows("schedule", row.dataset.status || "") && row.dataset.platform === platform);
+      const waiting = available.filter((row) => row.dataset.status === "WAITING").length;
+      const scheduled = available.filter((row) => row.dataset.status === "SCHEDULED").length;
+      const waitingNode = document.querySelector(`[data-platform-waiting="${platform}"]`);
+      const scheduledNode = document.querySelector(`[data-platform-scheduled="${platform}"]`);
+      if (waitingNode) waitingNode.textContent = String(waiting);
+      if (scheduledNode) scheduledNode.textContent = String(scheduled);
+    });
+    document.querySelectorAll("[data-schedule-platform]").forEach((button) => {
+      const active = button.dataset.schedulePlatform === activeSchedulePlatform;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    let visibleCount = 0;
+    rows.forEach((row) => {
+      const visible = sectionAllows("schedule", row.dataset.status || "") && row.dataset.platform === activeSchedulePlatform;
+      row.hidden = !visible;
+      if (visible) visibleCount += 1;
+    });
+    if (platformListTitle) platformListTitle.textContent = `${activeSchedulePlatform === "douyin" ? "抖音" : "B站"}任务清单`;
+    if (scheduleEmpty) scheduleEmpty.hidden = visibleCount > 0;
+  }
+
+  function renderCalendar() {
+    if (!calendarNode) return;
+    const { year, month } = calendarMonth;
+    if (calendarTitle) calendarTitle.textContent = `${year} 年 ${month} 月 · ${activeSchedulePlatform === "douyin" ? "抖音" : "B站"}`;
+    const firstDay = new Date(Date.UTC(year, month - 1, 1));
+    const mondayOffset = (firstDay.getUTCDay() + 6) % 7;
+    const gridStart = new Date(Date.UTC(year, month - 1, 1 - mondayOffset));
+    const todayParts = beijingDateParts();
+    const todayKey = `${todayParts.year}-${String(todayParts.month).padStart(2, "0")}-${String(todayParts.day).padStart(2, "0")}`;
+    const jobsByDate = new Map();
+    scheduleRows().forEach((row) => {
+      if (row.dataset.platform !== activeSchedulePlatform || row.dataset.status !== "SCHEDULED") return;
+      const utcValue = row.querySelector("[data-row-schedule]")?.dataset.utc || "";
+      const key = beijingDateKey(utcValue);
+      if (!key) return;
+      if (!jobsByDate.has(key)) jobsByDate.set(key, []);
+      jobsByDate.get(key).push({
+        id: row.dataset.jobId,
+        title: row.querySelector("[data-row-title]")?.textContent?.trim() || "未命名任务",
+        time: formatBeijingTimestamp(utcValue).slice(11),
+      });
+    });
+    calendarNode.innerHTML = "";
+    for (let index = 0; index < 42; index += 1) {
+      const date = new Date(gridStart.getTime() + index * 86400000);
+      const cellYear = date.getUTCFullYear();
+      const cellMonth = date.getUTCMonth() + 1;
+      const cellDay = date.getUTCDate();
+      const key = `${cellYear}-${String(cellMonth).padStart(2, "0")}-${String(cellDay).padStart(2, "0")}`;
+      const jobs = jobsByDate.get(key) || [];
+      const cell = document.createElement("div");
+      cell.className = "publish-calendar-day";
+      cell.setAttribute("role", "gridcell");
+      cell.dataset.date = key;
+      cell.classList.toggle("is-outside", cellMonth !== month);
+      cell.classList.toggle("is-today", key === todayKey);
+      const number = document.createElement("span");
+      number.className = "calendar-day-number";
+      number.textContent = String(cellDay);
+      cell.appendChild(number);
+      jobs.slice(0, 2).forEach((job) => {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "calendar-job-chip";
+        chip.dataset.calendarJob = job.id;
+        chip.title = `${job.time} ${job.title}`;
+        chip.textContent = `${job.time} ${job.title}`;
+        cell.appendChild(chip);
+      });
+      if (jobs.length > 2) {
+        const more = document.createElement("small");
+        more.className = "calendar-job-more";
+        more.textContent = `另有 ${jobs.length - 2} 条`;
+        cell.appendChild(more);
+      }
+      calendarNode.appendChild(cell);
+    }
+  }
+
+  function refreshScheduleViews() {
+    renderPlatformSchedule();
+    renderCalendar();
+  }
+
+  function queueScheduleRefresh() {
+    if (scheduleRefreshFrame) window.cancelAnimationFrame(scheduleRefreshFrame);
+    scheduleRefreshFrame = window.requestAnimationFrame(() => {
+      scheduleRefreshFrame = 0;
+      refreshScheduleViews();
+    });
   }
 
   function statusLabel(status) {
@@ -128,6 +261,7 @@ if (publishCenterRoot) {
     document.querySelectorAll(`[data-publish-row][data-job-id="${CSS.escape(job.id)}"]`).forEach((row) => {
       const status = String(job.status || row.dataset.status || "").toUpperCase();
       row.dataset.status = status;
+      if (job.platform) row.dataset.platform = job.platform;
       if (job.account_id !== undefined) row.dataset.accountId = job.account_id || "";
       row.hidden = !sectionAllows(row.dataset.section, status);
       const statusNode = row.querySelector("[data-row-status]");
@@ -156,6 +290,7 @@ if (publishCenterRoot) {
       updateSelectionUi();
     }
     applyHistoryFilter();
+    queueScheduleRefresh();
   }
 
   function cloneRowsForRetry(sourceId, job) {
@@ -239,8 +374,58 @@ if (publishCenterRoot) {
     }
   }
 
+  async function refreshSchedulerHealth(showResult = false) {
+    const button = document.querySelector("[data-refresh-worker]");
+    if (button) button.disabled = true;
+    try {
+      const data = await window.apiFetch("/api/publish/scheduler/health");
+      const statusNode = document.querySelector("[data-worker-status]");
+      const message = document.querySelector("[data-worker-message]");
+      const help = document.querySelector("[data-worker-help]");
+      const dot = document.querySelector("[data-scheduler-health] .health-dot");
+      if (statusNode) statusNode.textContent = data.worker_available ? "正常" : "未连接";
+      if (message) message.textContent = `${data.worker_message} · 页面及排期均使用北京时间`;
+      if (help) help.hidden = Boolean(data.worker_available);
+      if (dot) dot.classList.toggle("is-ok", Boolean(data.running && data.worker_available));
+      if (showResult) showMessage(data.worker_available ? "Windows Worker 已连接，可以打开账号登录窗口。" : "Worker 仍未连接，请按卡片中的连接修复步骤操作。", data.worker_available ? "success" : "error");
+    } catch (error) {
+      if (showResult) showMessage(`检测失败：${error.message}`, "error");
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   document.querySelectorAll("[data-center-tab]").forEach((button) => {
     button.addEventListener("click", () => switchTab(button.dataset.centerTab));
+  });
+  document.querySelectorAll("[data-schedule-platform]").forEach((button) => {
+    button.addEventListener("click", () => {
+      activeSchedulePlatform = button.dataset.schedulePlatform || "douyin";
+      refreshScheduleViews();
+    });
+  });
+  document.querySelector("[data-calendar-previous]")?.addEventListener("click", () => {
+    const previous = new Date(Date.UTC(calendarMonth.year, calendarMonth.month - 2, 1));
+    calendarMonth = { year: previous.getUTCFullYear(), month: previous.getUTCMonth() + 1 };
+    renderCalendar();
+  });
+  document.querySelector("[data-calendar-next]")?.addEventListener("click", () => {
+    const next = new Date(Date.UTC(calendarMonth.year, calendarMonth.month, 1));
+    calendarMonth = { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1 };
+    renderCalendar();
+  });
+  document.querySelector("[data-calendar-today]")?.addEventListener("click", () => {
+    calendarMonth = currentBeijingMonth();
+    renderCalendar();
+  });
+  calendarNode?.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-calendar-job]");
+    if (!chip) return;
+    const row = document.querySelector(`[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(chip.dataset.calendarJob)}"]`);
+    if (!row || row.hidden) return;
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.classList.add("is-calendar-focus");
+    window.setTimeout(() => row.classList.remove("is-calendar-focus"), 1600);
   });
   historyFilter?.addEventListener("change", applyHistoryFilter);
 
@@ -486,10 +671,15 @@ if (publishCenterRoot) {
           statusNode.classList.toggle("tone-amber", !["normal", "invalid"].includes(account.login_status));
         }
         showMessage(data.message || data.worker_result?.message || "账号操作已执行。", "success");
-      } catch (error) { showMessage(`账号操作失败：${error.message}`, "error"); }
+      } catch (error) {
+        document.querySelector("[data-worker-help]")?.removeAttribute("hidden");
+        showMessage(`账号操作失败：${error.message}`, "error");
+      }
       finally { accountAction.disabled = false; }
     }
   });
+
+  document.querySelector("[data-refresh-worker]")?.addEventListener("click", () => refreshSchedulerHealth(true));
 
   document.querySelector("[data-open-schedule-drawer]")?.addEventListener("click", openDrawer);
   document.querySelector("[data-close-schedule-drawer]")?.addEventListener("click", closeDrawer);
@@ -590,6 +780,6 @@ if (publishCenterRoot) {
   document.querySelectorAll("[data-publish-editor]").forEach(syncPlatformFields);
   filterAccountOptions(document.querySelector("[data-batch-account]"), document.querySelector("[data-batch-platform]")?.value || "douyin");
   if (scheduleForm?.elements.start_at_local) scheduleForm.elements.start_at_local.value = beijingDatetimeValue(Date.now() + 10 * 60 * 1000);
-  updateSelectionUi(); applyHistoryFilter();
-  window.setInterval(refreshJobs, 5000);
+  updateSelectionUi(); applyHistoryFilter(); refreshScheduleViews();
+  window.setInterval(() => { refreshJobs(); refreshSchedulerHealth(); }, 5000);
 }

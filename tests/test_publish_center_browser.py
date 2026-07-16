@@ -22,7 +22,7 @@ from app.services import publish_service  # noqa: E402
 PREFIX = "test-browser-publish-"
 
 
-def _seed_job(tmp_path: Path, index: int) -> str:
+def _seed_job(tmp_path: Path, index: int, platform: str = "douyin") -> str:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     task_id = f"{PREFIX}{uuid4().hex[:8]}"
     clip_id = f"{PREFIX}clip-{uuid4().hex[:8]}"
@@ -31,8 +31,8 @@ def _seed_job(tmp_path: Path, index: int) -> str:
     video.write_bytes(b"fake-video")
     with get_connection() as connection:
         connection.execute(
-            "INSERT INTO tasks (id, task_name, task_dir_name, platform, status, created_at, updated_at) VALUES (?, ?, ?, 'douyin', 'COMPLETED', ?, ?)",
-            (task_id, f"浏览器排期任务 {index}", task_id, now, now),
+            "INSERT INTO tasks (id, task_name, task_dir_name, platform, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?)",
+            (task_id, f"浏览器排期任务 {index}", task_id, platform, now, now),
         )
         connection.execute(
             "INSERT INTO output_clip (id, task_id, output_file_path, output_file_name, status, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, 'completed', 1, ?, ?)",
@@ -44,10 +44,10 @@ def _seed_job(tmp_path: Path, index: int) -> str:
                 id, task_id, output_clip_id, clip_id, platform, publish_mode,
                 video_source, video_file_path, video_path, title, description, caption,
                 tags, hashtags, scheduled_at, schedule_timezone, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'douyin', 'opencli_publish', 'original', ?, ?, ?, '测试正文',
+            ) VALUES (?, ?, ?, ?, ?, 'opencli_publish', 'original', ?, ?, ?, '测试正文',
                 '测试正文', '测试', '测试', '', 'Asia/Shanghai', 'WAITING', ?, ?)
             """,
-            (job_id, task_id, clip_id, clip_id, str(video), str(video), f"浏览器测试片段 {index}", now, now),
+            (job_id, task_id, clip_id, clip_id, platform, str(video), str(video), f"浏览器测试片段 {index}", now, now),
         )
         connection.commit()
     return job_id
@@ -72,6 +72,7 @@ def test_publish_center_schedule_preview_confirm_and_publish(monkeypatch, tmp_pa
     _cleanup()
     first = _seed_job(tmp_path, 1)
     second = _seed_job(tmp_path, 2)
+    bilibili = _seed_job(tmp_path, 3, "bilibili")
     opencli_calls: list[str] = []
 
     def mocked_opencli(job_id: str, runner=None):
@@ -106,6 +107,22 @@ def test_publish_center_schedule_preview_confirm_and_publish(monkeypatch, tmp_pa
             page.goto(f"http://127.0.0.1:{port}/publish", wait_until="networkidle")
 
             page.locator('[data-center-tab="schedule"]').click()
+            assert page.locator('[data-schedule-calendar] .publish-calendar-day').count() == 42
+            assert "抖音" in page.locator("[data-calendar-title]").inner_text()
+            assert page.locator(
+                f'[data-publish-row][data-section="schedule"][data-job-id="{bilibili}"]'
+            ).is_hidden()
+
+            page.locator('[data-schedule-platform="bilibili"]').click()
+            assert "B站" in page.locator("[data-calendar-title]").inner_text()
+            assert page.locator(
+                f'[data-publish-row][data-section="schedule"][data-job-id="{bilibili}"]'
+            ).is_visible()
+            assert page.locator(
+                f'[data-publish-row][data-section="schedule"][data-job-id="{first}"]'
+            ).is_hidden()
+
+            page.locator('[data-schedule-platform="douyin"]').click()
             page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{first}"] [data-publish-select]').check()
             page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{second}"] [data-publish-select]').check()
             page.locator("[data-open-schedule-drawer]").click()

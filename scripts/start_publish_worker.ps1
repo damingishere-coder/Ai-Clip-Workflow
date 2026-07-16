@@ -84,3 +84,39 @@ try {
 } catch {
     throw "发布 Worker 未能启动。请查看日志：$errLog"
 }
+
+# Docker 容器只会在创建时读取 .env。这里自动重建正在运行的 Web 容器，
+# 让刚生成的 Worker Token 和当前 compose 连接地址立即生效；SQLite 与任务目录均为挂载卷，不会被删除。
+$docker = Get-Command docker -ErrorAction SilentlyContinue
+if ($docker) {
+    try {
+        $runningServices = @(docker compose ps --services --status running 2>$null)
+        if ($runningServices -contains 'workflow') {
+            Write-Host '正在同步 Docker 与 Windows Worker 的连接配置……'
+            docker compose up -d --force-recreate --no-deps workflow | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Docker 容器重建失败。'
+            }
+
+            $connected = $false
+            foreach ($attempt in 1..20) {
+                Start-Sleep -Seconds 1
+                try {
+                    $appHealth = Invoke-RestMethod -Uri 'http://127.0.0.1:8001/api/publish/scheduler/health' -TimeoutSec 3
+                    if ($appHealth.worker_available) {
+                        $connected = $true
+                        break
+                    }
+                } catch {
+                    # Web 容器仍在启动，继续等待。
+                }
+            }
+            if (-not $connected) {
+                throw 'Docker 已重启，但发送中心仍未连接 Worker。请查看 Docker 日志和 Worker 错误日志。'
+            }
+            Write-Host 'Docker 已同步完成，发送中心现在可以连接 Windows Worker。'
+        }
+    } catch {
+        throw "Worker 已启动，但 Docker 同步失败：$($_.Exception.Message)"
+    }
+}

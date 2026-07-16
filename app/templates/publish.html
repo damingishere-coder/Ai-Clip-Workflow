@@ -54,8 +54,8 @@
 {% endmacro %}
 
 {% macro schedule_row(job) %}
-<article class="publish-plan-row" data-publish-row data-job-id="{{ job.id }}" data-status="{{ job.status }}" data-section="schedule" {% if job.status not in ["WAITING", "SCHEDULED"] %}hidden{% endif %}>
-  <label class="publish-row-select"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
+<article class="publish-plan-row" data-publish-row data-job-id="{{ job.id }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-section="schedule" {% if job.status not in ["WAITING", "SCHEDULED"] %}hidden{% endif %}>
+  <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
   <time data-row-schedule data-utc="{{ job.scheduled_at_utc }}">{{ job.scheduled_at_display }}</time>
   <div class="publish-plan-video"><video muted preload="metadata" src="{{ job.video_media_url }}"></video><strong data-row-title>{{ job.title }}</strong></div>
   <span data-row-platform>{{ job.platform_label }}</span>
@@ -102,11 +102,15 @@
 <section id="send-center-message" class="inline-alert tone-blue" hidden></section>
 
 <section class="scheduler-health-card" data-scheduler-health>
-  <div><span class="health-dot {{ 'is-ok' if scheduler_health.enabled and scheduler_health.running else '' }}"></span><strong>统一发布调度器</strong></div>
+  <div><span class="health-dot {{ 'is-ok' if scheduler_health.enabled and scheduler_health.running and scheduler_health.worker_available else '' }}"></span><strong>统一发布调度器</strong></div>
   <span>运行：{{ '是' if scheduler_health.running else '否' }}</span><span>扫描：{{ scheduler_health.interval_seconds }} 秒</span>
   <span>已排期：{{ scheduler_health.scheduled_count }}</span><span>发送中：{{ scheduler_health.publishing_count }}</span>
-  <span>Windows Worker：{{ '正常' if scheduler_health.worker_available else '未连接' }}</span>
-  <small>{{ scheduler_health.worker_message }} · 页面及排期均使用北京时间</small>
+  <span>Windows Worker：<strong data-worker-status>{{ '正常' if scheduler_health.worker_available else '未连接' }}</strong></span>
+  <button type="button" class="text-button worker-refresh-button" data-refresh-worker>重新检测</button>
+  <small data-worker-message>{{ scheduler_health.worker_message }} · 页面及排期均使用北京时间</small>
+  <div class="worker-connection-help" data-worker-help {% if scheduler_health.worker_available %}hidden{% endif %}>
+    <strong>连接修复：</strong><span>在项目目录运行</span><code>.\scripts\start_publish_worker.ps1</code><span>，脚本会启动 Worker 并同步 Docker 配置。</span>
+  </div>
 </section>
 
 <nav class="publish-center-tabs" aria-label="发送中心区域">
@@ -122,8 +126,36 @@
 
 <section class="panel publish-center-panel" data-center-panel="schedule" hidden>
   <div class="panel-header"><div><h2>排期计划</h2><p>计划时间统一显示为北京时间；批量排期必须预览后才能保存。</p></div></div>
+  <div class="publish-platform-switch" role="group" aria-label="按发布平台查看排期">
+    <button type="button" class="publish-platform-card is-active" data-schedule-platform="douyin" aria-pressed="true">
+      <span class="platform-card-icon douyin">抖</span>
+      <span><strong>抖音排期</strong><small>待排期 <b data-platform-waiting="douyin">0</b> · 已排期 <b data-platform-scheduled="douyin">0</b></small></span>
+      <span class="platform-card-action">查看</span>
+    </button>
+    <button type="button" class="publish-platform-card" data-schedule-platform="bilibili" aria-pressed="false">
+      <span class="platform-card-icon bilibili">B</span>
+      <span><strong>B站排期</strong><small>待排期 <b data-platform-waiting="bilibili">0</b> · 已排期 <b data-platform-scheduled="bilibili">0</b></small></span>
+      <span class="platform-card-action">查看</span>
+    </button>
+  </div>
+  <section class="publish-calendar-card" aria-label="北京时间排期日历">
+    <header class="publish-calendar-toolbar">
+      <div><p class="eyebrow">Beijing Time</p><h3 data-calendar-title>排期日历</h3></div>
+      <div class="button-row calendar-navigation">
+        <button type="button" class="icon-button" data-calendar-previous aria-label="上个月">‹</button>
+        <button type="button" class="secondary-button" data-calendar-today>回到本月</button>
+        <button type="button" class="icon-button" data-calendar-next aria-label="下个月">›</button>
+      </div>
+    </header>
+    <div class="publish-calendar-scroll">
+      <div class="publish-calendar-weekdays" aria-hidden="true"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+      <div class="publish-calendar-grid" data-schedule-calendar role="grid" aria-label="排期月历"></div>
+    </div>
+  </section>
+  <div class="publish-plan-section-heading"><div><p class="eyebrow">Tasks</p><h3 data-platform-list-title>抖音任务清单</h3></div><small>未排期任务也会保留在清单中，勾选后可批量设置时间。</small></div>
   <div class="publish-plan-header"><span></span><span>计划时间</span><span>视频</span><span>平台</span><span>账号</span><span>状态</span><span>操作</span></div>
   <div class="publish-plan-list">{% for job in publish_jobs %}{{ schedule_row(job) }}{% endfor %}</div>
+  <div class="publish-plan-empty" data-schedule-empty hidden>当前平台没有待排期或已排期任务。</div>
 </section>
 
 <section class="panel publish-center-panel" data-center-panel="history" hidden>
@@ -168,4 +200,4 @@
 </aside>
 {% endblock %}
 
-{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260715-v150"></script>{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260716-platform-calendar-worker"></script>{% endblock %}

@@ -54,7 +54,8 @@ class PublishWorkerClient:
             reason = getattr(exc, "reason", exc)
             timed_out = isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in str(reason).lower()
             raise PublishWorkerUnavailable(
-                f"无法连接 Windows 发布 Worker：{exc}",
+                "Windows 发布 Worker 未启动或当前不可达。请在项目目录运行 "
+                r".\scripts\start_publish_worker.ps1；如果页面使用 Docker，脚本会同步容器连接配置。",
                 request_may_have_been_received=timed_out,
             ) from exc
         if not raw:
