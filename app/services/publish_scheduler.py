@@ -14,6 +14,12 @@ from uuid import uuid4
 from app.core.config import settings
 from app.db.database import get_connection, init_db
 from app.services.publish_executor import execute_publish_job
+from app.services.publish_readiness import (
+    SendReadinessBlocked,
+    build_send_readiness,
+    list_account_snapshots,
+    require_worker_available,
+)
 from app.services.publish_repository import PublishRepository
 from app.services.publish_time import (
     app_zone,
@@ -228,6 +234,32 @@ class PublishScheduler:
         if status != "SCHEDULED":
             return {"status": "skipped", "job_id": job_id, "message": f"任务状态为 {status}"}
 
+        readiness = build_send_readiness(
+            job,
+            accounts=list_account_snapshots(),
+            resolve_legacy=False,
+            validate_files=True,
+        )
+        if not readiness["ready"]:
+            return {
+                "status": "skipped",
+                "job_id": job_id,
+                "error_code": "send_setup_required",
+                "message": readiness["message"],
+                "send_readiness": readiness,
+            }
+        if readiness["requires_worker"]:
+            try:
+                require_worker_available(self.worker_client)
+            except SendReadinessBlocked as exc:
+                return {
+                    "status": "skipped",
+                    "job_id": job_id,
+                    "error_code": "publish_worker_unavailable",
+                    "message": str(exc),
+                    "send_readiness": exc.readiness,
+                }
+
         risk_flags = self._risk_flags(job)
         if risk_flags and not settings.publish_scheduler_allow_publish_without_review:
             return self._mark_need_review(job_id, "risk_flags_require_review", f"内容风险标记需要人工复核：{risk_flags}")
@@ -280,19 +312,30 @@ class PublishScheduler:
             raise ValueError("发布任务不存在")
         if str(job.get("status") or "").upper() not in {"DRAFT", "WAITING", "SCHEDULED"}:
             raise ValueError("只有草稿、等待或已排期任务可以立即发送")
+        readiness = self._require_ready_jobs([job_id], resolve_legacy=True, check_worker=True)[job_id]
         now = utc_now_iso()
         with get_connection() as connection:
             cursor = connection.execute(
                 """
                 UPDATE publish_jobs
-                SET scheduled_at = ?, next_attempt_at = NULL, timezone = ?, schedule_timezone = ?,
+                SET account_id = ?, publish_mode = ?, scheduled_at = ?, next_attempt_at = NULL,
+                    timezone = ?, schedule_timezone = ?,
                     status = 'SCHEDULED', error_code = '', error_message = '', last_error = '',
                     needs_manual_review = 0, updated_at = ?
                 WHERE id = ? AND status IN ('DRAFT', 'WAITING', 'SCHEDULED')
                 """,
-                (now, settings.app_timezone, settings.app_timezone, now, job_id),
+                (
+                    readiness["resolved_account_id"] or job.get("account_id") or None,
+                    readiness["resolved_publish_mode"] or job.get("publish_mode"),
+                    now,
+                    settings.app_timezone,
+                    settings.app_timezone,
+                    now,
+                    job_id,
+                ),
             )
             if cursor.rowcount:
+                self._record_auto_target_resolution(job, readiness, connection=connection)
                 self.repository.add_event(
                     job_id, "publish_now", from_status=str(job.get("status") or ""),
                     to_status="SCHEDULED", message="立即发送已进入统一调度队列", connection=connection,
@@ -301,7 +344,7 @@ class PublishScheduler:
         if not cursor.rowcount:
             raise ValueError("任务状态已变化，请刷新页面后重试")
         wake_scheduler()
-        return {"status": "scheduled", "job_id": job_id, "scheduled_at": now, "job": self.repository.get_job(job_id)}
+        return {"status": "scheduled", "job_id": job_id, "scheduled_at": now, "job": self._public_job(job_id)}
 
     def retry_failed(self, job_id: str, scheduled_at: str | None = None) -> dict[str, Any]:
         source = self.repository.get_job(job_id)
@@ -309,10 +352,77 @@ class PublishScheduler:
             raise ValueError("发布任务不存在")
         if str(source.get("status") or "").upper() != "FAILED":
             raise ValueError("只有明确失败的任务可以重试；需复核任务请先确认平台未发布并标记失败")
-        new_id = f"pub_{uuid4().hex}"
         schedule = to_utc_iso(scheduled_at, settings.app_timezone) if scheduled_at else utc_now_iso()
         if scheduled_at:
             ensure_future(scheduled_at, settings.app_timezone)
+        return self._clone_job_for_retry(
+            source,
+            scheduled_at=schedule,
+            event_type="manual_retry_created",
+            event_message=f"由失败任务 {job_id} 创建",
+            event_from_status="FAILED",
+        )
+
+    def repair_and_publish(self, job_id: str, account_id: str = "") -> dict[str, Any]:
+        source = self.repository.get_job(job_id)
+        if not source:
+            raise ValueError("发布任务不存在")
+        source_readiness = build_send_readiness(
+            source,
+            accounts=list_account_snapshots(),
+            resolve_legacy=False,
+        )
+        if str(source.get("status") or "").upper() != "NEED_REVIEW" or not source_readiness["repairable"]:
+            raise ValueError("该任务不是明确发生在上传前的旧任务，不能自动修复；请先人工核对平台结果")
+        candidate = {**source, "account_id": account_id.strip() or source.get("account_id") or ""}
+        readiness = build_send_readiness(
+            candidate,
+            accounts=list_account_snapshots(),
+            resolve_legacy=True,
+            validate_files=True,
+        )
+        if not readiness["dispatch_ready"]:
+            raise SendReadinessBlocked(readiness)
+        if readiness["requires_worker"]:
+            require_worker_available(self.worker_client)
+        result = self._clone_job_for_retry(
+            source,
+            scheduled_at=utc_now_iso(),
+            event_type="safe_repair_created",
+            event_message=f"由上传前失败任务 {job_id} 安全修复",
+            event_from_status="NEED_REVIEW",
+            overrides={
+                "publish_mode": readiness["resolved_publish_mode"],
+                "account_id": readiness["resolved_account_id"] or None,
+            },
+        )
+        with get_connection() as connection:
+            self.repository.add_event(
+                job_id,
+                "safe_repair_replacement_created",
+                from_status="NEED_REVIEW",
+                to_status="NEED_REVIEW",
+                message=f"已保留原记录并创建替代任务 {result['job_id']}",
+                payload={"replacement_job_id": result["job_id"]},
+                connection=connection,
+            )
+            connection.commit()
+        result["message"] = "旧任务已保留，新的 Windows Chrome 投稿任务已进入调度器"
+        result["source_job_id"] = job_id
+        return result
+
+    def _clone_job_for_retry(
+        self,
+        source: dict[str, Any],
+        *,
+        scheduled_at: str,
+        event_type: str,
+        event_message: str,
+        event_from_status: str,
+        overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        source_id = str(source.get("id") or "")
+        new_id = f"pub_{uuid4().hex}"
         columns_to_clear = {
             "id", "status", "scheduled_at", "next_attempt_at", "attempt_count", "retry_count",
             "claimed_at", "started_at", "finished_at", "worker_id", "execution_id", "execution_phase",
@@ -326,29 +436,30 @@ class PublishScheduler:
             values.update({
                 "id": new_id,
                 "status": "SCHEDULED",
-                "scheduled_at": schedule,
+                "scheduled_at": scheduled_at,
                 "timezone": source.get("timezone") or settings.app_timezone,
                 "schedule_timezone": source.get("schedule_timezone") or settings.app_timezone,
                 "attempt_count": 0,
                 "retry_count": 0,
                 "max_attempts": source.get("max_attempts") or self.max_retry_count,
                 "needs_manual_review": 0,
-                "retry_of_job_id": job_id,
+                "retry_of_job_id": source_id,
                 "created_at": utc_now_iso(),
                 "updated_at": utc_now_iso(),
             })
+            values.update(overrides or {})
             columns = list(values)
             connection.execute(
                 f"INSERT INTO publish_jobs ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
                 [values[column] for column in columns],
             )
             self.repository.add_event(
-                new_id, "manual_retry_created", from_status="FAILED", to_status="SCHEDULED",
-                message=f"由失败任务 {job_id} 创建", payload={"retry_of_job_id": job_id}, connection=connection,
+                new_id, event_type, from_status=event_from_status, to_status="SCHEDULED",
+                message=event_message, payload={"retry_of_job_id": source_id}, connection=connection,
             )
             connection.commit()
         wake_scheduler()
-        return {"status": "scheduled", "job_id": new_id, "retry_of_job_id": job_id, "job": self.repository.get_job(new_id)}
+        return {"status": "scheduled", "job_id": new_id, "retry_of_job_id": source_id, "job": self._public_job(new_id)}
 
     def recover_interrupted_jobs(self) -> int:
         stale_before = utc_now() - timedelta(minutes=max(1, int(settings.publish_job_stale_minutes)))
@@ -398,24 +509,35 @@ class PublishScheduler:
             raise ValueError("发布任务不存在")
         if str(job.get("status") or "").upper() not in {"DRAFT", "WAITING", "SCHEDULED"}:
             raise ValueError("当前状态不能修改排期；失败任务请使用重试，需复核任务请先人工确认")
+        readiness = self._require_ready_jobs([job_id], resolve_legacy=True, check_worker=True)[job_id]
         stored = to_utc_iso(parsed)
         now = utc_now_iso()
         with get_connection() as connection:
             connection.execute(
                 """
-                UPDATE publish_jobs SET scheduled_at = ?, next_attempt_at = NULL,
+                UPDATE publish_jobs SET account_id = ?, publish_mode = ?,
+                    scheduled_at = ?, next_attempt_at = NULL,
                     timezone = ?, schedule_timezone = ?, status = 'SCHEDULED', updated_at = ?
                 WHERE id = ?
                 """,
-                (stored, settings.app_timezone, settings.app_timezone, now, job_id),
+                (
+                    readiness["resolved_account_id"] or job.get("account_id") or None,
+                    readiness["resolved_publish_mode"] or job.get("publish_mode"),
+                    stored,
+                    settings.app_timezone,
+                    settings.app_timezone,
+                    now,
+                    job_id,
+                ),
             )
+            self._record_auto_target_resolution(job, readiness, connection=connection)
             self.repository.add_event(
                 job_id, "schedule_updated", from_status=str(job.get("status") or ""),
                 to_status="SCHEDULED", payload={"scheduled_at": stored}, connection=connection,
             )
             connection.commit()
         wake_scheduler()
-        return {"status": "ok", "job": self.repository.get_job(job_id)}
+        return {"status": "ok", "job": self._public_job(job_id)}
 
     def preview_batch_schedule(
         self,
@@ -428,6 +550,7 @@ class PublishScheduler:
         daily_end_time: str,
     ) -> dict[str, Any]:
         ids = self._validate_batch_jobs(job_ids)
+        self._require_ready_jobs(ids, resolve_legacy=True, check_worker=True)
         schedule = build_batch_schedule_preview(
             ids,
             start_at_local=start_at_local,
@@ -453,6 +576,11 @@ class PublishScheduler:
         ids = self._validate_batch_jobs(job_ids)
         if action not in {"apply", "clear"}:
             raise ValueError("不支持的排期操作")
+        readiness_map = (
+            self._require_ready_jobs(ids, resolve_legacy=True, check_worker=True)
+            if action == "apply"
+            else {}
+        )
         if action == "apply" and confirmed_schedule:
             schedule_map = {str(item.get("job_id") or ""): str(item.get("scheduled_at_utc") or "") for item in confirmed_schedule}
             if set(schedule_map) != set(ids):
@@ -485,23 +613,32 @@ class PublishScheduler:
         now = utc_now_iso()
         with get_connection() as connection:
             rows = connection.execute(
-                f"SELECT id, status FROM publish_jobs WHERE id IN ({','.join('?' for _ in ids)})", ids
+                f"SELECT id, status, account_id, publish_mode FROM publish_jobs WHERE id IN ({','.join('?' for _ in ids)})", ids
             ).fetchall()
-            status_map = {row["id"]: str(row["status"] or "").upper() for row in rows}
+            row_map = {row["id"]: dict(row) for row in rows}
             for item in schedule:
                 job_id = item["job_id"]
-                status = status_map[job_id]
+                current = row_map[job_id]
+                status = str(current["status"] or "").upper()
                 if status not in {"DRAFT", "WAITING", "SCHEDULED"}:
                     raise ValueError(f"任务 {job_id} 当前状态不能修改排期")
                 next_status = "SCHEDULED" if action == "apply" else "WAITING"
+                readiness = readiness_map.get(job_id) or {}
                 connection.execute(
                     """
-                    UPDATE publish_jobs SET scheduled_at = ?, next_attempt_at = NULL,
+                    UPDATE publish_jobs SET account_id = ?, publish_mode = ?,
+                        scheduled_at = ?, next_attempt_at = NULL,
                         timezone = ?, schedule_timezone = ?, status = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (item["scheduled_at_utc"], timezone_name, timezone_name, next_status, now, job_id),
+                    (
+                        readiness.get("resolved_account_id") or current.get("account_id") or None,
+                        readiness.get("resolved_publish_mode") or current.get("publish_mode"),
+                        item["scheduled_at_utc"], timezone_name, timezone_name, next_status, now, job_id,
+                    ),
                 )
+                if action == "apply":
+                    self._record_auto_target_resolution(current, readiness, connection=connection)
                 self.repository.add_event(
                     job_id, "batch_schedule_applied" if action == "apply" else "schedule_cleared",
                     from_status=status, to_status=next_status, payload=item, connection=connection,
@@ -513,7 +650,7 @@ class PublishScheduler:
             "status": "ok", "action": action, "updated_count": len(ids),
             "message": f"已保存 {len(ids)} 条任务的具体排期" if action == "apply" else f"已清除 {len(ids)} 条任务的排期",
             "schedule": schedule,
-            "jobs": [self.repository.get_job(job_id) for job_id in ids],
+            "jobs": [self._public_job(job_id) for job_id in ids],
         }
 
     def cancel_job(self, job_id: str) -> dict[str, Any]:
@@ -564,6 +701,66 @@ class PublishScheduler:
         if int(count) != len(ids):
             raise ValueError("部分发布任务不存在")
         return ids
+
+    def _require_ready_jobs(
+        self,
+        job_ids: list[str],
+        *,
+        resolve_legacy: bool,
+        check_worker: bool,
+    ) -> dict[str, dict[str, Any]]:
+        accounts = list_account_snapshots()
+        readiness_map: dict[str, dict[str, Any]] = {}
+        worker_required = False
+        for job_id in job_ids:
+            job = self.repository.get_job(job_id)
+            if not job:
+                raise ValueError("发布任务不存在")
+            readiness = build_send_readiness(
+                job,
+                accounts=accounts,
+                resolve_legacy=resolve_legacy,
+                validate_files=True,
+            )
+            readiness_map[job_id] = readiness
+            if not readiness["dispatch_ready"]:
+                raise SendReadinessBlocked(readiness)
+            worker_required = worker_required or bool(readiness["requires_worker"])
+        if check_worker and worker_required:
+            require_worker_available(self.worker_client)
+        return readiness_map
+
+    def _record_auto_target_resolution(
+        self,
+        job: dict[str, Any],
+        readiness: dict[str, Any],
+        *,
+        connection,
+    ) -> None:
+        original_mode = str(job.get("publish_mode") or "")
+        original_account = str(job.get("account_id") or "")
+        resolved_mode = str(readiness.get("resolved_publish_mode") or original_mode)
+        resolved_account = str(readiness.get("resolved_account_id") or original_account)
+        if original_mode == resolved_mode and original_account == resolved_account:
+            return
+        self.repository.add_event(
+            str(job.get("id") or ""),
+            "send_target_auto_resolved",
+            from_status=str(job.get("status") or ""),
+            to_status=str(job.get("status") or ""),
+            message="已自动选择唯一同平台账号并改用 Windows Chrome",
+            payload={
+                "from_publish_mode": original_mode,
+                "to_publish_mode": resolved_mode,
+                "auto_selected_account": bool(readiness.get("auto_selected_account")),
+            },
+            connection=connection,
+        )
+
+    def _public_job(self, job_id: str) -> dict[str, Any] | None:
+        from app.services import publish_service
+
+        return publish_service.get_publish_job(job_id) or self.repository.get_job(job_id)
 
     def _claim_scheduled_job(self, job_id: str) -> bool:
         now = utc_now_iso()

@@ -60,7 +60,7 @@ def _job(tmp_path: Path, *, status: str = "SCHEDULED", scheduled_in: int = -60) 
                 video_source, video_file_path, video_path, title, description, caption,
                 tags, hashtags, risk_flags, scheduled_at, schedule_timezone, timezone,
                 status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'douyin', 'local_browser', 'original', ?, ?,
+            ) VALUES (?, ?, ?, ?, 'douyin', 'manual_export', 'original', ?, ?,
                 '测试标题', '测试正文', '测试正文', '测试', '测试', ?, ?,
                 'Asia/Shanghai', 'Asia/Shanghai', ?, ?, ?)
             """,

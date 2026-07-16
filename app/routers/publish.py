@@ -21,6 +21,7 @@ from app.models.task import (
     PublishSendStart,
 )
 from app.services import publish_service
+from app.services.publish_readiness import SendReadinessBlocked
 from app.services.publish_scheduler import PublishScheduler, queue_snapshot, scheduler_health
 from app.services.publishers.base import PublishError
 
@@ -239,6 +240,24 @@ async def publish_job_now(job_id: str, background_tasks: BackgroundTasks) -> dic
         result = PublishScheduler().publish_now(job_id)
         background_tasks.add_task(PublishScheduler().run_once)
         return result
+    except SendReadinessBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.readiness) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/repair-and-publish")
+async def repair_and_publish_job(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    account_id: str = Query(default=""),
+) -> dict:
+    try:
+        result = PublishScheduler().repair_and_publish(job_id, account_id=account_id)
+        background_tasks.add_task(PublishScheduler().run_once)
+        return result
+    except SendReadinessBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.readiness) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -263,6 +282,8 @@ async def approve_review_publish_job(job_id: str, payload: PublishMarkPublishedR
 async def update_publish_job_schedule(job_id: str, payload: PublishJobScheduleUpdate) -> dict:
     try:
         return publish_service.update_publish_job_schedule(job_id, payload)
+    except SendReadinessBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.readiness) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -280,6 +301,8 @@ async def update_publish_jobs_schedule_batch(payload: PublishBatchScheduleUpdate
             daily_end_time=payload.daily_end_time,
             confirmed_schedule=payload.confirmed_schedule,
         )
+    except SendReadinessBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.readiness) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -297,6 +320,8 @@ async def preview_publish_jobs_schedule(payload: PublishBatchScheduleUpdate) -> 
             daily_start_time=payload.daily_start_time,
             daily_end_time=payload.daily_end_time,
         )
+    except SendReadinessBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.readiness) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

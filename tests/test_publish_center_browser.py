@@ -16,7 +16,6 @@ playwright = pytest.importorskip("playwright.sync_api")
 from app.core.config import settings  # noqa: E402
 from app.db.database import get_connection, init_db  # noqa: E402
 from app.main import app  # noqa: E402
-from app.services import publish_service  # noqa: E402
 
 
 PREFIX = "test-browser-publish-"
@@ -44,7 +43,7 @@ def _seed_job(tmp_path: Path, index: int, platform: str = "douyin") -> str:
                 id, task_id, output_clip_id, clip_id, platform, publish_mode,
                 video_source, video_file_path, video_path, title, description, caption,
                 tags, hashtags, scheduled_at, schedule_timezone, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'opencli_publish', 'original', ?, ?, ?, '测试正文',
+            ) VALUES (?, ?, ?, ?, ?, 'manual_export', 'original', ?, ?, ?, '测试正文',
                 '测试正文', '测试', '测试', '', 'Asia/Shanghai', 'WAITING', ?, ?)
             """,
             (job_id, task_id, clip_id, clip_id, platform, str(video), str(video), f"浏览器测试片段 {index}", now, now),
@@ -67,21 +66,12 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def test_publish_center_schedule_preview_confirm_and_publish(monkeypatch, tmp_path):
+def test_publish_center_schedule_preview_confirm_and_export(tmp_path):
     init_db()
     _cleanup()
     first = _seed_job(tmp_path, 1)
     second = _seed_job(tmp_path, 2)
     bilibili = _seed_job(tmp_path, 3, "bilibili")
-    opencli_calls: list[str] = []
-
-    def mocked_opencli(job_id: str, runner=None):
-        opencli_calls.append(job_id)
-        return {"status": "ok", "confirmed": True, "message": "mock opencli submitted", "job": {"id": job_id}}
-
-    monkeypatch.setattr(publish_service, "execute_opencli_send_job", mocked_opencli)
-    original_opencli_fallback = settings.publish_enable_opencli_fallback
-    object.__setattr__(settings, "publish_enable_opencli_fallback", True)
     future_start = datetime.now() + timedelta(days=2)
     future_day = future_start.strftime("%Y-%m-%d")
     following_day = (future_start + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -144,14 +134,12 @@ def test_publish_center_schedule_preview_confirm_and_publish(monkeypatch, tmp_pa
             page.on("dialog", lambda dialog: dialog.accept())
             page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{first}"] [data-publish-now]').click()
             page.wait_for_function(
-                "jobId => document.querySelector(`[data-publish-row][data-section=\"history\"][data-job-id=\"${jobId}\"]`).dataset.status === 'PUBLISHED'",
+                "jobId => document.querySelector(`[data-publish-row][data-section=\"history\"][data-job-id=\"${jobId}\"]`).dataset.status === 'EXPORTED'",
                 arg=first,
             )
-            assert opencli_calls == [first]
             context.close()
             browser.close()
     finally:
         server.should_exit = True
         thread.join(timeout=10)
-        object.__setattr__(settings, "publish_enable_opencli_fallback", original_opencli_fallback)
         _cleanup()

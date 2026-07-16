@@ -19,6 +19,7 @@ from app.main import app
 from app.models.task import PublishJobCreate
 from app.services.auto_publish_service import create_auto_publish_jobs
 from app.services.publish_domain import TARGET_PLATFORMS
+from app.services.publish_readiness import SendReadinessBlocked
 from app.services.publish_scheduler import PublishScheduler, build_batch_schedule_times
 from app.services import publish_service
 
@@ -62,7 +63,7 @@ def _insert_job(
     tmp_path: Path,
     *,
     status: str = "SCHEDULED",
-    publish_mode: str = "opencli_publish",
+    publish_mode: str = "manual_export",
     platform: str = "douyin",
     scheduled_at: str | None = None,
     risk_flags: list[str] | None = None,
@@ -163,36 +164,30 @@ def test_daily_window_overflow_moves_to_next_local_day():
     assert result == ["2026-07-12T12:00:00+00:00", "2026-07-13T01:00:00+00:00", "2026-07-13T04:00:00+00:00"]
 
 
-def test_scheduled_job_can_publish_now(monkeypatch, tmp_path):
-    calls = []
-    _mock_opencli_success(monkeypatch, calls)
+def test_scheduled_manual_export_job_can_run_now(tmp_path):
     job_id = _insert_job(tmp_path, status="SCHEDULED", scheduled_at=_utc(3600))
     result = PublishScheduler().publish_now(job_id)
     assert result["status"] == "scheduled"
     PublishScheduler().run_once()
-    assert calls == [job_id]
-    assert _raw(job_id)["status"] == "PUBLISHED"
+    assert _raw(job_id)["status"] == "EXPORTED"
 
 
-def test_due_opencli_job_calls_executor_and_success_is_published(monkeypatch, tmp_path):
+def test_due_legacy_opencli_job_is_not_claimed(monkeypatch, tmp_path):
     calls = []
     _mock_opencli_success(monkeypatch, calls)
-    job_id = _insert_job(tmp_path)
-    PublishScheduler().run_once()
-    assert job_id in calls
-    assert _raw(job_id)["status"] == "PUBLISHED"
-    assert _raw(job_id)["published_at"]
+    job_id = _insert_job(tmp_path, publish_mode="opencli_publish")
+    result = PublishScheduler().execute_job(job_id)
+    assert calls == []
+    assert result["error_code"] == "send_setup_required"
+    assert _raw(job_id)["status"] == "SCHEDULED"
 
 
-def test_opencli_failure_becomes_failed(monkeypatch, tmp_path):
-    job_id = _insert_job(tmp_path)
-    monkeypatch.setattr(
-        publish_service,
-        "execute_opencli_send_job",
-        lambda job_id, runner=None: {"status": "failed", "message": "mock failed", "job": _raw(job_id)},
-    )
-    PublishScheduler().run_once()
-    assert _raw(job_id)["status"] == "FAILED"
+def test_publish_now_legacy_without_account_is_blocked_before_status_change(tmp_path):
+    job_id = _insert_job(tmp_path, publish_mode="opencli_publish")
+    with pytest.raises(SendReadinessBlocked) as caught:
+        PublishScheduler().publish_now(job_id)
+    assert caught.value.readiness["action"] == "create_account"
+    assert _raw(job_id)["status"] == "SCHEDULED"
 
 
 def test_manual_export_success_is_exported(tmp_path):
@@ -212,14 +207,12 @@ def test_need_review_is_never_executed(monkeypatch, tmp_path):
     assert _raw(job_id)["status"] == "NEED_REVIEW"
 
 
-def test_two_schedulers_cannot_claim_same_job(monkeypatch, tmp_path):
-    calls = []
-    _mock_opencli_success(monkeypatch, calls)
+def test_two_schedulers_cannot_claim_same_job(tmp_path):
     job_id = _insert_job(tmp_path)
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: PublishScheduler().execute_job(job_id), range(2)))
-    assert len(calls) == 1
-    assert sorted(item["status"] for item in results) == ["published", "skipped"]
+    assert sorted(item["status"] for item in results) == ["exported", "skipped"]
+    assert _raw(job_id)["status"] == "EXPORTED"
 
 
 def test_only_stale_publishing_job_is_recovered(tmp_path):

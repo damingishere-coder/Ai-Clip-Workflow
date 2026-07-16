@@ -54,7 +54,8 @@
 {% endmacro %}
 
 {% macro schedule_row(job) %}
-<article class="publish-plan-row" data-publish-row data-job-id="{{ job.id }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-section="schedule" {% if job.status not in ["WAITING", "SCHEDULED"] %}hidden{% endif %}>
+{% set readiness = job.send_readiness %}
+<article class="publish-plan-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.account_id or '' }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-section="schedule" data-send-readiness="{{ readiness | tojson | forceescape }}" {% if job.status not in ["WAITING", "SCHEDULED"] %}hidden{% endif %}>
   <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
   <time data-row-schedule data-utc="{{ job.scheduled_at_utc }}">{{ job.scheduled_at_display }}</time>
   <div class="publish-plan-video"><video muted preload="metadata" src="{{ job.video_media_url }}"></video><strong data-row-title>{{ job.title }}</strong></div>
@@ -62,7 +63,12 @@
   <span data-row-account>{{ job.account_name }}</span>
   <span class="status-pill tone-{{ job.status_tone }}" data-row-status>{{ job.status_label }}</span>
   <div class="publish-row-actions">
-    <button type="button" class="primary-button" data-publish-now>立即发送</button>
+    <small class="publish-send-readiness {{ 'is-ready' if readiness.ready else 'is-blocked' }}" data-readiness-message>{{ readiness.message }}</small>
+    {% if readiness.ready or readiness.can_auto_resolve %}
+      <button type="button" class="primary-button" data-primary-send-action data-publish-now>{{ "立即导出" if readiness.action == "export" else ("转换并发送" if readiness.can_auto_resolve else "立即发送") }}</button>
+    {% else %}
+      <button type="button" class="secondary-button" data-primary-send-action data-send-setup>{{ {"login_account": "打开登录窗口", "create_account": "新增账号", "select_account": "选择账号", "complete_content": "完善内容", "start_worker": "连接 Worker"}.get(readiness.action, "完善发送配置") }}</button>
+    {% endif %}
     {% if job.status == "SCHEDULED" %}<button type="button" class="secondary-button" data-clear-schedule>清除排期</button>{% endif %}
     <button type="button" class="text-button" data-cancel-job>取消任务</button>
   </div>
@@ -70,7 +76,8 @@
 {% endmacro %}
 
 {% macro history_row(job) %}
-<article class="publish-execution-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.account_id or '' }}" data-status="{{ job.status }}" data-section="history" {% if job.status in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
+{% set readiness = job.send_readiness %}
+<article class="publish-execution-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.account_id or '' }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-section="history" data-send-readiness="{{ readiness | tojson | forceescape }}" {% if job.status in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
   <strong data-row-title>{{ job.title }}</strong>
   <span>{{ job.platform_label }}</span>
   <span>{{ job.account_name }}</span>
@@ -80,6 +87,20 @@
   <span class="status-pill tone-{{ job.status_tone }}" data-row-status>{{ job.status_label }}</span>
   <span>{{ job.publish_mode_label }}</span>
   <div class="publish-row-actions">
+    {% if job.status == "NEED_REVIEW" and readiness.repairable %}
+      <small class="publish-send-readiness {{ 'is-ready' if readiness.dispatch_ready else 'is-blocked' }}" data-readiness-message>{{ readiness.message }}</small>
+      {% if readiness.action == "select_account" %}
+        <select class="compact-filter" data-repair-account-select aria-label="选择替代任务账号">
+          <option value="">请选择账号</option>
+          {% for account in accounts %}{% if account.platform == job.platform %}<option value="{{ account.id }}">{{ account.account_name }} · {{ "已登录" if account.login_status == "normal" else "需登录" }}</option>{% endif %}{% endfor %}
+        </select>
+        <button type="button" class="primary-button" data-primary-send-action data-repair-job>选择后修复并发送</button>
+      {% elif readiness.dispatch_ready %}
+        <button type="button" class="primary-button" data-primary-send-action data-repair-job>修复并发送</button>
+      {% else %}
+        <button type="button" class="secondary-button" data-primary-send-action data-send-setup>{{ {"login_account": "打开登录窗口", "create_account": "新增账号", "select_account": "选择账号", "complete_content": "完善内容", "start_worker": "连接 Worker"}.get(readiness.action, "完善发送配置") }}</button>
+      {% endif %}
+    {% endif %}
     {% if job.platform_url %}<a class="text-button" href="{{ job.platform_url }}" target="_blank" rel="noreferrer">平台链接</a>{% endif %}
     {% if job.status == "FAILED" %}<button type="button" class="secondary-button" data-retry-job>手动重试</button>{% endif %}
     {% if job.status == "NEED_REVIEW" %}
@@ -101,7 +122,7 @@
 
 <section id="send-center-message" class="inline-alert tone-blue" hidden></section>
 
-<section class="scheduler-health-card" data-scheduler-health>
+<section class="scheduler-health-card" data-scheduler-health data-worker-available="{{ 'true' if scheduler_health.worker_available else 'false' }}">
   <div><span class="health-dot {{ 'is-ok' if scheduler_health.enabled and scheduler_health.running and scheduler_health.worker_available else '' }}"></span><strong>统一发布调度器</strong></div>
   <span>运行：{{ '是' if scheduler_health.running else '否' }}</span><span>扫描：{{ scheduler_health.interval_seconds }} 秒</span>
   <span>已排期：{{ scheduler_health.scheduled_count }}</span><span>发送中：{{ scheduler_health.publishing_count }}</span>

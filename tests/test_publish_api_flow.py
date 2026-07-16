@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from app.main import app
 from app.routers import publish as publish_router
+from app.services.publish_readiness import SendReadinessBlocked
 
 
 def _headers() -> dict[str, str]:
@@ -40,6 +41,25 @@ def test_past_single_schedule_is_rejected_by_api():
     )
     assert response.status_code == 400
     assert "晚于当前时间" in response.json()["detail"]
+
+
+def test_publish_now_returns_structured_readiness_block(monkeypatch):
+    readiness = {
+        "ready": False,
+        "dispatch_ready": False,
+        "message": "账号尚未登录",
+        "action": "login_account",
+        "issues": [{"code": "account_login_required", "action": "login_account"}],
+    }
+
+    class BlockedScheduler:
+        def publish_now(self, job_id: str) -> dict:
+            raise SendReadinessBlocked(readiness)
+
+    monkeypatch.setattr(publish_router, "PublishScheduler", BlockedScheduler)
+    response = TestClient(app).post("/api/publish/jobs/job-1/publish-now", headers=_headers())
+    assert response.status_code == 409
+    assert response.json()["detail"] == readiness
 
 
 def test_review_cannot_be_marked_published_without_platform_evidence():

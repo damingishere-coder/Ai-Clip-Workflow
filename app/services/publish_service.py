@@ -513,7 +513,12 @@ def _format_publish_schedule(value: str | None, timezone_name: str = "Asia/Shang
         return text
 
 
-def _normalize_job(row) -> dict:
+def _normalize_job(
+    row,
+    *,
+    accounts: list[dict] | None = None,
+    worker_state: dict | None = None,
+) -> dict:
     job = dict(row)
     status = _normalize_publish_status(job.get("status"))
     provider_payload = _parse_json_text(job.get("provider_response"))
@@ -589,6 +594,14 @@ def _normalize_job(row) -> dict:
             "account_login_status": job.get("account_login_status") or "login_required",
             "account_login_message": job.get("account_login_message") or "",
         }
+    )
+    from app.services.publish_readiness import build_send_readiness
+
+    job["send_readiness"] = build_send_readiness(
+        job,
+        accounts=accounts,
+        worker_available=(worker_state or {}).get("worker_available"),
+        worker_message=str((worker_state or {}).get("worker_message") or ""),
     )
     return job
 
@@ -1736,7 +1749,7 @@ def get_publish_job(job_id: str) -> dict | None:
     return _normalize_job(row) if row else None
 
 
-def list_publish_jobs(limit: int | None = 100) -> list[dict]:
+def list_publish_jobs(limit: int | None = 100, *, worker_state: dict | None = None) -> list[dict]:
     sql = """
         SELECT
             publish_jobs.*,
@@ -1757,7 +1770,12 @@ def list_publish_jobs(limit: int | None = 100) -> list[dict]:
         params = (limit,)
     with get_connection() as connection:
         rows = connection.execute(sql, params).fetchall()
-    return [_normalize_job(row) for row in rows]
+    accounts = list_accounts()
+    if worker_state is None:
+        from app.services.publish_scheduler import scheduler_health
+
+        worker_state = scheduler_health()
+    return [_normalize_job(row, accounts=accounts, worker_state=worker_state) for row in rows]
 
 
 def update_publish_job_status(job_id: str, status: str, error_message: str = "") -> dict:
@@ -2937,7 +2955,10 @@ def get_publish_center_context() -> dict:
                     }
                 )
 
-    jobs = list_publish_jobs(limit=200)
+    from app.services.publish_scheduler import scheduler_health
+
+    current_scheduler_health = scheduler_health()
+    jobs = list_publish_jobs(limit=200, worker_state=current_scheduler_health)
     pending_jobs = [
         job for job in jobs
         if job.get("status") in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_FAILED, PUBLISH_STATUS_NEED_REVIEW}
@@ -2960,8 +2981,6 @@ def get_publish_center_context() -> dict:
     failed_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_FAILED)
     need_review_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_NEED_REVIEW)
     opencli_status = _opencli_status()
-    from app.services.publish_scheduler import scheduler_health
-
     return {
         "publish_items": publish_items,
         "send_queue_items": queue_items,
@@ -2975,7 +2994,7 @@ def get_publish_center_context() -> dict:
         "app_timezone": settings.app_timezone,
         "opencli_available": opencli_status["available"],
         "opencli_status": opencli_status,
-        "scheduler_health": scheduler_health(),
+        "scheduler_health": current_scheduler_health,
         "stats": [
             {"label": "需复核", "value": need_review_count, "tone": "amber"},
             {"label": "可入队切片", "value": len(publish_items), "tone": "green"},

@@ -17,7 +17,14 @@ async function apiFetch(url, options = {}) {
     data = {};
   }
   if (!response.ok) {
-    throw new Error(data.detail || data.message || `请求失败（HTTP ${response.status}）`);
+    const detail = data.detail;
+    const message = typeof detail === "object" && detail
+      ? (detail.message || data.message || `请求失败（HTTP ${response.status}）`)
+      : (detail || data.message || `请求失败（HTTP ${response.status}）`);
+    const error = new Error(message);
+    error.status = response.status;
+    error.details = typeof detail === "object" && detail ? detail : null;
+    throw error;
   }
   return data;
 }
