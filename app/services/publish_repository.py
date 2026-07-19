@@ -49,6 +49,31 @@ class PublishRepository:
             )
             connection.commit()
 
+    def update_execution_phase(
+        self,
+        job_id: str,
+        phase: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """同步 Worker 的实时阶段；不会在这里改变任务最终状态。"""
+
+        values = sanitize_provider_response(details or {})
+        message = str(values.get("message") or "") if isinstance(values, dict) else ""
+        now = utc_now_iso()
+        with get_connection() as connection:
+            connection.execute(
+                """
+                UPDATE publish_jobs
+                SET execution_phase = ?,
+                    last_error = CASE WHEN ? <> '' THEN ? ELSE last_error END,
+                    error_message = CASE WHEN ? <> '' THEN ? ELSE error_message END,
+                    updated_at = ?
+                WHERE id = ? AND status = 'PUBLISHING'
+                """,
+                (phase, message, message, message, message, now, job_id),
+            )
+            connection.commit()
+
     def add_event(
         self,
         job_id: str,

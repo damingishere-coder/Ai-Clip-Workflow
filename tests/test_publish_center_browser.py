@@ -96,6 +96,13 @@ def test_publish_center_schedule_preview_confirm_and_export(tmp_path):
             page = context.new_page()
             page.goto(f"http://127.0.0.1:{port}/publish", wait_until="networkidle")
 
+            assert page.locator(
+                f'[data-publish-row][data-section="content"][data-job-id="{bilibili}"]'
+            ).is_hidden()
+            assert page.locator(
+                f'[data-publish-row][data-section="content"][data-job-id="{first}"]'
+            ).is_visible()
+
             page.locator('[data-center-tab="schedule"]').click()
             assert page.locator('[data-schedule-calendar] .publish-calendar-day').count() == 42
             assert "抖音" in page.locator("[data-calendar-title]").inner_text()
@@ -103,7 +110,7 @@ def test_publish_center_schedule_preview_confirm_and_export(tmp_path):
                 f'[data-publish-row][data-section="schedule"][data-job-id="{bilibili}"]'
             ).is_hidden()
 
-            page.locator('[data-schedule-platform="bilibili"]').click()
+            page.locator('[data-publish-platform="bilibili"]').click()
             assert "B站" in page.locator("[data-calendar-title]").inner_text()
             assert page.locator(
                 f'[data-publish-row][data-section="schedule"][data-job-id="{bilibili}"]'
@@ -112,7 +119,12 @@ def test_publish_center_schedule_preview_confirm_and_export(tmp_path):
                 f'[data-publish-row][data-section="schedule"][data-job-id="{first}"]'
             ).is_hidden()
 
-            page.locator('[data-schedule-platform="douyin"]').click()
+            page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{bilibili}"] [data-publish-select]').check()
+            assert page.locator("[data-selection-bar]").is_visible()
+
+            page.locator('[data-publish-platform="douyin"]').click()
+            assert page.locator("[data-selection-bar]").is_hidden()
+            assert not page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{bilibili}"] [data-publish-select]').is_checked()
             page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{first}"] [data-publish-select]').check()
             page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{second}"] [data-publish-select]').check()
             page.locator("[data-open-schedule-drawer]").click()
@@ -131,8 +143,10 @@ def test_publish_center_schedule_preview_confirm_and_export(tmp_path):
                 f'[data-publish-row][data-section="schedule"][data-job-id="{first}"] [data-row-schedule]'
             ).inner_text()
 
-            page.on("dialog", lambda dialog: dialog.accept())
+            dialogs = []
+            page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.accept()))
             page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{first}"] [data-publish-now]').click()
+            assert any("抖音" in message for message in dialogs)
             page.wait_for_function(
                 "jobId => document.querySelector(`[data-publish-row][data-section=\"history\"][data-job-id=\"${jobId}\"]`).dataset.status === 'EXPORTED'",
                 arg=first,

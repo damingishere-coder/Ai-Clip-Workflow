@@ -12,7 +12,7 @@
 {% endmacro %}
 
 {% macro content_row(job) %}
-<article class="publish-content-card" data-publish-row data-job-id="{{ job.id }}" data-status="{{ job.status }}" data-section="content" {% if job.status not in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
+<article class="publish-content-card" data-publish-row data-job-id="{{ job.id }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-section="content" {% if job.status not in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
   <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
   <div class="publish-content-media">
     <video muted preload="metadata" src="{{ job.video_media_url }}"></video>
@@ -29,7 +29,7 @@
       <label><span>标题</span><input name="title" value="{{ job.title }}" maxlength="120" required></label>
       <label><span>话题 / 标签</span><input name="tags" value="{{ job.tags }}" maxlength="500" placeholder="多个标签用逗号分隔"></label>
       <label class="span-2"><span>正文 / 简介</span><textarea name="description" maxlength="2000" required>{{ job.description }}</textarea></label>
-      <label><span>发布平台</span><select name="platform" data-platform-select><option value="douyin" {% if job.platform == "douyin" %}selected{% endif %}>抖音</option><option value="bilibili" {% if job.platform == "bilibili" %}selected{% endif %}>B站</option></select></label>
+      <label><span>发布平台（创建后不可更改）</span><strong class="publish-locked-value" data-row-platform>{{ job.platform_label }}</strong><input type="hidden" name="platform" value="{{ job.platform }}"></label>
       <label><span>发布账号</span><select name="account_id" data-account-select>{{ account_options(job) }}</select></label>
       <label><span>发布方式</span><select name="publish_mode"><option value="local_browser" {% if job.publish_mode == "local_browser" %}selected{% endif %}>Windows Chrome 真实投稿</option><option value="manual_export" {% if job.publish_mode == "manual_export" %}selected{% endif %}>仅导出本地发布包</option></select></label>
       <label><span>可见范围</span><select name="visibility"><option value="public" {% if job.visibility == "public" %}selected{% endif %}>公开</option><option value="friends" {% if job.visibility == "friends" %}selected{% endif %}>好友可见</option><option value="private" {% if job.visibility == "private" %}selected{% endif %}>仅自己可见</option></select></label>
@@ -55,7 +55,7 @@
 
 {% macro schedule_row(job) %}
 {% set readiness = job.send_readiness %}
-<article class="publish-plan-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.account_id or '' }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-section="schedule" data-send-readiness="{{ readiness | tojson | forceescape }}" {% if job.status not in ["WAITING", "SCHEDULED"] %}hidden{% endif %}>
+<article class="publish-plan-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.account_id or '' }}" data-platform="{{ job.platform }}" data-visibility="{{ job.visibility or 'public' }}" data-status="{{ job.status }}" data-section="schedule" data-send-readiness="{{ readiness | tojson | forceescape }}" {% if job.status not in ["WAITING", "SCHEDULED"] %}hidden{% endif %}>
   <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
   <time data-row-schedule data-utc="{{ job.scheduled_at_utc }}">{{ job.scheduled_at_display }}</time>
   <div class="publish-plan-video"><video muted preload="metadata" src="{{ job.video_media_url }}"></video><strong data-row-title>{{ job.title }}</strong></div>
@@ -77,18 +77,20 @@
 
 {% macro history_row(job) %}
 {% set readiness = job.send_readiness %}
-<article class="publish-execution-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.account_id or '' }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-section="history" data-send-readiness="{{ readiness | tojson | forceescape }}" {% if job.status in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
+<article class="publish-execution-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.account_id or '' }}" data-platform="{{ job.platform }}" data-visibility="{{ job.visibility or 'public' }}" data-status="{{ job.status }}" data-section="history" data-send-readiness="{{ readiness | tojson | forceescape }}" {% if job.status in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
   <strong data-row-title>{{ job.title }}</strong>
-  <span>{{ job.platform_label }}</span>
-  <span>{{ job.account_name }}</span>
+  <span data-row-platform>{{ job.platform_label }}</span>
+  <span data-row-account>{{ job.account_name }}</span>
   <time data-row-schedule>{{ job.scheduled_at_display }}</time>
   <time>{{ job.started_at or "—" }}</time>
   <time>{{ job.finished_at or "—" }}</time>
   <span class="status-pill tone-{{ job.status_tone }}" data-row-status>{{ job.status_label }}</span>
+  <small class="publish-send-readiness" data-execution-message>{{ job.error_message or job.execution_phase_label or "" }}</small>
   <span>{{ job.publish_mode_label }}</span>
   <div class="publish-row-actions">
     {% if job.status == "NEED_REVIEW" and readiness.repairable %}
       <small class="publish-send-readiness {{ 'is-ready' if readiness.dispatch_ready else 'is-blocked' }}" data-readiness-message>{{ readiness.message }}</small>
+      <select class="compact-filter" data-repair-visibility aria-label="替代任务可见范围"><option value="public" {% if job.visibility == 'public' %}selected{% endif %}>公开</option><option value="friends" {% if job.visibility == 'friends' %}selected{% endif %}>好友可见</option><option value="private" {% if job.visibility == 'private' %}selected{% endif %}>仅自己可见</option></select>
       {% if readiness.action == "select_account" %}
         <select class="compact-filter" data-repair-account-select aria-label="选择替代任务账号">
           <option value="">请选择账号</option>
@@ -102,7 +104,10 @@
       {% endif %}
     {% endif %}
     {% if job.platform_url %}<a class="text-button" href="{{ job.platform_url }}" target="_blank" rel="noreferrer">平台链接</a>{% endif %}
-    {% if job.status == "FAILED" %}<button type="button" class="secondary-button" data-retry-job>手动重试</button>{% endif %}
+    {% if job.status == "FAILED" %}
+      <select class="compact-filter" data-retry-visibility aria-label="重试任务可见范围"><option value="public" {% if job.visibility == 'public' %}selected{% endif %}>公开</option><option value="friends" {% if job.visibility == 'friends' %}selected{% endif %}>好友可见</option><option value="private" {% if job.visibility == 'private' %}selected{% endif %}>仅自己可见</option></select>
+      <button type="button" class="secondary-button" data-retry-job>手动重试</button>
+    {% endif %}
     {% if job.status == "NEED_REVIEW" %}
       <button type="button" class="secondary-button" data-open-creator>打开创作者中心</button>
       <button type="button" class="secondary-button" data-mark-published>标记已发布</button>
@@ -130,7 +135,23 @@
   <button type="button" class="text-button worker-refresh-button" data-refresh-worker>重新检测</button>
   <small data-worker-message>{{ scheduler_health.worker_message }} · 页面及排期均使用北京时间</small>
   <div class="worker-connection-help" data-worker-help {% if scheduler_health.worker_available %}hidden{% endif %}>
-    <strong>连接修复：</strong><span>在项目目录运行</span><code>.\scripts\start_publish_worker.ps1</code><span>，脚本会启动 Worker 并同步 Docker 配置。</span>
+    <strong>连接修复：</strong><span>在项目目录运行</span><code>.\scripts\start_niuma_studio.ps1</code><span>，脚本会同时启动 Worker、Docker 和发送中心。</span>
+  </div>
+</section>
+
+<section class="publish-platform-context" aria-label="当前发布平台">
+  <div><p class="eyebrow">Current Platform</p><h2>当前只处理 <span data-active-platform-label>抖音</span></h2><p>切换平台会立即清空已选择任务，抖音与 B站不会混合发送。</p></div>
+  <div class="publish-platform-switch" role="group" aria-label="切换发送中心平台">
+    <button type="button" class="publish-platform-card is-active" data-publish-platform="douyin" aria-pressed="true">
+      <span class="platform-card-icon douyin">抖</span>
+      <span><strong>抖音</strong><small>待排期 <b data-platform-waiting="douyin">0</b> · 已排期 <b data-platform-scheduled="douyin">0</b></small></span>
+      <span class="platform-card-action">当前</span>
+    </button>
+    <button type="button" class="publish-platform-card" data-publish-platform="bilibili" aria-pressed="false">
+      <span class="platform-card-icon bilibili">B</span>
+      <span><strong>B站</strong><small>待排期 <b data-platform-waiting="bilibili">0</b> · 已排期 <b data-platform-scheduled="bilibili">0</b></small></span>
+      <span class="platform-card-action">切换</span>
+    </button>
   </div>
 </section>
 
@@ -147,18 +168,6 @@
 
 <section class="panel publish-center-panel" data-center-panel="schedule" hidden>
   <div class="panel-header"><div><h2>排期计划</h2><p>计划时间统一显示为北京时间；批量排期必须预览后才能保存。</p></div></div>
-  <div class="publish-platform-switch" role="group" aria-label="按发布平台查看排期">
-    <button type="button" class="publish-platform-card is-active" data-schedule-platform="douyin" aria-pressed="true">
-      <span class="platform-card-icon douyin">抖</span>
-      <span><strong>抖音排期</strong><small>待排期 <b data-platform-waiting="douyin">0</b> · 已排期 <b data-platform-scheduled="douyin">0</b></small></span>
-      <span class="platform-card-action">查看</span>
-    </button>
-    <button type="button" class="publish-platform-card" data-schedule-platform="bilibili" aria-pressed="false">
-      <span class="platform-card-icon bilibili">B</span>
-      <span><strong>B站排期</strong><small>待排期 <b data-platform-waiting="bilibili">0</b> · 已排期 <b data-platform-scheduled="bilibili">0</b></small></span>
-      <span class="platform-card-action">查看</span>
-    </button>
-  </div>
   <section class="publish-calendar-card" aria-label="北京时间排期日历">
     <header class="publish-calendar-toolbar">
       <div><p class="eyebrow">Beijing Time</p><h3 data-calendar-title>排期日历</h3></div>
@@ -187,9 +196,9 @@
 
 <div class="publish-selection-bar" data-selection-bar hidden>
   <strong>已选 <span data-selected-count>0</span> 条</strong>
-  <select data-batch-platform aria-label="批量平台"><option value="douyin">抖音</option><option value="bilibili">B站</option></select>
+  <span class="status-pill tone-blue">仅限 <b data-selection-platform>抖音</b></span>
   <select data-batch-account aria-label="批量账号">{{ account_options({}) }}</select>
-  <button type="button" class="secondary-button" data-apply-batch-target>批量设置平台账号</button>
+  <button type="button" class="secondary-button" data-apply-batch-target>批量设置当前平台账号</button>
   <button type="button" class="secondary-button" data-batch-ai>批量 AI 补齐</button>
   <button type="button" class="primary-button" data-open-schedule-drawer>设置排期</button>
   <button type="button" class="secondary-button" data-send-selected>立即发送</button>
@@ -215,10 +224,10 @@
 <aside class="schedule-drawer account-drawer" data-account-drawer hidden aria-label="账号管理">
   <div class="schedule-drawer-header"><div><p class="eyebrow">Accounts</p><h2>发布账号</h2><p>账号密码不会保存到数据库。</p></div><button type="button" class="icon-button" data-close-account-drawer aria-label="关闭">×</button></div>
   <div class="publish-account-list" data-account-list>
-    {% for account in accounts %}<article data-account-row data-account-id="{{ account.id }}"><div><strong>{{ account.account_name }}</strong><small>{{ account.platform_label }}</small></div><span class="status-pill tone-{{ 'green' if account.login_status == 'normal' else ('red' if account.login_status == 'invalid' else 'amber') }}" data-account-status>{{ '正常' if account.login_status == 'normal' else ('登录失效' if account.login_status == 'invalid' else '需要重新登录') }}</span><div class="button-row"><button type="button" class="secondary-button" data-account-login>登录 / 重新登录</button><button type="button" class="text-button" data-account-check>检查状态</button></div></article>{% endfor %}
+    {% for account in accounts %}<article data-account-row data-account-id="{{ account.id }}" data-account-platform="{{ account.platform }}"><div><strong>{{ account.account_name }}</strong><small>{{ account.platform_label }}</small><small data-account-message>{{ account.login_message or '' }}</small></div><span class="status-pill tone-{{ 'green' if account.login_status == 'normal' else ('red' if account.login_status == 'invalid' else 'amber') }}" data-account-status>{{ account.login_status_label }}</span><div class="button-row">{% if account.login_status == 'normal' %}<button type="button" class="secondary-button" data-account-open-center>打开创作者中心</button><button type="button" class="text-button" data-account-login>重新登录</button>{% else %}<button type="button" class="secondary-button" data-account-login>登录 / 重新登录</button><button type="button" class="text-button" data-account-check>检查状态</button>{% endif %}</div></article>{% endfor %}
   </div>
-  <form class="publish-account-create" data-account-create><h3>新增账号</h3><label><span>平台</span><select name="platform"><option value="douyin">抖音</option><option value="bilibili">B站</option></select></label><label><span>账号备注名</span><input name="account_name" maxlength="120" required placeholder="例如：抖音主账号"></label><button type="submit" class="primary-button">保存并准备登录</button><span class="form-hint" data-account-form-result></span></form>
+  <form class="publish-account-create" data-account-create><h3>新增账号</h3><label><span>当前平台</span><strong class="publish-locked-value" data-account-create-platform>抖音</strong><input type="hidden" name="platform" value="douyin"></label><label><span>账号备注名</span><input name="account_name" maxlength="120" required placeholder="例如：抖音主账号"></label><button type="submit" class="primary-button">保存并准备登录</button><span class="form-hint" data-account-form-result></span></form>
 </aside>
 {% endblock %}
 
-{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260716-platform-calendar-worker"></script>{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260718-platform-isolation"></script>{% endblock %}

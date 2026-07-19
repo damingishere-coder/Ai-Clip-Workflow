@@ -19,6 +19,7 @@ from app.services.publishers.base import (
     split_hashtags,
 )
 from app.services.publishers.browser_runtime import BrowserRuntime
+from app.services.publishers import page_scripts
 
 
 class BilibiliPublisher(BasePlatformPublisher):
@@ -86,48 +87,79 @@ class BilibiliPublisher(BasePlatformPublisher):
                 self.runtime.detect_manual_challenge(page)
                 if not self._page_logged_in(page):
                     raise PublishNeedsReview("B站账号登录失效，请重新登录", "account_login_required")
+                self.runtime.evaluate_script(
+                    page,
+                    page_scripts.bilibili_dismiss_local_draft(),
+                    phase="local_draft_prompt_checked",
+                )
                 upload = self.runtime.first_visible(page, ('input[type="file"]',), timeout_ms=5000)
                 if upload is None:
                     raise PublishError("未找到 B站视频上传入口", "platform_form_changed")
                 self.runtime.phase("upload_started", {"video": Path(payload["video_path"]).name})
                 upload.set_input_files(payload["video_path"])
-                ready = self.runtime.wait_for_text(page, ("上传完成", "稿件标题", "基础设置", "立即投稿"), 900)
-                if not ready:
-                    raise PublishError("B站视频上传超时", "video_upload_timeout")
+                self.runtime.evaluate_script(
+                    page,
+                    page_scripts.bilibili_wait_uploaded(),
+                    phase="upload_completion_checked",
+                    default_error_code="video_upload_timeout",
+                )
                 self.runtime.phase("upload_completed", None)
-
-                self.runtime.fill_first(page, (
-                    'input[placeholder*="稿件标题"]',
-                    'input[placeholder*="标题"]',
-                    'input[maxlength="80"]',
-                ), payload["title"])
-                self.runtime.fill_first(page, (
-                    'textarea[placeholder*="填写简介"]',
-                    'textarea[placeholder*="简介"]',
-                    'div[contenteditable="true"][data-placeholder*="简介"]',
-                ), payload["caption"])
-                self._set_tags(page, payload["hashtags"])
-                self._set_copyright(page, payload["bilibili_copyright"], payload["bilibili_source"])
-                self._set_partition(page, payload["bilibili_tid"])
-                self._set_cover(page, payload.get("cover_file_path") or "")
+                self.runtime.evaluate_script(
+                    page,
+                    page_scripts.bilibili_select_recommended_cover(),
+                    phase="recommended_cover_selected",
+                    default_error_code="bilibili_cover_not_ready",
+                )
+                self.runtime.evaluate_script(
+                    page, page_scripts.fill_title(payload["title"]), phase="title_filled"
+                )
+                if payload["bilibili_copyright"] == "repost":
+                    self._set_copyright(page, payload["bilibili_copyright"], payload["bilibili_source"])
+                self.runtime.evaluate_script(
+                    page,
+                    page_scripts.bilibili_select_declaration(),
+                    phase="declaration_selected",
+                )
+                self.runtime.evaluate_script(
+                    page,
+                    page_scripts.bilibili_select_category(payload["bilibili_tid"]),
+                    phase="category_checked",
+                )
+                self.runtime.evaluate_script(
+                    page,
+                    page_scripts.bilibili_set_description(payload["caption"]),
+                    phase="description_filled",
+                )
+                self.runtime.evaluate_script(
+                    page,
+                    page_scripts.bilibili_verify_ready(payload["title"], payload["caption"]),
+                    phase="form_verified_before_submit",
+                )
                 self.runtime.detect_manual_challenge(page)
 
                 self.runtime.phase("submit_clicked", None)
                 submitted = True
-                self.runtime.click_first(page, (
-                    'button:has-text("立即投稿")',
-                    'button:has-text("投稿")',
-                    '[role="button"]:has-text("立即投稿")',
-                ))
-                success = self.runtime.wait_for_text(page, ("投稿成功", "稿件提交成功", "提交成功"), 180)
-                platform_url = self.runtime.extract_link(page, ("/video/BV", "member.bilibili.com/platform/upload-manager"))
-                if not success and "upload-manager" not in page.url:
+                click_result = self.runtime.evaluate_script(
+                    page,
+                    page_scripts.bilibili_click_publish(),
+                    phase="precise_publish_clicked",
+                    default_error_code="bilibili_publish_button_not_found",
+                )
+                confirmation = self.runtime.evaluate_script(
+                    page,
+                    page_scripts.bilibili_wait_result(payload["title"]),
+                    phase="publish_result_checked",
+                    default_error_code="bilibili_publish_not_confirmed",
+                )
+                if not confirmation.get("bilibili_publish_confirmed"):
                     raise PublishNeedsReview(
-                        "已点击 B站投稿，但未能确认最终结果，请在创作中心核对",
+                        "B站没有返回可验证的投稿成功证据，请在创作中心核对",
                         "publish_result_uncertain",
                     )
-                if not platform_url and "upload-manager" in page.url:
-                    platform_url = page.url
+                platform_url = self.runtime.extract_link(page, ("/video/BV", "member.bilibili.com/platform/upload-manager"))
+                confirmed_url = str(confirmation.get("url") or page.url or "")
+                if not platform_url and any(marker in confirmed_url for marker in ("upload-manager", "archive", "content")):
+                    platform_url = confirmed_url
                 remote_id = self.runtime.extract_remote_id(platform_url)
                 self.runtime.phase("confirmed_success", {"platform_url": platform_url, "remote_video_id": remote_id})
                 return PublishResult(
@@ -136,7 +168,12 @@ class BilibiliPublisher(BasePlatformPublisher):
                     remote_video_id=remote_id,
                     platform_url=platform_url,
                     published_at=utc_now_iso(),
-                    provider_response={"success_marker": success, "final_url": page.url},
+                    provider_response={
+                        "click": click_result,
+                        "confirmation": confirmation,
+                        "final_url": confirmed_url,
+                        "default_tags_kept": True,
+                    },
                 )
             except PublishNeedsReview:
                 raise

@@ -22,7 +22,7 @@ if (publishCenterRoot) {
   const schedulerHealthNode = document.querySelector("[data-scheduler-health]");
   let latestPreviewSignature = "";
   let latestPreviewItems = [];
-  let activeSchedulePlatform = "douyin";
+  let activePlatform = "douyin";
   let calendarMonth = currentBeijingMonth();
   let scheduleRefreshFrame = 0;
   let workerAvailable = schedulerHealthNode?.dataset.workerAvailable === "true";
@@ -86,6 +86,23 @@ if (publishCenterRoot) {
     return Array.from(document.querySelectorAll('[data-publish-row][data-section="schedule"]'));
   }
 
+  function platformLabel(platform = activePlatform) {
+    return platform === "bilibili" ? "B站" : "抖音";
+  }
+
+  function visibilityLabel(value) {
+    return { public: "公开", friends: "好友可见", private: "仅自己可见" }[value] || "公开";
+  }
+
+  function sendConfirmation(row, actionLabel, visibility = "") {
+    const title = row?.querySelector("[data-row-title]")?.textContent?.trim() || "未命名任务";
+    const account = row?.querySelector("[data-row-account]")?.textContent?.trim()
+      || row?.querySelector("[data-repair-account-select] option:checked")?.textContent?.trim()
+      || "未选择";
+    const resolvedVisibility = visibility || row?.dataset.visibility || "public";
+    return `${actionLabel}\n\n平台：${platformLabel(row?.dataset.platform)}\n账号：${account}\n标题：${title}\n可见范围：${visibilityLabel(resolvedVisibility)}\n\n请确认以上信息无误。`;
+  }
+
   function renderPlatformSchedule() {
     const rows = scheduleRows();
     ["douyin", "bilibili"].forEach((platform) => {
@@ -97,25 +114,42 @@ if (publishCenterRoot) {
       if (waitingNode) waitingNode.textContent = String(waiting);
       if (scheduledNode) scheduledNode.textContent = String(scheduled);
     });
-    document.querySelectorAll("[data-schedule-platform]").forEach((button) => {
-      const active = button.dataset.schedulePlatform === activeSchedulePlatform;
+    document.querySelectorAll("[data-publish-platform]").forEach((button) => {
+      const active = button.dataset.publishPlatform === activePlatform;
       button.classList.toggle("is-active", active);
       button.setAttribute("aria-pressed", active ? "true" : "false");
+      const action = button.querySelector(".platform-card-action");
+      if (action) action.textContent = active ? "当前" : "切换";
     });
     let visibleCount = 0;
     rows.forEach((row) => {
-      const visible = sectionAllows("schedule", row.dataset.status || "") && row.dataset.platform === activeSchedulePlatform;
+      const visible = sectionAllows("schedule", row.dataset.status || "") && row.dataset.platform === activePlatform;
       row.hidden = !visible;
       if (visible) visibleCount += 1;
     });
-    if (platformListTitle) platformListTitle.textContent = `${activeSchedulePlatform === "douyin" ? "抖音" : "B站"}任务清单`;
+    document.querySelectorAll('[data-publish-row][data-section="content"]').forEach((row) => {
+      row.hidden = !sectionAllows("content", row.dataset.status || "") || row.dataset.platform !== activePlatform;
+    });
+    document.querySelectorAll("[data-account-row]").forEach((row) => {
+      row.hidden = row.dataset.accountPlatform !== activePlatform;
+    });
+    document.querySelectorAll("[data-active-platform-label], [data-selection-platform]").forEach((node) => {
+      node.textContent = platformLabel();
+    });
+    const accountForm = document.querySelector("[data-account-create]");
+    if (accountForm?.elements.platform) accountForm.elements.platform.value = activePlatform;
+    const accountPlatformLabel = accountForm?.querySelector("[data-account-create-platform]");
+    if (accountPlatformLabel) accountPlatformLabel.textContent = platformLabel();
+    filterAccountOptions(document.querySelector("[data-batch-account]"), activePlatform);
+    if (platformListTitle) platformListTitle.textContent = `${platformLabel()}任务清单`;
     if (scheduleEmpty) scheduleEmpty.hidden = visibleCount > 0;
+    applyHistoryFilter();
   }
 
   function renderCalendar() {
     if (!calendarNode) return;
     const { year, month } = calendarMonth;
-    if (calendarTitle) calendarTitle.textContent = `${year} 年 ${month} 月 · ${activeSchedulePlatform === "douyin" ? "抖音" : "B站"}`;
+    if (calendarTitle) calendarTitle.textContent = `${year} 年 ${month} 月 · ${platformLabel()}`;
     const firstDay = new Date(Date.UTC(year, month - 1, 1));
     const mondayOffset = (firstDay.getUTCDay() + 6) % 7;
     const gridStart = new Date(Date.UTC(year, month - 1, 1 - mondayOffset));
@@ -123,7 +157,7 @@ if (publishCenterRoot) {
     const todayKey = `${todayParts.year}-${String(todayParts.month).padStart(2, "0")}-${String(todayParts.day).padStart(2, "0")}`;
     const jobsByDate = new Map();
     scheduleRows().forEach((row) => {
-      if (row.dataset.platform !== activeSchedulePlatform || row.dataset.status !== "SCHEDULED") return;
+      if (row.dataset.platform !== activePlatform || row.dataset.status !== "SCHEDULED") return;
       const utcValue = row.querySelector("[data-row-schedule]")?.dataset.utc || "";
       const key = beijingDateKey(utcValue);
       if (!key) return;
@@ -193,7 +227,13 @@ if (publishCenterRoot) {
   }
 
   function accountStatusLabel(status) {
-    return status === "normal" ? "正常" : (status === "invalid" ? "登录失效" : "需要重新登录");
+    return {
+      normal: "正常",
+      invalid: "登录失效",
+      login_pending: "等待登录完成",
+      busy: "账号操作中",
+      login_required: "需要重新登录",
+    }[status] || "需要重新登录";
   }
 
   function rowReadiness(row) {
@@ -289,29 +329,67 @@ if (publishCenterRoot) {
 
   function appendAccountRow(account) {
     const list = document.querySelector("[data-account-list]");
-    if (!list || list.querySelector(`[data-account-id="${CSS.escape(account.id)}"]`)) return;
+    if (!list) return null;
+    const existing = list.querySelector(`[data-account-id="${CSS.escape(account.id)}"]`);
+    if (existing) return existing;
     const article = document.createElement("article");
     article.dataset.accountRow = "";
     article.dataset.accountId = account.id;
+    article.dataset.accountPlatform = account.platform;
     const identity = document.createElement("div");
     const name = document.createElement("strong");
     name.textContent = account.account_name;
     const platform = document.createElement("small");
     platform.textContent = account.platform_label;
-    identity.append(name, platform);
+    const message = document.createElement("small");
+    message.dataset.accountMessage = "";
+    identity.append(name, platform, message);
     const status = document.createElement("span");
     status.className = "status-pill tone-amber";
     status.dataset.accountStatus = "";
-    status.textContent = accountStatusLabel(account.login_status);
     const actions = document.createElement("div");
     actions.className = "button-row";
-    const login = document.createElement("button");
-    login.type = "button"; login.className = "secondary-button"; login.dataset.accountLogin = ""; login.textContent = "登录 / 重新登录";
-    const check = document.createElement("button");
-    check.type = "button"; check.className = "text-button"; check.dataset.accountCheck = ""; check.textContent = "检查状态";
-    actions.append(login, check);
     article.append(identity, status, actions);
     list.append(article);
+    return article;
+  }
+
+  function updateAccountRow(account) {
+    if (!account?.id) return;
+    const article = appendAccountRow(account);
+    if (!article) return;
+    article.dataset.accountPlatform = account.platform;
+    article.hidden = account.platform !== activePlatform;
+    const status = article.querySelector("[data-account-status]");
+    if (status) {
+      status.textContent = account.login_status_label || accountStatusLabel(account.login_status);
+      status.classList.toggle("tone-green", account.login_status === "normal");
+      status.classList.toggle("tone-red", account.login_status === "invalid");
+      status.classList.toggle("tone-amber", !["normal", "invalid"].includes(account.login_status));
+    }
+    const message = article.querySelector("[data-account-message]");
+    if (message) message.textContent = account.login_message || "";
+    const actions = article.querySelector(".button-row");
+    if (!actions) return;
+    actions.replaceChildren();
+    const primary = document.createElement("button");
+    primary.type = "button";
+    primary.className = "secondary-button";
+    const secondary = document.createElement("button");
+    secondary.type = "button";
+    secondary.className = "text-button";
+    if (account.login_status === "normal") {
+      primary.dataset.accountOpenCenter = "";
+      primary.textContent = "打开创作者中心";
+      secondary.dataset.accountLogin = "";
+      secondary.textContent = "重新登录";
+    } else {
+      primary.dataset.accountLogin = "";
+      primary.textContent = account.login_status === "login_pending" ? "再次打开登录窗口" : "登录 / 重新登录";
+      secondary.dataset.accountCheck = "";
+      secondary.textContent = "检查状态";
+    }
+    actions.append(primary, secondary);
   }
 
   function sectionAllows(section, status) {
@@ -325,11 +403,15 @@ if (publishCenterRoot) {
     const filter = String(historyFilter?.value || "all");
     document.querySelectorAll('[data-publish-row][data-section="history"]').forEach((row) => {
       const allowed = sectionAllows("history", row.dataset.status || "");
-      row.hidden = !allowed || (filter !== "all" && row.dataset.status !== filter);
+      row.hidden = !allowed || row.dataset.platform !== activePlatform || (filter !== "all" && row.dataset.status !== filter);
     });
   }
 
   function updateSelectionUi() {
+    Array.from(selectedJobIds).forEach((jobId) => {
+      const row = document.querySelector(`[data-publish-row][data-job-id="${CSS.escape(jobId)}"]`);
+      if (!row || row.dataset.platform !== activePlatform) selectedJobIds.delete(jobId);
+    });
     document.querySelectorAll("[data-publish-select]").forEach((checkbox) => {
       checkbox.checked = selectedJobIds.has(checkbox.value);
     });
@@ -337,6 +419,20 @@ if (publishCenterRoot) {
     if (selectedCountNode) selectedCountNode.textContent = String(count);
     if (drawerCount) drawerCount.textContent = String(count);
     if (selectionBar) selectionBar.hidden = count === 0;
+  }
+
+  function setActivePlatform(nextPlatform) {
+    const next = nextPlatform === "bilibili" ? "bilibili" : "douyin";
+    const changed = next !== activePlatform;
+    activePlatform = next;
+    if (changed) {
+      selectedJobIds.clear();
+      invalidatePreview();
+      closeDrawer();
+      showMessage(`已切换到${platformLabel()}；之前勾选的任务已清空，不会跨平台发送。`, "success");
+    }
+    updateSelectionUi();
+    refreshScheduleViews();
   }
 
   function switchTab(tab) {
@@ -357,10 +453,13 @@ if (publishCenterRoot) {
       row.dataset.status = status;
       if (job.platform) row.dataset.platform = job.platform;
       if (job.account_id !== undefined) row.dataset.accountId = job.account_id || "";
+      if (job.visibility) row.dataset.visibility = job.visibility;
       if (job.send_readiness) row.dataset.sendReadiness = JSON.stringify(job.send_readiness);
-      row.hidden = !sectionAllows(row.dataset.section, status);
+      row.hidden = !sectionAllows(row.dataset.section, status) || row.dataset.platform !== activePlatform;
       const statusNode = row.querySelector("[data-row-status]");
       if (statusNode) statusNode.textContent = job.status_label || statusLabel(status);
+      const executionMessage = row.querySelector("[data-execution-message]");
+      if (executionMessage) executionMessage.textContent = job.error_message || job.execution_phase_label || "";
       const titleNode = row.querySelector("[data-row-title]");
       if (titleNode && job.title) titleNode.textContent = job.title;
       const platformNode = row.querySelector("[data-row-platform]");
@@ -414,6 +513,7 @@ if (publishCenterRoot) {
     const preset = String(scheduleForm?.elements.interval_preset?.value || "180");
     return {
       job_ids: Array.from(selectedJobIds),
+      platform: activePlatform,
       action,
       start_at_local: String(scheduleForm?.elements.start_at_local?.value || ""),
       timezone: APP_TIMEZONE,
@@ -474,11 +574,17 @@ if (publishCenterRoot) {
 
   function openAccountDrawer(platform = "") {
     if (!accountDrawer || !accountBackdrop) return;
+    if (platform && platform !== activePlatform) setActivePlatform(platform);
     accountDrawer.hidden = false;
     accountBackdrop.hidden = false;
     document.body.classList.add("has-schedule-drawer");
     const form = accountDrawer.querySelector("[data-account-create]");
-    if (platform && form?.elements.platform) form.elements.platform.value = platform;
+    if (form?.elements.platform) form.elements.platform.value = activePlatform;
+    const label = form?.querySelector("[data-account-create-platform]");
+    if (label) label.textContent = platformLabel();
+    document.querySelectorAll("[data-account-row]").forEach((row) => {
+      row.hidden = row.dataset.accountPlatform !== activePlatform;
+    });
   }
 
   function readinessAccountId(readiness) {
@@ -504,8 +610,9 @@ if (publishCenterRoot) {
       }
       try {
         const data = await window.apiFetch(`/api/publish/accounts/${accountId}/login`, { method: "POST" });
+        if (data.account) updateAccountRow(data.account);
         showMessage(data.message || data.worker_result?.message || "登录窗口已打开，请在专属 Chrome 中完成登录。", "success");
-        await refreshJobs();
+        await Promise.all([refreshAccounts(), refreshJobs()]);
       } catch (error) {
         document.querySelector("[data-worker-help]")?.removeAttribute("hidden");
         showMessage(`打开登录窗口失败：${error.message}`, "error");
@@ -553,6 +660,15 @@ if (publishCenterRoot) {
     }
   }
 
+  async function refreshAccounts() {
+    try {
+      const data = await window.apiFetch("/api/publish/accounts");
+      (data.accounts || []).forEach(updateAccountRow);
+    } catch (_error) {
+      // 登录窗口仍可继续使用；下一轮会自动重试同步状态。
+    }
+  }
+
   async function refreshSchedulerHealth(showResult = false) {
     const button = document.querySelector("[data-refresh-worker]");
     if (button) button.disabled = true;
@@ -581,11 +697,8 @@ if (publishCenterRoot) {
   document.querySelectorAll("[data-center-tab]").forEach((button) => {
     button.addEventListener("click", () => switchTab(button.dataset.centerTab));
   });
-  document.querySelectorAll("[data-schedule-platform]").forEach((button) => {
-    button.addEventListener("click", () => {
-      activeSchedulePlatform = button.dataset.schedulePlatform || "douyin";
-      refreshScheduleViews();
-    });
+  document.querySelectorAll("[data-publish-platform]").forEach((button) => {
+    button.addEventListener("click", () => setActivePlatform(button.dataset.publishPlatform));
   });
   document.querySelector("[data-calendar-previous]")?.addEventListener("click", () => {
     const previous = new Date(Date.UTC(calendarMonth.year, calendarMonth.month - 2, 1));
@@ -615,13 +728,16 @@ if (publishCenterRoot) {
   document.addEventListener("change", (event) => {
     const checkbox = event.target.closest("[data-publish-select]");
     if (checkbox) {
-      if (checkbox.checked) selectedJobIds.add(checkbox.value); else selectedJobIds.delete(checkbox.value);
+      const row = checkbox.closest("[data-publish-row]");
+      if (checkbox.checked && row?.dataset.platform !== activePlatform) {
+        checkbox.checked = false;
+        showMessage("当前平台与任务不一致，已阻止跨平台选择。", "error");
+      } else if (checkbox.checked) selectedJobIds.add(checkbox.value); else selectedJobIds.delete(checkbox.value);
       updateSelectionUi();
     }
     const form = event.target.closest("[data-publish-editor]");
     if (form && (event.target.matches("[data-platform-select]") || event.target.matches("[data-copyright-select]"))) syncPlatformFields(form);
     if (event.target.closest("[data-schedule-form]")) invalidatePreview();
-    if (event.target.matches("[data-batch-platform]")) filterAccountOptions(document.querySelector("[data-batch-account]"), event.target.value);
   });
 
   document.addEventListener("submit", async (event) => {
@@ -631,7 +747,7 @@ if (publishCenterRoot) {
       const row = form.closest("[data-publish-row]");
       const jobId = row?.dataset.jobId;
       const resultNode = form.querySelector("[data-editor-result]");
-      const platform = String(form.elements.platform.value || "douyin");
+      const platform = String(row?.dataset.platform || form.elements.platform.value || "douyin");
       const publishMode = String(form.elements.publish_mode.value || "local_browser");
       const target = { platform, account_id: String(form.elements.account_id.value || ""), publish_mode: publishMode };
       const content = {
@@ -672,8 +788,11 @@ if (publishCenterRoot) {
           option.dataset.accountPlatform = account.platform;
           select.add(option);
         });
-        appendAccountRow(account);
+        updateAccountRow(account);
         accountForm.reset();
+        accountForm.elements.platform.value = activePlatform;
+        const platformNode = accountForm.querySelector("[data-account-create-platform]");
+        if (platformNode) platformNode.textContent = platformLabel();
         if (resultNode) resultNode.textContent = "账号已保存，请点击登录 / 重新登录。";
         showMessage("账号记录已保存；系统没有保存账号密码。", "success");
         await refreshJobs();
@@ -696,15 +815,18 @@ if (publishCenterRoot) {
       const sourceId = row?.dataset.jobId;
       const accountSelect = row?.querySelector("[data-repair-account-select]");
       const accountId = String(accountSelect?.value || "");
+      const visibility = String(row?.querySelector("[data-repair-visibility]")?.value || row?.dataset.visibility || "public");
       if (accountSelect && !accountId) {
         showMessage("请先选择用于替代任务的同平台账号。", "error");
         accountSelect.focus();
         return;
       }
-      if (!sourceId || !window.confirm("确认修复并发送？原需复核记录会保留，系统只会创建一条新的 Windows Chrome 投稿任务。")) return;
+      if (!sourceId || !window.confirm(sendConfirmation(row, "确认转换并发送？原需复核记录会保留，系统只会创建一条同平台的 Windows Chrome 投稿任务。", visibility))) return;
       repairButton.disabled = true;
       try {
-        const query = accountId ? `?account_id=${encodeURIComponent(accountId)}` : "";
+        const queryParams = new URLSearchParams({ visibility });
+        if (accountId) queryParams.set("account_id", accountId);
+        const query = `?${queryParams.toString()}`;
         const data = await window.apiFetch(`/api/publish/jobs/${sourceId}/repair-and-publish${query}`, { method: "POST" });
         cloneRowsForRetry(sourceId, data.job);
         showMessage(data.message || "旧记录已保留，替代任务已进入统一调度器。", "success");
@@ -716,13 +838,19 @@ if (publishCenterRoot) {
 
     const publishNowButton = event.target.closest("[data-publish-now]");
     if (publishNowButton) {
-      const jobId = publishNowButton.closest("[data-publish-row]")?.dataset.jobId;
-      if (!jobId || !window.confirm("确认立即发送？任务会先进入 SCHEDULED，再由统一调度器执行真实投稿。")) return;
+      const publishRow = publishNowButton.closest("[data-publish-row]");
+      const jobId = publishRow?.dataset.jobId;
+      if (!jobId || !window.confirm(sendConfirmation(publishRow, "确认立即发送？任务会先进入 SCHEDULED，再由统一调度器执行真实投稿。"))) return;
       publishNowButton.disabled = true;
       try {
         const result = await window.apiFetch(`/api/publish/jobs/${jobId}/publish-now`, { method: "POST" });
-        updateRowFromJob(result.job || { id: jobId, status: "SCHEDULED" });
-        showMessage("任务已按当前北京时间加入统一调度器。", "success");
+        if (result.source_job_id && result.job?.id && result.job.id !== jobId) {
+          cloneRowsForRetry(jobId, result.job);
+          await refreshJobs();
+        } else {
+          updateRowFromJob(result.job || { id: jobId, status: "SCHEDULED" });
+        }
+        showMessage(result.message || "任务已按当前北京时间加入统一调度器。", "success");
       } catch (error) {
         if (!applyReadinessError(error, publishNowButton.closest("[data-publish-row]"))) {
           showMessage(`立即发送失败：${error.message}`, "error");
@@ -735,7 +863,7 @@ if (publishCenterRoot) {
     if (clearButton) {
       const jobId = clearButton.closest("[data-publish-row]")?.dataset.jobId;
       try {
-        const data = await window.apiFetch("/api/publish/jobs/schedule-batch", { method: "PATCH", body: JSON.stringify({ job_ids: [jobId], action: "clear", timezone: APP_TIMEZONE }) });
+        const data = await window.apiFetch("/api/publish/jobs/schedule-batch", { method: "PATCH", body: JSON.stringify({ job_ids: [jobId], platform: activePlatform, action: "clear", timezone: APP_TIMEZONE }) });
         (data.jobs || []).forEach(updateRowFromJob);
         showMessage(data.message, "success");
       } catch (error) { showMessage(`清除排期失败：${error.message}`, "error"); }
@@ -804,7 +932,12 @@ if (publishCenterRoot) {
 
     const addPlan = event.target.closest("[data-add-to-plan]");
     if (addPlan) {
-      const jobId = addPlan.closest("[data-publish-row]")?.dataset.jobId;
+      const planRow = addPlan.closest("[data-publish-row]");
+      const jobId = planRow?.dataset.jobId;
+      if (planRow?.dataset.platform !== activePlatform) {
+        showMessage("当前平台与任务不一致，已阻止加入计划。", "error");
+        return;
+      }
       selectedJobIds.add(jobId);
       updateSelectionUi();
       switchTab("schedule");
@@ -815,9 +948,11 @@ if (publishCenterRoot) {
     const retryButton = event.target.closest("[data-retry-job]");
     if (retryButton) {
       const sourceId = retryButton.closest("[data-publish-row]")?.dataset.jobId;
-      if (!window.confirm("确认重新发布？系统会保留原失败记录，并创建一条新的任务。")) return;
+      const retryRow = retryButton.closest("[data-publish-row]");
+      const visibility = retryRow?.querySelector("[data-retry-visibility]")?.value || retryRow?.dataset.visibility || "public";
+      if (!window.confirm(`${sendConfirmation(retryRow, "确认创建重试任务？", visibility)}\n\n系统会保留原失败记录。`)) return;
       try {
-        const data = await window.apiFetch(`/api/publish/jobs/${sourceId}/retry`, { method: "POST", body: "{}" });
+        const data = await window.apiFetch(`/api/publish/jobs/${sourceId}/retry`, { method: "POST", body: JSON.stringify({ visibility }) });
         cloneRowsForRetry(sourceId, data.job);
         showMessage(`已创建重试任务 ${data.job_id}，并交给统一调度器。`, "success");
       } catch (error) { showMessage(`重试失败：${error.message}`, "error"); }
@@ -870,24 +1005,20 @@ if (publishCenterRoot) {
       return;
     }
 
-    const accountAction = event.target.closest("[data-account-login], [data-account-check]");
+    const accountAction = event.target.closest("[data-account-login], [data-account-check], [data-account-open-center]");
     if (accountAction) {
       const accountRow = accountAction.closest("[data-account-row]");
       const accountId = accountRow?.dataset.accountId;
-      const action = accountAction.matches("[data-account-login]") ? "login" : "check";
+      const action = accountAction.matches("[data-account-login]")
+        ? "login"
+        : (accountAction.matches("[data-account-open-center]") ? "open-center" : "check");
       accountAction.disabled = true;
       try {
         const data = await window.apiFetch(`/api/publish/accounts/${accountId}/${action}`, { method: "POST" });
         const account = data.account || {};
-        const statusNode = accountRow.querySelector("[data-account-status]");
-        if (statusNode && action === "check") {
-          statusNode.textContent = accountStatusLabel(account.login_status);
-          statusNode.classList.toggle("tone-green", account.login_status === "normal");
-          statusNode.classList.toggle("tone-red", account.login_status === "invalid");
-          statusNode.classList.toggle("tone-amber", !["normal", "invalid"].includes(account.login_status));
-        }
+        updateAccountRow(account);
         showMessage(data.message || data.worker_result?.message || "账号操作已执行。", "success");
-        await refreshJobs();
+        await Promise.all([refreshAccounts(), refreshJobs()]);
       } catch (error) {
         document.querySelector("[data-worker-help]")?.removeAttribute("hidden");
         showMessage(`账号操作失败：${error.message}`, "error");
@@ -911,6 +1042,21 @@ if (publishCenterRoot) {
   document.querySelector("[data-send-selected]")?.addEventListener("click", async () => {
     const ids = Array.from(selectedJobIds);
     if (!ids.length) return;
+    const hasMixedPlatform = ids
+      .map((jobId) => document.querySelector(`[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(jobId)}"]`))
+      .some((row) => !row || row.dataset.platform !== activePlatform);
+    if (hasMixedPlatform) {
+      selectedJobIds.clear(); updateSelectionUi();
+      showMessage("检测到跨平台选择，已全部清空，未发送任何任务。", "error");
+      return;
+    }
+    const legacyRows = ids
+      .map((jobId) => document.querySelector(`[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(jobId)}"]`))
+      .filter((row) => effectiveReadiness(row).can_auto_resolve);
+    if (legacyRows.length) {
+      showMessage("旧版排期不能批量补发，请逐条点击任务右侧的“转换并发送”。", "error");
+      return;
+    }
     const blockedRow = ids
       .map((jobId) => document.querySelector(`[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(jobId)}"]`))
       .find((row) => {
@@ -921,7 +1067,7 @@ if (publishCenterRoot) {
       await handleSendSetup(blockedRow);
       return;
     }
-    if (!window.confirm(`确认立即发送 ${ids.length} 条任务？`)) return;
+    if (!window.confirm(`确认立即发送 ${ids.length} 条${platformLabel()}任务？不会领取或创建另一平台的任务。`)) return;
     for (const jobId of ids) {
       try {
         const result = await window.apiFetch(`/api/publish/jobs/${jobId}/publish-now`, { method: "POST" });
@@ -939,14 +1085,14 @@ if (publishCenterRoot) {
   document.querySelector("[data-apply-batch-target]")?.addEventListener("click", async () => {
     const payload = {
       job_ids: Array.from(selectedJobIds),
-      platform: document.querySelector("[data-batch-platform]").value,
+      platform: activePlatform,
       account_id: document.querySelector("[data-batch-account]").value,
       publish_mode: "local_browser",
     };
     try {
       const data = await window.apiFetch("/api/publish/jobs/target-batch", { method: "PATCH", body: JSON.stringify(payload) });
       (data.jobs || []).forEach(updateRowFromJob);
-      showMessage(`已更新 ${data.updated_count} 条任务的平台和账号。`, "success");
+      showMessage(`已更新 ${data.updated_count} 条${platformLabel()}任务的账号。`, "success");
     } catch (error) { showMessage(`批量设置失败：${error.message}`, "error"); }
   });
 
@@ -1009,16 +1155,16 @@ if (publishCenterRoot) {
   document.querySelector("[data-supplement-publish-jobs]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget; button.disabled = true;
     try {
-      const data = await window.apiFetch("/api/publish/queue/refresh?use_ai=false", { method: "POST" });
+      const data = await window.apiFetch(`/api/publish/queue/refresh?use_ai=false&platform=${encodeURIComponent(activePlatform)}`, { method: "POST" });
       showMessage(data.message || "缺失任务已补充，请稍后查看内容准备区。", "success");
     } catch (error) { showMessage(`补充任务失败：${error.message}`, "error"); }
     finally { button.disabled = false; }
   });
 
   document.querySelectorAll("[data-publish-editor]").forEach(syncPlatformFields);
-  filterAccountOptions(document.querySelector("[data-batch-account]"), document.querySelector("[data-batch-platform]")?.value || "douyin");
+  filterAccountOptions(document.querySelector("[data-batch-account]"), activePlatform);
   if (scheduleForm?.elements.start_at_local) scheduleForm.elements.start_at_local.value = beijingDatetimeValue(Date.now() + 10 * 60 * 1000);
   document.querySelectorAll('[data-publish-row][data-section="schedule"], [data-publish-row][data-section="history"]').forEach((row) => applyRowReadiness(row));
   updateSelectionUi(); applyHistoryFilter(); refreshScheduleViews();
-  window.setInterval(() => { refreshJobs(); refreshSchedulerHealth(); }, 5000);
+  window.setInterval(() => { refreshJobs(); refreshAccounts(); refreshSchedulerHealth(); }, 5000);
 }

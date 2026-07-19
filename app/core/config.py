@@ -181,6 +181,9 @@ class Settings:
     publish_browser_navigation_timeout_ms: int = int(
         _env("PUBLISH_BROWSER_NAVIGATION_TIMEOUT_MS", "60000")
     )
+    publish_browser_failure_hold_seconds: int = int(
+        _env("PUBLISH_BROWSER_FAILURE_HOLD_SECONDS", "600")
+    )
     publish_browser_profile_dir: Path = _env_path(
         "PUBLISH_BROWSER_PROFILE_DIR",
         _env_path("DATA_DIR", PROJECT_ROOT / "data") / "browser_profiles",

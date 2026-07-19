@@ -282,10 +282,14 @@ def create_worker_app(token: str | None = None) -> FastAPI:
             values = payload.model_dump()
             values["video_path"] = _resolve_media_path(values["video_path"], required=True)
             values["cover_file_path"] = _resolve_media_path(values["cover_file_path"], required=False)
+            def update_phase(phase: str, details: dict[str, Any] | None = None) -> None:
+                journal.update(phase, details)
+                repository.update_execution_phase(payload.job_id, phase, details)
+
             runtime = BrowserRuntime(
                 payload.platform,
                 payload.account_id,
-                phase_callback=lambda phase, details=None: journal.update(phase, details),
+                phase_callback=update_phase,
             )
             publisher = get_platform_publisher(
                 payload.platform,
@@ -296,11 +300,14 @@ def create_worker_app(token: str | None = None) -> FastAPI:
             journal.update("confirmed_success" if result.outcome == PublishOutcome.PUBLISHED else result.outcome.value.lower(), result.as_dict())
             return result.as_dict()
         except PublishNeedsReview as exc:
+            current = journal.read()
+            diagnostics = current.get("details") if isinstance(current.get("details"), dict) else {}
             result = PublishResult(
                 outcome=PublishOutcome.NEED_REVIEW,
                 message=exc.message,
                 error_code=exc.error_code,
                 needs_manual_review=True,
+                provider_response={"diagnostics": diagnostics},
             )
             journal.update("manual_review", result.as_dict())
             return result.as_dict()
@@ -314,6 +321,8 @@ def create_worker_app(token: str | None = None) -> FastAPI:
             return result.as_dict()
         except PublishError as exc:
             phase = str(journal.read().get("phase") or "unknown")
+            current = journal.read()
+            diagnostics = current.get("details") if isinstance(current.get("details"), dict) else {}
             uncertain = exc.needs_manual_review or phase in {
                 "upload_started", "upload_completed", "submit_clicked", "unknown"
             }
@@ -322,6 +331,7 @@ def create_worker_app(token: str | None = None) -> FastAPI:
                 message=exc.message,
                 error_code=exc.error_code,
                 needs_manual_review=uncertain,
+                provider_response={"diagnostics": diagnostics},
             )
             journal.update("manual_review" if uncertain else "failed", result.as_dict())
             return result.as_dict()

@@ -55,7 +55,7 @@ class PublishWorkerClient:
             timed_out = isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in str(reason).lower()
             raise PublishWorkerUnavailable(
                 "Windows 发布 Worker 未启动或当前不可达。请在项目目录运行 "
-                r".\scripts\start_publish_worker.ps1；如果页面使用 Docker，脚本会同步容器连接配置。",
+                r".\scripts\start_niuma_studio.ps1；脚本会同时启动 Worker、Docker 和发送中心。",
                 request_may_have_been_received=timed_out,
             ) from exc
         if not raw:

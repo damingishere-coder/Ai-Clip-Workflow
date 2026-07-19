@@ -172,14 +172,27 @@ def test_scheduled_manual_export_job_can_run_now(tmp_path):
     assert _raw(job_id)["status"] == "EXPORTED"
 
 
-def test_due_legacy_opencli_job_is_not_claimed(monkeypatch, tmp_path):
+def test_due_legacy_opencli_job_moves_to_review_once_without_being_claimed(monkeypatch, tmp_path):
     calls = []
     _mock_opencli_success(monkeypatch, calls)
     job_id = _insert_job(tmp_path, publish_mode="opencli_publish")
     result = PublishScheduler().execute_job(job_id)
     assert calls == []
-    assert result["error_code"] == "send_setup_required"
-    assert _raw(job_id)["status"] == "SCHEDULED"
+    assert result["error_code"] == "legacy_schedule_requires_confirmation"
+    assert _raw(job_id)["status"] == "NEED_REVIEW"
+    with get_connection() as connection:
+        event_count = connection.execute(
+            "SELECT COUNT(*) FROM publish_job_events WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()[0]
+    repeated = PublishScheduler().execute_job(job_id)
+    assert repeated["status"] == "skipped"
+    with get_connection() as connection:
+        repeated_event_count = connection.execute(
+            "SELECT COUNT(*) FROM publish_job_events WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()[0]
+    assert repeated_event_count == event_count
 
 
 def test_publish_now_legacy_without_account_is_blocked_before_status_change(tmp_path):
@@ -222,6 +235,36 @@ def test_only_stale_publishing_job_is_recovered(tmp_path):
     assert recovered == 1
     assert _raw(stale)["status"] == "NEED_REVIEW"
     assert _raw(fresh)["status"] == "PUBLISHING"
+
+
+def test_finished_manual_review_execution_is_reconciled_without_stale_wait(tmp_path):
+    job_id = _insert_job(tmp_path, status="PUBLISHING", updated_at=_utc())
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE publish_jobs SET execution_id = ?, execution_phase = 'manual_review_waiting' WHERE id = ?",
+            ("execution-manual-review", job_id),
+        )
+        connection.commit()
+
+    class FinishedWorker:
+        @staticmethod
+        def execution(_execution_id):
+            return {
+                "phase": "manual_review",
+                "details": {
+                    "outcome": "NEED_REVIEW",
+                    "message": "上传状态需要人工确认",
+                    "error_code": "video_upload_timeout",
+                    "needs_manual_review": True,
+                },
+            }
+
+    recovered = PublishScheduler(worker_client=FinishedWorker()).recover_interrupted_jobs()
+
+    assert recovered == 1
+    job = _raw(job_id)
+    assert job["status"] == "NEED_REVIEW"
+    assert job["error_code"] == "video_upload_timeout"
 
 
 def test_preview_and_save_use_identical_schedule(tmp_path):

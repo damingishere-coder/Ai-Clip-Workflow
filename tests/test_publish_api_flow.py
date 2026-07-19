@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from app.main import app
 from app.routers import publish as publish_router
-from app.services.publish_readiness import SendReadinessBlocked
+from app.services.publish_readiness import PublishPlatformIsolationBlocked, SendReadinessBlocked
 
 
 def _headers() -> dict[str, str]:
@@ -69,3 +69,22 @@ def test_review_cannot_be_marked_published_without_platform_evidence():
         json={"platform_url": ""},
     )
     assert response.status_code in {400, 422}
+
+
+def test_mixed_platform_target_batch_returns_conflict(monkeypatch):
+    def blocked(_payload):
+        raise PublishPlatformIsolationBlocked("抖音和 B站任务不能混合操作")
+
+    monkeypatch.setattr(publish_router.publish_service, "update_publish_jobs_target_batch", blocked)
+    response = TestClient(app).patch(
+        "/api/publish/jobs/target-batch",
+        headers=_headers(),
+        json={
+            "job_ids": ["douyin-job", "bilibili-job"],
+            "platform": "douyin",
+            "account_id": "account-1",
+            "publish_mode": "local_browser",
+        },
+    )
+    assert response.status_code == 409
+    assert "不能混合" in response.json()["detail"]

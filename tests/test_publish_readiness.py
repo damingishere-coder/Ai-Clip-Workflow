@@ -200,7 +200,7 @@ def _raw(job_id: str) -> dict:
         return dict(connection.execute("SELECT * FROM publish_jobs WHERE id = ?", (job_id,)).fetchone())
 
 
-def test_unique_logged_account_converts_legacy_job_then_reaches_worker(tmp_path):
+def test_unique_logged_account_keeps_legacy_job_and_creates_replacement(tmp_path):
     account_id = _insert_account()
     job_id = _insert_job(tmp_path)
     worker = FakeWorker()
@@ -208,11 +208,16 @@ def test_unique_logged_account_converts_legacy_job_then_reaches_worker(tmp_path)
 
     scheduled = scheduler.publish_now(job_id)
     assert scheduled["status"] == "scheduled"
-    assert _raw(job_id)["account_id"] == account_id
-    assert _raw(job_id)["publish_mode"] == "local_browser"
+    replacement_id = scheduled["job_id"]
+    assert replacement_id != job_id
+    assert _raw(job_id)["status"] == "NEED_REVIEW"
+    assert _raw(job_id)["publish_mode"] == "opencli_publish"
+    assert _raw(replacement_id)["account_id"] == account_id
+    assert _raw(replacement_id)["publish_mode"] == "local_browser"
 
     scheduler.run_once()
-    assert _raw(job_id)["status"] == "PUBLISHED"
+    assert _raw(job_id)["status"] == "NEED_REVIEW"
+    assert _raw(replacement_id)["status"] == "PUBLISHED"
     assert len(worker.publish_calls) == 1
 
 
@@ -248,7 +253,7 @@ def test_safe_repair_keeps_original_and_creates_local_browser_replacement(tmp_pa
     worker = FakeWorker()
     scheduler = PublishScheduler(worker_client=worker)
 
-    result = scheduler.repair_and_publish(source_id)
+    result = scheduler.repair_and_publish(source_id, visibility="private")
     replacement_id = result["job_id"]
     assert _raw(source_id)["status"] == "NEED_REVIEW"
     replacement = _raw(replacement_id)
@@ -256,6 +261,11 @@ def test_safe_repair_keeps_original_and_creates_local_browser_replacement(tmp_pa
     assert replacement["publish_mode"] == "local_browser"
     assert replacement["account_id"] == account_id
     assert replacement["status"] == "SCHEDULED"
+    assert replacement["visibility"] == "private"
+
+    repeated = scheduler.repair_and_publish(source_id)
+    assert repeated["status"] == "already_created"
+    assert repeated["job_id"] == replacement_id
 
     scheduler.run_once()
     assert _raw(source_id)["status"] == "NEED_REVIEW"

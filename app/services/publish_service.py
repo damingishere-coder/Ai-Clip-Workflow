@@ -37,6 +37,7 @@ from app.services.publish_providers import (
     PublishProviderError,
 )
 from app.services.publish_domain import PUBLISH_MODES, TARGET_PLATFORMS
+from app.services.publish_readiness import PublishPlatformIsolationBlocked
 from app.services.storage_service import get_artifact_paths, resolve_video_file_path
 from app.services.video_cut_service import ensure_ffmpeg_available, sanitize_filename_part, summarize_stderr
 
@@ -61,6 +62,30 @@ STATUS_TONES = {
     "published": "green",
     "failed": "red",
     "cancelled": "amber",
+}
+
+EXECUTION_PHASE_LABELS = {
+    "claimed": "正在领取任务",
+    "received": "Worker 已接收",
+    "browser_opening": "正在打开抖音",
+    "browser_opened": "抖音页面已打开",
+    "upload_started": "已选择视频",
+    "upload_waiting": "正在上传并解析视频",
+    "upload_completed": "视频上传完成",
+    "title_filled": "标题已填写",
+    "description_filled": "正文和话题已填写",
+    "form_verified_before_cover": "内容校验通过",
+    "recommended_cover_ready": "推荐封面已生成",
+    "recommended_cover_clicked": "正在设置推荐封面",
+    "recommended_cover_confirmed": "推荐封面已确认",
+    "recommended_cover_verified": "推荐封面已生效",
+    "form_verified_before_submit": "发布内容最终校验通过",
+    "visibility_verified": "可见范围已验证",
+    "precise_publish_clicked": "正在点击发布",
+    "submit_clicked": "已提交，等待平台结果",
+    "publish_result_checked": "正在确认发布结果",
+    "manual_review_waiting": "已暂停，等待人工处理",
+    "confirmed_success": "平台已确认发布成功",
 }
 
 VIDEO_SOURCE_LABELS = {
@@ -473,6 +498,7 @@ def _normalize_config(row) -> dict:
 
 def _normalize_account(row) -> dict:
     account = dict(row)
+    login_status = account.get("login_status") or "login_required"
     account.update(
         {
             "platform_label": PLATFORM_LABELS.get(account.get("platform"), account.get("platform")),
@@ -480,7 +506,13 @@ def _normalize_account(row) -> dict:
             "refresh_token_masked": _mask_secret(account.get("refresh_token")),
             "is_authorized": account.get("authorization_status") == "authorized",
             "auth_type": account.get("auth_type") or "browser_profile",
-            "login_status": account.get("login_status") or "login_required",
+            "login_status": login_status,
+            "login_status_label": {
+                "normal": "正常",
+                "invalid": "登录失效",
+                "login_pending": "等待登录完成",
+                "busy": "账号操作中",
+            }.get(login_status, "需要重新登录"),
             "login_message": account.get("login_message") or "",
         }
     )
@@ -530,6 +562,8 @@ def _normalize_job(
     error_message = job.get("error_message") or job.get("last_error") or ""
     schedule_timezone = job.get("schedule_timezone") or "Asia/Shanghai"
     scheduled_at_utc = job.get("scheduled_at") or ""
+    execution_phase = str(job.get("execution_phase") or "")
+    execution_phase_label = EXECUTION_PHASE_LABELS.get(execution_phase, execution_phase)
     scheduled_at_local = ""
     if scheduled_at_utc:
         try:
@@ -570,7 +604,12 @@ def _normalize_job(
             "last_error": job.get("last_error") or error_message,
             "attempt_count": int(job.get("attempt_count") or job.get("retry_count") or 0),
             "platform_label": PLATFORM_LABELS.get(job.get("platform"), job.get("platform")),
-            "status_label": STATUS_LABELS.get(status, status),
+            "status_label": (
+                execution_phase_label
+                if status == PUBLISH_STATUS_PUBLISHING and execution_phase_label
+                else STATUS_LABELS.get(status, status)
+            ),
+            "execution_phase_label": execution_phase_label,
             "status_tone": STATUS_TONES.get(status, "blue"),
             "video_source_label": VIDEO_SOURCE_LABELS.get(job.get("video_source"), job.get("video_source")),
             "publish_mode_label": PUBLISH_MODE_LABELS.get(job.get("publish_mode"), job.get("publish_mode")),
@@ -755,11 +794,18 @@ def check_browser_account(account_id: str) -> dict:
     from app.services.publishers.worker_client import PublishWorkerClient
 
     result = PublishWorkerClient().check_account(account["platform"], account_id)
-    normal = str(result.get("login_status") or "") == "normal"
+    worker_status = str(result.get("login_status") or "").lower()
+    normal = worker_status == "normal"
     previous_login = str(account.get("login_status") or "") == "normal" or bool(account.get("last_login_at"))
+    if normal:
+        stored_status = "normal"
+    elif worker_status in {"busy", "login_pending"}:
+        stored_status = worker_status
+    else:
+        stored_status = "invalid" if previous_login else "login_required"
     PublishRepository().update_account_status(
         account_id,
-        "normal" if normal else ("invalid" if previous_login else "login_required"),
+        stored_status,
         str(result.get("message") or ""),
         logged_in=normal,
     )
@@ -770,10 +816,13 @@ def start_browser_account_login(account_id: str) -> dict:
     account = get_account(account_id)
     if not account:
         raise ValueError("发布账号不存在")
+    from app.services.publish_repository import PublishRepository
     from app.services.publishers.worker_client import PublishWorkerClient
 
     result = PublishWorkerClient().start_login(account["platform"], account_id)
-    return {"status": "started", "message": result.get("message") or "已打开登录窗口", "account": account}
+    message = str(result.get("message") or "已打开登录窗口")
+    PublishRepository().update_account_status(account_id, "login_pending", message)
+    return {"status": "started", "message": message, "account": get_account(account_id)}
 
 
 def open_browser_creator_center(account_id: str) -> dict:
@@ -1257,7 +1306,10 @@ def _insert_opencli_job(item: dict, platform: str, metadata: dict, cover: dict |
     return get_publish_job(job_id)
 
 
-def refresh_send_queue(use_ai: bool = False) -> dict:
+def refresh_send_queue(use_ai: bool = False, platform: str | None = None) -> dict:
+    if platform and platform not in PLATFORM_LABELS:
+        raise ValueError("只支持补充抖音或 B站发送任务")
+    target_platforms = [platform] if platform else list(PLATFORM_LABELS)
     created: list[dict] = []
     updated_covers = 0
     skipped = 0
@@ -1276,8 +1328,8 @@ def refresh_send_queue(use_ai: bool = False) -> dict:
                     errors.append(f"{item.get('output_file_name') or item.get('output_clip_id')} / 自动封面：{exc}")
             return cover_state["cover"] or {}
 
-        for platform in PLATFORM_LABELS:
-            existing_job = _find_active_publish_job(item["output_clip_id"], platform)
+        for target_platform in target_platforms:
+            existing_job = _find_active_publish_job(item["output_clip_id"], target_platform)
             if existing_job:
                 skipped += 1
                 if existing_job.get("publish_mode") == "opencli_publish" and not existing_job.get("cover_file_path"):
@@ -1289,9 +1341,12 @@ def refresh_send_queue(use_ai: bool = False) -> dict:
             try:
                 if item_metadata is None:
                     item_metadata = generate_publish_metadata(item, use_ai=use_ai)
-                created.append(_insert_opencli_job(item, platform, item_metadata, ensure_cover_for_item()))
+                created.append(_insert_opencli_job(item, target_platform, item_metadata, ensure_cover_for_item()))
             except Exception as exc:
-                errors.append(f"{item.get('output_file_name') or item.get('output_clip_id')} / {PLATFORM_LABELS[platform]}：{exc}")
+                errors.append(
+                    f"{item.get('output_file_name') or item.get('output_clip_id')} / "
+                    f"{PLATFORM_LABELS[target_platform]}：{exc}"
+                )
                 if item_metadata is None:
                     item_metadata = {}
     return {
@@ -1853,6 +1908,10 @@ def update_publish_job_target(job_id: str, payload: PublishJobTargetUpdate) -> d
         raise ValueError("发布任务不存在")
     if job.get("status") not in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_SCHEDULED}:
         raise ValueError("当前状态不能修改发布平台或账号")
+    if payload.platform != job.get("platform"):
+        raise PublishPlatformIsolationBlocked("任务平台创建后不可修改；请到对应平台任务中选择账号")
+    if job.get("publish_mode") == "opencli_publish":
+        raise PublishPlatformIsolationBlocked("旧版任务不能覆盖转换；请使用“转换并发送”保留原记录并创建新任务")
     account_id = (payload.account_id or "").strip()
     if payload.publish_mode == "local_browser":
         account = get_account(account_id)
@@ -1878,6 +1937,12 @@ def update_publish_job_target(job_id: str, payload: PublishJobTargetUpdate) -> d
 
 
 def update_publish_jobs_target_batch(payload: PublishBatchTargetUpdate) -> dict:
+    jobs = [get_publish_job(job_id) for job_id in payload.job_ids]
+    if any(job is None for job in jobs):
+        raise ValueError("部分发布任务不存在")
+    platforms = {str(job.get("platform") or "") for job in jobs if job}
+    if len(platforms) != 1 or payload.platform not in platforms:
+        raise PublishPlatformIsolationBlocked("抖音和 B站任务不能混合操作，也不能批量改成另一个平台")
     updated = []
     single = PublishJobTargetUpdate(
         platform=payload.platform,
@@ -1998,8 +2063,11 @@ def _hashtags(tags: str) -> str:
 
 
 def _douyin_description_for_job(job: dict, fallback_title: str) -> str:
-    description = _sanitize_publish_description(job.get("description") or fallback_title, fallback_title)
-    tag_text = _hashtags(job.get("tags") or "")
+    description = _sanitize_publish_description(
+        job.get("description") or job.get("caption") or fallback_title,
+        fallback_title,
+    )
+    tag_text = _hashtags(job.get("tags") or job.get("hashtags") or "")
     parts = [description] if description else []
     if tag_text:
         parts.append(tag_text)
@@ -2234,11 +2302,19 @@ def _douyin_verify_publish_ready_script(title: str, description: str) -> str:
         "if(expectedCompact&&(!actualCompact||(!actualCompact.includes(expectedCompact)&&!(bodyPiece&&actualCompact.includes(bodyPiece))))){throw new Error('douyin_description_missing_after_set');}"
         "const titleActual=titleValue();"
         "if(compact(expectedTitle)&&!compact(titleActual).includes(compact(expectedTitle).slice(0,12))){throw new Error('douyin_title_missing_after_set');}"
-        "const previewLabels=['预览视频','预览封面/标题','预览封面','平台投稿预览'];"
-        "const previewRoots=[...document.querySelectorAll('section,aside,div')].filter((el)=>visible(el)&&previewLabels.some((label)=>textOf(el).includes(label)));"
-        "const previewReady=previewRoots.some((root)=>[...root.querySelectorAll('img,video,canvas')].some(visible));"
+        "const busyMarkers=['文件解析中','正在上传','上传中','视频处理中','正在处理','转码中','等待上传','请等待上传完成','上传过程中请不要删除','上传过程中请勿删除'];"
+        "const explanatoryMarkers=['点击发布后','如作品还在上传中','上传发布完成','视频预览功能','实际播放时'];"
+        "const statusTexts=[...document.querySelectorAll('span,div,p')].filter(visible).map(textOf).filter((text)=>text&&text.length<=40&&!explanatoryMarkers.some((item)=>text.includes(item)));"
+        "const progress=[...document.querySelectorAll('span,div,p')].filter(visible).map(textOf).filter((text)=>/^\\d{1,3}%$/.test(text)).map((text)=>Number(text.slice(0,-1))).filter(Number.isFinite);"
+        "const stillBusy=busyMarkers.some((item)=>statusTexts.some((text)=>text===item||text.startsWith(`${item}，`)||text.startsWith(`${item},`)||text.startsWith(`${item}：`)||text.startsWith(`${item}:`)||text.startsWith(`${item}...`)||text.startsWith(`${item}…`)))||progress.some((value)=>value<100);"
+        "const badImage=(src)=>/logo|avatar|favicon|icon|douyin-creator-logo|static\\/image/i.test(src||'');"
+        "const videos=[...document.querySelectorAll('video')].filter((el)=>visible(el)&&(el.videoWidth>0||el.readyState>=2||Number.isFinite(el.duration)));"
+        "const canvases=[...document.querySelectorAll('canvas')].filter((el)=>{const rect=el.getBoundingClientRect();return visible(el)&&el.width>=160&&el.height>=90&&rect.width>=120&&rect.height>=80;});"
+        "const images=[...document.querySelectorAll('img')].filter((el)=>{const rect=el.getBoundingClientRect();const src=el.currentSrc||el.src||'';return visible(el)&&!badImage(src)&&el.complete!==false&&el.naturalWidth>=240&&el.naturalHeight>=135&&rect.width>=120&&rect.height>=80;});"
+        "const previewCount=videos.length+canvases.length+images.length;"
+        "const previewReady=!stillBusy&&previewCount>0;"
         "if(!previewReady){throw new Error('douyin_preview_not_ready');}"
-        "return {publish_ready:true,title_checked:true,description_checked:true,preview_checked:true,description_length:actualDescription.length,preview_roots:previewRoots.length};"
+        "return {publish_ready:true,title_checked:true,description_checked:true,preview_checked:true,description_length:actualDescription.length,preview_count:previewCount};"
         "})()"
     )
 
@@ -2264,7 +2340,7 @@ def _douyin_click_publish_script() -> str:
         "const isMatch=(text)=>names.some((name)=>text===name||(text.includes(name)&&text.length<=12))&&!blocked.some((name)=>text.includes(name));"
         "const clickKnownTip=()=>{const tip=[...document.querySelectorAll('button,[role=\"button\"],div,span')].filter(visible).find((el)=>['我知道了','知道了'].includes(textOf(el)));if(tip){tip.click();return true;}return false;};"
         "const findButton=()=>{const seen=new Set();const candidates=[];for(const el of [...document.querySelectorAll('button,[role=\"button\"],a,div,span')]){const text=textOf(el);if(!text||!isMatch(text)){continue;}const clickable=el.closest('button,[role=\"button\"],a')||el;if(seen.has(clickable)||!visible(clickable)){continue;}seen.add(clickable);const rect=clickable.getBoundingClientRect();if(rect.left<180&&text.includes('发布')){continue;}const exact=text==='发布'?0:1;const tag=clickable.tagName==='BUTTON'?0:1;candidates.push({el:clickable,text,rect,score:exact*10+tag});}return candidates.sort((a,b)=>a.score-b.score||b.rect.top-a.rect.top||b.rect.left-a.rect.left)[0];};"
-        "const started=Date.now();let lastTexts=[];while(Date.now()-started<45000){clickKnownTip();let found=findButton();if(found){found.el.scrollIntoView({block:'center',inline:'center'});await sleep(500);found=findButton()||found;setTimeout(()=>found.el.click(),50);return {click_scheduled:true,text:found.text,waited_ms:Date.now()-started};}lastTexts=[...document.querySelectorAll('button,[role=\"button\"],a')].filter(visible).map(textOf).filter(Boolean).slice(-20);window.scrollTo({top:document.documentElement.scrollHeight||document.body.scrollHeight,behavior:'instant'});await sleep(1000);}"
+        "const started=Date.now();let lastTexts=[];while(Date.now()-started<45000){clickKnownTip();let found=findButton();if(found){found.el.scrollIntoView({block:'center',inline:'center'});await sleep(500);found=findButton()||found;found.el.click();await sleep(500);return {clicked:true,text:found.text,waited_ms:Date.now()-started};}lastTexts=[...document.querySelectorAll('button,[role=\"button\"],a')].filter(visible).map(textOf).filter(Boolean).slice(-20);window.scrollTo({top:document.documentElement.scrollHeight||document.body.scrollHeight,behavior:'instant'});await sleep(1000);}"
         "throw new Error('douyin_publish_button_not_found:'+lastTexts.join('|'));"
         "})()"
     )
@@ -2792,9 +2868,30 @@ def _ready_opencli_job_ids(job_ids: list[str] | None = None) -> list[str]:
     return [row["id"] for row in rows]
 
 
+def _require_same_platform_batch(job_ids: list[str]) -> None:
+    if not job_ids:
+        return
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"SELECT id, platform FROM publish_jobs WHERE id IN ({','.join('?' for _ in job_ids)})",
+            job_ids,
+        ).fetchall()
+    platforms = {str(row["platform"] or "") for row in rows}
+    if len(platforms) > 1:
+        raise PublishPlatformIsolationBlocked("抖音和 B站任务不能混合发送，请在发送中心切换平台后分别操作")
+    with get_connection() as connection:
+        legacy_count = connection.execute(
+            f"SELECT COUNT(*) FROM publish_jobs WHERE id IN ({','.join('?' for _ in job_ids)}) AND publish_mode = 'opencli_publish'",
+            job_ids,
+        ).fetchone()[0]
+    if int(legacy_count) and len(job_ids) > 1:
+        raise PublishPlatformIsolationBlocked("旧版排期必须逐条点击“转换并发送”，不能批量补发")
+
+
 def run_opencli_send_batch(job_ids: list[str] | None = None, runner: CommandRunner | None = None) -> dict:
     del runner
     ids = _ready_opencli_job_ids(job_ids)
+    _require_same_platform_batch(ids)
     from app.services.publish_scheduler import PublishScheduler
 
     scheduler = PublishScheduler()
@@ -2811,6 +2908,7 @@ def run_opencli_send_batch(job_ids: list[str] | None = None, runner: CommandRunn
 
 def start_opencli_send_batch(payload: PublishSendStart, background_tasks: Any | None = None) -> dict:
     ids = _ready_opencli_job_ids(payload.job_ids)
+    _require_same_platform_batch(ids)
     if not ids:
         return {"status": "empty", "message": "当前没有可加入调度器的任务。", **get_publish_center_context()}
     from app.services.publish_scheduler import PublishScheduler

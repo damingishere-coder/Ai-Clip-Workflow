@@ -16,9 +16,9 @@ from app.services.publishers.base import (
     PublishValidationError,
     job_caption,
     job_hashtags,
-    split_hashtags,
 )
 from app.services.publishers.browser_runtime import BrowserRuntime
+from app.services.publishers import page_scripts
 
 
 class DouyinPublisher(BasePlatformPublisher):
@@ -75,6 +75,7 @@ class DouyinPublisher(BasePlatformPublisher):
         self.validate(job)
         payload = self.build_payload(job)
         submitted = False
+        evidence: dict[str, Any] = {}
         with self.runtime.page(self.creator_url) as page:
             try:
                 self.runtime.detect_manual_challenge(page)
@@ -87,51 +88,96 @@ class DouyinPublisher(BasePlatformPublisher):
                     raise PublishError("未找到抖音视频上传入口", "platform_form_changed")
                 self.runtime.phase("upload_started", {"video": Path(payload["video_path"]).name})
                 upload.set_input_files(payload["video_path"])
-
-                ready = self.runtime.wait_for_text(
+                upload_result = self.runtime.wait_for_script_state(
                     page,
-                    ("重新上传", "视频上传成功", "作品描述", "发布设置"),
+                    page_scripts.douyin_upload_state(),
+                    phase="upload_waiting",
+                    ready_key="upload_ready",
                     timeout_seconds=600,
+                    timeout_error_code="video_upload_timeout",
+                    timeout_message="抖音视频上传或解析超时",
+                    stable_polls=2,
                 )
-                if not ready:
-                    raise PublishError("抖音视频上传超时", "video_upload_timeout")
-                self.runtime.phase("upload_completed", None)
+                evidence["upload"] = upload_result
+                self.runtime.phase("upload_completed", upload_result)
 
-                self.runtime.fill_first(page, (
-                    'input[placeholder*="作品标题"]',
-                    'input[placeholder*="填写标题"]',
-                    'input[placeholder*="标题"]',
-                ), payload["title"])
-                content = payload["caption"]
-                if payload["hashtags"]:
-                    tags = " ".join(f"#{part}" for part in split_hashtags(payload["hashtags"]))
-                    content = f"{content}\n{tags}".strip()
-                self.runtime.fill_first(page, (
-                    'div[contenteditable="true"][data-placeholder*="作品描述"]',
-                    'div[contenteditable="true"][data-placeholder*="简介"]',
-                    'div[contenteditable="true"]',
-                    'textarea[placeholder*="作品描述"]',
-                ), content)
-
-                self._set_cover(page, payload.get("cover_file_path") or "")
-                self._set_visibility(page, payload.get("visibility") or "public")
+                content = page_scripts.douyin_description(job, payload["title"])
+                evidence["preview_tip"] = self.runtime.evaluate_script(
+                    page, page_scripts.douyin_close_preview_tip(), phase="preview_tip_closed"
+                )
+                evidence["title"] = self.runtime.evaluate_script(
+                    page, page_scripts.fill_title(payload["title"]), phase="title_filled"
+                )
+                evidence["description"] = self.runtime.evaluate_script(
+                    page,
+                    page_scripts.douyin_set_description(content),
+                    phase="description_filled",
+                )
+                evidence["form_before_cover"] = self.runtime.evaluate_script(
+                    page,
+                    page_scripts.douyin_verify_ready(payload["title"], content),
+                    phase="form_verified_before_cover",
+                )
+                evidence["recommended_cover_ready"] = self.runtime.evaluate_script(
+                    page,
+                    page_scripts.douyin_wait_recommended_cover(),
+                    phase="recommended_cover_ready",
+                    default_error_code="douyin_ai_cover_not_ready",
+                )
+                evidence["recommended_cover_click"] = self.runtime.evaluate_script(
+                    page,
+                    page_scripts.douyin_click_recommended_cover(),
+                    phase="recommended_cover_clicked",
+                )
+                evidence["recommended_cover_confirm"] = self.runtime.evaluate_script(
+                    page,
+                    page_scripts.douyin_confirm_cover(),
+                    phase="recommended_cover_confirmed",
+                )
+                evidence["recommended_cover"] = self.runtime.evaluate_script(
+                    page,
+                    page_scripts.douyin_verify_cover(),
+                    phase="recommended_cover_verified",
+                )
+                evidence["form_before_submit"] = self.runtime.evaluate_script(
+                    page,
+                    page_scripts.douyin_verify_ready(payload["title"], content),
+                    phase="form_verified_before_submit",
+                )
+                evidence["visibility"] = self.runtime.evaluate_script(
+                    page,
+                    page_scripts.douyin_set_visibility(payload.get("visibility") or "public"),
+                    phase="visibility_verified",
+                    default_error_code="douyin_visibility_not_applied",
+                )
                 self.runtime.detect_manual_challenge(page)
-                self.runtime.phase("submit_clicked", None)
+                click_result = self.runtime.evaluate_script(
+                    page,
+                    page_scripts.douyin_click_publish(),
+                    phase="precise_publish_clicked",
+                    default_error_code="douyin_publish_button_not_found",
+                )
+                if not click_result.get("clicked"):
+                    raise PublishError("抖音发布按钮没有返回已点击证据", "douyin_publish_click_not_confirmed")
                 submitted = True
-                self.runtime.click_first(page, (
-                    'button:has-text("发布")',
-                    '[role="button"]:has-text("发布")',
-                ))
-
-                success = self.runtime.wait_for_text(page, ("发布成功", "作品发布成功", "投稿成功"), 120)
-                platform_url = self.runtime.extract_link(page, ("/video/", "/creator-micro/content/manage"))
-                if not success and "/content/manage" not in page.url:
+                evidence["click"] = click_result
+                self.runtime.phase("submit_clicked", click_result)
+                confirmation = self.runtime.evaluate_script(
+                    page,
+                    page_scripts.douyin_wait_result(payload["title"]),
+                    phase="publish_result_checked",
+                    default_error_code="douyin_publish_not_confirmed",
+                )
+                if not confirmation.get("publish_confirmed"):
                     raise PublishNeedsReview(
-                        "已点击抖音发布，但未能确认最终结果，请在创作者中心核对",
+                        "抖音没有返回可验证的发布成功证据，请在创作者中心核对",
                         "publish_result_uncertain",
                     )
-                if not platform_url and "/content/manage" in page.url:
-                    platform_url = page.url
+                evidence["confirmation"] = confirmation
+                platform_url = self.runtime.extract_link(page, ("/video/", "/creator-micro/content/manage"))
+                confirmed_url = str(confirmation.get("url") or page.url or "")
+                if not platform_url and "/manage" in confirmed_url:
+                    platform_url = confirmed_url
                 remote_id = self.runtime.extract_remote_id(platform_url)
                 self.runtime.phase("confirmed_success", {"platform_url": platform_url, "remote_video_id": remote_id})
                 return PublishResult(
@@ -140,20 +186,35 @@ class DouyinPublisher(BasePlatformPublisher):
                     remote_video_id=remote_id,
                     platform_url=platform_url,
                     published_at=utc_now_iso(),
-                    provider_response={"success_marker": success, "final_url": page.url},
+                    provider_response={
+                        **evidence,
+                        "final_url": confirmed_url,
+                    },
                 )
-            except PublishNeedsReview:
-                raise
             except Exception as exc:
-                self.runtime.screenshot(page, "douyin-publish-error")
+                screenshot = self.runtime.screenshot(page, "douyin-publish-error")
+                error_code = (
+                    exc.error_code if isinstance(exc, PublishError) else "douyin_publish_failed"
+                )
+                message = (
+                    exc.message if isinstance(exc, PublishError) else str(exc)
+                )
+                diagnostic = {**evidence, "screenshot": screenshot, "submitted": submitted}
+                self.runtime.hold_for_manual_review(
+                    page,
+                    message,
+                    error_code,
+                    evidence=diagnostic,
+                )
                 if submitted:
                     raise PublishNeedsReview(
-                        f"抖音投稿结果不确定，请人工确认。{exc}",
+                        f"抖音投稿结果不确定，请人工确认。{message}",
                         "publish_result_uncertain",
                     ) from exc
-                if isinstance(exc, PublishError):
+                if isinstance(exc, PublishNeedsReview):
                     raise
-                raise PublishError(str(exc), "douyin_publish_failed") from exc
+                # 失败窗口允许用户人工操作，因此即使错误发生在点击前，也不能再自动重试。
+                raise PublishNeedsReview(message, error_code) from exc
 
     def _page_logged_in(self, page: Any) -> bool:
         text = self.runtime.body_text(page)

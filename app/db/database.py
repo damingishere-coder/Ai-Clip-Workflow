@@ -925,7 +925,7 @@ def _cancel_duplicate_active_publish_jobs(connection: sqlite3.Connection) -> Non
         """
         SELECT output_clip_id, platform, publish_mode
         FROM publish_jobs
-        WHERE status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
+        WHERE status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'PUBLISHING')
         GROUP BY output_clip_id, platform, publish_mode
         HAVING COUNT(*) > 1
         """
@@ -937,7 +937,7 @@ def _cancel_duplicate_active_publish_jobs(connection: sqlite3.Connection) -> Non
             SELECT id, provider_response
             FROM publish_jobs
             WHERE output_clip_id = ? AND platform = ? AND publish_mode = ?
-              AND status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
+              AND status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'PUBLISHING')
             ORDER BY COALESCE(NULLIF(updated_at, ''), created_at) DESC, created_at DESC, id DESC
             """,
             (group["output_clip_id"], group["platform"], group["publish_mode"]),

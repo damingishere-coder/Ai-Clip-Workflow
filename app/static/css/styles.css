@@ -5098,6 +5098,31 @@ td a,
   gap: 14px;
   margin-bottom: 18px;
 }
+.publish-platform-context {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(440px, 1.3fr);
+  align-items: center;
+  gap: 22px;
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid rgba(126, 151, 187, 0.2);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 14px 34px rgba(34, 77, 128, 0.07);
+}
+.publish-platform-context h2 { margin: 3px 0 6px; }
+.publish-platform-context p:last-child { margin: 0; color: var(--muted); }
+.publish-platform-context .publish-platform-switch { margin-bottom: 0; }
+.publish-locked-value {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 13px;
+  border: 1px solid rgba(126, 151, 187, 0.2);
+  border-radius: 12px;
+  color: #21436e;
+  background: #f3f7fc;
+}
 .publish-platform-card {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) auto;
@@ -5165,11 +5190,13 @@ td a,
 
 .publish-account-list { display: grid; gap: 10px; }
 .publish-account-list article { display: grid; gap: 10px; padding: 14px; border: 1px solid rgba(126, 151, 187, 0.18); border-radius: 14px; background: #fff; }
-.publish-account-list article > div:first-child { display: flex; justify-content: space-between; gap: 12px; }
+.publish-account-list article > div:first-child { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; }
+.publish-account-list article > div:first-child [data-account-message] { grid-column: 1 / -1; color: var(--muted); }
 .publish-account-create { margin-top: 24px; padding-top: 20px; border-top: 1px solid rgba(126, 151, 187, 0.22); }
 .publish-selection-bar select { min-width: 110px; }
 
 @media (max-width: 1180px) {
+  .publish-platform-context { grid-template-columns: 1fr; }
   .publish-plan-header { display: none; }
   .publish-plan-row { grid-template-columns: 28px 132px minmax(190px, 1fr); align-items: start; }
   .publish-plan-row > :nth-child(1) { grid-column: 1; grid-row: 1 / 3; }

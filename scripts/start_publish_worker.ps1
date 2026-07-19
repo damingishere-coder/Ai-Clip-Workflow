@@ -1,5 +1,7 @@
 ﻿param(
-    [int]$Port = 8765
+    [int]$Port = 8765,
+    [switch]$SkipDockerSync,
+    [switch]$Restart
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,14 +47,48 @@ if (-not $chromeCandidates) {
 }
 
 $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
-foreach ($listener in $listeners) {
-    $processId = $listener.OwningProcess
+$listenerProcessIds = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
+$reuseWorker = $false
+foreach ($processId in $listenerProcessIds) {
     $commandLine = (Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue).CommandLine
     if ($commandLine -match 'publish_host_worker|opencli_host_bridge') {
-        Write-Host ("正在停止旧发布 Worker：PID {0}" -f $processId)
-        Stop-Process -Id $processId -Force
+        if ($Restart) {
+            Write-Host ("正在重启本项目的发布 Worker：PID {0}" -f $processId)
+            Stop-Process -Id $processId -Force
+            continue
+        }
+        try {
+            $existingHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2
+            $headers = @{ Authorization = "Bearer $workerToken" }
+            Invoke-RestMethod -Uri "http://127.0.0.1:$Port/v1/executions/niuma-health-check" -Headers $headers -TimeoutSec 2 | Out-Null
+            if ($existingHealth.status -eq 'ok' -and $existingHealth.worker -eq 'windows_chrome') {
+                $reuseWorker = $true
+                Write-Host ("检测到健康的发布 Worker，直接复用：PID {0}" -f $processId)
+            }
+        } catch {
+            Write-Host ("旧发布 Worker 无法通过健康或 Token 校验，正在安全重启：PID {0}" -f $processId)
+            Stop-Process -Id $processId -Force
+        }
     } else {
         throw "端口 $Port 已被其他程序占用（PID $processId），为避免误关程序已停止启动。"
+    }
+}
+
+# Stop-Process 返回时，Windows 可能仍需极短时间才能真正释放监听端口。
+# 必须确认端口已经空闲后再启动新进程，否则重复运行脚本时会偶发 WinError 10048。
+if ($listenerProcessIds -and -not $reuseWorker) {
+    $releaseDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $remainingListeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+        if (-not $remainingListeners) {
+            break
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $releaseDeadline)
+
+    if ($remainingListeners) {
+        $remainingProcessIds = @($remainingListeners | Select-Object -ExpandProperty OwningProcess -Unique)
+        throw "旧发布 Worker 已停止，但端口 $Port 在 10 秒内仍未释放（PID：$($remainingProcessIds -join ', ')）。请稍后重新运行脚本。"
     }
 }
 
@@ -63,32 +99,47 @@ if (-not (Test-Path $python)) {
 $workerScript = Join-Path $ProjectRoot 'scripts\publish_host_worker.py'
 $outLog = Join-Path $ProjectRoot "publish_worker_$Port.out.log"
 $errLog = Join-Path $ProjectRoot "publish_worker_$Port.err.log"
-$arguments = @("`"$workerScript`"", '--host', '0.0.0.0', '--port', "$Port")
+$arguments = @("`"$workerScript`"", '--host', '127.0.0.1', '--port', "$Port")
 
+if (-not $reuseWorker) {
 Write-Host ("正在启动 Windows Chrome 发布 Worker：http://127.0.0.1:{0}" -f $Port)
-Start-Process `
+$workerProcess = Start-Process `
     -FilePath $python `
     -ArgumentList $arguments `
     -WorkingDirectory $ProjectRoot `
     -RedirectStandardOutput $outLog `
     -RedirectStandardError $errLog `
-    -WindowStyle Hidden
+    -WindowStyle Hidden `
+    -PassThru
 
-Start-Sleep -Seconds 2
-try {
-    $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 5
-    if ($health.status -ne 'ok') {
-        throw '健康检查返回异常状态。'
+$health = $null
+foreach ($attempt in 1..20) {
+    Start-Sleep -Milliseconds 500
+    if ($workerProcess.HasExited) {
+        break
     }
+    try {
+        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2
+        if ($health.status -eq 'ok') {
+            break
+        }
+        $health = $null
+    } catch {
+        # Worker 或端口仍在初始化，继续等待，最多等待约 10 秒。
+    }
+}
+
+if ($health -and $health.status -eq 'ok' -and -not $workerProcess.HasExited) {
     Write-Host '发布 Worker 已启动。登录账号时会打开牛马片场专属 Chrome 窗口。'
-} catch {
+} else {
     throw "发布 Worker 未能启动。请查看日志：$errLog"
+}
 }
 
 # Docker 容器只会在创建时读取 .env。这里自动重建正在运行的 Web 容器，
 # 让刚生成的 Worker Token 和当前 compose 连接地址立即生效；SQLite 与任务目录均为挂载卷，不会被删除。
 $docker = Get-Command docker -ErrorAction SilentlyContinue
-if ($docker) {
+if ($docker -and -not $SkipDockerSync) {
     try {
         $runningServices = @(docker compose ps --services --status running 2>$null)
         if ($runningServices -contains 'workflow') {

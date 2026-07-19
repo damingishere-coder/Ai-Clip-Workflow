@@ -19,12 +19,13 @@ v1.5.0 将抖音和 B站的立即发送、定时发送统一到 `PublishSchedule
 
 ### 单条真实灰度发布
 
-1. 在项目目录运行 `./scripts/start_publish_worker.ps1`，启动带 Token 的 Windows Worker。
+1. 在项目目录运行 `.\scripts\start_niuma_studio.ps1`，一次启动 Windows Worker、Docker 和发送中心；脚本还会确认发布调度器正在运行，必要时只重启本项目的 `workflow` 服务。
 2. 打开 `/publish` 的“内容准备 → 账号管理”，分别新增抖音和 B站账号，再点击“打开登录窗口”。
 3. 在系统 Chrome 独立窗口内完成二维码、短信或平台要求的人工验证，然后回到页面点击“检查登录”。
 4. 只选择一条用户确认可发布的短测试视频，核对标题、正文、话题、封面、平台账号和可见范围。
 5. 点击“立即发送”后，任务先进入 `SCHEDULED`，再由 Scheduler 领取为 `PUBLISHING`；平台确认成功后进入 `PUBLISHED`。
 6. 若出现登录、验证码、风控或结果不确定，任务应进入 `NEED_REVIEW`，先打开平台创作者中心核对，不能直接重试。
+7. 抖音会等待真实上传和解析完成后再填写内容；失败窗口默认保留 10 分钟，方便查看原因或人工处理。
 
 ### 排期 API
 
@@ -119,7 +120,7 @@ http://127.0.0.1:8001
 
 - 应用启动时会自动启动 `PublishScheduler`，默认每 5 秒扫描一次 `publish_jobs`。
 - 默认发布方式是 `local_browser`；Docker 中的 FastAPI 通过 `PUBLISH_WORKER_URL=http://host.docker.internal:8765` 调用 Windows Worker。
-- 一键启动 Worker：`./scripts/start_publish_worker.ps1`；兼容脚本 `./scripts/start_docker_opencli.ps1` 现在也会先启动同一个 Worker，再启动 Docker。
+- 推荐一键启动：`.\scripts\start_niuma_studio.ps1`，会启动或复用健康 Worker、启动 Docker、检查连接并打开发送中心；单独维护 Worker 时仍可运行 `.\scripts\start_publish_worker.ps1`。
 - 可选的 `manual_export` 会把发布包导出到 `outputs/publish_packages/{task_id}/{clip_id}/`；发布包包含 `clip.mp4`、`title.txt`、`caption.txt`、`hashtags.txt`、`cover_text.txt`、`publish_plan.json` 和 `metadata.json`，成功状态为 `EXPORTED`。
 - 手动执行一次扫描：
 
@@ -163,10 +164,10 @@ pytest --cov=app --cov-report=term-missing
 
 ## Docker 启动
 
-推荐启动方式：Docker 一键启动。
+推荐启动方式：牛马片场一键启动，同时包含真实发送所需的 Windows Worker。
 
 ```powershell
-docker compose up --build
+.\scripts\start_niuma_studio.ps1
 ```
 
 启动后在浏览器打开：

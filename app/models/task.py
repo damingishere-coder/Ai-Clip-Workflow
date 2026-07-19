@@ -168,6 +168,7 @@ class PublishJobScheduleUpdate(BaseModel):
 
 class PublishBatchScheduleUpdate(BaseModel):
     job_ids: list[str] = Field(default_factory=list)
+    platform: Optional[Literal["douyin", "bilibili"]] = None
     action: Literal["apply", "clear"] = "apply"
     start_at_local: Optional[str] = Field(default="", max_length=80)
     timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=80)
@@ -236,6 +237,7 @@ class PublishSendStart(BaseModel):
 
 class PublishRetryRequest(BaseModel):
     scheduled_at: Optional[str] = Field(default="", max_length=80)
+    visibility: Optional[Literal["public", "friends", "private"]] = None
 
 
 class PublishMarkPublishedRequest(BaseModel):

@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import socket
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -15,6 +16,7 @@ from app.core.config import settings
 from app.db.database import get_connection, init_db
 from app.services.publish_executor import execute_publish_job
 from app.services.publish_readiness import (
+    PublishPlatformIsolationBlocked,
     SendReadinessBlocked,
     build_send_readiness,
     list_account_snapshots,
@@ -234,6 +236,15 @@ class PublishScheduler:
         if status != "SCHEDULED":
             return {"status": "skipped", "job_id": job_id, "message": f"任务状态为 {status}"}
 
+        # 旧版 OpenCLI 排期不得由新调度器静默补发。先转入人工复核，
+        # 只有用户在对应平台逐条确认后，才会创建新的 Windows Chrome 任务。
+        if str(job.get("publish_mode") or "") == "opencli_publish":
+            return self._mark_need_review(
+                job_id,
+                "legacy_schedule_requires_confirmation",
+                "旧版排期已暂停，未执行上传；请选择对应平台账号后逐条转换并发送",
+            )
+
         readiness = build_send_readiness(
             job,
             accounts=list_account_snapshots(),
@@ -313,6 +324,16 @@ class PublishScheduler:
         if str(job.get("status") or "").upper() not in {"DRAFT", "WAITING", "SCHEDULED"}:
             raise ValueError("只有草稿、等待或已排期任务可以立即发送")
         readiness = self._require_ready_jobs([job_id], resolve_legacy=True, check_worker=True)[job_id]
+        if str(job.get("publish_mode") or "") == "opencli_publish":
+            self._mark_need_review(
+                job_id,
+                "legacy_schedule_requires_confirmation",
+                "旧版任务已暂停；正在保留原记录并创建新的 Windows Chrome 投稿任务",
+            )
+            return self.repair_and_publish(
+                job_id,
+                account_id=str(readiness.get("resolved_account_id") or ""),
+            )
         now = utc_now_iso()
         with get_connection() as connection:
             cursor = connection.execute(
@@ -346,7 +367,13 @@ class PublishScheduler:
         wake_scheduler()
         return {"status": "scheduled", "job_id": job_id, "scheduled_at": now, "job": self._public_job(job_id)}
 
-    def retry_failed(self, job_id: str, scheduled_at: str | None = None) -> dict[str, Any]:
+    def retry_failed(
+        self,
+        job_id: str,
+        scheduled_at: str | None = None,
+        *,
+        visibility: str | None = None,
+    ) -> dict[str, Any]:
         source = self.repository.get_job(job_id)
         if not source:
             raise ValueError("发布任务不存在")
@@ -355,15 +382,44 @@ class PublishScheduler:
         schedule = to_utc_iso(scheduled_at, settings.app_timezone) if scheduled_at else utc_now_iso()
         if scheduled_at:
             ensure_future(scheduled_at, settings.app_timezone)
+        resolved_visibility = str(visibility or source.get("visibility") or "public")
+        if resolved_visibility not in {"public", "friends", "private"}:
+            raise ValueError("可见范围只支持公开、好友可见或仅自己可见")
+        with get_connection() as connection:
+            active = connection.execute(
+                """
+                SELECT id, status FROM publish_jobs
+                WHERE id <> ? AND output_clip_id = ? AND platform = ? AND publish_mode = ?
+                  AND status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'PUBLISHING', 'NEED_REVIEW')
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (
+                    job_id,
+                    source.get("output_clip_id"),
+                    source.get("platform"),
+                    source.get("publish_mode"),
+                ),
+            ).fetchone()
+        if active:
+            raise ValueError(
+                f"同一视频已有任务 {active['id']} 处于 {active['status']}；"
+                "如为人工复核，请先确认平台未发布并标记失败"
+            )
         return self._clone_job_for_retry(
             source,
             scheduled_at=schedule,
             event_type="manual_retry_created",
             event_message=f"由失败任务 {job_id} 创建",
             event_from_status="FAILED",
+            overrides={"visibility": resolved_visibility},
         )
 
-    def repair_and_publish(self, job_id: str, account_id: str = "") -> dict[str, Any]:
+    def repair_and_publish(
+        self,
+        job_id: str,
+        account_id: str = "",
+        visibility: str = "",
+    ) -> dict[str, Any]:
         source = self.repository.get_job(job_id)
         if not source:
             raise ValueError("发布任务不存在")
@@ -374,7 +430,32 @@ class PublishScheduler:
         )
         if str(source.get("status") or "").upper() != "NEED_REVIEW" or not source_readiness["repairable"]:
             raise ValueError("该任务不是明确发生在上传前的旧任务，不能自动修复；请先人工核对平台结果")
-        candidate = {**source, "account_id": account_id.strip() or source.get("account_id") or ""}
+        with get_connection() as connection:
+            existing = connection.execute(
+                """
+                SELECT id FROM publish_jobs
+                WHERE retry_of_job_id = ?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (job_id,),
+            ).fetchone()
+        if existing:
+            existing_id = str(existing["id"])
+            return {
+                "status": "already_created",
+                "job_id": existing_id,
+                "source_job_id": job_id,
+                "job": self._public_job(existing_id),
+                "message": "该旧任务已经创建过替代任务，本次没有重复创建",
+            }
+        resolved_visibility = visibility.strip() or str(source.get("visibility") or "public")
+        if resolved_visibility not in {"public", "friends", "private"}:
+            raise ValueError("可见范围只支持公开、好友可见或仅自己可见")
+        candidate = {
+            **source,
+            "account_id": account_id.strip() or source.get("account_id") or "",
+            "visibility": resolved_visibility,
+        }
         readiness = build_send_readiness(
             candidate,
             accounts=list_account_snapshots(),
@@ -394,6 +475,7 @@ class PublishScheduler:
             overrides={
                 "publish_mode": readiness["resolved_publish_mode"],
                 "account_id": readiness["resolved_account_id"] or None,
+                "visibility": resolved_visibility,
             },
         )
         with get_connection() as connection:
@@ -449,10 +531,15 @@ class PublishScheduler:
             })
             values.update(overrides or {})
             columns = list(values)
-            connection.execute(
-                f"INSERT INTO publish_jobs ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
-                [values[column] for column in columns],
-            )
+            try:
+                connection.execute(
+                    f"INSERT INTO publish_jobs ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                    [values[column] for column in columns],
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(
+                    "同一视频已经存在等待、排期、执行中或人工复核任务；请刷新发送中心后核对"
+                ) from exc
             self.repository.add_event(
                 new_id, event_type, from_status=event_from_status, to_status="SCHEDULED",
                 message=event_message, payload={"retry_of_job_id": source_id}, connection=connection,
@@ -472,12 +559,14 @@ class PublishScheduler:
                 updated_at = parse_datetime(job.get("updated_at")).astimezone(timezone.utc)
             except ValueError:
                 updated_at = datetime.min.replace(tzinfo=timezone.utc)
-            if updated_at > stale_before:
-                continue
             execution_id = str(job.get("execution_id") or "")
             phase = str(job.get("execution_phase") or "unknown")
             details: dict[str, Any] = {}
-            if execution_id:
+            should_check_execution = bool(execution_id) and (
+                updated_at <= stale_before
+                or phase in {"manual_review_waiting", "waiting_platform_result", "submit_clicked"}
+            )
+            if should_check_execution:
                 try:
                     execution = self.worker_client.execution(execution_id)
                     phase = str(execution.get("phase") or phase)
@@ -490,6 +579,26 @@ class PublishScheduler:
                 except Exception:
                     self._mark_need_review(job["id"], "recovery_result_uncertain", "Worker 记录成功但结果数据不完整，请人工确认")
                 recovered += 1
+            elif phase == "manual_review" and details:
+                result = PublishResult.from_dict(details)
+                self._mark_need_review(
+                    job["id"],
+                    result.error_code or "manual_review_required",
+                    result.message or "Worker 已停止自动发送，请人工确认平台结果",
+                    result,
+                )
+                recovered += 1
+            elif phase == "failed" and details:
+                result = PublishResult.from_dict(details)
+                self._mark_failed(
+                    job["id"],
+                    result.error_code or "publish_failed",
+                    result.message or "Worker 已确认发送失败",
+                    result,
+                )
+                recovered += 1
+            elif updated_at > stale_before:
+                continue
             elif phase in {"received", "browser_opening", "browser_opened", "rejected"} and execution_id:
                 self._reschedule_before_upload(job["id"], "应用重启后确认尚未开始上传，已安全重新排队")
                 recovered += 1
@@ -509,6 +618,8 @@ class PublishScheduler:
             raise ValueError("发布任务不存在")
         if str(job.get("status") or "").upper() not in {"DRAFT", "WAITING", "SCHEDULED"}:
             raise ValueError("当前状态不能修改排期；失败任务请使用重试，需复核任务请先人工确认")
+        if str(job.get("publish_mode") or "") == "opencli_publish":
+            raise ValueError("旧版任务不能直接改排期；请逐条使用“转换并发送”创建新的 Windows Chrome 任务")
         readiness = self._require_ready_jobs([job_id], resolve_legacy=True, check_worker=True)[job_id]
         stored = to_utc_iso(parsed)
         now = utc_now_iso()
@@ -543,13 +654,15 @@ class PublishScheduler:
         self,
         job_ids: list[str],
         *,
+        platform: str | None = None,
         start_at_local: str,
         timezone_name: str,
         interval_minutes: int,
         daily_start_time: str,
         daily_end_time: str,
     ) -> dict[str, Any]:
-        ids = self._validate_batch_jobs(job_ids)
+        ids = self._validate_batch_jobs(job_ids, platform)
+        self._reject_legacy_schedule_apply(ids)
         self._require_ready_jobs(ids, resolve_legacy=True, check_worker=True)
         schedule = build_batch_schedule_preview(
             ids,
@@ -565,6 +678,7 @@ class PublishScheduler:
         self,
         job_ids: list[str],
         *,
+        platform: str | None = None,
         action: str,
         start_at_local: str = "",
         timezone_name: str = "Asia/Shanghai",
@@ -573,9 +687,11 @@ class PublishScheduler:
         daily_end_time: str = "21:00",
         confirmed_schedule: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
-        ids = self._validate_batch_jobs(job_ids)
+        ids = self._validate_batch_jobs(job_ids, platform)
         if action not in {"apply", "clear"}:
             raise ValueError("不支持的排期操作")
+        if action == "apply":
+            self._reject_legacy_schedule_apply(ids)
         readiness_map = (
             self._require_ready_jobs(ids, resolve_legacy=True, check_worker=True)
             if action == "apply"
@@ -690,17 +806,31 @@ class PublishScheduler:
     def approve_review(self, job_id: str, platform_url: str = "") -> dict[str, Any]:
         return self.mark_published_manually(job_id, platform_url)
 
-    def _validate_batch_jobs(self, job_ids: list[str]) -> list[str]:
+    def _validate_batch_jobs(self, job_ids: list[str], platform: str | None = None) -> list[str]:
         ids = list(dict.fromkeys(str(job_id).strip() for job_id in job_ids if str(job_id).strip()))
         if not ids:
             raise ValueError("至少选择一条发布任务")
         with get_connection() as connection:
-            count = connection.execute(
-                f"SELECT COUNT(*) FROM publish_jobs WHERE id IN ({','.join('?' for _ in ids)})", ids
-            ).fetchone()[0]
-        if int(count) != len(ids):
+            rows = connection.execute(
+                f"SELECT id, platform FROM publish_jobs WHERE id IN ({','.join('?' for _ in ids)})", ids
+            ).fetchall()
+        if len(rows) != len(ids):
             raise ValueError("部分发布任务不存在")
+        platforms = {str(row["platform"] or "") for row in rows}
+        if len(platforms) != 1:
+            raise PublishPlatformIsolationBlocked("抖音和 B站任务不能混合排期或批量操作")
+        if platform and platform not in platforms:
+            raise PublishPlatformIsolationBlocked("当前平台与所选任务不一致，请切换到对应平台后重试")
         return ids
+
+    def _reject_legacy_schedule_apply(self, job_ids: list[str]) -> None:
+        with get_connection() as connection:
+            count = connection.execute(
+                f"SELECT COUNT(*) FROM publish_jobs WHERE id IN ({','.join('?' for _ in job_ids)}) AND publish_mode = 'opencli_publish'",
+                job_ids,
+            ).fetchone()[0]
+        if int(count):
+            raise ValueError("旧版任务不能批量覆盖转换；请逐条使用“转换并发送”保留原记录")
 
     def _require_ready_jobs(
         self,

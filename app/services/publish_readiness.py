@@ -9,6 +9,7 @@ from app.services.publishers.base import PublishError, PublishValidationError
 
 
 SAFE_PREFLIGHT_REPAIR_CODES = {
+    "legacy_schedule_requires_confirmation",
     "opencli_fallback_disabled",
 }
 
@@ -19,6 +20,10 @@ class SendReadinessBlocked(ValueError):
     def __init__(self, readiness: dict[str, Any]) -> None:
         super().__init__(str(readiness.get("message") or "发布条件尚未满足"))
         self.readiness = readiness
+
+
+class PublishPlatformIsolationBlocked(ValueError):
+    """所选任务跨越平台或试图修改任务所属平台。"""
 
 
 def list_account_snapshots() -> list[dict[str, Any]]:

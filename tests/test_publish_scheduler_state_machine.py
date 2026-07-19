@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -8,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.db.database import get_connection, init_db
+from app.db.database import _cancel_duplicate_active_publish_jobs, get_connection, init_db
 from app.services.publish_scheduler import PublishScheduler
 from app.services.publishers.base import PublishOutcome, PublishResult
 
@@ -98,12 +99,52 @@ def test_publish_schema_migration_contains_worker_and_review_fields():
     assert event_table is not None
 
 
+def test_duplicate_cleanup_preserves_failed_and_need_review_history():
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE publish_jobs (
+            id TEXT PRIMARY KEY, output_clip_id TEXT, platform TEXT, publish_mode TEXT,
+            status TEXT, provider_response TEXT, created_at TEXT, updated_at TEXT,
+            error_code TEXT, error_message TEXT, last_error TEXT
+        )
+        """
+    )
+    rows = [
+        ("failed-history", "clip-1", "douyin", "local_browser", "FAILED", "2026-01-01T00:00:00Z"),
+        ("review-history", "clip-1", "douyin", "local_browser", "NEED_REVIEW", "2026-01-02T00:00:00Z"),
+    ]
+    connection.executemany(
+        "INSERT INTO publish_jobs (id, output_clip_id, platform, publish_mode, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [(*row, row[-1]) for row in rows],
+    )
+
+    _cancel_duplicate_active_publish_jobs(connection)
+
+    statuses = dict(connection.execute("SELECT id, status FROM publish_jobs").fetchall())
+    connection.close()
+    assert statuses == {"failed-history": "FAILED", "review-history": "NEED_REVIEW"}
+
+
 def test_not_due_job_is_not_claimed(tmp_path):
     calls: list[str] = []
     job_id = _job(tmp_path, scheduled_in=3600)
     PublishScheduler(executor=_executor(PublishResult(PublishOutcome.PUBLISHED), calls)).run_once()
     assert calls == []
     assert _raw(job_id)["status"] == "SCHEDULED"
+
+
+def test_retry_returns_clear_error_when_same_clip_has_active_replacement(tmp_path):
+    source_id = _job(tmp_path, status="FAILED")
+    scheduler = PublishScheduler()
+    replacement = scheduler.retry_failed(source_id, visibility="private")
+
+    with pytest.raises(ValueError, match="已有任务"):
+        scheduler.retry_failed(source_id, visibility="private")
+
+    assert _raw(source_id)["status"] == "FAILED"
+    assert _raw(replacement["job_id"])["status"] == "SCHEDULED"
 
 
 @pytest.mark.parametrize(
@@ -153,8 +194,9 @@ def test_two_schedulers_atomically_claim_only_once(tmp_path):
 
 def test_manual_retry_creates_new_task_and_keeps_failed_history(tmp_path):
     old_id = _job(tmp_path, status="FAILED")
-    created = PublishScheduler().retry_failed(old_id)
+    created = PublishScheduler().retry_failed(old_id, visibility="private")
     assert _raw(old_id)["status"] == "FAILED"
     assert created["job_id"] != old_id
     assert _raw(created["job_id"])["retry_of_job_id"] == old_id
     assert _raw(created["job_id"])["status"] == "SCHEDULED"
+    assert _raw(created["job_id"])["visibility"] == "private"
