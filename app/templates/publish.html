@@ -201,7 +201,6 @@
   <button type="button" class="secondary-button" data-apply-batch-target>批量设置当前平台账号</button>
   <button type="button" class="secondary-button" data-batch-ai>批量 AI 补齐</button>
   <button type="button" class="primary-button" data-open-schedule-drawer>设置排期</button>
-  <button type="button" class="secondary-button" data-send-selected>立即发送</button>
   <button type="button" class="text-button" data-clear-selection>取消选择</button>
 </div>
 
@@ -230,4 +229,4 @@
 </aside>
 {% endblock %}
 
-{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260718-platform-isolation"></script>{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260719-remove-legacy-batch-send"></script>{% endblock %}

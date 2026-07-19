@@ -18,7 +18,6 @@ from app.models.task import (
     PublishPlatformConfigUpdate,
     PublishRetryRequest,
     PublishSendJobUpdate,
-    PublishSendStart,
 )
 from app.services import publish_service
 from app.services.publish_readiness import PublishPlatformIsolationBlocked, SendReadinessBlocked
@@ -206,29 +205,6 @@ async def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
 async def regenerate_send_job_metadata(job_id: str, use_ai: bool = Query(default=True)) -> dict:
     try:
         return publish_service.regenerate_send_job_metadata(job_id, use_ai=use_ai)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/jobs/{job_id}/send")
-async def send_publish_job(job_id: str, background_tasks: BackgroundTasks) -> dict:
-    try:
-        return publish_service.start_opencli_send_batch(
-            PublishSendStart(job_ids=[job_id]),
-            background_tasks=background_tasks,
-        )
-    except PublishPlatformIsolationBlocked as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/send/start")
-async def start_send_queue(payload: PublishSendStart, background_tasks: BackgroundTasks) -> dict:
-    try:
-        return publish_service.start_opencli_send_batch(payload, background_tasks=background_tasks)
-    except PublishPlatformIsolationBlocked as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -231,10 +231,6 @@ class PublishSendJobUpdate(BaseModel):
     bilibili_source: Optional[str] = Field(default="", max_length=300)
 
 
-class PublishSendStart(BaseModel):
-    job_ids: list[str] = Field(default_factory=list)
-
-
 class PublishRetryRequest(BaseModel):
     scheduled_at: Optional[str] = Field(default="", max_length=80)
     visibility: Optional[Literal["public", "friends", "private"]] = None

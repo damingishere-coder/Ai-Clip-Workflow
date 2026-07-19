@@ -1039,49 +1039,6 @@ if (publishCenterRoot) {
   document.querySelector("[data-close-account-drawer]")?.addEventListener("click", closeAccountDrawer);
   accountBackdrop?.addEventListener("click", closeAccountDrawer);
 
-  document.querySelector("[data-send-selected]")?.addEventListener("click", async () => {
-    const ids = Array.from(selectedJobIds);
-    if (!ids.length) return;
-    const hasMixedPlatform = ids
-      .map((jobId) => document.querySelector(`[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(jobId)}"]`))
-      .some((row) => !row || row.dataset.platform !== activePlatform);
-    if (hasMixedPlatform) {
-      selectedJobIds.clear(); updateSelectionUi();
-      showMessage("检测到跨平台选择，已全部清空，未发送任何任务。", "error");
-      return;
-    }
-    const legacyRows = ids
-      .map((jobId) => document.querySelector(`[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(jobId)}"]`))
-      .filter((row) => effectiveReadiness(row).can_auto_resolve);
-    if (legacyRows.length) {
-      showMessage("旧版排期不能批量补发，请逐条点击任务右侧的“转换并发送”。", "error");
-      return;
-    }
-    const blockedRow = ids
-      .map((jobId) => document.querySelector(`[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(jobId)}"]`))
-      .find((row) => {
-        const readiness = effectiveReadiness(row);
-        return row && !readiness.ready && !readiness.can_auto_resolve;
-      });
-    if (blockedRow) {
-      await handleSendSetup(blockedRow);
-      return;
-    }
-    if (!window.confirm(`确认立即发送 ${ids.length} 条${platformLabel()}任务？不会领取或创建另一平台的任务。`)) return;
-    for (const jobId of ids) {
-      try {
-        const result = await window.apiFetch(`/api/publish/jobs/${jobId}/publish-now`, { method: "POST" });
-        updateRowFromJob(result.job || { id: jobId, status: "SCHEDULED" });
-      } catch (error) {
-        const row = document.querySelector(`[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(jobId)}"]`);
-        if (!applyReadinessError(error, row)) showMessage(`任务 ${jobId} 入队失败：${error.message}`, "error");
-        return;
-      }
-    }
-    selectedJobIds.clear(); updateSelectionUi();
-    showMessage("所选任务均已进入统一调度器。", "success");
-  });
-
   document.querySelector("[data-apply-batch-target]")?.addEventListener("click", async () => {
     const payload = {
       job_ids: Array.from(selectedJobIds),

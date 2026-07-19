@@ -1,5 +1,14 @@
 # Development Log
 
+## 2026-07-19 发送中心旧批量发送入口与冗余代码清理
+
+- 删除内容准备/排期共用底部批量栏中的旧“立即发送”；批量栏只保留当前平台账号设置、AI 文案补齐、设置排期和取消选择，避免继续进入已停用的批量直发方式。
+- 保留排期任务右侧的单条“立即发送 / 转换并发送 / 立即导出”；现有 `POST /api/publish/jobs/{job_id}/publish-now → PublishScheduler → Registry → Windows Worker` 成功链路没有改动。
+- 删除 `publish-center.js` 中旧批量逐条调用 `publish-now` 的监听器，并清理全局 `app.js` 内已没有模板引用的上一版发布配置、发送卡片、批量队列和投稿预览代码。
+- 删除只服务旧页面的 `POST /api/publish/jobs/{job_id}/send`、`POST /api/publish/send/start`、`PublishSendStart` 及对应批量兼容服务；排期、失败重试、人工复核、账号登录和当前单条发送接口全部保留。
+- 新增回归测试，固定检查旧按钮、旧前端监听器和旧路由已消失，同时当前设置排期、批量账号/AI 和单条 `publish-now` 入口仍存在。
+- 已验证：发送中心相关测试 `32 passed`，全量测试 `303 passed`，Ruff 与两份 JavaScript 语法检查通过；Docker `8001/publish` 实页勾选检查通过，Worker 正常且页面控制台无错误，未触发真实投稿。
+
 ## 2026-07-19 抖音立即发送上传判断与失败窗口修复
 
 - 根因确认：抖音视频仍处于“文件解析中，0%”时，旧逻辑把常驻的“作品描述 / 发布设置”误判为上传完成，随后触发 `douyin_preview_not_ready` 并关闭 Chrome。
@@ -621,7 +630,7 @@
 
 - 已把 `/publish` 从“发布中心”改为“发送中心”，页面不再展示抖音 / B站开放平台 API 配置、Client Key、Access Token、OAuth 和账号表单。
 - 新页面以待发送队列为主：从已完成切片读取切好的原片、封面帧、AI 标题、AI 话题和平台状态，默认生成抖音 + B站双平台队列。
-- 新增发送队列接口：`POST /api/publish/queue/refresh` 可从已完成切片生成 opencli 发送任务；`POST /api/publish/send/start` 可按队列逐条发送；`POST /api/publish/jobs/{job_id}/send` 可发送单条任务。
+- 新增发送队列接口：`POST /api/publish/queue/refresh` 可从已完成切片生成 opencli 发送任务；当时使用的 `POST /api/publish/send/start` 和 `POST /api/publish/jobs/{job_id}/send` 已在 2026-07-19 随旧页面清理移除，当前统一使用单条 `publish-now` 与排期接口。
 - 封面逻辑改为“从视频中选一帧”：新增 `POST /api/publish/covers/frames` 生成多张候选帧，页面可手动切换并保存，不再默认叠加标题大字。
 - AI 元数据补齐已接入：优先使用切片标题，话题和简介可由 AI 根据标题、摘要、推荐理由和转写片段生成；缺失时页面可一键重新生成。
 - 自动发送改为 opencli 网页自动化：抖音打开 `creator.douyin.com` 投稿页，B站打开创作中心投稿页；发送批次一次只执行一条，避免平台窗口互相抢焦点。

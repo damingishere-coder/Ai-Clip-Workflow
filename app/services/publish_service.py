@@ -27,7 +27,6 @@ from app.models.task import (
     PublishJobTargetUpdate,
     PublishPlatformConfigUpdate,
     PublishSendJobUpdate,
-    PublishSendStart,
 )
 from app.services.ai.ai_clip_analyzer import build_remote_provider
 from app.services.ai.base import AIProviderError
@@ -2850,78 +2849,6 @@ def execute_opencli_send_job(job_id: str, runner: CommandRunner | None = None) -
         "message": "opencli 已完成平台结果确认步骤。",
         "provider_response": response,
         "job": job,
-    }
-
-
-def _ready_opencli_job_ids(job_ids: list[str] | None = None) -> list[str]:
-    params: list[str] = []
-    where = "status IN ('DRAFT', 'WAITING', 'SCHEDULED')"
-    if job_ids:
-        placeholders = ",".join("?" for _ in job_ids)
-        where += f" AND id IN ({placeholders})"
-        params.extend(job_ids)
-    with get_connection() as connection:
-        rows = connection.execute(
-            f"SELECT id FROM publish_jobs WHERE {where} ORDER BY created_at ASC",
-            params,
-        ).fetchall()
-    return [row["id"] for row in rows]
-
-
-def _require_same_platform_batch(job_ids: list[str]) -> None:
-    if not job_ids:
-        return
-    with get_connection() as connection:
-        rows = connection.execute(
-            f"SELECT id, platform FROM publish_jobs WHERE id IN ({','.join('?' for _ in job_ids)})",
-            job_ids,
-        ).fetchall()
-    platforms = {str(row["platform"] or "") for row in rows}
-    if len(platforms) > 1:
-        raise PublishPlatformIsolationBlocked("抖音和 B站任务不能混合发送，请在发送中心切换平台后分别操作")
-    with get_connection() as connection:
-        legacy_count = connection.execute(
-            f"SELECT COUNT(*) FROM publish_jobs WHERE id IN ({','.join('?' for _ in job_ids)}) AND publish_mode = 'opencli_publish'",
-            job_ids,
-        ).fetchone()[0]
-    if int(legacy_count) and len(job_ids) > 1:
-        raise PublishPlatformIsolationBlocked("旧版排期必须逐条点击“转换并发送”，不能批量补发")
-
-
-def run_opencli_send_batch(job_ids: list[str] | None = None, runner: CommandRunner | None = None) -> dict:
-    del runner
-    ids = _ready_opencli_job_ids(job_ids)
-    _require_same_platform_batch(ids)
-    from app.services.publish_scheduler import PublishScheduler
-
-    scheduler = PublishScheduler()
-    results = [scheduler.publish_now(job_id) for job_id in ids]
-    scan = scheduler.run_once()
-    return {
-        "status": "ok",
-        "message": f"已通过统一调度器处理 {len(results)} 条任务。",
-        "results": results,
-        "scheduler_result": scan,
-        **get_publish_center_context(),
-    }
-
-
-def start_opencli_send_batch(payload: PublishSendStart, background_tasks: Any | None = None) -> dict:
-    ids = _ready_opencli_job_ids(payload.job_ids)
-    _require_same_platform_batch(ids)
-    if not ids:
-        return {"status": "empty", "message": "当前没有可加入调度器的任务。", **get_publish_center_context()}
-    from app.services.publish_scheduler import PublishScheduler
-
-    scheduler = PublishScheduler()
-    results = [scheduler.publish_now(job_id) for job_id in ids]
-    if background_tasks is not None:
-        background_tasks.add_task(PublishScheduler().run_once)
-    return {
-        "status": "scheduled",
-        "message": f"已将 {len(ids)} 条任务加入统一发布调度器。",
-        "results": results,
-        **get_publish_center_context(),
     }
 
 
