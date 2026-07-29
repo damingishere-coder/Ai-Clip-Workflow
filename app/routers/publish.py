@@ -153,6 +153,29 @@ async def refresh_send_queue(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/tasks/{task_id}/link-state")
+async def get_task_publish_link_state(task_id: str) -> dict:
+    try:
+        return publish_service.get_task_publish_link_state(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/tasks/{task_id}/sync")
+async def sync_task_publish_jobs(
+    task_id: str,
+    prefer_subtitled: bool = Query(default=True),
+) -> dict:
+    try:
+        return publish_service.sync_task_publish_jobs(
+            task_id,
+            prefer_subtitled=prefer_subtitled,
+            restore_removed=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/jobs")
 async def create_publish_job(payload: PublishJobCreate) -> dict:
     try:

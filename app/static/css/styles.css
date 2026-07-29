@@ -5013,6 +5013,57 @@ td a,
   gap: 12px;
 }
 
+.publish-content-list { gap: 16px; }
+
+.publish-content-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.publish-content-header [data-backfill-covers][data-loading="true"] {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.publish-task-group {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(126, 151, 187, 0.22);
+  border-radius: 20px;
+  background: rgba(247, 250, 255, 0.72);
+}
+
+.publish-task-group[hidden] { display: none; }
+
+.publish-task-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 4px 4px 2px;
+}
+
+.publish-task-group-identity { min-width: 0; }
+.publish-task-group-identity h3 { margin: 2px 0 6px; }
+.publish-task-group-identity p:not(.eyebrow) { margin: 0 0 5px; color: var(--muted); }
+.publish-task-group-identity p strong {
+  display: inline-block;
+  max-width: min(680px, 68vw);
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+.publish-task-group-identity small { color: var(--muted); }
+.publish-task-group-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.publish-task-group-body { display: grid; gap: 12px; }
+.publish-task-group-body[hidden] { display: none; }
+
 .publish-content-card {
   display: grid;
   grid-template-columns: 28px 150px minmax(0, 1fr);
@@ -5224,6 +5275,9 @@ td a,
   .publish-content-grid, .publish-bilibili-fields { grid-template-columns: 1fr; }
   .publish-content-grid .span-2, .publish-bilibili-fields.span-2, .publish-bilibili-fields .span-2 { grid-column: 1; }
   .publish-card-heading { display: grid; }
+  .publish-task-group-header { align-items: flex-start; flex-direction: column; }
+  .publish-task-group-actions { width: 100%; justify-content: space-between; }
+  .publish-task-group-identity p strong { max-width: 70vw; }
   .publish-plan-row, .publish-execution-row { grid-template-columns: 28px minmax(0, 1fr); }
   .publish-plan-row > :nth-child(1) { grid-column: 1; grid-row: 1 / 7; }
   .publish-plan-row > :nth-child(n+2) { grid-column: 2; grid-row: auto; }

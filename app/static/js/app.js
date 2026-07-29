@@ -1350,7 +1350,11 @@ if (generateClipsButton) {
       if (!response.ok) {
         throw new Error(data.detail || "生成切片请求失败");
       }
-      showClipReviewMessage(`${data.message || "切片生成完成。"} 可进入“字幕推送”继续加字幕、打码和发布配置。`, "success");
+      const syncMessage = data.publish_sync?.message ? ` ${data.publish_sync.message}` : "";
+      showClipReviewMessage(
+        `${data.message || "切片生成完成。"}${syncMessage} 可进入“字幕推送”继续处理，或查看本任务发送内容。`,
+        data.publish_sync?.status === "partial" ? "error" : "success",
+      );
     } catch (error) {
       showClipReviewMessage(`生成切片失败：${error.message}`, "error");
     } finally {
@@ -1359,6 +1363,38 @@ if (generateClipsButton) {
     }
   });
 }
+
+document.querySelectorAll("[data-sync-publish-task]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const taskId = button.dataset.taskId;
+    if (!taskId) return;
+    const originalText = button.textContent;
+    const preferSubtitled = button.dataset.preferSubtitled === "true";
+    button.disabled = true;
+    button.textContent = "正在同步...";
+    try {
+      const data = await window.apiFetch(
+        `/api/publish/tasks/${encodeURIComponent(taskId)}/sync?prefer_subtitled=${preferSubtitled ? "true" : "false"}`,
+        { method: "POST" },
+      );
+      const summary = document.querySelector("[data-publish-link-summary]");
+      if (summary) {
+        summary.innerHTML = `<strong>发送中心关联：${data.link_state?.label || "同步完成"}</strong><span>${data.message || ""}</span>`;
+      }
+      showClipReviewMessage(data.message || "发送中心同步完成。", data.status === "partial" ? "error" : "success");
+      if (!document.querySelector("#process-result")) {
+        window.alert(data.message || "发送中心同步完成。");
+      }
+    } catch (error) {
+      const message = `同步发送中心失败：${error.message}`;
+      showClipReviewMessage(message, "error");
+      if (!document.querySelector("#process-result")) window.alert(message);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
+});
 
 document.querySelectorAll(".js-hide-task").forEach((button) => {
   button.addEventListener("click", async () => {

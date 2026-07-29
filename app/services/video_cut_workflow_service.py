@@ -155,7 +155,7 @@ def _resolve_final_cut_status(results: list[CutResult]) -> tuple[TaskStatus, str
 
 # ---------- 切片主流程 ----------
 
-def process_task_video_cuts(task_id: str) -> dict:
+def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> dict:
     from app.services.task_service import (
         get_status_label,
         get_task,
@@ -215,6 +215,7 @@ def process_task_video_cuts(task_id: str) -> dict:
 
     final_status, final_error = _resolve_final_cut_status(results)
 
+    publish_sync = None
     if final_status == TaskStatus.failed:
         # 全部失败：不激活新 run，旧 active 保持不变
         _fail_cut_run(cut_run_id, final_error or "全部切片失败")
@@ -225,6 +226,22 @@ def process_task_video_cuts(task_id: str) -> dict:
         _activate_cut_run(task_id, cut_run_id)
         update_task_status(task_id, final_status, final_error)
         append_task_log(task_id, f"自动切割结束：{get_status_label(final_status.value)}")
+        if sync_publish_jobs:
+            try:
+                from app.services.publish_service import sync_task_publish_jobs as sync_publish
+
+                publish_sync = sync_publish(
+                    task_id,
+                    prefer_subtitled=False,
+                    restore_removed=False,
+                )
+            except Exception as exc:
+                publish_sync = {
+                    "status": "partial",
+                    "message": f"切片已生成，但发送中心自动同步失败：{exc}",
+                    "errors": [str(exc)],
+                }
+                append_task_log(task_id, f"切片完成后的发送中心同步失败：{exc}")
 
     return {
         "status": final_status.value,
@@ -234,5 +251,6 @@ def process_task_video_cuts(task_id: str) -> dict:
         "cut_run_id": cut_run_id,
         "cut_run_number": cut_run["run_number"],
         "results": [result.__dict__ for result in results],
+        "publish_sync": publish_sync,
         "task": get_task(task_id),
     }

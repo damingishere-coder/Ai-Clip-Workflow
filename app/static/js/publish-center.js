@@ -18,6 +18,7 @@ if (publishCenterRoot) {
   const calendarNode = document.querySelector("[data-schedule-calendar]");
   const calendarTitle = document.querySelector("[data-calendar-title]");
   const scheduleEmpty = document.querySelector("[data-schedule-empty]");
+  const contentEmpty = document.querySelector("[data-content-empty]");
   const platformListTitle = document.querySelector("[data-platform-list-title]");
   const schedulerHealthNode = document.querySelector("[data-scheduler-health]");
   let latestPreviewSignature = "";
@@ -85,6 +86,36 @@ if (publishCenterRoot) {
   function scheduleRows() {
     return Array.from(document.querySelectorAll('[data-publish-row][data-section="schedule"]'));
   }
+  function setTaskGroupExpanded(group, expanded) {
+    if (!group) return;
+    group.dataset.expanded = expanded ? "true" : "false";
+    const body = group.querySelector("[data-task-group-body]");
+    const toggle = group.querySelector("[data-task-group-toggle]");
+    if (body) body.hidden = !expanded;
+    if (toggle) toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    const action = group.querySelector("[data-task-group-action]");
+    if (action) action.textContent = expanded ? "收起" : "展开";
+  }
+
+  function syncContentTaskGroups() {
+    const groups = Array.from(document.querySelectorAll("[data-publish-task-group]"));
+    const visibleGroups = [];
+    groups.forEach((group) => {
+      const rows = Array.from(group.querySelectorAll('[data-publish-row][data-section="content"]'));
+      const visibleCount = rows.filter((row) => !row.hidden).length;
+      const count = group.querySelector("[data-task-group-count]");
+      if (count) count.textContent = `${visibleCount} 条待准备`;
+      group.hidden = visibleCount === 0;
+      if (visibleCount > 0) visibleGroups.push(group);
+      if (visibleCount === 0) setTaskGroupExpanded(group, false);
+    });
+    if (visibleGroups.length && !visibleGroups.some((group) => group.dataset.expanded === "true")) {
+      setTaskGroupExpanded(visibleGroups[0], true);
+    }
+    visibleGroups.forEach((group) => setTaskGroupExpanded(group, group.dataset.expanded === "true"));
+    if (contentEmpty) contentEmpty.hidden = visibleGroups.length > 0;
+  }
+
 
   function platformLabel(platform = activePlatform) {
     return platform === "bilibili" ? "B站" : "抖音";
@@ -106,7 +137,11 @@ if (publishCenterRoot) {
   function renderPlatformSchedule() {
     const rows = scheduleRows();
     ["douyin", "bilibili"].forEach((platform) => {
-      const available = rows.filter((row) => sectionAllows("schedule", row.dataset.status || "") && row.dataset.platform === platform);
+      const available = rows.filter((row) => (
+        row.dataset.outputActive !== "false"
+        && sectionAllows("schedule", row.dataset.status || "")
+        && row.dataset.platform === platform
+      ));
       const waiting = available.filter((row) => row.dataset.status === "WAITING").length;
       const scheduled = available.filter((row) => row.dataset.status === "SCHEDULED").length;
       const waitingNode = document.querySelector(`[data-platform-waiting="${platform}"]`);
@@ -123,13 +158,22 @@ if (publishCenterRoot) {
     });
     let visibleCount = 0;
     rows.forEach((row) => {
-      const visible = sectionAllows("schedule", row.dataset.status || "") && row.dataset.platform === activePlatform;
+      const visible = (
+        row.dataset.outputActive !== "false"
+        && sectionAllows("schedule", row.dataset.status || "")
+        && row.dataset.platform === activePlatform
+      );
       row.hidden = !visible;
       if (visible) visibleCount += 1;
     });
     document.querySelectorAll('[data-publish-row][data-section="content"]').forEach((row) => {
-      row.hidden = !sectionAllows("content", row.dataset.status || "") || row.dataset.platform !== activePlatform;
+      row.hidden = (
+        row.dataset.outputActive === "false"
+        || !sectionAllows("content", row.dataset.status || "")
+        || row.dataset.platform !== activePlatform
+      );
     });
+    syncContentTaskGroups();
     document.querySelectorAll("[data-account-row]").forEach((row) => {
       row.hidden = row.dataset.accountPlatform !== activePlatform;
     });
@@ -455,7 +499,12 @@ if (publishCenterRoot) {
       if (job.account_id !== undefined) row.dataset.accountId = job.account_id || "";
       if (job.visibility) row.dataset.visibility = job.visibility;
       if (job.send_readiness) row.dataset.sendReadiness = JSON.stringify(job.send_readiness);
-      row.hidden = !sectionAllows(row.dataset.section, status) || row.dataset.platform !== activePlatform;
+      if (job.output_is_active !== undefined) row.dataset.outputActive = job.output_is_active ? "true" : "false";
+      row.hidden = (
+        !sectionAllows(row.dataset.section, status)
+        || row.dataset.platform !== activePlatform
+        || (row.dataset.section !== "history" && row.dataset.outputActive === "false")
+      );
       const statusNode = row.querySelector("[data-row-status]");
       if (statusNode) statusNode.textContent = job.status_label || statusLabel(status);
       const executionMessage = row.querySelector("[data-execution-message]");
@@ -803,6 +852,13 @@ if (publishCenterRoot) {
   });
 
   document.addEventListener("click", async (event) => {
+    const taskGroupToggle = event.target.closest("[data-task-group-toggle]");
+    if (taskGroupToggle) {
+      const group = taskGroupToggle.closest("[data-publish-task-group]");
+      setTaskGroupExpanded(group, group?.dataset.expanded !== "true");
+      return;
+    }
+
     const setupButton = event.target.closest("[data-send-setup]");
     if (setupButton) {
       await handleSendSetup(setupButton.closest("[data-publish-row]"));
@@ -1119,9 +1175,23 @@ if (publishCenterRoot) {
   });
 
   document.querySelectorAll("[data-publish-editor]").forEach(syncPlatformFields);
+  const focus = document.querySelector("[data-publish-focus]");
+  if (focus?.dataset.platform) setActivePlatform(focus.dataset.platform);
+  if (focus?.dataset.tab) switchTab(focus.dataset.tab);
   filterAccountOptions(document.querySelector("[data-batch-account]"), activePlatform);
   if (scheduleForm?.elements.start_at_local) scheduleForm.elements.start_at_local.value = beijingDatetimeValue(Date.now() + 10 * 60 * 1000);
   document.querySelectorAll('[data-publish-row][data-section="schedule"], [data-publish-row][data-section="history"]').forEach((row) => applyRowReadiness(row));
   updateSelectionUi(); applyHistoryFilter(); refreshScheduleViews();
+  if (focus?.dataset.taskId) {
+    const group = document.querySelector(
+      `[data-publish-task-group][data-task-id="${CSS.escape(focus.dataset.taskId)}"]`,
+    );
+    if (group && !group.hidden) {
+      setTaskGroupExpanded(group, true);
+      group.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else {
+      showMessage("已定位到该处理任务，但当前平台没有可准备的新版本内容。可切换平台或返回任务页重新同步。");
+    }
+  }
   window.setInterval(() => { refreshJobs(); refreshAccounts(); refreshSchedulerHealth(); }, 5000);
 }

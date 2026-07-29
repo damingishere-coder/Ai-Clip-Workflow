@@ -272,7 +272,7 @@ class PipelineEngine:
 
     def _cut_video(self, task_id: str, context: dict) -> dict:
         append_task_log(task_id, "全自动模式：开始原视频裁切，本轮明确跳过字幕烧录")
-        result = task_service.process_task_video_cuts(task_id)
+        result = task_service.process_task_video_cuts(task_id, sync_publish_jobs=False)
         output_clips = task_service.list_output_clips(task_id)
         success = [clip for clip in output_clips if clip.get("status") == "completed" and clip.get("file_exists")]
         failed = [item for item in result.get("results") or [] if item.get("status") == "failed"]

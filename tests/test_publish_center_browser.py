@@ -22,7 +22,7 @@ PREFIX = "test-browser-publish-"
 
 
 def _seed_job(tmp_path: Path, index: int, platform: str = "douyin") -> str:
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    now = (datetime.now(timezone.utc) + timedelta(seconds=index)).isoformat(timespec="seconds").replace("+00:00", "Z")
     task_id = f"{PREFIX}{uuid4().hex[:8]}"
     clip_id = f"{PREFIX}clip-{uuid4().hex[:8]}"
     job_id = f"{PREFIX}job-{uuid4().hex[:8]}"
@@ -99,9 +99,13 @@ def test_publish_center_schedule_preview_confirm_and_export(tmp_path):
             assert page.locator(
                 f'[data-publish-row][data-section="content"][data-job-id="{bilibili}"]'
             ).is_hidden()
-            assert page.locator(
+            first_content = page.locator(
                 f'[data-publish-row][data-section="content"][data-job-id="{first}"]'
-            ).is_visible()
+            )
+            first_group = first_content.locator("xpath=ancestor::section[@data-publish-task-group]")
+            if not first_content.is_visible():
+                first_group.locator("[data-task-group-toggle]").click()
+            assert first_content.is_visible()
 
             page.locator('[data-center-tab="schedule"]').click()
             assert page.locator('[data-schedule-calendar] .publish-calendar-day').count() == 42

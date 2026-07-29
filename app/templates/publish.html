@@ -12,7 +12,7 @@
 {% endmacro %}
 
 {% macro content_row(job) %}
-<article class="publish-content-card" data-publish-row data-job-id="{{ job.id }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-section="content" {% if job.status not in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
+<article class="publish-content-card" data-publish-row data-job-id="{{ job.id }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-section="content" {% if not job.output_is_active or job.status not in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
   <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
   <div class="publish-content-media">
     <video muted preload="metadata" src="{{ job.video_media_url }}"></video>
@@ -55,7 +55,7 @@
 
 {% macro schedule_row(job) %}
 {% set readiness = job.send_readiness %}
-<article class="publish-plan-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.account_id or '' }}" data-platform="{{ job.platform }}" data-visibility="{{ job.visibility or 'public' }}" data-status="{{ job.status }}" data-section="schedule" data-send-readiness="{{ readiness | tojson | forceescape }}" {% if job.status not in ["WAITING", "SCHEDULED"] %}hidden{% endif %}>
+<article class="publish-plan-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.account_id or '' }}" data-platform="{{ job.platform }}" data-visibility="{{ job.visibility or 'public' }}" data-status="{{ job.status }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-section="schedule" data-send-readiness="{{ readiness | tojson | forceescape }}" {% if not job.output_is_active or job.status not in ["WAITING", "SCHEDULED"] %}hidden{% endif %}>
   <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
   <time data-row-schedule data-utc="{{ job.scheduled_at_utc }}">{{ job.scheduled_at_display }}</time>
   <div class="publish-plan-video"><video muted preload="metadata" src="{{ job.video_media_url }}"></video><strong data-row-title>{{ job.title }}</strong></div>
@@ -120,6 +120,13 @@
 {% endmacro %}
 
 {% block content %}
+<div
+  data-publish-focus
+  data-task-id="{{ focus_task_id }}"
+  data-platform="{{ focus_platform }}"
+  data-tab="{{ focus_tab }}"
+  hidden
+></div>
 <section class="page-heading send-heading">
   <div><p class="eyebrow">Publish Center</p><h1>发送中心</h1><p>先准备内容，再按北京时间排期，最后在执行记录中确认平台结果。</p></div>
   <div class="button-row"><button type="button" class="secondary-button" data-open-account-drawer>账号管理</button><button type="button" class="secondary-button" data-supplement-publish-jobs>补充缺失任务</button></div>
@@ -163,7 +170,30 @@
 
 <section class="panel publish-center-panel active" data-center-panel="content">
   <div class="panel-header"><div><h2>内容准备</h2><p>这里不展示历史错误；内容、平台和账号完整后再加入排期。</p></div></div>
-  <div class="publish-content-list">{% for job in publish_jobs %}{{ content_row(job) }}{% endfor %}</div>
+  <div class="publish-content-list">
+    {% for group in publish_task_groups %}
+    <section class="publish-task-group" data-publish-task-group data-task-id="{{ group.task_id }}" data-expanded="{{ 'true' if loop.first else 'false' }}">
+      <header class="publish-task-group-header">
+        <div class="publish-task-group-identity">
+          <p class="eyebrow">原始处理任务</p>
+          <h3>{{ group.task_name }}</h3>
+          <p title="{{ group.task_source_file_name }}">原视频：<strong>{{ group.task_source_file_name }}</strong></p>
+          <small>创建于 {{ group.task_created_at_display }} · <span data-task-group-count>0 条待准备</span></small>
+        </div>
+        <div class="publish-task-group-actions">
+          <a class="text-button" href="/tasks/{{ group.task_id }}">查看任务详情</a>
+          <button type="button" class="secondary-button" data-task-group-toggle aria-expanded="{{ 'true' if loop.first else 'false' }}">
+            <span data-task-group-action>{{ '收起' if loop.first else '展开' }}</span>
+          </button>
+        </div>
+      </header>
+      <div class="publish-task-group-body" data-task-group-body {% if not loop.first %}hidden{% endif %}>
+        {% for job in group.jobs %}{{ content_row(job) }}{% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+  <div class="publish-plan-empty" data-content-empty hidden>当前平台没有待准备内容。</div>
 </section>
 
 <section class="panel publish-center-panel" data-center-panel="schedule" hidden>

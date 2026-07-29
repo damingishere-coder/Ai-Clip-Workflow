@@ -52,10 +52,14 @@
 ### 1.3 核心设计决策
 
 - **单体业务应用**：页面、路由、视频、AI、SQLite 和 Scheduler 保持同一 FastAPI 应用；Windows Worker 只隔离宿主 Chrome 操作。
+- **SQLite 单写入者**：只有 Docker 内的 FastAPI 可以读写 `workflow.sqlite3`；Windows Worker 不导入数据库仓储、不打开 SQLite，只通过 HTTP 返回账号检查/发布结果并写独立执行日志。
 - **同步 FFmpeg**：视频处理通过 `subprocess` 同步调用，阻塞当前请求直到完成。
 - **无外部消息队列**：发布队列直接使用 SQLite 原子状态更新，无 Redis / Celery。
 - **无用户体系**：单用户本地使用，通过 `LOCAL_ADMIN_TOKEN` 做简易鉴权。
 - **统一定时调度**：立即发送与未来排期都先写 `SCHEDULED`，再由 `PublishScheduler` 原子领取。
+- **终态原子提交**：平台结果、任务终态和事件由 FastAPI 在同一 SQLite 事务写入；任一步失败都会回滚，避免出现“平台结果已记但任务仍在发送中”。
+- **调度循环自恢复**：单条任务异常不会阻塞后续排期；SQLite 临时异常只结束当前扫描，常驻循环按配置间隔继续重试并在健康接口公开连续失败次数。
+- **执行日志恢复**：Worker 的 `/v1/executions/{execution_id}` 是跨进程中断恢复依据；已确认成功只补记终态，结果不确定一律进入人工复核，不自动重复投稿。
 - **保守结果语义**：只有平台成功证据进入 `PUBLISHED`；不确定结果进入 `NEED_REVIEW`，禁止自动重复上传。
 
 ---
@@ -186,6 +190,16 @@ flowchart TD
 `manual_export` 是显式的独立模式，成功状态为 `EXPORTED`；真实平台发送失败不会切换成导出包。旧 `opencli_publish` 仅在兼容开关打开时走同一 Scheduler 状态机。
 
 **安全边界**：不绕过验证码、登录失效、风控和人工确认。
+
+### 5.1 切片版本与发送中心关联规则
+
+- `output_clip.is_active = 1` 是任务当前切片版本，也是内容准备和排期计划唯一允许使用的来源；不新增任务级外键或关联表。
+- 手动切片成功后调用任务级同步服务，为目标平台创建 `WAITING` 内容。通用任务目标为抖音和 B站；平台专属任务只创建对应平台。
+- 同一当前切片、同一平台已经存在非取消记录时保持幂等，不重复创建。全局补充尊重 `user_removed_from_preparation`；任务级显式同步可以恢复该记录，并始终清空旧排期。
+- 新切片激活后，旧切片上的 `DRAFT / WAITING / SCHEDULED` 改为 `CANCELLED + superseded_by_recut`，同时清除排期并写 `superseded_by_recut` 事件。
+- `PUBLISHING / NEED_REVIEW / PUBLISHED / EXPORTED / FAILED` 属于执行证据，不因重新切片而改写；旧版记录只允许出现在执行历史。
+- 新版内容可按 `clip_candidate_id + platform` 继承标题、简介、标签、账号与发布方式；视频路径、封面和排期不继承。封面按新视频生成，排期保持空。
+- 默认自动同步使用原始切片。字幕工作台显式同步优先使用已完成的带字幕成片，但只允许未排期的 `DRAFT / WAITING` 更换视频；`SCHEDULED` 只返回提示，要求先取消排期。
 
 ---
 
