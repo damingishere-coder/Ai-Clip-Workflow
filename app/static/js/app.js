@@ -64,8 +64,10 @@ if (newTaskForm) {
       const uploadData = new FormData();
       uploadData.append("task_name", payload.task_name || "");
       uploadData.append("platform", payload.platform || "general");
-      uploadData.append("max_clip_duration", payload.max_clip_duration || "5");
-      uploadData.append("candidate_clip_count", payload.candidate_clip_count || "5");
+      uploadData.append("max_clip_duration", payload.max_clip_duration || "10");
+      uploadData.append("candidate_clip_count", payload.candidate_clip_count || "12");
+      uploadData.append("selection_profile", payload.selection_profile || "general");
+      uploadData.append("final_clip_target", payload.final_clip_target || "5");
       uploadData.append("ai_preference", "");
       uploadData.append("auto_mode", payload.auto_mode === "true" ? "true" : "false");
       uploadData.append("auto_metadata_use_ai", "false");
@@ -325,6 +327,8 @@ const aiProcessResult = document.querySelector("#ai-process-result");
 const aiAnalysisSummary = document.querySelector("#ai-analysis-summary");
 const aiCandidateCountPill = document.querySelector("#ai-candidate-count-pill");
 const aiCandidateCountInput = document.querySelector("#ai-candidate-count-input");
+const aiSelectionProfile = document.querySelector("#ai-selection-profile");
+const aiFinalClipTarget = document.querySelector("#ai-final-clip-target");
 const showAiHistoryButton = document.querySelector("#show-ai-history-button");
 const refreshAiHistoryButton = document.querySelector("#refresh-ai-history-button");
 const aiAnalysisHistory = document.querySelector("#ai-analysis-history");
@@ -494,7 +498,7 @@ async function refreshAiAnalysisHistory() {
 async function saveTaskCandidateClipCount() {
   if (!aiAnalysisForm || !aiCandidateCountInput) return null;
   const taskId = aiAnalysisForm.dataset.taskId;
-  const count = Number(aiCandidateCountInput.value || 5);
+  const count = Number(aiCandidateCountInput.value || 12);
   if (!Number.isInteger(count) || count < 1 || count > 50) {
     throw new Error("候选片段数量必须是 1 到 50 之间的整数。");
   }
@@ -576,6 +580,7 @@ if (saveAiPromptsButton && aiAnalysisForm) {
     try {
       const data = await saveTaskAiPromptSettings();
       await saveTaskCandidateClipCount();
+      await saveTaskSelectionSettings();
       if (aiProcessResult) aiProcessResult.textContent = data.message || "AI Prompt 方案已保存。";
     } catch (error) {
       if (aiProcessResult) aiProcessResult.textContent = `保存失败：${error.message}`;
@@ -619,6 +624,7 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
     try {
       await saveTaskAiPromptSettings();
       await saveTaskCandidateClipCount();
+      await saveTaskSelectionSettings();
       pollAiAnalysisStatus(true).catch(() => {});
       const response = await fetch(`/api/tasks/${taskId}/process/ai?provider=${provider}`, {
         method: "POST",
@@ -816,6 +822,40 @@ async function deleteClipCard(card, button) {
       button.textContent = originalText;
     }
     showClipReviewMessage(`\u5220\u9664\u5931\u8d25\uff1a${error.message}`, "error");
+  }
+}
+
+async function saveClipFeedback(card, button) {
+  if (!clipReviewForm || !card || !button) return;
+  const taskId = clipReviewForm.dataset.taskId;
+  const clipId = card.dataset.clipId;
+  const decision = button.dataset.feedbackDecision;
+  const reasonCode = button.dataset.feedbackReason;
+  const feedbackButtons = Array.from(card.querySelectorAll("[data-feedback-decision]"));
+  feedbackButtons.forEach((item) => { item.disabled = true; });
+  showClipReviewMessage("正在记录你的审片判断...", "info");
+
+  try {
+    const response = await fetch(`/api/tasks/${taskId}/clips/${clipId}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision, reason_code: reasonCode }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "保存反馈失败");
+    }
+    feedbackButtons.forEach((item) => {
+      item.classList.toggle("is-active", item === button);
+      item.setAttribute("aria-pressed", item === button ? "true" : "false");
+    });
+    const enabledInput = card.querySelector("[name='enabled']");
+    if (enabledInput) enabledInput.checked = Boolean(data.enabled);
+    showClipReviewMessage(data.message || "反馈已保存。", "success");
+  } catch (error) {
+    showClipReviewMessage(`保存反馈失败：${error.message}`, "error");
+  } finally {
+    feedbackButtons.forEach((item) => { item.disabled = false; });
   }
 }
 
@@ -1251,6 +1291,12 @@ document.querySelectorAll("[data-delete-trigger]").forEach((button) => {
   });
 });
 
+document.querySelectorAll("[data-feedback-decision]").forEach((button) => {
+  button.addEventListener("click", () => {
+    saveClipFeedback(button.closest("[data-clip-card]"), button);
+  });
+});
+
 if (closeTranscriptDrawerButton) {
   closeTranscriptDrawerButton.addEventListener("click", closeTranscriptDrawer);
 }
@@ -1362,6 +1408,25 @@ if (generateClipsButton) {
       generateClipsButton.textContent = originalText;
     }
   });
+}
+
+async function saveTaskSelectionSettings() {
+  if (!aiAnalysisForm || !aiSelectionProfile || !aiFinalClipTarget) return null;
+  const finalTarget = Number(aiFinalClipTarget.value || 5);
+  if (!Number.isInteger(finalTarget) || finalTarget < 1 || finalTarget > 12) {
+    throw new Error("最终启用目标必须是 1 到 12 之间的整数。");
+  }
+  const response = await fetch(`/api/tasks/${aiAnalysisForm.dataset.taskId}/selection-settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      selection_profile: aiSelectionProfile.value || "general",
+      final_clip_target: finalTarget,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "选片设置保存失败");
+  return data;
 }
 
 document.querySelectorAll("[data-sync-publish-task]").forEach((button) => {

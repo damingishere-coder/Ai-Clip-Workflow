@@ -24,7 +24,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.core.config import settings  # noqa: E402
-from app.services.publish_repository import PublishRepository  # noqa: E402
 from app.services.publish_time import utc_now_iso  # noqa: E402
 from app.services.publishers.base import (  # noqa: E402
     PublishError,
@@ -149,7 +148,6 @@ def _resolve_media_path(raw_value: str, *, required: bool) -> str:
 
 def create_worker_app(token: str | None = None) -> FastAPI:
     worker_token = str(token if token is not None else settings.publish_worker_token)
-    repository = PublishRepository()
     worker = FastAPI(title="NiuMa Studio Publish Worker", version="1.5.0")
 
     def require_token(authorization: str = Header(default="")) -> None:
@@ -158,8 +156,7 @@ def create_worker_app(token: str | None = None) -> FastAPI:
         if authorization != f"Bearer {worker_token}":
             raise HTTPException(status_code=401, detail="Worker Token 无效")
 
-    @worker.get("/health")
-    def health() -> dict[str, Any]:
+    def health_payload() -> dict[str, Any]:
         from scripts.opencli_host_bridge import _opencli_executable
 
         opencli_executable = _opencli_executable() if settings.publish_enable_opencli_fallback else None
@@ -173,6 +170,16 @@ def create_worker_app(token: str | None = None) -> FastAPI:
             "opencli_executable": opencli_executable or "",
             "message": "Windows 发布 Worker 已启动",
         }
+
+    @worker.get("/health")
+    def health() -> dict[str, Any]:
+        """供 Windows 本机启动脚本使用的公开健康检查。"""
+        return health_payload()
+
+    @worker.get("/v1/health", dependencies=[Depends(require_token)])
+    def protected_health() -> dict[str, Any]:
+        """供 Docker 调度器使用，同时验证 Worker Token。"""
+        return health_payload()
 
     @worker.post("/run", dependencies=[Depends(require_token)])
     def run_opencli_compat(payload: OpenCliRunRequest) -> dict[str, Any]:
@@ -215,16 +222,8 @@ def create_worker_app(token: str | None = None) -> FastAPI:
                 payload.platform, runtime=runtime, account_id=payload.account_id
             )
             result = publisher.check_login(payload.account_id)
-            normal = str(result.get("login_status") or "") == "normal"
-            repository.update_account_status(
-                payload.account_id,
-                "normal" if normal else "login_required",
-                str(result.get("message") or ""),
-                logged_in=normal,
-            )
             return result
         except PublishError as exc:
-            repository.update_account_status(payload.account_id, "login_required", exc.message)
             return {"login_status": "login_required", "message": exc.message, "error_code": exc.error_code}
         finally:
             lock.release()
@@ -238,16 +237,11 @@ def create_worker_app(token: str | None = None) -> FastAPI:
             publisher = get_platform_publisher(
                 payload.platform, runtime=runtime, account_id=payload.account_id
             )
-            result = publisher.open_login(payload.account_id)
-            normal = str(result.get("login_status") or "") == "normal"
-            repository.update_account_status(
-                payload.account_id,
-                "normal" if normal else "login_required",
-                str(result.get("message") or ""),
-                logged_in=normal,
-            )
-        except Exception as exc:
-            repository.update_account_status(payload.account_id, "login_required", str(exc))
+            publisher.open_login(payload.account_id)
+        except Exception:
+            # Worker 只负责宿主浏览器操作，不直接写 Docker 挂载的 SQLite。
+            # 登录结果由 FastAPI 后续通过账号检测接口统一落库。
+            return
         finally:
             lock.release()
 
@@ -284,7 +278,6 @@ def create_worker_app(token: str | None = None) -> FastAPI:
             values["cover_file_path"] = _resolve_media_path(values["cover_file_path"], required=False)
             def update_phase(phase: str, details: dict[str, Any] | None = None) -> None:
                 journal.update(phase, details)
-                repository.update_execution_phase(payload.job_id, phase, details)
 
             runtime = BrowserRuntime(
                 payload.platform,

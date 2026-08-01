@@ -19,7 +19,7 @@ v1.5.0 将抖音和 B站的立即发送、定时发送统一到 `PublishSchedule
 
 ### 单条真实灰度发布
 
-1. 在项目目录运行 `.\scripts\start_niuma_studio.ps1`，一次启动 Windows Worker、Docker 和发送中心；脚本还会确认发布调度器正在运行，必要时只重启本项目的 `workflow` 服务。
+1. 打开 Docker Desktop 并运行 `niuma-studio` 项目；后台观察器会在容器运行后自动启动 Windows Worker，发送中心显示“Windows Worker：正常”后即可继续。
 2. 打开 `/publish` 的“内容准备 → 账号管理”，分别新增抖音和 B站账号，再点击“打开登录窗口”。
 3. 在系统 Chrome 独立窗口内完成二维码、短信或平台要求的人工验证，然后回到页面点击“检查登录”。
 4. 只选择一条用户确认可发布的短测试视频，核对标题、正文、话题、封面、平台账号和可见范围。
@@ -120,7 +120,8 @@ http://127.0.0.1:8001
 
 - 应用启动时会自动启动 `PublishScheduler`，默认每 5 秒扫描一次 `publish_jobs`。
 - 默认发布方式是 `local_browser`；Docker 中的 FastAPI 通过 `PUBLISH_WORKER_URL=http://host.docker.internal:8765` 调用 Windows Worker。
-- 推荐一键启动：`.\scripts\start_niuma_studio.ps1`，会启动或复用健康 Worker、启动 Docker、检查连接并打开发送中心；单独维护 Worker 时仍可运行 `.\scripts\start_publish_worker.ps1`。
+- 日常启动只需打开 Docker Desktop 并运行 `niuma-studio`；Windows 后台观察器只在该容器运行时启动 Worker，项目停止 15 秒后自动关闭 Worker。
+- `.\scripts\start_niuma_studio.ps1` 和 `.\scripts\start_publish_worker.ps1` 继续保留为开发、诊断或手动维护工具，不再是日常启动必需步骤。
 - 可选的 `manual_export` 会把发布包导出到 `outputs/publish_packages/{task_id}/{clip_id}/`；发布包包含 `clip.mp4`、`title.txt`、`caption.txt`、`hashtags.txt`、`cover_text.txt`、`publish_plan.json` 和 `metadata.json`，成功状态为 `EXPORTED`。
 - 手动执行一次扫描：
 
@@ -164,11 +165,7 @@ pytest --cov=app --cov-report=term-missing
 
 ## Docker 启动
 
-推荐启动方式：牛马片场一键启动，同时包含真实发送所需的 Windows Worker。
-
-```powershell
-.\scripts\start_niuma_studio.ps1
-```
+推荐启动方式：打开 Docker Desktop，在 Containers 中运行 `niuma-studio`。Windows 后台观察器检测到牛马片场的 `workflow` 容器后，会自动准备真实发送所需的 Worker；无需打开 PowerShell。
 
 启动后在浏览器打开：
 
@@ -185,6 +182,7 @@ docker compose down
 Docker 启动说明：
 - 容器内 Python 3.12，已预装 FFmpeg
 - Windows Worker 必须在宿主机运行，容器不会保存 Chrome 登录态
+- `NiuMa Studio Docker Watcher` 只负责等待 Docker 项目；Windows Worker 不会在项目停止时常驻
 - `.env` 文件会被自动加载（如果存在）
 - 存储目录 `E:\直播间切片工作流存储` 会自动挂载到容器内
 - 代码目录和 prompts 目录以 volume 方式挂载，支持热更新

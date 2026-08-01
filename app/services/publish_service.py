@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 import shutil
@@ -37,7 +38,7 @@ from app.services.publish_providers import (
 )
 from app.services.publish_domain import PUBLISH_MODES, TARGET_PLATFORMS
 from app.services.publish_readiness import PublishPlatformIsolationBlocked
-from app.services.publish_time import local_display
+from app.services.publish_time import app_zone, local_display, parse_datetime
 from app.services.storage_service import get_artifact_paths, resolve_video_file_path
 from app.services.video_cut_service import ensure_ffmpeg_available, sanitize_filename_part, summarize_stderr
 
@@ -1025,6 +1026,7 @@ def _get_output_clip_for_publish(task_id: str, output_clip_id: str) -> dict | No
                 output_clip.output_file_name,
                 output_clip.status AS output_status,
                 clip_candidates.title AS clip_title,
+                clip_candidates.cover_time_seconds AS ai_cover_time_seconds,
                 subtitle_jobs.status AS subtitle_status,
                 subtitle_jobs.output_file_path AS subtitled_output_file_path
             FROM output_clip
@@ -1050,6 +1052,7 @@ def _get_output_clip_by_id(output_clip_id: str) -> dict | None:
                 output_clip.output_file_name,
                 output_clip.status AS output_status,
                 clip_candidates.title AS clip_title,
+                clip_candidates.cover_time_seconds AS ai_cover_time_seconds,
                 subtitle_jobs.status AS subtitle_status,
                 subtitle_jobs.output_file_path AS subtitled_output_file_path
             FROM output_clip
@@ -1087,6 +1090,7 @@ def _list_completed_publish_clips(task_id: str | None = None) -> list[dict]:
                 clip_candidates.start_time,
                 clip_candidates.end_time,
                 clip_candidates.duration_seconds,
+                clip_candidates.cover_time_seconds AS ai_cover_time_seconds,
                 subtitle_jobs.status AS subtitle_status,
                 subtitle_jobs.output_file_path AS subtitled_output_file_path
             FROM output_clip
@@ -2082,9 +2086,20 @@ def _cover_frame_times(duration: float, frame_count: int) -> list[float]:
 
 
 def _default_cover_time_seconds(duration: float) -> float:
-    if duration <= 1:
+    if duration <= 0:
         return 0
-    return max(0, min(duration - 0.1, max(1.0, duration * 0.25)))
+    return max(0, min(duration - 0.001, duration / 2))
+
+
+def _resolve_cover_time_seconds(duration: float, preferred_time_seconds: Any = None) -> tuple[float, str]:
+    fallback = _default_cover_time_seconds(duration)
+    try:
+        preferred = float(preferred_time_seconds)
+    except (TypeError, ValueError):
+        return fallback, "midpoint_fallback"
+    if not math.isfinite(preferred) or preferred < 0 or duration <= 0 or preferred >= duration:
+        return fallback, "midpoint_fallback"
+    return round(preferred, 3), "ai_frame"
 
 
 def _unique_frame_cover_path(task_id: str, output_clip_id: str, video_source: str, seconds: float) -> Path:
@@ -2131,21 +2146,35 @@ def _cover_frame_payload(task_id: str, cover_path: Path, seconds: float) -> dict
     }
 
 
-def _generate_default_publish_cover(item: dict, video_source: str = "original") -> dict:
+def generate_publish_cover_for_item(
+    item: dict,
+    preferred_time_seconds: Any = None,
+    video_source: str = "original",
+) -> dict:
+    output_clip_id = str(item.get("output_clip_id") or item.get("id") or "").strip()
+    if not output_clip_id:
+        raise ValueError("封面生成失败：缺少切片编号。")
     _, video_path = _resolve_publish_video_path(
         {
             **item,
-            "output_status": item.get("output_status") or "completed",
+            "output_status": item.get("output_status") or item.get("status") or "completed",
             "subtitle_status": item.get("subtitle_status"),
             "subtitled_output_file_path": item.get("subtitled_output_file_path"),
         },
         video_source,
     )
     duration = _get_video_duration_seconds(video_path)
-    seconds = _default_cover_time_seconds(duration)
-    cover_path = _unique_frame_cover_path(item["task_id"], item["output_clip_id"], video_source, seconds)
+    seconds, cover_source = _resolve_cover_time_seconds(duration, preferred_time_seconds)
+    cover_path = _unique_frame_cover_path(item["task_id"], output_clip_id, video_source, seconds)
     _write_plain_cover_frame(video_path, cover_path, seconds)
-    return _cover_frame_payload(item["task_id"], cover_path, seconds)
+    return {
+        **_cover_frame_payload(item["task_id"], cover_path, seconds),
+        "cover_source": cover_source,
+    }
+
+
+def _generate_default_publish_cover(item: dict, video_source: str = "original") -> dict:
+    return generate_publish_cover_for_item(item, preferred_time_seconds=None, video_source=video_source)
 
 
 def _update_job_cover(job_id: str, cover: dict) -> None:
@@ -2161,6 +2190,161 @@ def _update_job_cover(job_id: str, cover: dict) -> None:
             (float(cover.get("cover_time_seconds") or 0), str(cover.get("cover_file_path") or ""), _now_iso(), job_id),
         )
         connection.commit()
+
+
+def _list_missing_publish_cover_jobs() -> list[dict]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                publish_jobs.id,
+                publish_jobs.task_id,
+                publish_jobs.output_clip_id,
+                publish_jobs.video_source,
+                publish_jobs.title,
+                publish_jobs.provider_response,
+                output_clip.output_file_path,
+                output_clip.output_file_name,
+                output_clip.status AS output_status,
+                clip_candidates.cover_time_seconds AS ai_cover_time_seconds,
+                subtitle_jobs.status AS subtitle_status,
+                subtitle_jobs.output_file_path AS subtitled_output_file_path
+            FROM publish_jobs
+            JOIN output_clip ON output_clip.id = publish_jobs.output_clip_id
+            JOIN tasks ON tasks.id = publish_jobs.task_id
+            LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
+            LEFT JOIN subtitle_jobs
+              ON subtitle_jobs.output_clip_id = output_clip.id
+             AND subtitle_jobs.is_active = 1
+            WHERE publish_jobs.status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'NEED_REVIEW')
+              AND TRIM(COALESCE(publish_jobs.cover_file_path, '')) = ''
+              AND output_clip.is_active = 1
+              AND tasks.is_deleted = 0
+            ORDER BY output_clip.created_at ASC, publish_jobs.created_at ASC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _find_reusable_publish_cover(output_clip_id: str, video_source: str) -> dict | None:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT task_id, cover_file_path, cover_time_seconds
+            FROM publish_jobs
+            WHERE output_clip_id = ?
+              AND video_source = ?
+              AND TRIM(COALESCE(cover_file_path, '')) <> ''
+            ORDER BY updated_at DESC, created_at DESC
+            """,
+            (output_clip_id, video_source),
+        ).fetchall()
+    for row in rows:
+        cover_path = Path(str(row["cover_file_path"] or "").strip())
+        if cover_path.is_file():
+            return {
+                "cover_file_path": str(cover_path),
+                "cover_media_url": _cover_media_url(str(row["task_id"] or ""), str(cover_path)),
+                "cover_time_seconds": float(row["cover_time_seconds"] or 0),
+                "cover_source": "existing_clip_cover",
+            }
+    return None
+
+
+def _apply_cover_to_missing_jobs(jobs: list[dict], cover: dict) -> list[str]:
+    updated_ids: list[str] = []
+    now = _now_iso()
+    with get_connection() as connection:
+        for job in jobs:
+            provider_response = _parse_json_text(job.get("provider_response"))
+            provider_response.update(
+                {
+                    "cover_source": cover.get("cover_source") or "midpoint_fallback",
+                    "cover_time_seconds": float(cover.get("cover_time_seconds") or 0),
+                }
+            )
+            cursor = connection.execute(
+                """
+                UPDATE publish_jobs
+                SET cover_mode = 'time',
+                    cover_time_seconds = ?,
+                    cover_file_path = ?,
+                    provider_response = ?,
+                    updated_at = ?
+                WHERE id = ?
+                  AND status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'NEED_REVIEW')
+                  AND TRIM(COALESCE(cover_file_path, '')) = ''
+                """,
+                (
+                    float(cover.get("cover_time_seconds") or 0),
+                    str(cover.get("cover_file_path") or ""),
+                    json.dumps(provider_response, ensure_ascii=False),
+                    now,
+                    job["id"],
+                ),
+            )
+            if cursor.rowcount:
+                updated_ids.append(job["id"])
+        connection.commit()
+    return updated_ids
+
+
+def backfill_missing_publish_covers() -> dict:
+    missing_jobs = _list_missing_publish_cover_jobs()
+    grouped_jobs: dict[tuple[str, str], list[dict]] = {}
+    for job in missing_jobs:
+        key = (
+            str(job.get("output_clip_id") or ""),
+            str(job.get("video_source") or "original"),
+        )
+        grouped_jobs.setdefault(key, []).append(job)
+
+    generated_cover_count = 0
+    reused_cover_count = 0
+    updated_ids: list[str] = []
+    errors: list[dict] = []
+    for (output_clip_id, video_source), jobs in grouped_jobs.items():
+        item = jobs[0]
+        try:
+            cover = _find_reusable_publish_cover(output_clip_id, video_source)
+            if cover:
+                reused_cover_count += 1
+            else:
+                cover = generate_publish_cover_for_item(
+                    item,
+                    preferred_time_seconds=item.get("ai_cover_time_seconds"),
+                    video_source=video_source,
+                )
+                generated_cover_count += 1
+            updated_ids.extend(_apply_cover_to_missing_jobs(jobs, cover))
+        except Exception as exc:
+            errors.append(
+                {
+                    "output_clip_id": output_clip_id,
+                    "output_file_name": item.get("output_file_name") or item.get("title") or output_clip_id,
+                    "message": str(exc),
+                }
+            )
+
+    updated_jobs = [job for job_id in updated_ids if (job := get_publish_job(job_id))]
+    status = "partial" if errors else "ok"
+    if not missing_jobs:
+        message = "当前没有需要补充封面的未发布任务。"
+    else:
+        message = (
+            f"已生成 {generated_cover_count} 张新封面、复用 {reused_cover_count} 张已有封面，"
+            f"补齐 {len(updated_ids)} 条发布任务，{len(errors)} 条切片处理失败。"
+        )
+    return {
+        "status": status,
+        "message": message,
+        "generated_cover_count": generated_cover_count,
+        "reused_cover_count": reused_cover_count,
+        "updated_job_count": len(updated_ids),
+        "failed_clip_count": len(errors),
+        "errors": errors,
+        "jobs": updated_jobs,
+    }
 
 
 def generate_publish_cover_frames(payload: PublishCoverFrameBatchCreate) -> dict:
@@ -2447,6 +2631,368 @@ def list_publish_jobs(limit: int | None = 100, *, worker_state: dict | None = No
 
         worker_state = scheduler_health()
     return [_normalize_job(row, accounts=accounts, worker_state=worker_state) for row in rows]
+
+
+def _publish_history_anchor(job: dict) -> datetime | None:
+    timezone_name = str(job.get("schedule_timezone") or job.get("timezone") or settings.app_timezone)
+    for field in ("scheduled_at", "started_at", "finished_at", "created_at"):
+        value = str(job.get(field) or "").strip()
+        if not value:
+            continue
+        try:
+            return parse_datetime(value, timezone_name).astimezone(app_zone(settings.app_timezone))
+        except ValueError:
+            continue
+    return None
+
+
+def _validate_history_platform(platform: str) -> str:
+    normalized = str(platform or "").strip().lower()
+    if normalized not in PLATFORM_LABELS:
+        raise ValueError("执行记录平台只支持抖音或 B站")
+    return normalized
+
+
+def _validate_history_month(month: str) -> tuple[int, int]:
+    matched = re.fullmatch(r"(\d{4})-(\d{2})", str(month or "").strip())
+    if not matched:
+        raise ValueError("月份格式必须为 YYYY-MM")
+    year, month_number = int(matched.group(1)), int(matched.group(2))
+    if not 1 <= month_number <= 12:
+        raise ValueError("月份必须在 01 到 12 之间")
+    return year, month_number
+
+
+def _query_publish_history_jobs(
+    *,
+    platform: str,
+    deleted: bool,
+    status: str = "all",
+    worker_state: dict | None = None,
+) -> list[dict]:
+    normalized_platform = _validate_history_platform(platform)
+    normalized_status = str(status or "all").strip().upper()
+    if normalized_status != "ALL" and normalized_status not in PUBLISH_HISTORY_STATUSES:
+        raise ValueError("执行记录状态筛选无效")
+    params: list[Any] = [normalized_platform, 1 if deleted else 0]
+    status_clause = ""
+    if normalized_status != "ALL":
+        status_clause = " AND publish_jobs.status = ?"
+        params.append(normalized_status)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                publish_jobs.*,
+                tasks.task_name,
+                tasks.source_type AS task_source_type,
+                tasks.original_video_path AS task_original_video_path,
+                tasks.nas_file_path AS task_nas_file_path,
+                tasks.created_at AS task_created_at,
+                output_clip.output_file_name,
+                output_clip.created_at AS output_clip_created_at,
+                publish_accounts.account_name,
+                publish_accounts.login_status AS account_login_status,
+                publish_accounts.login_message AS account_login_message
+            FROM publish_jobs
+            LEFT JOIN tasks ON tasks.id = publish_jobs.task_id
+            LEFT JOIN output_clip ON output_clip.id = publish_jobs.output_clip_id
+            LEFT JOIN publish_accounts ON publish_accounts.id = publish_jobs.account_id
+            WHERE publish_jobs.platform = ?
+              AND COALESCE(publish_jobs.history_hidden, 0) = ?
+              AND publish_jobs.status IN ({",".join("?" for _ in PUBLISH_HISTORY_STATUSES)})
+              {status_clause}
+            """,
+            [*params[:2], *sorted(PUBLISH_HISTORY_STATUSES), *params[2:]],
+        ).fetchall()
+    accounts = list_accounts()
+    if worker_state is None:
+        from app.services.publish_scheduler import scheduler_health
+
+        worker_state = scheduler_health()
+    jobs = [_normalize_job(row, accounts=accounts, worker_state=worker_state) for row in rows]
+    for job in jobs:
+        anchor = _publish_history_anchor(job)
+        job["history_date"] = anchor.date().isoformat() if anchor else ""
+        job["history_anchor_at"] = anchor.isoformat(timespec="seconds") if anchor else ""
+    return jobs
+
+
+def get_publish_history_calendar(platform: str, month: str) -> dict:
+    normalized_platform = _validate_history_platform(platform)
+    year, month_number = _validate_history_month(month)
+    counts_template = {status: 0 for status in sorted(PUBLISH_HISTORY_STATUSES)}
+    days: dict[str, dict[str, Any]] = {}
+    for job in _query_publish_history_jobs(platform=normalized_platform, deleted=False):
+        anchor = _publish_history_anchor(job)
+        if not anchor or anchor.year != year or anchor.month != month_number:
+            continue
+        date_key = anchor.date().isoformat()
+        item = days.setdefault(date_key, {"date": date_key, "total": 0, "counts": dict(counts_template)})
+        status = str(job.get("status") or "").upper()
+        item["total"] += 1
+        if status in item["counts"]:
+            item["counts"][status] += 1
+    return {
+        "platform": normalized_platform,
+        "month": f"{year:04d}-{month_number:02d}",
+        "timezone": settings.app_timezone,
+        "days": [days[key] for key in sorted(days)],
+    }
+
+
+def list_publish_history_records(
+    *,
+    platform: str,
+    date: str = "",
+    status: str = "all",
+    deleted: bool = False,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict:
+    normalized_platform = _validate_history_platform(platform)
+    normalized_date = str(date or "").strip()
+    if normalized_date:
+        try:
+            datetime.strptime(normalized_date, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("日期格式必须为 YYYY-MM-DD") from exc
+    current_page = max(1, int(page))
+    size = min(50, max(1, int(page_size)))
+    jobs = _query_publish_history_jobs(
+        platform=normalized_platform,
+        deleted=bool(deleted),
+        status=status,
+    )
+    if normalized_date:
+        jobs = [job for job in jobs if job.get("history_date") == normalized_date]
+    jobs.sort(
+        key=lambda job: (
+            str(job.get("history_anchor_at") or ""),
+            str(job.get("created_at") or ""),
+            str(job.get("id") or ""),
+        ),
+        reverse=True,
+    )
+    total = len(jobs)
+    total_pages = math.ceil(total / size) if total else 0
+    if total_pages and current_page > total_pages:
+        current_page = total_pages
+    offset = (current_page - 1) * size
+    return {
+        "jobs": jobs[offset:offset + size],
+        "pagination": {
+            "page": current_page,
+            "page_size": size,
+            "total": total,
+            "total_pages": total_pages,
+        },
+        "filters": {
+            "platform": normalized_platform,
+            "date": normalized_date,
+            "status": str(status or "all").upper(),
+            "deleted": bool(deleted),
+        },
+        "timezone": settings.app_timezone,
+    }
+
+
+def _update_publish_history_visibility(
+    job_ids: list[str],
+    *,
+    platform: str,
+    hidden: bool,
+) -> dict:
+    from app.services.publish_repository import PublishRepository
+
+    normalized_platform = _validate_history_platform(platform)
+    ids = list(dict.fromkeys(str(job_id).strip() for job_id in job_ids if str(job_id).strip()))
+    if not ids:
+        raise ValueError("至少选择一条执行记录")
+    if len(ids) > 100:
+        raise ValueError("每次最多处理 100 条执行记录")
+    placeholders = ",".join("?" for _ in ids)
+    repository = PublishRepository()
+    now = _now_iso()
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        rows = connection.execute(
+            f"SELECT * FROM publish_jobs WHERE id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        if len(rows) != len(ids):
+            raise ValueError("部分执行记录不存在")
+        jobs = [dict(row) for row in rows]
+        if {str(job.get("platform") or "") for job in jobs} != {normalized_platform}:
+            raise PublishPlatformIsolationBlocked("当前平台与所选执行记录不一致")
+        if hidden:
+            blocked = [
+                job for job in jobs
+                if str(job.get("status") or "").upper() not in PUBLISH_HISTORY_HIDEABLE_STATUSES
+            ]
+            if blocked:
+                raise ValueError("只有已发布、发送失败、已导出或已取消的终态记录可以删除")
+        target_value = 1 if hidden else 0
+        target_time = now if hidden else None
+        connection.execute(
+            f"""
+            UPDATE publish_jobs
+            SET history_hidden = ?, history_hidden_at = ?
+            WHERE id IN ({placeholders})
+            """,
+            (target_value, target_time, *ids),
+        )
+        for job in jobs:
+            if bool(job.get("history_hidden")) == hidden:
+                continue
+            repository.add_event(
+                str(job["id"]),
+                "history_record_hidden" if hidden else "history_record_restored",
+                from_status=str(job.get("status") or ""),
+                to_status=str(job.get("status") or ""),
+                message="用户从执行记录中安全删除该记录" if hidden else "用户恢复已删除的执行记录",
+                payload={
+                    "platform": normalized_platform,
+                    "files_deleted": False,
+                    "platform_item_deleted": False,
+                },
+                connection=connection,
+            )
+        connection.commit()
+    return {
+        "status": "ok",
+        "affected_count": len(ids),
+        "job_ids": ids,
+        "message": (
+            f"已安全删除 {len(ids)} 条执行记录；视频、执行明细和平台作品均已保留。"
+            if hidden
+            else f"已恢复 {len(ids)} 条执行记录。"
+        ),
+    }
+
+
+def hide_publish_history_records(job_ids: list[str], *, platform: str) -> dict:
+    return _update_publish_history_visibility(job_ids, platform=platform, hidden=True)
+
+
+def restore_publish_history_records(job_ids: list[str], *, platform: str) -> dict:
+    return _update_publish_history_visibility(job_ids, platform=platform, hidden=False)
+
+
+def dismiss_publish_job(job_id: str) -> dict:
+    from app.services.publish_repository import PublishRepository
+
+    repository = PublishRepository()
+    now = _now_iso()
+    allowed_statuses = {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_SCHEDULED}
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute("SELECT * FROM publish_jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            raise ValueError("发布内容不存在")
+        job = dict(row)
+        source_status = _normalize_publish_status(job.get("status"))
+        if source_status not in allowed_statuses:
+            raise ValueError("只有草稿、等待或已排期内容可以移出内容准备")
+        cursor = connection.execute(
+            """
+            UPDATE publish_jobs
+            SET status = 'CANCELLED', scheduled_at = '', next_attempt_at = NULL,
+                finished_at = ?, error_code = ?, error_message = '', last_error = '',
+                needs_manual_review = 0, execution_phase = '', updated_at = ?
+            WHERE id = ? AND status = ?
+            """,
+            (now, USER_REMOVED_ERROR_CODE, now, job_id, job.get("status")),
+        )
+        if not cursor.rowcount:
+            raise ValueError("发布内容状态已经变化，请刷新后重试")
+        repository.add_event(
+            job_id,
+            "removed_from_preparation",
+            from_status=source_status,
+            to_status=PUBLISH_STATUS_CANCELLED,
+            error_code=USER_REMOVED_ERROR_CODE,
+            message="用户从内容准备移除当前平台发布内容",
+            payload={
+                "platform": job.get("platform") or "",
+                "output_clip_id": job.get("output_clip_id") or "",
+                "files_deleted": False,
+            },
+            connection=connection,
+        )
+        connection.commit()
+    return {
+        "status": "ok",
+        "message": "已从当前平台的内容准备中移出；原视频和裁剪文件均已保留。",
+        "job": get_publish_job(job_id),
+    }
+
+
+def restore_publish_job(job_id: str) -> dict:
+    from app.services.publish_repository import PublishRepository
+
+    repository = PublishRepository()
+    now = _now_iso()
+    active_statuses = (
+        PUBLISH_STATUS_DRAFT,
+        PUBLISH_STATUS_WAITING,
+        PUBLISH_STATUS_SCHEDULED,
+        PUBLISH_STATUS_PUBLISHING,
+        PUBLISH_STATUS_NEED_REVIEW,
+    )
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute("SELECT * FROM publish_jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            raise ValueError("发布内容不存在")
+        job = dict(row)
+        if (
+            _normalize_publish_status(job.get("status")) != PUBLISH_STATUS_CANCELLED
+            or str(job.get("error_code") or "") != USER_REMOVED_ERROR_CODE
+        ):
+            raise ValueError("只有从内容准备手动移出的记录可以恢复")
+        duplicate = connection.execute(
+            f"""
+            SELECT id FROM publish_jobs
+            WHERE id <> ? AND output_clip_id = ? AND platform = ?
+              AND status IN ({','.join('?' for _ in active_statuses)})
+            ORDER BY COALESCE(NULLIF(updated_at, ''), created_at) DESC
+            LIMIT 1
+            """,
+            (job_id, job.get("output_clip_id"), job.get("platform"), *active_statuses),
+        ).fetchone()
+        if duplicate:
+            raise ValueError("同一裁剪片段在当前平台已有有效发布内容，不能重复恢复")
+        cursor = connection.execute(
+            """
+            UPDATE publish_jobs
+            SET status = 'WAITING', scheduled_at = '', next_attempt_at = NULL,
+                finished_at = NULL, error_code = '', error_message = '', last_error = '',
+                needs_manual_review = 0, execution_phase = '', updated_at = ?
+            WHERE id = ? AND status = 'CANCELLED' AND error_code = ?
+            """,
+            (now, job_id, USER_REMOVED_ERROR_CODE),
+        )
+        if not cursor.rowcount:
+            raise ValueError("发布内容状态已经变化，请刷新后重试")
+        repository.add_event(
+            job_id,
+            "restored_to_preparation",
+            from_status=PUBLISH_STATUS_CANCELLED,
+            to_status=PUBLISH_STATUS_WAITING,
+            message="用户将当前平台发布内容重新加入内容准备",
+            payload={
+                "platform": job.get("platform") or "",
+                "output_clip_id": job.get("output_clip_id") or "",
+            },
+            connection=connection,
+        )
+        connection.commit()
+    return {
+        "status": "ok",
+        "message": "已重新加入当前平台的内容准备，请重新确认账号和排期。",
+        "job": get_publish_job(job_id),
+    }
 
 
 def update_publish_job_status(job_id: str, status: str, error_message: str = "") -> dict:

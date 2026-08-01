@@ -82,7 +82,7 @@ def test_local_browser_checks_login_and_forwards_platform_payload(tmp_path, plat
     assert worker.checked == [(platform, "account-1")]
     assert worker.payloads[0]["platform"] == platform
     assert worker.payloads[0]["video_path"] == str(video.resolve())
-    assert repository.results == [("job-1", result)]
+    assert repository.results == []
 
 
 def test_login_expired_becomes_need_review_without_upload(tmp_path):
@@ -99,7 +99,7 @@ def test_login_expired_becomes_need_review_without_upload(tmp_path):
     assert result.error_code == "account_login_required"
     assert result.needs_manual_review is True
     assert worker.payloads == []
-    assert repository.results[0][1] == result
+    assert repository.results == []
 
 
 def test_bilibili_repost_requires_source(tmp_path):

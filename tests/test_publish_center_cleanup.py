@@ -28,7 +28,7 @@ def test_legacy_publish_frontend_handlers_are_removed() -> None:
 
 
 def test_current_single_send_route_remains_and_legacy_routes_are_removed() -> None:
-    route_paths = {route.path for route in app.routes}
+    route_paths = set(app.openapi()["paths"])
 
     assert "/api/publish/jobs/{job_id}/publish-now" in route_paths
     assert "/api/publish/jobs/{job_id}/send" not in route_paths

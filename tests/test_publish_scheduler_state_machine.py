@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from app.db.database import _cancel_duplicate_active_publish_jobs, get_connection, init_db
+from app.db import database as database_module
+from app.db.database import (
+    _backup_publish_database_before_data_migration,
+    _cancel_duplicate_active_publish_jobs,
+    get_connection,
+    init_db,
+)
+from app.services import publish_scheduler as scheduler_module
 from app.services.publish_scheduler import PublishScheduler
 from app.services.publishers.base import PublishOutcome, PublishResult
 
@@ -127,12 +136,120 @@ def test_duplicate_cleanup_preserves_failed_and_need_review_history():
     assert statuses == {"failed-history": "FAILED", "review-history": "NEED_REVIEW"}
 
 
+def test_migration_backup_ignores_failed_and_need_review_retry_pair(monkeypatch, tmp_path):
+    database_path = tmp_path / "workflow.sqlite3"
+    connection = sqlite3.connect(database_path)
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE publish_jobs (
+            id TEXT PRIMARY KEY, output_clip_id TEXT, platform TEXT, publish_mode TEXT,
+            status TEXT
+        )
+        """
+    )
+    connection.executemany(
+        """
+        INSERT INTO publish_jobs (id, output_clip_id, platform, publish_mode, status)
+        VALUES (?, 'clip-1', 'douyin', 'local_browser', ?)
+        """,
+        [("failed-history", "FAILED"), ("review-retry", "NEED_REVIEW")],
+    )
+    connection.commit()
+    monkeypatch.setattr(
+        database_module,
+        "settings",
+        SimpleNamespace(database_path=database_path, data_dir=tmp_path),
+    )
+
+    _backup_publish_database_before_data_migration(connection)
+
+    connection.close()
+    assert not (tmp_path / "backups").exists()
+
+
 def test_not_due_job_is_not_claimed(tmp_path):
     calls: list[str] = []
     job_id = _job(tmp_path, scheduled_in=3600)
     PublishScheduler(executor=_executor(PublishResult(PublishOutcome.PUBLISHED), calls)).run_once()
     assert calls == []
     assert _raw(job_id)["status"] == "SCHEDULED"
+
+
+def test_cancel_send_returns_job_to_preparation_and_clears_schedule(tmp_path):
+    job_id = _job(tmp_path, status="SCHEDULED", scheduled_in=3600)
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE publish_jobs
+            SET next_attempt_at = ?, claimed_at = ?, finished_at = ?,
+                execution_id = 'old-execution', execution_phase = 'received',
+                error_code = 'old-error', error_message = '旧错误', last_error = '旧错误',
+                needs_manual_review = 1
+            WHERE id = ?
+            """,
+            (_iso(3600), _iso(), _iso(), job_id),
+        )
+        connection.commit()
+
+    result = PublishScheduler().cancel_job(job_id)
+    job = _raw(job_id)
+
+    assert result["job"]["status"] == "WAITING"
+    assert "返回内容准备" in result["message"]
+    assert job["scheduled_at"] == ""
+    assert job["next_attempt_at"] is None
+    assert job["claimed_at"] is None
+    assert job["finished_at"] is None
+    assert job["execution_id"] is None
+    assert job["execution_phase"] == ""
+    assert job["error_code"] == ""
+    assert job["error_message"] == ""
+    assert job["needs_manual_review"] == 0
+    with get_connection() as connection:
+        event = connection.execute(
+            "SELECT * FROM publish_job_events WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()
+    assert event["event_type"] == "returned_to_preparation"
+    assert event["from_status"] == "SCHEDULED"
+    assert event["to_status"] == "WAITING"
+
+
+def test_skip_remains_terminal_cancelled(tmp_path):
+    job_id = _job(tmp_path, status="WAITING")
+
+    PublishScheduler().skip_job(job_id)
+
+    assert _raw(job_id)["status"] == "CANCELLED"
+    assert _raw(job_id)["error_message"] == "用户跳过任务"
+
+
+def test_legacy_user_cancel_is_restored_on_database_init(tmp_path):
+    job_id = _job(tmp_path, status="CANCELLED", scheduled_in=3600)
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE publish_jobs
+            SET error_code = '', error_message = '用户取消任务', last_error = '用户取消任务'
+            WHERE id = ?
+            """,
+            (job_id,),
+        )
+        connection.commit()
+
+    init_db()
+    job = _raw(job_id)
+
+    assert job["status"] == "WAITING"
+    assert job["scheduled_at"] == ""
+    assert job["error_message"] == ""
+    with get_connection() as connection:
+        event = connection.execute(
+            "SELECT event_type FROM publish_job_events WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()
+    assert event["event_type"] == "legacy_cancel_restored"
 
 
 def test_retry_returns_clear_error_when_same_clip_has_active_replacement(tmp_path):
@@ -200,3 +317,81 @@ def test_manual_retry_creates_new_task_and_keeps_failed_history(tmp_path):
     assert _raw(created["job_id"])["retry_of_job_id"] == old_id
     assert _raw(created["job_id"])["status"] == "SCHEDULED"
     assert _raw(created["job_id"])["visibility"] == "private"
+
+
+def test_run_forever_retries_after_transient_database_error(monkeypatch):
+    scheduler = PublishScheduler(interval_seconds=1)
+    attempts: list[int] = []
+
+    def flaky_run_once():
+        attempts.append(len(attempts) + 1)
+        if len(attempts) == 1:
+            raise sqlite3.OperationalError("database temporarily unavailable")
+        scheduler._record_scan_success(datetime.now(timezone.utc))
+        scheduler.stop()
+        return {"status": "ok"}
+
+    monkeypatch.setattr(scheduler, "run_once", flaky_run_once)
+    asyncio.run(asyncio.wait_for(scheduler.run_forever(), timeout=3))
+
+    assert attempts == [1, 2]
+    assert scheduler_module._SCHEDULER_HEALTH["running"] is False
+    assert scheduler_module._SCHEDULER_HEALTH["consecutive_failures"] == 0
+    assert scheduler_module._SCHEDULER_HEALTH["last_error_code"] == ""
+
+
+def test_unexpected_job_error_does_not_block_later_due_jobs(monkeypatch):
+    scheduler = PublishScheduler()
+    calls: list[str] = []
+    monkeypatch.setattr(scheduler, "recover_interrupted_jobs", lambda: 0)
+    monkeypatch.setattr(
+        scheduler,
+        "list_due_jobs",
+        lambda: [{"id": "broken-job"}, {"id": "later-job"}],
+    )
+
+    def execute(job_id: str):
+        calls.append(job_id)
+        if job_id == "broken-job":
+            raise ValueError("broken")
+        return {"status": "skipped", "job_id": job_id}
+
+    monkeypatch.setattr(scheduler, "execute_job", execute)
+    monkeypatch.setattr(
+        scheduler,
+        "_mark_need_review",
+        lambda job_id, error_code, message: {
+            "status": "need_review",
+            "job_id": job_id,
+            "error_code": error_code,
+            "message": message,
+        },
+    )
+
+    result = scheduler.run_once()
+
+    assert calls == ["broken-job", "later-job"]
+    assert result["need_review_count"] == 1
+    assert result["skipped_count"] == 1
+
+
+def test_terminal_result_rolls_back_when_job_state_changed(tmp_path):
+    job_id = _job(tmp_path, status="PUBLISHED")
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE publish_jobs SET provider_response = ? WHERE id = ?",
+            ('{"original": true}', job_id),
+        )
+        connection.commit()
+
+    result = PublishScheduler()._mark_published(
+        job_id,
+        PublishResult(
+            outcome=PublishOutcome.PUBLISHED,
+            message="新结果",
+            provider_response={"replacement": True},
+        ),
+    )
+
+    assert result["status"] == "skipped"
+    assert _raw(job_id)["provider_response"] == '{"original": true}'

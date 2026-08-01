@@ -20,6 +20,8 @@
 -> 自动切割输出短视频
 ```
 
+针对《康熙来了》类综艺，可以在新建任务或任务详情里选择“综艺笑点优先”。该模式先按重叠窗口找笑点，再补齐前后文，最后全局去重和评分；候选池默认 12 条，但只会默认启用最多 5 条 A 级内容，质量不足时不会凑数。现有直播和通用长视频继续使用“通用内容价值”模式。
+
 ## 2. 当前项目目录
 
 ```text
@@ -34,23 +36,13 @@ Docker 的好处是：不用每次手动激活 `.venv`，端口映射清楚，�
 
 第一次启动前，先确认 Docker Desktop 已经打开。
 
-然后打开 PowerShell，进入项目目录：
+日常不需要打开 PowerShell，也不需要输入命令：
 
-```powershell
-cd "C:\Users\10578\Documents\New project 2"
-```
+1. 打开 Docker Desktop。
+2. 在 Containers 中找到并运行 `niuma-studio`。
+3. 等待发送中心的“Windows Worker”显示“正常”。
 
-推荐启动项目和真实发送 Worker：
-
-```powershell
-.\scripts\start_niuma_studio.ps1
-```
-
-这条命令会启动或复用 Windows Chrome 发布 Worker、启动 Docker、检查连接，并自动打开发送中心。只想启动 Docker、暂时不用真实发送时，才运行：
-
-```powershell
-docker compose up --build
-```
+项目已经安装 `NiuMa Studio Docker Watcher` 后台观察器。它只等待当前项目的 Docker 容器；容器运行后自动启动 Windows Chrome Worker，项目停止 15 秒后自动关闭 Worker。旧启动脚本继续保留给开发助手诊断，不作为日常操作。
 
 看到服务启动后，在浏览器打开：
 
@@ -209,14 +201,7 @@ http://127.0.0.1:8001
 
 如果 AI 提示缺少 Key，先到系统状态页检查对应的三类接口：音频转写看火山引擎 Key，文字稿分析看 `AI_ANALYSIS_REMOTE_API_KEY`，发送中心文案看 `AI_PUBLISH_REMOTE_API_KEY`。
 
-如果发送中心提示“Windows Worker 未连接”，先不要点击“立即发送”。按下面顺序处理：
-
-```powershell
-cd "C:\Users\10578\Documents\New project 2"
-.\scripts\start_niuma_studio.ps1
-```
-
-脚本会检查 Docker、Chrome、Worker、发送中心连接和发布调度器；如果页面正常但调度器意外退出，会只重启本项目的 `workflow` 服务。全部正常后打开 `http://127.0.0.1:8001/publish`。页面打开后按 `Ctrl + F5` 强制刷新；如果仍然报错，把脚本显示的完整中文错误和 `publish_worker_8765.err.log` 发给开发助手继续排查。
+如果发送中心提示“Windows Worker 未连接”，先不要点击“立即发送”。刚运行 Docker 项目时先等待十几秒，再点击“重新检测”。如果持续未连接，在 Docker Desktop 中停止 `niuma-studio`，等待 15 秒后重新运行；不需要输入命令。仍未恢复时，把发送中心提示交给开发助手检查 `data/logs/docker_publish_worker_watcher.log` 和 `publish_worker_8765.err.log`。
 
 如果转写速度很慢，可能是没有使用 NVIDIA 显卡。可以在 `.env` 中把转写配置改成 CPU 模式，但速度会慢一些。
 

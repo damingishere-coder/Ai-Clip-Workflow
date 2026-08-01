@@ -1,5 +1,6 @@
 # ruff: noqa: F401
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -37,6 +38,7 @@ from app.services.ai_analysis_workflow_service import (
     process_task_ai_analysis,
     restore_ai_analysis_run,
 )
+from app.services.clip_feedback_service import save_clip_feedback
 from app.services.storage_service import (
     get_artifact_paths,
     get_source_video_path,
@@ -47,6 +49,7 @@ from app.services.task_lifecycle_service import (
     soft_delete_task,
     update_task_ai_preference,
     update_task_candidate_clip_count,
+    update_task_selection_settings,
     update_task_status,
 )
 from app.services.task_log_service import append_task_log as _append_task_log, read_task_log_tail as _read_task_log_tail
@@ -448,6 +451,11 @@ def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
         "status_label": get_status_label(status),
         "progress": progress,
         "candidate_count": task.get("candidate_clip_count") or 0,
+        "selection_profile": task.get("selection_profile") or "general",
+        "selection_profile_label": (
+            "综艺笑点优先" if task.get("selection_profile") == "variety_comedy" else "通用模式"
+        ),
+        "final_clip_target": int(task.get("final_clip_target") or 5),
         "duration": video_meta["duration"],
         "video_size": video_meta["video_size"],
         "owner": "本地用户",
@@ -485,7 +493,8 @@ def list_tasks(include_deleted: bool = False) -> list[dict]:
             f"""
             SELECT
                 id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path,
-                max_clip_duration, candidate_clip_count, ai_preference, ai_prompt_preset_id, auto_mode,
+                max_clip_duration, candidate_clip_count, selection_profile, final_clip_target,
+                ai_preference, ai_prompt_preset_id, auto_mode,
                 auto_config_json, status, progress, error_message, last_error,
                 is_deleted, deleted_at, created_at, updated_at
             FROM tasks
@@ -502,7 +511,8 @@ def get_task(task_id: str, include_video_probe: bool = True) -> dict | None:
             """
             SELECT
                 id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path,
-                max_clip_duration, candidate_clip_count, ai_preference, ai_prompt_preset_id, auto_mode,
+                max_clip_duration, candidate_clip_count, selection_profile, final_clip_target,
+                ai_preference, ai_prompt_preset_id, auto_mode,
                 auto_config_json, status, progress, error_message, last_error,
                 is_deleted, deleted_at, created_at, updated_at
             FROM tasks
@@ -518,8 +528,10 @@ def list_clip_candidates(task_id: str) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, task_id, clip_key, title, start_time, end_time, duration_seconds, summary,
-                   reason, highlight_reason, spread_value, suggested_editing, confidence_score,
+            SELECT id, task_id, clip_key, title, start_time, end_time, duration_seconds, cover_time_seconds,
+                   summary, reason, highlight_reason, spread_value, suggested_editing, confidence_score,
+                   quality_tier, quality_score, text_quality_score, humor_score, completeness_score,
+                   audio_reaction_score, topic_key, key_moment_time, quality_evidence_json, rejection_reason,
                    selected_by_default, enabled, reviewed, is_deleted, deleted_at, created_at, updated_at
             FROM clip_candidates
             WHERE task_id = ? AND is_deleted = 0
@@ -532,6 +544,12 @@ def list_clip_candidates(task_id: str) -> list[dict]:
         clip = dict(row)
         highlight_reason = clip.get("highlight_reason") or clip.get("reason") or ""
         confidence_score = clip.get("confidence_score") or 0
+        try:
+            quality_evidence = json.loads(clip.get("quality_evidence_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            quality_evidence = {}
+        if not isinstance(quality_evidence, dict):
+            quality_evidence = {}
         clips.append(
             {
                 **clip,
@@ -542,6 +560,16 @@ def list_clip_candidates(task_id: str) -> list[dict]:
                 "suggested_editing": clip.get("suggested_editing") or "",
                 "confidence_score": float(confidence_score),
                 "confidence_percent": int(round(float(confidence_score) * 100)),
+                "quality_tier": clip.get("quality_tier") or "",
+                "quality_score": float(clip.get("quality_score") or 0),
+                "text_quality_score": float(clip.get("text_quality_score") or 0),
+                "humor_score": float(clip.get("humor_score") or 0),
+                "completeness_score": float(clip.get("completeness_score") or 0),
+                "audio_reaction_score": float(clip.get("audio_reaction_score") or 0),
+                "topic_key": clip.get("topic_key") or "",
+                "key_moment_time": clip.get("key_moment_time") or "",
+                "quality_evidence": quality_evidence,
+                "rejection_reason": clip.get("rejection_reason") or "",
                 "ai_source_label": ai_source_label,
                 "selected_by_default": bool(clip.get("selected_by_default")),
                 "enabled": bool(clip.get("enabled")),
@@ -757,8 +785,10 @@ def list_enabled_clip_candidates(task_id: str) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, task_id, clip_key, title, start_time, end_time, duration_seconds, summary,
-                   reason, highlight_reason, spread_value, suggested_editing, confidence_score,
+            SELECT id, task_id, clip_key, title, start_time, end_time, duration_seconds, cover_time_seconds,
+                   summary, reason, highlight_reason, spread_value, suggested_editing, confidence_score,
+                   quality_tier, quality_score, text_quality_score, humor_score, completeness_score,
+                   audio_reaction_score, topic_key, key_moment_time, quality_evidence_json, rejection_reason,
                    selected_by_default, enabled, reviewed, is_deleted, deleted_at, created_at, updated_at
             FROM clip_candidates
             WHERE task_id = ? AND enabled = 1 AND is_deleted = 0
@@ -811,6 +841,7 @@ def list_output_clips(task_id: str) -> list[dict]:
                 clip_candidates.start_time AS clip_start_time,
                 clip_candidates.end_time AS clip_end_time,
                 clip_candidates.duration_seconds AS clip_duration_seconds,
+                clip_candidates.cover_time_seconds AS cover_time_seconds,
                 clip_candidates.summary AS clip_summary,
                 clip_candidates.enabled AS clip_enabled,
                 subtitle_jobs.id AS subtitle_job_id,

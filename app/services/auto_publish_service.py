@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from app.core.config import settings
 from app.db.database import get_connection
-from app.services.publish_service import DEFAULT_BILIBILI_TID, get_publish_job
+from app.services.publish_service import DEFAULT_BILIBILI_TID, USER_REMOVED_ERROR_CODE, get_publish_job
 from app.services.publish_domain import validate_publish_mode, validate_target_platform
 from app.services.task_service import _now_iso
 
@@ -32,8 +32,26 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
         for item in scheduled_items:
             output_clip = item["output_clip"]
             metadata = item["metadata"]
+            cover = item.get("cover") or {}
             platform = validate_target_platform(metadata["platform"])
             publish_mode = validate_publish_mode(settings.publish_default_mode)
+            latest = connection.execute(
+                """
+                SELECT id, status, error_code
+                FROM publish_jobs
+                WHERE output_clip_id = ? AND platform = ?
+                ORDER BY COALESCE(NULLIF(updated_at, ''), created_at) DESC, created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (output_clip["id"], platform),
+            ).fetchone()
+            if (
+                latest
+                and str(latest["status"] or "").upper() == "CANCELLED"
+                and str(latest["error_code"] or "") == USER_REMOVED_ERROR_CODE
+            ):
+                skipped_ids.append(latest["id"])
+                continue
             existing = connection.execute(
                 """
                 SELECT id
@@ -49,6 +67,10 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                 skipped_ids.append(existing["id"])
                 continue
 
+            cover_file_path = str(cover.get("cover_file_path") or "").strip()
+            if not cover_file_path:
+                raise ValueError(f"{output_clip.get('id') or '未知切片'} 没有生成封面，已停止创建不完整的发布任务")
+            cover_time_seconds = float(cover.get("cover_time_seconds") or 0)
             account = connection.execute(
                 """
                 SELECT id FROM publish_accounts
@@ -73,6 +95,8 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                 "metadata_source": metadata.get("source") or "",
                 "metadata_error": metadata.get("error") or "",
                 "cover_text": metadata.get("cover_text") or "",
+                "cover_source": cover.get("cover_source") or "midpoint_fallback",
+                "cover_time_seconds": cover_time_seconds,
                 "risk_flags": metadata.get("risk_flags") or [],
                 "publish_mode": publish_mode,
                 "note": "全自动流水线已直接创建最终发布任务，可在发送中心设置排期。",
@@ -89,7 +113,7 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                     provider_response, publish_result, max_attempts, created_at, updated_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'public',
-                    'auto', 0, 1, ?, 'original', '', '', ?, ?, ?, ?, 'not_submitted', '', '', ?, '', ?, ?, ?)
+                    'time', ?, 1, ?, 'original', '', ?, ?, ?, ?, ?, 'not_submitted', '', '', ?, '', ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -108,7 +132,9 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                     ", ".join(metadata.get("hashtags") or []),
                     metadata.get("cover_text") or "",
                     json.dumps(metadata.get("risk_flags") or [], ensure_ascii=False),
+                    cover_time_seconds,
                     DEFAULT_BILIBILI_TID,
+                    cover_file_path,
                     scheduled_at,
                     settings.app_timezone,
                     settings.app_timezone,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.services import publish_service
@@ -54,22 +55,17 @@ def test_busy_account_check_is_not_mislabeled_as_expired(monkeypatch):
     assert result["account"]["login_status"] == "busy"
 
 
-def test_worker_login_background_updates_normal_and_timeout(monkeypatch):
-    statuses: list[tuple[str, str]] = []
-
+def test_worker_login_background_never_writes_sqlite(monkeypatch):
     class FakePublisher:
-        def __init__(self) -> None:
-            self.result = {"login_status": "normal", "message": "登录成功"}
-
         def open_login(self, _account_id):
-            return self.result
+            return {"login_status": "normal", "message": "登录成功"}
 
     publisher = FakePublisher()
     monkeypatch.setattr(publish_host_worker, "get_platform_publisher", lambda *_args, **_kwargs: publisher)
     monkeypatch.setattr(
         PublishRepository,
         "update_account_status",
-        lambda _self, account_id, status, _message, **_kwargs: statuses.append((account_id, status)),
+        lambda *_args, **_kwargs: pytest.fail("Windows Worker 不得直接写 SQLite"),
     )
     client = TestClient(publish_host_worker.create_worker_app(token="test-token"))
     headers = {"Authorization": "Bearer test-token"}
@@ -80,16 +76,6 @@ def test_worker_login_background_updates_normal_and_timeout(monkeypatch):
         json={"platform": "douyin", "account_id": "account-background"},
     )
     assert response.status_code == 202
-    assert statuses[-1] == ("account-background", "normal")
-
-    publisher.result = {"login_status": "login_required", "message": "等待登录超时"}
-    response = client.post(
-        "/v1/accounts/login",
-        headers=headers,
-        json={"platform": "douyin", "account_id": "account-background"},
-    )
-    assert response.status_code == 202
-    assert statuses[-1] == ("account-background", "login_required")
 
 
 def test_worker_rejects_second_window_for_busy_account():

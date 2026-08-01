@@ -1,5 +1,30 @@
 # 数据库结构说明
 
+## 2026-08-01：康熙笑点优先 V2 兼容迁移
+
+- `tasks` 新增 `selection_profile TEXT NOT NULL DEFAULT 'general'` 与 `final_clip_target INTEGER NOT NULL DEFAULT 5`。历史任务自动保持 `general`，不会改变原有分析行为。
+- `clip_candidates` 新增 `quality_tier`、`quality_score`、`text_quality_score`、`humor_score`、`completeness_score`、`audio_reaction_score`、`topic_key`、`key_moment_time`、`quality_evidence_json` 和 `rejection_reason`。
+- 新增 `clip_feedback` 表，保存任务、候选、当次分析、选片模式、保留/拒绝判断、原因、备注和标题/摘要/时间快照；反馈不会删除候选或分析历史。
+- 新增索引 `idx_clip_feedback_profile_created` 与 `idx_clip_feedback_task_clip`，用于读取近期个人口味和定位候选反馈。
+- 所有变更继续使用 `CREATE TABLE IF NOT EXISTS` 与逐列 `ALTER TABLE ADD COLUMN`；不删除字段、不重建历史表、不改写历史候选。
+- `ai_prompt_presets` 新增 4 号内置方案“康熙笑点优先 V2”。若 `preset_004` 已有非空自定义内容，初始化会原样保留，不覆盖用户 Prompt。
+
+## 2026-07-28：SQLite 迁移备份安全与保留规则
+
+- 发布数据迁移只有在发现旧平台值或真正活跃的重复任务时才生成迁移前快照；失败、已发布、已取消和人工复核历史不会触发重复备份。
+- 备份与数据修复使用 `BEGIN IMMEDIATE` 串行化。快照由独立只读连接写入唯一临时文件，通过 `PRAGMA quick_check` 后再原子改名；备份失败时数据修复回滚。
+- 同类有效备份设置 24 小时冷却时间，并自动保留最近 14 个备份日、每天一份。
+- 维护命令为 `.venv\Scripts\python.exe scripts\cleanup_database_backups.py`；默认只预演，添加 `--apply` 才删除 `data/backups/workflow-before-publish-migration-*.sqlite3`。
+- 清理前必须保证主数据库和每天拟保留的快照完整；脚本不会删除主数据库、任务素材、浏览器登录状态或其他不匹配的文件。
+
+## 2026-07-28：执行记录安全隐藏与月历查询
+
+- `publish_jobs` 新增 `history_hidden INTEGER NOT NULL DEFAULT 0` 和 `history_hidden_at TEXT`；旧记录迁移后默认可见。
+- “删除记录”只允许 `PUBLISHED / FAILED / EXPORTED / CANCELLED`，仅更新上述字段并写入 `publish_job_events`，不删除发布任务、事件、视频、封面、平台链接或重试关系。
+- “恢复记录”把 `history_hidden` 恢复为 `0` 并清空 `history_hidden_at`，任务原状态和执行结果保持不变。
+- 新增索引 `idx_publish_jobs_history_visibility(history_hidden, platform, status, created_at)`。
+- 执行月历日期依次取 `scheduled_at`、`started_at`、`finished_at`、`created_at`；无时区的旧时间按 `Asia/Shanghai` 解释。
+
 ## 2026-07-15：v1.5.0 统一真实发布迁移
 
 - 迁移继续使用启动时 `CREATE TABLE IF NOT EXISTS` 和逐列 `ALTER TABLE ADD COLUMN`；不删除旧字段、不重建表、不清空历史数据。
@@ -121,6 +146,8 @@
 | `platform_url` | TEXT | 平台作品 / 稿件链接 |
 | `needs_manual_review` | INTEGER | 是否必须人工核对平台结果 |
 | `published_at` | TEXT | 平台确认投稿成功时间；`EXPORTED` 不写此字段 |
+| `history_hidden` | INTEGER | 是否从正常执行记录和月历安全隐藏，默认 `0` |
+| `history_hidden_at` | TEXT | 安全隐藏时间；恢复后清空 |
 
 ### publish_job_events 表
 
@@ -196,8 +223,8 @@ data/workflow.sqlite3
 | `platform` | TEXT | 平台类型：`douyin`、`bilibili`、`general` |
 | `original_video_path` | TEXT | 本地上传视频路径，后续接真实上传后写入 |
 | `nas_file_path` | TEXT | NAS / 本地已有视频路径 |
-| `max_clip_duration` | INTEGER | 单条切片最长时长，单位：分钟；新建任务默认建议为 5 分钟 |
-| `candidate_clip_count` | INTEGER | 希望 AI 输出的候选片段数量 |
+| `max_clip_duration` | INTEGER | 单条切片最长时长，单位：分钟；新建任务默认 10 分钟 |
+| `candidate_clip_count` | INTEGER | 希望 AI 输出的候选片段数量；新建任务默认 12 条 |
 | `ai_preference` | TEXT | AI 片段选择偏好 |
 | `ai_prompt_preset_id` | TEXT | 当前使用的 AI Prompt 方案 ID |
 | `auto_mode` | INTEGER | 是否开启全自动模式，`1` 表示开启 |
@@ -337,6 +364,7 @@ data/workflow.sqlite3
 
 早期项目骨架曾使用过 `title`、`source_path`、`max_clip_minutes`、`target_clip_count` 等草稿字段。当前初始化逻辑会自动补齐新字段，并把旧字段数据迁移到当前字段中。
 为了不破坏已有本地数据库，旧字段不会被强制删除。后续代码以本文件列出的当前字段为准。
+新任务默认值调整不会批量更新已有 `tasks` 记录；历史任务已经保存的最大时长和候选数量保持不变。
 
 任务移入回收站采用软删除方式：`DELETE /api/tasks/{task_id}` 会把 `is_deleted` 改为 `1`、写入 `deleted_at`，并把该任务的存储目录移动到 `_回收站`。工作台、任务列表和片段审核总览默认不显示已移入回收站的任务，原视频、音频、转写、AI 分析文件、切片输出和字幕输出都会保留。
 
@@ -389,3 +417,9 @@ data/workflow.sqlite3
 - 调度器只扫描 `status = SCHEDULED` 且 `scheduled_at <= 当前时间` 的任务；`NEED_REVIEW`、`CANCELLED`、`PUBLISHED` 不会自动发布。
 - 该 2026-06-23 版本曾默认使用 `manual_export`，2026-07-11 曾改为 `opencli_publish`；v1.5.0 当前默认是 `local_browser`。发布包导出成功写 `EXPORTED` 且不写 `published_at`；只有平台确认提交成功才写 `PUBLISHED` 和 `published_at`。
 - 没有 `scheduled_at` 的旧手动发送任务迁移为 `WAITING`，避免被自动调度器误执行。
+
+## 2026-07-27：取消发送状态兼容
+
+- 本次没有新增或删除数据库字段。普通“取消发送”把发布任务从 `DRAFT`、`WAITING` 或 `SCHEDULED` 恢复为 `WAITING`，并清空排期与执行占用字段，视频、文案和封面路径保持不变。
+- 旧版本中 `CANCELLED` 且错误信息为“用户取消任务”的最后一条记录，会在数据库初始化时安全恢复为 `WAITING`；同一切片和平台已有活跃任务时不恢复，避免重复。
+- 用户主动“移出内容准备”的 `user_removed_from_preparation` 记录，以及跳过、发布失败、发布完成和系统取消记录仍保持原状态，不参与兼容恢复。

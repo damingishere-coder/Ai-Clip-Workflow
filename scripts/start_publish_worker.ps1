@@ -46,21 +46,26 @@ if (-not $chromeCandidates) {
     throw '没有检测到 Google Chrome。请先安装 Chrome，再启动真实发布 Worker。'
 }
 
+$workerScript = Join-Path $ProjectRoot 'scripts\publish_host_worker.py'
+$legacyWorkerScript = Join-Path $ProjectRoot 'scripts\opencli_host_bridge.py'
 $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
 $listenerProcessIds = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
 $reuseWorker = $false
 foreach ($processId in $listenerProcessIds) {
-    $commandLine = (Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue).CommandLine
-    if ($commandLine -match 'publish_host_worker|opencli_host_bridge') {
+    $commandLine = [string](Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue).CommandLine
+    $belongsToProject = (
+        $commandLine.IndexOf($workerScript, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        $commandLine.IndexOf($legacyWorkerScript, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    )
+    if ($belongsToProject) {
         if ($Restart) {
             Write-Host ("正在重启本项目的发布 Worker：PID {0}" -f $processId)
             Stop-Process -Id $processId -Force
             continue
         }
         try {
-            $existingHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2
             $headers = @{ Authorization = "Bearer $workerToken" }
-            Invoke-RestMethod -Uri "http://127.0.0.1:$Port/v1/executions/niuma-health-check" -Headers $headers -TimeoutSec 2 | Out-Null
+            $existingHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/v1/health" -Headers $headers -TimeoutSec 2
             if ($existingHealth.status -eq 'ok' -and $existingHealth.worker -eq 'windows_chrome') {
                 $reuseWorker = $true
                 Write-Host ("检测到健康的发布 Worker，直接复用：PID {0}" -f $processId)
@@ -96,7 +101,6 @@ $python = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
 if (-not (Test-Path $python)) {
     $python = 'python'
 }
-$workerScript = Join-Path $ProjectRoot 'scripts\publish_host_worker.py'
 $outLog = Join-Path $ProjectRoot "publish_worker_$Port.out.log"
 $errLog = Join-Path $ProjectRoot "publish_worker_$Port.err.log"
 $arguments = @("`"$workerScript`"", '--host', '127.0.0.1', '--port', "$Port")

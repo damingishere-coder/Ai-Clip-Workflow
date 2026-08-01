@@ -192,6 +192,7 @@ selected_by_default 规则：
       "start_time": "00:12:10",
       "end_time": "00:14:40",
       "duration_seconds": 150,
+      "cover_time_seconds": 15,
       "summary": "概括这个片段讲了什么，控制在80字以内。",
       "highlight_reason": "说明为什么这个片段值得剪，控制在100字以内。",
       "spread_value": "高",

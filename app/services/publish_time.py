@@ -72,6 +72,26 @@ def parse_clock(value: str, label: str) -> time:
     return parsed.replace(second=0, microsecond=0)
 
 
+def _next_allowed_schedule_time(cursor: datetime, window_start: time, window_end: time) -> datetime:
+    """把后续发布时间顺延到每日允许时段，支持跨午夜窗口。"""
+    if window_start == window_end:
+        return cursor
+
+    cursor_clock = cursor.time()
+    if window_end > window_start:
+        day_start = datetime.combine(cursor.date(), window_start, tzinfo=cursor.tzinfo)
+        day_end = datetime.combine(cursor.date(), window_end, tzinfo=cursor.tzinfo)
+        if cursor < day_start:
+            return day_start
+        if cursor <= day_end:
+            return cursor
+        return datetime.combine(cursor.date() + timedelta(days=1), window_start, tzinfo=cursor.tzinfo)
+
+    if cursor_clock >= window_start or cursor_clock <= window_end:
+        return cursor
+    return datetime.combine(cursor.date(), window_start, tzinfo=cursor.tzinfo)
+
+
 def build_schedule_times(
     count: int,
     *,
@@ -92,18 +112,10 @@ def build_schedule_times(
     interval = timedelta(minutes=max(1, int(interval_minutes)))
     window_start = parse_clock(daily_start_time, "每日开始时间")
     window_end = parse_clock(daily_end_time, "每日结束时间")
-    if window_end <= window_start:
-        raise ValueError("每日结束时间必须晚于每日开始时间")
 
-    result: list[str] = []
+    result = [to_utc_iso(cursor)]
     while len(result) < count:
-        day_start = datetime.combine(cursor.date(), window_start, tzinfo=zone)
-        day_end = datetime.combine(cursor.date(), window_end, tzinfo=zone)
-        if cursor < day_start:
-            cursor = day_start
-        if cursor > day_end:
-            cursor = datetime.combine(cursor.date() + timedelta(days=1), window_start, tzinfo=zone)
-            continue
-        result.append(to_utc_iso(cursor))
         cursor += interval
+        cursor = _next_allowed_schedule_time(cursor, window_start, window_end)
+        result.append(to_utc_iso(cursor))
     return result

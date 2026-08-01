@@ -125,10 +125,17 @@ def test_platform_and_publish_mode_are_separate():
 def test_auto_pipeline_creates_only_metadata_target_platform(tmp_path):
     job_id = _insert_job(tmp_path, status="CANCELLED")
     seed = _raw(job_id)
+    cover_path = tmp_path / "auto-pipeline-cover.jpg"
+    cover_path.write_bytes(b"cover")
     result = create_auto_publish_jobs(
         {"id": seed["task_id"], "platform": "general"},
         [{
             "output_clip": {"id": seed["output_clip_id"], "output_file_path": seed["video_file_path"]},
+            "cover": {
+                "cover_file_path": str(cover_path),
+                "cover_time_seconds": 15,
+                "cover_source": "ai_frame",
+            },
             "metadata": {"platform": "bilibili", "title": "自动标题", "caption": "自动正文", "hashtags": ["自动"], "risk_flags": []},
             "scheduled_at": "",
         }],
@@ -267,6 +274,65 @@ def test_finished_manual_review_execution_is_reconciled_without_stale_wait(tmp_p
     assert job["error_code"] == "video_upload_timeout"
 
 
+def test_confirmed_success_execution_is_recovered_once_without_republishing(tmp_path):
+    job_id = _insert_job(tmp_path, status="PUBLISHING", updated_at=_utc())
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE publish_jobs SET execution_id = ?, execution_phase = 'claimed' WHERE id = ?",
+            ("execution-confirmed-success", job_id),
+        )
+        connection.commit()
+
+    class FinishedWorker:
+        calls = 0
+
+        @classmethod
+        def execution(cls, _execution_id):
+            cls.calls += 1
+            return {
+                "phase": "confirmed_success",
+                "details": {
+                    "outcome": "PUBLISHED",
+                    "message": "投稿成功",
+                    "needs_manual_review": False,
+                },
+            }
+
+    publish_calls: list[str] = []
+    scheduler = PublishScheduler(
+        worker_client=FinishedWorker(),
+        executor=lambda job_id, **_kwargs: publish_calls.append(job_id),
+    )
+
+    assert scheduler.recover_interrupted_jobs() == 1
+    assert scheduler.recover_interrupted_jobs() == 0
+    assert _raw(job_id)["status"] == "PUBLISHED"
+    assert FinishedWorker.calls == 1
+    assert publish_calls == []
+
+
+def test_recovery_schedule_keeps_18_jobs_in_order_on_two_hour_grid():
+    scheduled = build_batch_schedule_times(
+        18,
+        start_at_local="2026-07-29T21:00:00+08:00",
+        timezone_name="Asia/Shanghai",
+        interval_minutes=120,
+        daily_start_time="09:00",
+        daily_end_time="21:00",
+        reject_past=False,
+    )
+    local = [
+        datetime.fromisoformat(value).astimezone(ZoneInfo("Asia/Shanghai"))
+        for value in scheduled
+    ]
+
+    assert len(local) == 18
+    assert local[0].isoformat(timespec="minutes") == "2026-07-29T21:00+08:00"
+    assert local[-1].isoformat(timespec="minutes") == "2026-08-01T13:00+08:00"
+    assert [item.hour for item in local[:8]] == [21, 9, 11, 13, 15, 17, 19, 21]
+    assert all(item.minute == 0 and 9 <= item.hour <= 21 for item in local)
+
+
 def test_preview_and_save_use_identical_schedule(tmp_path):
     first = _insert_job(tmp_path, status="WAITING", scheduled_at="")
     second = _insert_job(tmp_path, status="WAITING", scheduled_at="")
@@ -285,13 +351,15 @@ def test_preview_and_save_use_identical_schedule(tmp_path):
 
 
 def test_schedule_preview_api_matches_save_api(tmp_path):
-    first = _insert_job(tmp_path, status="WAITING", scheduled_at="")
-    second = _insert_job(tmp_path, status="WAITING", scheduled_at="")
+    job_ids = [_insert_job(tmp_path, status="WAITING", scheduled_at="") for _ in range(10)]
     future_day = (datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(days=2)).strftime("%Y-%m-%d")
+    following_day = (
+        datetime.strptime(future_day, "%Y-%m-%d") + timedelta(days=1)
+    ).strftime("%Y-%m-%d")
     payload = {
-        "job_ids": [first, second], "action": "apply", "start_at_local": f"{future_day}T20:00",
+        "job_ids": job_ids, "action": "apply", "start_at_local": f"{future_day}T06:00",
         "timezone": "Asia/Shanghai", "interval_minutes": 180,
-        "daily_start_time": "09:00", "daily_end_time": "21:00",
+        "daily_start_time": "06:00", "daily_end_time": "00:00",
     }
     headers = {"Authorization": f"Bearer {settings.local_admin_token}"} if settings.local_admin_token else {}
     client = TestClient(app)
@@ -300,6 +368,18 @@ def test_schedule_preview_api_matches_save_api(tmp_path):
     assert preview.status_code == 200
     assert saved.status_code == 200
     assert preview.json()["schedule"] == saved.json()["schedule"]
+    assert [item["scheduled_at_local_display"] for item in preview.json()["schedule"]] == [
+        f"{future_day} 06:00",
+        f"{future_day} 09:00",
+        f"{future_day} 12:00",
+        f"{future_day} 15:00",
+        f"{future_day} 18:00",
+        f"{future_day} 21:00",
+        f"{following_day} 00:00",
+        f"{following_day} 06:00",
+        f"{following_day} 09:00",
+        f"{following_day} 12:00",
+    ]
 
 
 def test_frontend_uses_one_selection_semantic_and_no_schedule_reload():
@@ -310,6 +390,9 @@ def test_frontend_uses_one_selection_semantic_and_no_schedule_reload():
     assert "data-send-job-checkbox" not in template
     assert "window.location.reload" not in script
     assert "/api/publish/schedules/preview" in script
+    assert "data-schedule-feedback" in template
+    assert "正在生成预览…" in script
+    assert 'addEventListener("input", invalidatePreview)' in script
 
 
 def test_run_once_module_command(tmp_path):

@@ -49,22 +49,40 @@
       </select>
     </label>
 
+    <label>
+      <span>选片模式</span>
+      <select name="selection_profile">
+        <option value="general">通用内容价值</option>
+        <option value="variety_comedy">综艺笑点优先（康熙推荐）</option>
+      </select>
+      <span class="form-hint">康熙类内容会使用重叠召回、完整段落扩展、音频反应复核和 A/B 质量分级。</span>
+    </label>
+
     <div class="form-row">
       <label>
         <span>单条切片最长</span>
         <span class="unit-input">
-          <input name="max_clip_duration" type="number" min="1" max="60" step="1" value="5" required>
+          <input name="max_clip_duration" type="number" min="1" max="60" step="1" value="10" required>
           <small>分钟</small>
         </span>
-        <span class="form-hint">直播干货建议 3-5 分钟；综艺、访谈、康熙来了建议 4-6 分钟。</span>
+        <span class="form-hint">默认 10 分钟是单条允许上限，AI 仍会根据内容完整度选择更短的片段。</span>
       </label>
       <label>
-        <span>候选片段数量</span>
+        <span>候选池上限</span>
         <select name="candidate_clip_count">
           {% for option in candidate_count_options %}
-          <option value="{{ option }}">{{ option }} 条</option>
+          <option value="{{ option }}" {% if option == 12 %}selected{% endif %}>{{ option }} 条</option>
           {% endfor %}
         </select>
+        <span class="form-hint">供人工审核的最多条数，不等于最终自动切片数量。</span>
+      </label>
+      <label>
+        <span>最终启用目标</span>
+        <span class="unit-input">
+          <input name="final_clip_target" type="number" min="1" max="12" step="1" value="5" required>
+          <small>条</small>
+        </span>
+        <span class="form-hint">质量不足时允许少于 5 条，绝不自动补齐次选。</span>
       </label>
     </div>
 
@@ -74,7 +92,7 @@
         <input name="auto_mode" type="checkbox" value="true">
         <span>新建后自动跑完整流水线</span>
       </label>
-      <p class="form-hint">开启后，候选片段数量就是自动切片目标数量，单条切片最长就是时长上限。任务创建成功后会立即自动提取音频、转写、AI 分析并切片，无需进入详情页再次点击开始。</p>
+      <p class="form-hint">开启后，系统按“最终启用目标”生成切片；综艺笑点优先模式只自动处理达到 A 级质量门槛的片段。</p>
     </fieldset>
 
     <div class="button-row align-end">
@@ -103,7 +121,7 @@
   </section>
   <section class="panel soft-tip">
     <p class="eyebrow">小贴士</p>
-    <p>AI 偏好不在新建任务时填写。进入任务详情后，在“AI 分析”板块填写它；建议综艺访谈任务选择 2 号 Prompt，让 AI 直接输出更完整、可发布的候选片段。片段审核页保留为检查入口，最终成片仍以启用片段为准。</p>
+    <p>康熙类素材请选择“综艺笑点优先”。候选池默认最多 12 条，真正进入切片队列的 A 级片段默认不超过 5 条。</p>
   </section>
   </aside>
 </section>

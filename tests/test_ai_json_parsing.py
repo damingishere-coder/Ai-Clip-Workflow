@@ -12,7 +12,9 @@ from app.services.ai.ai_clip_analyzer import (
     _replace_python_literals,
     _normalize_ai_clip_item,
     _normalize_confidence_score,
+    _normalize_cover_time_seconds,
     _normalize_spread_value,
+    _render_prompt,
     AIAnalysisError,
 )
 
@@ -113,6 +115,35 @@ class TestNormalizeSpreadValue:
         assert _normalize_spread_value("随便") == "中"
 
 
+class TestNormalizeCoverTime:
+
+    def test_valid_cover_time_is_kept(self):
+        assert _normalize_cover_time_seconds(12.5, 60) == 12.5
+
+    @pytest.mark.parametrize("value", [None, -1, 60, 999, "not-a-number"])
+    def test_missing_or_invalid_cover_time_uses_midpoint(self, value):
+        assert _normalize_cover_time_seconds(value, 60) == 30
+
+    def test_old_alias_is_supported(self):
+        result = _normalize_ai_clip_item(
+            {"start_time": "00:01:00", "end_time": "00:02:00", "cover_seconds": 18},
+            index=1,
+        )
+        assert result["cover_time_seconds"] == 18
+
+    def test_custom_prompt_always_gets_cover_requirement(self):
+        prompt = _render_prompt(
+            max_clip_duration=120,
+            target_clip_count=2,
+            ai_preference="完整",
+            transcript_text="00:00:00 - 00:00:10 测试",
+            prompt_template="自定义方案\n{{TRANSCRIPT_TEXT}}",
+        )
+        assert "自定义方案" in prompt
+        assert "cover_time_seconds" in prompt
+        assert "相对于该条短视频开头" in prompt
+
+
 class TestNormalizeAiClipItem:
 
     def test_old_fields_converted(self):
@@ -150,6 +181,7 @@ class TestNormalizeAiClipItem:
         clip = {"start_time": "00:01:00", "end_time": "00:02:30"}
         result = _normalize_ai_clip_item(clip, index=1)
         assert result["duration_seconds"] == 90
+        assert result["cover_time_seconds"] == 45
 
 
 class TestLoadsAiJson:

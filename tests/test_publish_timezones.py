@@ -37,3 +37,57 @@ def test_batch_schedule_rolls_to_next_beijing_day():
         "2026-07-17T01:00:00+00:00",
         "2026-07-17T04:00:00+00:00",
     ]
+
+
+def test_cross_midnight_window_keeps_first_time_and_includes_midnight():
+    assert build_schedule_times(
+        10,
+        start_at_local="2026-07-28T06:00",
+        timezone_name="Asia/Shanghai",
+        interval_minutes=180,
+        daily_start_time="06:00",
+        daily_end_time="00:00",
+        reject_past=False,
+    ) == [
+        "2026-07-27T22:00:00+00:00",
+        "2026-07-28T01:00:00+00:00",
+        "2026-07-28T04:00:00+00:00",
+        "2026-07-28T07:00:00+00:00",
+        "2026-07-28T10:00:00+00:00",
+        "2026-07-28T13:00:00+00:00",
+        "2026-07-28T16:00:00+00:00",
+        "2026-07-28T22:00:00+00:00",
+        "2026-07-29T01:00:00+00:00",
+        "2026-07-29T04:00:00+00:00",
+    ]
+
+
+def test_first_schedule_time_is_not_rewritten_by_daily_window():
+    assert build_schedule_times(
+        2,
+        start_at_local="2026-07-16T22:00",
+        timezone_name="Asia/Shanghai",
+        interval_minutes=180,
+        daily_start_time="09:00",
+        daily_end_time="21:00",
+        reject_past=False,
+    ) == [
+        "2026-07-16T14:00:00+00:00",
+        "2026-07-17T01:00:00+00:00",
+    ]
+
+
+def test_equal_daily_window_times_mean_all_day():
+    assert build_schedule_times(
+        3,
+        start_at_local="2026-07-16T22:00",
+        timezone_name="Asia/Shanghai",
+        interval_minutes=180,
+        daily_start_time="00:00",
+        daily_end_time="00:00",
+        reject_past=False,
+    ) == [
+        "2026-07-16T14:00:00+00:00",
+        "2026-07-16T17:00:00+00:00",
+        "2026-07-16T20:00:00+00:00",
+    ]

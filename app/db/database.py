@@ -5,11 +5,13 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from app.core.config import settings
+from app.services.database_backup_service import create_publish_migration_backup
 
 
 DEFAULT_AI_PROMPT_PRESET_ID = "preset_001"
 DEFAULT_AI_PROMPT_PATH = settings.project_root / "prompts" / "default_ai_prompt_preset_001.txt"
 VARIETY_AI_PROMPT_PATH = settings.project_root / "prompts" / "variety_interview_prompt_preset_002.txt"
+COMEDY_V2_AI_PROMPT_PATH = settings.project_root / "prompts" / "variety_comedy_v2_prompt.txt"
 
 
 @contextmanager
@@ -41,8 +43,10 @@ def init_db() -> None:
                 platform TEXT NOT NULL DEFAULT 'general',
                 original_video_path TEXT,
                 nas_file_path TEXT,
-                max_clip_duration INTEGER NOT NULL DEFAULT 5,
-                candidate_clip_count INTEGER NOT NULL DEFAULT 5,
+                max_clip_duration INTEGER NOT NULL DEFAULT 10,
+                candidate_clip_count INTEGER NOT NULL DEFAULT 12,
+                selection_profile TEXT NOT NULL DEFAULT 'general',
+                final_clip_target INTEGER NOT NULL DEFAULT 5,
                 ai_preference TEXT,
                 ai_prompt_preset_id TEXT NOT NULL DEFAULT 'preset_001',
                 auto_mode INTEGER NOT NULL DEFAULT 0,
@@ -65,12 +69,23 @@ def init_db() -> None:
                 start_time TEXT NOT NULL,
                 end_time TEXT NOT NULL,
                 duration_seconds INTEGER NOT NULL,
+                cover_time_seconds REAL,
                 summary TEXT,
                 reason TEXT,
                 highlight_reason TEXT,
                 spread_value TEXT,
                 suggested_editing TEXT,
                 confidence_score REAL NOT NULL DEFAULT 0,
+                quality_tier TEXT NOT NULL DEFAULT '',
+                quality_score REAL NOT NULL DEFAULT 0,
+                text_quality_score REAL NOT NULL DEFAULT 0,
+                humor_score REAL NOT NULL DEFAULT 0,
+                completeness_score REAL NOT NULL DEFAULT 0,
+                audio_reaction_score REAL NOT NULL DEFAULT 0,
+                topic_key TEXT,
+                key_moment_time TEXT,
+                quality_evidence_json TEXT,
+                rejection_reason TEXT,
                 selected_by_default INTEGER NOT NULL DEFAULT 1,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 reviewed INTEGER NOT NULL DEFAULT 0,
@@ -249,6 +264,8 @@ def init_db() -> None:
                 platform_url TEXT,
                 needs_manual_review INTEGER NOT NULL DEFAULT 0,
                 published_at TEXT,
+                history_hidden INTEGER NOT NULL DEFAULT 0,
+                history_hidden_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(task_id) REFERENCES tasks(id),
@@ -305,6 +322,24 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(task_id) REFERENCES tasks(id)
             );
+
+            CREATE TABLE IF NOT EXISTS clip_feedback (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                clip_candidate_id TEXT NOT NULL,
+                analysis_run_id TEXT,
+                selection_profile TEXT NOT NULL DEFAULT 'general',
+                decision TEXT NOT NULL,
+                reason_code TEXT NOT NULL,
+                note TEXT,
+                title_snapshot TEXT,
+                summary_snapshot TEXT,
+                start_time TEXT,
+                end_time TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES tasks(id),
+                FOREIGN KEY(analysis_run_id) REFERENCES ai_analysis_runs(id)
+            );
             """
         )
         _migrate_tasks_table(connection)
@@ -317,6 +352,7 @@ def init_db() -> None:
         _migrate_publish_accounts_table(connection)
         _migrate_publish_jobs_table(connection)
         _migrate_publish_job_events_table(connection)
+        _restore_legacy_user_cancelled_publish_jobs(connection)
         _migrate_workflow_jobs_table(connection)
         _migrate_cut_runs_table(connection)
         _seed_ai_prompt_presets(connection)
@@ -345,6 +381,8 @@ def _create_indexes(connection: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_output_clip_task_status ON output_clip(task_id, status)",
         # AI 分析（按任务、创建时间；ai_analysis_runs 表无 status 列）
         "CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_task_created ON ai_analysis_runs(task_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_clip_feedback_profile_created ON clip_feedback(selection_profile, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_clip_feedback_task_clip ON clip_feedback(task_id, clip_candidate_id)",
         # 字幕任务（按任务、输出切片、状态）
         "CREATE INDEX IF NOT EXISTS idx_subtitle_jobs_task_output_status ON subtitle_jobs(task_id, output_clip_id, status)",
         # 发布任务（按状态、平台、时间；按任务、输出切片）
@@ -353,6 +391,7 @@ def _create_indexes(connection: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_status_scheduled ON publish_jobs(status, scheduled_at)",
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_due_retry ON publish_jobs(status, next_attempt_at, scheduled_at)",
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_execution ON publish_jobs(execution_id)",
+        "CREATE INDEX IF NOT EXISTS idx_publish_jobs_history_visibility ON publish_jobs(history_hidden, platform, status, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_publish_job_events_job_time ON publish_job_events(job_id, occurred_at)",
         """CREATE UNIQUE INDEX IF NOT EXISTS uq_publish_jobs_active_clip_platform_mode
            ON publish_jobs(output_clip_id, platform, publish_mode)
@@ -377,8 +416,10 @@ def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
         "platform": "ALTER TABLE tasks ADD COLUMN platform TEXT NOT NULL DEFAULT 'general'",
         "original_video_path": "ALTER TABLE tasks ADD COLUMN original_video_path TEXT",
         "nas_file_path": "ALTER TABLE tasks ADD COLUMN nas_file_path TEXT",
-        "max_clip_duration": "ALTER TABLE tasks ADD COLUMN max_clip_duration INTEGER NOT NULL DEFAULT 5",
-        "candidate_clip_count": "ALTER TABLE tasks ADD COLUMN candidate_clip_count INTEGER NOT NULL DEFAULT 5",
+        "max_clip_duration": "ALTER TABLE tasks ADD COLUMN max_clip_duration INTEGER NOT NULL DEFAULT 10",
+        "candidate_clip_count": "ALTER TABLE tasks ADD COLUMN candidate_clip_count INTEGER NOT NULL DEFAULT 12",
+        "selection_profile": "ALTER TABLE tasks ADD COLUMN selection_profile TEXT NOT NULL DEFAULT 'general'",
+        "final_clip_target": "ALTER TABLE tasks ADD COLUMN final_clip_target INTEGER NOT NULL DEFAULT 5",
         "ai_preference": "ALTER TABLE tasks ADD COLUMN ai_preference TEXT",
         "ai_prompt_preset_id": "ALTER TABLE tasks ADD COLUMN ai_prompt_preset_id TEXT NOT NULL DEFAULT 'preset_001'",
         "auto_mode": "ALTER TABLE tasks ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0",
@@ -449,6 +490,8 @@ def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
         UPDATE tasks SET task_dir_name = id WHERE task_dir_name IS NULL OR task_dir_name = '';
         UPDATE tasks SET is_deleted = 0 WHERE is_deleted IS NULL;
         UPDATE tasks SET ai_prompt_preset_id = 'preset_001' WHERE ai_prompt_preset_id IS NULL OR ai_prompt_preset_id = '';
+        UPDATE tasks SET selection_profile = 'general' WHERE selection_profile NOT IN ('general', 'variety_comedy') OR selection_profile IS NULL OR selection_profile = '';
+        UPDATE tasks SET final_clip_target = 5 WHERE final_clip_target IS NULL OR final_clip_target < 1 OR final_clip_target > 12;
         UPDATE tasks SET source_type = 'upload' WHERE source_type NOT IN ('upload', 'nas') OR source_type IS NULL OR source_type = '';
 
         UPDATE tasks SET platform = 'douyin' WHERE platform IN ('抖音', 'douyin');
@@ -489,7 +532,18 @@ def _migrate_clip_candidates_table(connection: sqlite3.Connection) -> None:
         "clip_key": "ALTER TABLE clip_candidates ADD COLUMN clip_key TEXT",
         "highlight_reason": "ALTER TABLE clip_candidates ADD COLUMN highlight_reason TEXT",
         "suggested_editing": "ALTER TABLE clip_candidates ADD COLUMN suggested_editing TEXT",
+        "cover_time_seconds": "ALTER TABLE clip_candidates ADD COLUMN cover_time_seconds REAL",
         "confidence_score": "ALTER TABLE clip_candidates ADD COLUMN confidence_score REAL NOT NULL DEFAULT 0",
+        "quality_tier": "ALTER TABLE clip_candidates ADD COLUMN quality_tier TEXT NOT NULL DEFAULT ''",
+        "quality_score": "ALTER TABLE clip_candidates ADD COLUMN quality_score REAL NOT NULL DEFAULT 0",
+        "text_quality_score": "ALTER TABLE clip_candidates ADD COLUMN text_quality_score REAL NOT NULL DEFAULT 0",
+        "humor_score": "ALTER TABLE clip_candidates ADD COLUMN humor_score REAL NOT NULL DEFAULT 0",
+        "completeness_score": "ALTER TABLE clip_candidates ADD COLUMN completeness_score REAL NOT NULL DEFAULT 0",
+        "audio_reaction_score": "ALTER TABLE clip_candidates ADD COLUMN audio_reaction_score REAL NOT NULL DEFAULT 0",
+        "topic_key": "ALTER TABLE clip_candidates ADD COLUMN topic_key TEXT",
+        "key_moment_time": "ALTER TABLE clip_candidates ADD COLUMN key_moment_time TEXT",
+        "quality_evidence_json": "ALTER TABLE clip_candidates ADD COLUMN quality_evidence_json TEXT",
+        "rejection_reason": "ALTER TABLE clip_candidates ADD COLUMN rejection_reason TEXT",
         "selected_by_default": "ALTER TABLE clip_candidates ADD COLUMN selected_by_default INTEGER NOT NULL DEFAULT 1",
         "reviewed": "ALTER TABLE clip_candidates ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0",
         "is_deleted": "ALTER TABLE clip_candidates ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0",
@@ -763,6 +817,8 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
         "platform_url": "ALTER TABLE publish_jobs ADD COLUMN platform_url TEXT",
         "needs_manual_review": "ALTER TABLE publish_jobs ADD COLUMN needs_manual_review INTEGER NOT NULL DEFAULT 0",
         "published_at": "ALTER TABLE publish_jobs ADD COLUMN published_at TEXT",
+        "history_hidden": "ALTER TABLE publish_jobs ADD COLUMN history_hidden INTEGER NOT NULL DEFAULT 0",
+        "history_hidden_at": "ALTER TABLE publish_jobs ADD COLUMN history_hidden_at TEXT",
         "created_at": "ALTER TABLE publish_jobs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         "updated_at": "ALTER TABLE publish_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
     }
@@ -771,6 +827,27 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
             connection.execute(statement)
 
     columns = _get_table_columns(connection, "publish_jobs")
+    requires_serialized_migration = _publish_database_requires_data_migration(connection)
+    if requires_serialized_migration:
+        # 提交上方的加列操作，再用 SQLite 写锁串行化“备份 + 数据修复”。
+        # 备份服务会使用独立只读连接，因此快照仍是数据修复前的完整状态。
+        connection.commit()
+        connection.execute("BEGIN IMMEDIATE")
+    try:
+        _run_publish_jobs_data_migrations(connection, columns)
+    except Exception:
+        if requires_serialized_migration:
+            connection.rollback()
+        raise
+    else:
+        if requires_serialized_migration:
+            connection.commit()
+
+
+def _run_publish_jobs_data_migrations(
+    connection: sqlite3.Connection,
+    columns: set[str],
+) -> None:
     _backup_publish_database_before_data_migration(connection)
     _migrate_publish_platform_and_mode_values(connection)
     if {"clip_id", "output_clip_id"}.issubset(columns):
@@ -793,29 +870,35 @@ def _migrate_publish_jobs_table(connection: sqlite3.Connection) -> None:
         connection.execute(
             "UPDATE publish_jobs SET attempt_count = retry_count WHERE attempt_count IS NULL OR attempt_count = 0"
         )
+    if "history_hidden" in columns:
+        connection.execute("UPDATE publish_jobs SET history_hidden = 0 WHERE history_hidden IS NULL")
 
     if "status" in columns:
-        connection.executescript(
+        status_migrations = (
+            "UPDATE publish_jobs SET status = 'DRAFT' WHERE status = 'draft'",
+            "UPDATE publish_jobs SET status = 'SCHEDULED' WHERE status IN ('ready', 'scheduled')",
+            "UPDATE publish_jobs SET status = 'PUBLISHING' WHERE status = 'publishing'",
+            "UPDATE publish_jobs SET status = 'PUBLISHED' WHERE status = 'published'",
+            "UPDATE publish_jobs SET status = 'EXPORTED' WHERE status = 'exported'",
+            "UPDATE publish_jobs SET status = 'FAILED' WHERE status = 'failed'",
+            "UPDATE publish_jobs SET status = 'CANCELLED' WHERE status = 'cancelled'",
+            "UPDATE publish_jobs SET status = 'NEED_REVIEW' WHERE status = 'need_review'",
             """
-            UPDATE publish_jobs SET status = 'DRAFT' WHERE status = 'draft';
-            UPDATE publish_jobs SET status = 'SCHEDULED' WHERE status IN ('ready', 'scheduled');
-            UPDATE publish_jobs SET status = 'PUBLISHING' WHERE status = 'publishing';
-            UPDATE publish_jobs SET status = 'PUBLISHED' WHERE status = 'published';
-            UPDATE publish_jobs SET status = 'EXPORTED' WHERE status = 'exported';
-            UPDATE publish_jobs SET status = 'FAILED' WHERE status = 'failed';
-            UPDATE publish_jobs SET status = 'CANCELLED' WHERE status = 'cancelled';
-            UPDATE publish_jobs SET status = 'NEED_REVIEW' WHERE status = 'need_review';
             UPDATE publish_jobs
             SET status = 'WAITING'
-            WHERE status = 'SCHEDULED' AND (scheduled_at IS NULL OR scheduled_at = '');
+            WHERE status = 'SCHEDULED' AND (scheduled_at IS NULL OR scheduled_at = '')
+            """,
+            """
             UPDATE publish_jobs
             SET status = 'SCHEDULED'
             WHERE status IS NULL OR status = '' OR status NOT IN (
                 'DRAFT', 'SCHEDULED', 'WAITING', 'PUBLISHING',
                 'PUBLISHED', 'EXPORTED', 'FAILED', 'CANCELLED', 'NEED_REVIEW'
-            );
-            """
+            )
+            """,
         )
+        for statement in status_migrations:
+            connection.execute(statement)
     _cancel_duplicate_active_publish_jobs(connection)
 
 
@@ -839,8 +922,80 @@ def _migrate_publish_job_events_table(connection: sqlite3.Connection) -> None:
             connection.execute(statement)
 
 
-def _backup_publish_database_before_data_migration(connection: sqlite3.Connection) -> None:
-    """仅在发现旧值或有效重复任务时创建一次迁移前备份。"""
+def _restore_legacy_user_cancelled_publish_jobs(connection: sqlite3.Connection) -> None:
+    """旧版“取消任务”应按新语义回到内容准备，系统取消和主动移出保持不变。"""
+    rows = connection.execute(
+        """
+        SELECT cancelled.id, cancelled.status
+        FROM publish_jobs AS cancelled
+        WHERE cancelled.status = 'CANCELLED'
+          AND (
+              cancelled.error_message = '用户取消任务'
+              OR cancelled.last_error = '用户取消任务'
+          )
+          AND cancelled.id = (
+              SELECT candidate.id
+              FROM publish_jobs AS candidate
+              WHERE candidate.output_clip_id = cancelled.output_clip_id
+                AND candidate.platform = cancelled.platform
+                AND candidate.status = 'CANCELLED'
+                AND (
+                    candidate.error_message = '用户取消任务'
+                    OR candidate.last_error = '用户取消任务'
+                )
+              ORDER BY COALESCE(NULLIF(candidate.updated_at, ''), candidate.created_at) DESC,
+                       candidate.created_at DESC,
+                       candidate.id DESC
+              LIMIT 1
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM publish_jobs AS active
+              WHERE active.id <> cancelled.id
+                AND active.output_clip_id = cancelled.output_clip_id
+                AND active.platform = cancelled.platform
+                AND active.status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'PUBLISHING', 'NEED_REVIEW')
+          )
+        """
+    ).fetchall()
+    if not rows:
+        return
+
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    for row in rows:
+        cursor = connection.execute(
+            """
+            UPDATE publish_jobs
+            SET status = 'WAITING', scheduled_at = '', next_attempt_at = NULL,
+                claimed_at = NULL, started_at = NULL, finished_at = NULL,
+                worker_id = NULL, execution_id = NULL, execution_phase = '',
+                error_code = '', error_message = '', last_error = '',
+                needs_manual_review = 0, updated_at = ?
+            WHERE id = ? AND status = 'CANCELLED'
+              AND (error_message = '用户取消任务' OR last_error = '用户取消任务')
+            """,
+            (now, row["id"]),
+        )
+        if cursor.rowcount:
+            connection.execute(
+                """
+                INSERT INTO publish_job_events (
+                    job_id, event_type, from_status, to_status, message, payload, occurred_at
+                ) VALUES (?, 'legacy_cancel_restored', 'CANCELLED', 'WAITING', ?, ?, ?)
+                """,
+                (
+                    row["id"],
+                    "旧版取消发送记录已自动返回内容准备",
+                    json.dumps(
+                        {"scheduled_at_cleared": True, "files_deleted": False},
+                        ensure_ascii=False,
+                    ),
+                    now,
+                ),
+            )
+
+
+def _publish_database_requires_data_migration(connection: sqlite3.Connection) -> bool:
     legacy_count = connection.execute(
         """
         SELECT COUNT(*)
@@ -854,28 +1009,24 @@ def _backup_publish_database_before_data_migration(connection: sqlite3.Connectio
         SELECT COUNT(*) FROM (
             SELECT output_clip_id, platform, publish_mode
             FROM publish_jobs
-            WHERE status NOT IN ('PUBLISHED', 'EXPORTED', 'CANCELLED')
+            WHERE status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'PUBLISHING')
             GROUP BY output_clip_id, platform, publish_mode
             HAVING COUNT(*) > 1
         )
         """
     ).fetchone()[0]
-    if not legacy_count and not duplicate_count:
+    return bool(legacy_count or duplicate_count)
+
+
+def _backup_publish_database_before_data_migration(connection: sqlite3.Connection) -> None:
+    """仅在发现旧值或有效重复任务时创建受限频率的完整迁移前备份。"""
+    if not _publish_database_requires_data_migration(connection):
         return
     database_path = settings.database_path
     if not database_path.exists():
         return
-    # sqlite backup 不能在源连接持有写事务时执行；这里只提交此前的建表/加列操作，
-    # 真正的数据修复尚未开始，因此备份仍然是数据迁移前快照。
-    connection.commit()
     backup_dir = settings.data_dir / "backups"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_path = backup_dir / f"workflow-before-publish-migration-{timestamp}.sqlite3"
-    if backup_path.exists():
-        return
-    with sqlite3.connect(str(backup_path)) as backup_connection:
-        connection.backup(backup_connection)
+    create_publish_migration_backup(database_path, backup_dir)
 
 
 def _provider_target_platform(raw_value: str | None) -> str:
@@ -1020,11 +1171,15 @@ def _seed_ai_prompt_presets(connection: sqlite3.Connection) -> None:
     variety_prompt = ""
     if VARIETY_AI_PROMPT_PATH.exists():
         variety_prompt = VARIETY_AI_PROMPT_PATH.read_text(encoding="utf-8")
+    comedy_v2_prompt = ""
+    if COMEDY_V2_AI_PROMPT_PATH.exists():
+        comedy_v2_prompt = COMEDY_V2_AI_PROMPT_PATH.read_text(encoding="utf-8")
 
     presets = [
         (DEFAULT_AI_PROMPT_PRESET_ID, 1, "默认直播切片分析专家", default_prompt, 1),
         ("preset_002", 2, "综艺访谈完整上下文专家", variety_prompt, 0),
         ("preset_003", 3, "3号方案", "", 0),
+        ("preset_004", 4, "康熙笑点优先 V2", comedy_v2_prompt, 0),
     ]
     for preset_id, slot, name, prompt_text, is_default in presets:
         existing = connection.execute(

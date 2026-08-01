@@ -141,12 +141,18 @@ def _filter_and_sort_clips(clips: list[dict], clip_filter: str, sort_by: str) ->
         clips = [
             clip
             for clip in clips
-            if "高" in clip.get("spread_value", "") or clip.get("spread_value", "").lower() == "high"
+            if clip.get("quality_tier") == "A"
+            or "高" in clip.get("spread_value", "")
+            or clip.get("spread_value", "").lower() == "high"
         ]
 
     if sort_by == "time":
         return sorted(clips, key=lambda clip: clip.get("start_seconds", 0))
-    return sorted(clips, key=lambda clip: clip.get("confidence_score", 0), reverse=True)
+    return sorted(
+        clips,
+        key=lambda clip: clip.get("quality_score") or clip.get("confidence_score", 0),
+        reverse=True,
+    )
 
 
 async def _render_clip_review_page(

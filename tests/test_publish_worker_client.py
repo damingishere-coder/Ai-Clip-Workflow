@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from app.services.publishers.base import PublishOutcome, PublishWorkerUnavailable
 from app.services.publishers.worker_client import PublishWorkerClient
 from app.core.config import settings
-from scripts.publish_host_worker import _resolve_media_path, create_worker_app
+from scripts.publish_host_worker import ExecutionJournal, _resolve_media_path, create_worker_app
 
 
 class FakeResponse:
@@ -31,6 +31,21 @@ def test_worker_health_does_not_require_token():
     assert response.status_code == 200
     assert response.json()["worker"] == "windows_chrome"
     assert response.json()["token_configured"] is True
+
+
+def test_protected_worker_health_requires_matching_token():
+    client = TestClient(create_worker_app(token="test-token"))
+    assert client.get("/v1/health").status_code == 401
+    assert client.get(
+        "/v1/health",
+        headers={"Authorization": "Bearer wrong-token"},
+    ).status_code == 401
+    response = client.get(
+        "/v1/health",
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    assert response.json()["worker"] == "windows_chrome"
 
 
 def test_protected_worker_endpoint_rejects_invalid_token():
@@ -80,7 +95,25 @@ def test_worker_offline_before_connection_is_safe_retry(monkeypatch):
     with pytest.raises(PublishWorkerUnavailable) as caught:
         PublishWorkerClient("http://127.0.0.1:8765", "token", 2).health()
     assert caught.value.request_may_have_been_received is False
-    assert r".\scripts\start_niuma_studio.ps1" in caught.value.message
+    assert "随 Docker 中的牛马片场项目自动启动" in caught.value.message
+    assert r".\scripts" not in caught.value.message
+
+
+def test_worker_client_uses_protected_health_endpoint(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["authorization"] = request.headers.get("Authorization")
+        return FakeResponse({"status": "ok", "worker": "windows_chrome"})
+
+    monkeypatch.setattr("app.services.publishers.worker_client.urlopen", fake_urlopen)
+    result = PublishWorkerClient("http://127.0.0.1:8765", "secret-token", 2).health()
+    assert result["status"] == "ok"
+    assert captured == {
+        "url": "http://127.0.0.1:8765/v1/health",
+        "authorization": "Bearer secret-token",
+    }
 
 
 def test_worker_maps_docker_tasks_path_to_windows_storage(tmp_path):
@@ -100,3 +133,21 @@ def test_worker_maps_docker_tasks_path_to_windows_storage(tmp_path):
     finally:
         object.__setattr__(settings, "tasks_dir", original_tasks_dir)
         object.__setattr__(settings, "publish_worker_allowed_roots", original_allowed_roots)
+
+
+def test_worker_execution_journal_persists_final_result_without_database(tmp_path):
+    original_state_dir = settings.publish_worker_state_dir
+    object.__setattr__(settings, "publish_worker_state_dir", tmp_path)
+    try:
+        journal = ExecutionJournal("execution-journal-test")
+        journal.update(
+            "confirmed_success",
+            {"outcome": "PUBLISHED", "message": "投稿成功", "needs_manual_review": False},
+        )
+        stored = journal.read()
+    finally:
+        object.__setattr__(settings, "publish_worker_state_dir", original_state_dir)
+
+    assert stored["phase"] == "confirmed_success"
+    assert stored["details"]["outcome"] == "PUBLISHED"
+    assert stored["details"]["message"] == "投稿成功"

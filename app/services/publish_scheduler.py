@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import socket
 import sqlite3
@@ -41,6 +42,9 @@ from app.services.publishers.base import (
 )
 from app.services.publishers.worker_client import PublishWorkerClient
 from app.services.task_log_service import append_task_log
+
+
+logger = logging.getLogger(__name__)
 
 
 def now_iso() -> str:
@@ -108,6 +112,10 @@ _SCHEDULER_HEALTH: dict[str, Any] = {
     "scanning": False,
     "last_scan_at": "",
     "next_scan_at": "",
+    "last_error_code": "",
+    "last_error_message": "",
+    "last_error_at": "",
+    "consecutive_failures": 0,
 }
 _ACTIVE_SCHEDULER: "PublishScheduler | None" = None
 
@@ -150,12 +158,24 @@ class PublishScheduler:
         try:
             recovered = self.recover_interrupted_jobs()
             jobs = self.list_due_jobs()
-            results = [self.execute_job(job["id"]) for job in jobs]
+            results: list[dict[str, Any]] = []
+            for job in jobs:
+                try:
+                    results.append(self.execute_job(job["id"]))
+                except sqlite3.Error:
+                    # 数据库属于全局基础设施故障；停止本轮，交给常驻循环稍后重试。
+                    raise
+                except Exception:
+                    logger.exception("发布任务执行出现未预期异常：%s", job.get("id"))
+                    results.append(
+                        self._mark_need_review(
+                            str(job["id"]),
+                            "unexpected_scheduler_error",
+                            "调度任务出现未预期异常，为避免重复投稿已转入人工复核",
+                        )
+                    )
             checked_at = utc_now()
-            _SCHEDULER_HEALTH["last_scan_at"] = checked_at.isoformat(timespec="seconds")
-            _SCHEDULER_HEALTH["next_scan_at"] = (
-                checked_at + timedelta(seconds=self.interval_seconds)
-            ).isoformat(timespec="seconds")
+            self._record_scan_success(checked_at)
             return {
                 "status": "ok",
                 "checked_at": _SCHEDULER_HEALTH["last_scan_at"],
@@ -174,7 +194,6 @@ class PublishScheduler:
 
     async def run_forever(self) -> None:
         global _ACTIVE_SCHEDULER
-        init_db()
         self._loop = asyncio.get_running_loop()
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
@@ -182,7 +201,13 @@ class PublishScheduler:
         _SCHEDULER_HEALTH["running"] = True
         try:
             while not self._stop_event.is_set():
-                await asyncio.to_thread(self.run_once)
+                try:
+                    await asyncio.to_thread(self.run_once)
+                except Exception as exc:
+                    self._record_scan_error(exc)
+                    logger.exception("发布调度扫描失败，将在下一轮自动重试")
+                if self._stop_event.is_set():
+                    break
                 self._wake_event.clear()
                 try:
                     await asyncio.wait_for(self._wake_event.wait(), timeout=self.interval_seconds)
@@ -192,6 +217,34 @@ class PublishScheduler:
             if _ACTIVE_SCHEDULER is self:
                 _ACTIVE_SCHEDULER = None
             _SCHEDULER_HEALTH["running"] = False
+
+    def _record_scan_success(self, checked_at: datetime) -> None:
+        _SCHEDULER_HEALTH["last_scan_at"] = checked_at.isoformat(timespec="seconds")
+        _SCHEDULER_HEALTH["next_scan_at"] = (
+            checked_at + timedelta(seconds=self.interval_seconds)
+        ).isoformat(timespec="seconds")
+        _SCHEDULER_HEALTH["last_error_code"] = ""
+        _SCHEDULER_HEALTH["last_error_message"] = ""
+        _SCHEDULER_HEALTH["last_error_at"] = ""
+        _SCHEDULER_HEALTH["consecutive_failures"] = 0
+
+    def _record_scan_error(self, exc: Exception) -> None:
+        failed_at = utc_now()
+        if isinstance(exc, sqlite3.Error):
+            error_code = "database_unavailable"
+            error_message = "数据库暂时不可用，调度器将在下一轮自动重试"
+        else:
+            error_code = "scheduler_scan_failed"
+            error_message = "调度扫描出现异常，调度器将在下一轮自动重试"
+        _SCHEDULER_HEALTH["last_error_code"] = error_code
+        _SCHEDULER_HEALTH["last_error_message"] = error_message
+        _SCHEDULER_HEALTH["last_error_at"] = failed_at.isoformat(timespec="seconds")
+        _SCHEDULER_HEALTH["next_scan_at"] = (
+            failed_at + timedelta(seconds=self.interval_seconds)
+        ).isoformat(timespec="seconds")
+        _SCHEDULER_HEALTH["consecutive_failures"] = (
+            int(_SCHEDULER_HEALTH.get("consecutive_failures") or 0) + 1
+        )
 
     def wake(self) -> None:
         if self._loop and self._wake_event:
@@ -385,6 +438,12 @@ class PublishScheduler:
         resolved_visibility = str(visibility or source.get("visibility") or "public")
         if resolved_visibility not in {"public", "friends", "private"}:
             raise ValueError("可见范围只支持公开、好友可见或仅自己可见")
+        readiness = self._require_ready_jobs(
+            [job_id],
+            resolve_legacy=True,
+            check_worker=True,
+        )[job_id]
+        resolved_mode = str(readiness.get("resolved_publish_mode") or source.get("publish_mode") or "")
         with get_connection() as connection:
             active = connection.execute(
                 """
@@ -397,7 +456,7 @@ class PublishScheduler:
                     job_id,
                     source.get("output_clip_id"),
                     source.get("platform"),
-                    source.get("publish_mode"),
+                    resolved_mode,
                 ),
             ).fetchone()
         if active:
@@ -411,7 +470,11 @@ class PublishScheduler:
             event_type="manual_retry_created",
             event_message=f"由失败任务 {job_id} 创建",
             event_from_status="FAILED",
-            overrides={"visibility": resolved_visibility},
+            overrides={
+                "visibility": resolved_visibility,
+                "publish_mode": resolved_mode,
+                "account_id": readiness.get("resolved_account_id") or source.get("account_id") or None,
+            },
         )
 
     def repair_and_publish(
@@ -562,11 +625,9 @@ class PublishScheduler:
             execution_id = str(job.get("execution_id") or "")
             phase = str(job.get("execution_phase") or "unknown")
             details: dict[str, Any] = {}
-            should_check_execution = bool(execution_id) and (
-                updated_at <= stale_before
-                or phase in {"manual_review_waiting", "waiting_platform_result", "submit_clicked"}
-            )
-            if should_check_execution:
+            # Worker 执行日志是跨进程恢复的唯一依据。只要有 execution_id 就主动查询，
+            # 不依赖宿主 Worker 回写 SQLite，也不会因此重复调用投稿接口。
+            if execution_id:
                 try:
                     execution = self.worker_client.execution(execution_id)
                     phase = str(execution.get("phase") or phase)
@@ -770,10 +831,47 @@ class PublishScheduler:
         }
 
     def cancel_job(self, job_id: str) -> dict[str, Any]:
-        return self._transition_user_status(job_id, "CANCELLED", "用户取消任务")
+        job = self.repository.get_job(job_id)
+        if not job:
+            raise ValueError("发布任务不存在")
+        source = str(job.get("status") or "").upper()
+        if source not in {"DRAFT", "WAITING", "SCHEDULED"}:
+            raise ValueError("只有草稿、等待或已排期任务可以取消发送并返回内容准备")
+        now = utc_now_iso()
+        with get_connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE publish_jobs
+                SET status = 'WAITING', scheduled_at = '', next_attempt_at = NULL,
+                    claimed_at = NULL, started_at = NULL, finished_at = NULL,
+                    worker_id = NULL, execution_id = NULL, execution_phase = '',
+                    error_code = '', error_message = '', last_error = '',
+                    needs_manual_review = 0, updated_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (now, job_id, source),
+            )
+            if cursor.rowcount:
+                self.repository.add_event(
+                    job_id,
+                    "returned_to_preparation",
+                    from_status=source,
+                    to_status="WAITING",
+                    message="用户取消发送并返回内容准备",
+                    payload={"scheduled_at_cleared": True, "files_deleted": False},
+                    connection=connection,
+                )
+            connection.commit()
+        if not cursor.rowcount:
+            raise ValueError("任务状态已变化，请刷新后重试")
+        return {
+            "status": "ok",
+            "message": "已取消发送并返回内容准备；视频、文案和封面均已保留。",
+            "job": self._public_job(job_id),
+        }
 
     def skip_job(self, job_id: str) -> dict[str, Any]:
-        return self.cancel_job(job_id)
+        return self._transition_user_status(job_id, "CANCELLED", "用户跳过任务")
 
     def mark_failed_manually(self, job_id: str, message: str = "人工确认平台未发布") -> dict[str, Any]:
         job = self.repository.get_job(job_id)
@@ -981,10 +1079,12 @@ class PublishScheduler:
             connection.commit()
 
     def _mark_published(self, job_id: str, result: PublishResult, *, require_publishing: bool = True) -> dict[str, Any]:
-        self.repository.record_provider_result(job_id, result)
         now = utc_now_iso()
         condition = "AND status = 'PUBLISHING'" if require_publishing else "AND status = 'NEED_REVIEW'"
         with get_connection() as connection:
+            self.repository.record_provider_result(
+                job_id, result, connection=connection, updated_at=now
+            )
             cursor = connection.execute(
                 f"""
                 UPDATE publish_jobs SET status = 'PUBLISHED', published_at = ?, finished_at = ?,
@@ -1002,17 +1102,21 @@ class PublishScheduler:
                     job_id, "published", from_status="PUBLISHING" if require_publishing else "NEED_REVIEW",
                     to_status="PUBLISHED", worker_id=self.worker_id, payload=result.as_dict(), connection=connection,
                 )
-            connection.commit()
+                connection.commit()
+            else:
+                connection.rollback()
         if not cursor.rowcount:
             return {"status": "skipped", "job_id": job_id, "message": "任务状态已变化，未覆盖最新状态"}
         self._append_log(job_id, "平台已确认投稿成功")
         return {"status": "published", "job_id": job_id, "publish_result": result.as_dict()}
 
     def _mark_exported(self, job_id: str, result: PublishResult) -> dict[str, Any]:
-        self.repository.record_provider_result(job_id, result)
         now = utc_now_iso()
         with get_connection() as connection:
-            connection.execute(
+            self.repository.record_provider_result(
+                job_id, result, connection=connection, updated_at=now
+            )
+            cursor = connection.execute(
                 """
                 UPDATE publish_jobs SET status = 'EXPORTED', finished_at = ?, published_at = NULL,
                     audit_status = 'not_submitted', execution_phase = 'exported', updated_at = ?
@@ -1020,23 +1124,30 @@ class PublishScheduler:
                 """,
                 (now, now, job_id),
             )
-            self.repository.add_event(
-                job_id, "exported", from_status="PUBLISHING", to_status="EXPORTED",
-                payload=result.as_dict(), connection=connection,
-            )
-            connection.commit()
+            if cursor.rowcount:
+                self.repository.add_event(
+                    job_id, "exported", from_status="PUBLISHING", to_status="EXPORTED",
+                    payload=result.as_dict(), connection=connection,
+                )
+                connection.commit()
+            else:
+                connection.rollback()
+        if not cursor.rowcount:
+            return {"status": "skipped", "job_id": job_id, "message": "任务状态已变化，未覆盖最新状态"}
         return {"status": "exported", "job_id": job_id, "publish_result": result.as_dict()}
 
     def _mark_failed(
         self, job_id: str, error_code: str, message: str, result: PublishResult | None = None
     ) -> dict[str, Any]:
-        if result:
-            self.repository.record_provider_result(job_id, result)
         now = utc_now_iso()
         with get_connection() as connection:
             row = connection.execute("SELECT status FROM publish_jobs WHERE id = ?", (job_id,)).fetchone()
             from_status = str(row["status"] if row else "")
-            connection.execute(
+            if result:
+                self.repository.record_provider_result(
+                    job_id, result, connection=connection, updated_at=now
+                )
+            cursor = connection.execute(
                 """
                 UPDATE publish_jobs SET status = 'FAILED', finished_at = ?, error_code = ?,
                     error_message = ?, last_error = ?, needs_manual_review = 0,
@@ -1045,24 +1156,31 @@ class PublishScheduler:
                 """,
                 (now, error_code, message, message, now, job_id),
             )
-            self.repository.add_event(
-                job_id, "failed", from_status=from_status, to_status="FAILED",
-                worker_id=self.worker_id, error_code=error_code, message=message, connection=connection,
-            )
-            connection.commit()
+            if cursor.rowcount:
+                self.repository.add_event(
+                    job_id, "failed", from_status=from_status, to_status="FAILED",
+                    worker_id=self.worker_id, error_code=error_code, message=message, connection=connection,
+                )
+                connection.commit()
+            else:
+                connection.rollback()
+        if not cursor.rowcount:
+            return {"status": "skipped", "job_id": job_id, "message": "任务状态已变化，未覆盖最新状态"}
         self._append_log(job_id, f"发布失败：{message}")
         return {"status": "failed", "job_id": job_id, "error_code": error_code, "message": message}
 
     def _mark_need_review(
         self, job_id: str, error_code: str, message: str, result: PublishResult | None = None
     ) -> dict[str, Any]:
-        if result:
-            self.repository.record_provider_result(job_id, result)
         now = utc_now_iso()
         with get_connection() as connection:
             row = connection.execute("SELECT status FROM publish_jobs WHERE id = ?", (job_id,)).fetchone()
             from_status = str(row["status"] if row else "")
-            connection.execute(
+            if result:
+                self.repository.record_provider_result(
+                    job_id, result, connection=connection, updated_at=now
+                )
+            cursor = connection.execute(
                 """
                 UPDATE publish_jobs SET status = 'NEED_REVIEW', finished_at = ?, error_code = ?,
                     error_message = ?, last_error = ?, needs_manual_review = 1,
@@ -1071,11 +1189,16 @@ class PublishScheduler:
                 """,
                 (now, error_code, message, message, now, job_id),
             )
-            self.repository.add_event(
-                job_id, "needs_review", from_status=from_status, to_status="NEED_REVIEW",
-                worker_id=self.worker_id, error_code=error_code, message=message, connection=connection,
-            )
-            connection.commit()
+            if cursor.rowcount:
+                self.repository.add_event(
+                    job_id, "needs_review", from_status=from_status, to_status="NEED_REVIEW",
+                    worker_id=self.worker_id, error_code=error_code, message=message, connection=connection,
+                )
+                connection.commit()
+            else:
+                connection.rollback()
+        if not cursor.rowcount:
+            return {"status": "skipped", "job_id": job_id, "message": "任务状态已变化，未覆盖最新状态"}
         self._append_log(job_id, f"发布需要人工复核：{message}")
         return {"status": "need_review", "job_id": job_id, "error_code": error_code, "message": message}
 
@@ -1191,6 +1314,10 @@ def scheduler_health() -> dict[str, Any]:
         "scanning": bool(_SCHEDULER_HEALTH["scanning"]),
         "last_scan_at": _SCHEDULER_HEALTH["last_scan_at"],
         "next_scan_at": _SCHEDULER_HEALTH["next_scan_at"],
+        "last_error_code": _SCHEDULER_HEALTH["last_error_code"],
+        "last_error_message": _SCHEDULER_HEALTH["last_error_message"],
+        "last_error_at": _SCHEDULER_HEALTH["last_error_at"],
+        "consecutive_failures": int(_SCHEDULER_HEALTH["consecutive_failures"]),
         "interval_seconds": int(settings.publish_scheduler_interval_seconds),
         "scheduled_count": int(counts["scheduled_count"] or 0),
         "publishing_count": int(counts["publishing_count"] or 0),

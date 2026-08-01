@@ -13,18 +13,50 @@ if (publishCenterRoot) {
   const drawerCount = document.querySelector("[data-drawer-count]");
   const scheduleForm = document.querySelector("[data-schedule-form]");
   const previewList = document.querySelector("[data-schedule-preview]");
+  const previewScheduleButton = document.querySelector("[data-preview-schedule]");
+  const scheduleFeedbackNode = document.querySelector("[data-schedule-feedback]");
   const confirmScheduleButton = document.querySelector("[data-confirm-schedule]");
   const historyFilter = document.querySelector("[data-history-filter]");
+  const historyCalendarCard = document.querySelector("[data-history-calendar-card]");
+  const historyCalendarNode = document.querySelector("[data-history-calendar]");
+  const historyCalendarTitle = document.querySelector("[data-history-calendar-title]");
+  const historyListNode = document.querySelector("[data-history-list]");
+  const historyEmpty = document.querySelector("[data-history-empty]");
+  const historyListTitle = document.querySelector("[data-history-list-title]");
+  const historyListSummary = document.querySelector("[data-history-list-summary]");
+  const historyListEyebrow = document.querySelector("[data-history-list-eyebrow]");
+  const historyClearDateButton = document.querySelector("[data-history-clear-date]");
+  const historyBatchBar = document.querySelector("[data-history-batch-bar]");
+  const historySelectedCount = document.querySelector("[data-history-selected-count]");
+  const historyBatchHideButton = document.querySelector("[data-history-batch-hide]");
+  const historyBatchRestoreButton = document.querySelector("[data-history-batch-restore]");
+  const historyPagination = document.querySelector("[data-history-pagination]");
+  const historyPageSummary = document.querySelector("[data-history-page-summary]");
+  const historyPreviousButton = document.querySelector("[data-history-previous]");
+  const historyNextButton = document.querySelector("[data-history-next]");
   const calendarNode = document.querySelector("[data-schedule-calendar]");
   const calendarTitle = document.querySelector("[data-calendar-title]");
   const scheduleEmpty = document.querySelector("[data-schedule-empty]");
   const contentEmpty = document.querySelector("[data-content-empty]");
   const platformListTitle = document.querySelector("[data-platform-list-title]");
   const schedulerHealthNode = document.querySelector("[data-scheduler-health]");
+  const backfillCoversButton = document.querySelector("[data-backfill-covers]");
   let latestPreviewSignature = "";
   let latestPreviewItems = [];
   let activePlatform = "douyin";
   let calendarMonth = currentBeijingMonth();
+  let historyMonth = currentBeijingMonth();
+  let historySelectedDate = "";
+  let historyDeletedView = false;
+  let historyPage = 1;
+  let historyTotalPages = 0;
+  let historyRefreshFrame = 0;
+  let historyRefreshCalendar = false;
+  let historyRequestSequence = 0;
+  let historyRefreshInFlight = false;
+  let historyRefreshQueuedCalendar = false;
+  let historyRefreshQueuedRecords = false;
+  const selectedHistoryJobIds = new Set();
   let scheduleRefreshFrame = 0;
   let workerAvailable = schedulerHealthNode?.dataset.workerAvailable === "true";
   let workerMessage = document.querySelector("[data-worker-message]")?.textContent?.split(" · ")[0] || "Windows 发布 Worker 未连接";
@@ -35,6 +67,26 @@ if (publishCenterRoot) {
     messageNode.textContent = message;
     messageNode.classList.toggle("tone-red", tone === "error");
     messageNode.classList.toggle("tone-blue", tone !== "error");
+  }
+
+  function missingCoverRows() {
+    const eligibleStatuses = new Set(["DRAFT", "WAITING", "SCHEDULED", "NEED_REVIEW"]);
+    return Array.from(document.querySelectorAll('[data-publish-row][data-section="content"]')).filter((row) => {
+      const editor = row.querySelector("[data-publish-editor]");
+      const coverPath = String(editor?.elements?.cover_file_path?.value || "").trim();
+      return eligibleStatuses.has(String(row.dataset.status || "").toUpperCase()) && !coverPath;
+    });
+  }
+
+  function updateBackfillCoversButton() {
+    if (!backfillCoversButton) return;
+    const count = missingCoverRows().length;
+    const loading = backfillCoversButton.dataset.loading === "true";
+    backfillCoversButton.dataset.missingCount = String(count);
+    backfillCoversButton.disabled = loading || count === 0;
+    backfillCoversButton.textContent = loading
+      ? `正在补充 ${count} 条封面…`
+      : `一键补充所有封面${count ? `（${count}）` : ""}`;
   }
 
   function beijingDatetimeValue(timestamp) {
@@ -86,6 +138,7 @@ if (publishCenterRoot) {
   function scheduleRows() {
     return Array.from(document.querySelectorAll('[data-publish-row][data-section="schedule"]'));
   }
+
   function setTaskGroupExpanded(group, expanded) {
     if (!group) return;
     group.dataset.expanded = expanded ? "true" : "false";
@@ -115,7 +168,6 @@ if (publishCenterRoot) {
     visibleGroups.forEach((group) => setTaskGroupExpanded(group, group.dataset.expanded === "true"));
     if (contentEmpty) contentEmpty.hidden = visibleGroups.length > 0;
   }
-
 
   function platformLabel(platform = activePlatform) {
     return platform === "bilibili" ? "B站" : "抖音";
@@ -246,6 +298,392 @@ if (publishCenterRoot) {
         cell.appendChild(more);
       }
       calendarNode.appendChild(cell);
+    }
+  }
+
+  function historyMonthKey() {
+    return `${historyMonth.year}-${String(historyMonth.month).padStart(2, "0")}`;
+  }
+
+  function historyPanelIsActive() {
+    return Boolean(document.querySelector('[data-center-panel="history"].active'));
+  }
+
+  function createHistoryButton(label, className, dataAttribute) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = className;
+    button.textContent = label;
+    button.dataset[dataAttribute] = "";
+    return button;
+  }
+
+  function createHistoryVisibilitySelect(job, dataAttribute, ariaLabel) {
+    const select = document.createElement("select");
+    select.className = "compact-filter";
+    select.dataset[dataAttribute] = "";
+    select.setAttribute("aria-label", ariaLabel);
+    [
+      ["public", "公开"],
+      ["friends", "好友可见"],
+      ["private", "仅自己可见"],
+    ].forEach(([value, label]) => {
+      const option = new Option(label, value, false, String(job.visibility || "public") === value);
+      select.add(option);
+    });
+    return select;
+  }
+
+  function appendRepairAccountSelect(actions, job) {
+    const select = document.createElement("select");
+    select.className = "compact-filter";
+    select.dataset.repairAccountSelect = "";
+    select.setAttribute("aria-label", "选择替代任务账号");
+    select.add(new Option("请选择账号", ""));
+    const source = document.querySelector("[data-batch-account]");
+    Array.from(source?.options || []).forEach((option) => {
+      if (!option.value || option.dataset.accountPlatform !== job.platform) return;
+      const clone = new Option(option.textContent, option.value);
+      select.add(clone);
+    });
+    actions.appendChild(select);
+    return select;
+  }
+
+  function renderHistoryActions(actions, job) {
+    const readiness = job.send_readiness || {};
+    if (historyDeletedView) {
+      actions.appendChild(createHistoryButton("恢复记录", "secondary-button", "historyRestore"));
+      actions.appendChild(createHistoryButton("执行详情", "text-button", "viewEvents"));
+      return;
+    }
+
+    if (job.status === "NEED_REVIEW" && readiness.repairable) {
+      const readinessMessage = document.createElement("small");
+      readinessMessage.className = `publish-send-readiness ${readiness.dispatch_ready ? "is-ready" : "is-blocked"}`;
+      readinessMessage.dataset.readinessMessage = "";
+      readinessMessage.textContent = readiness.message || "";
+      actions.appendChild(readinessMessage);
+      actions.appendChild(createHistoryVisibilitySelect(job, "repairVisibility", "替代任务可见范围"));
+      if (readiness.action === "select_account") {
+        appendRepairAccountSelect(actions, job);
+        actions.appendChild(createHistoryButton("选择后修复并发送", "primary-button", "repairJob"));
+      } else if (readiness.dispatch_ready) {
+        actions.appendChild(createHistoryButton("修复并发送", "primary-button", "repairJob"));
+      } else {
+        const setup = createHistoryButton(setupActionLabel(readiness.action), "secondary-button", "sendSetup");
+        setup.dataset.primarySendAction = "";
+        actions.appendChild(setup);
+      }
+    }
+
+    if (job.platform_url) {
+      const link = document.createElement("a");
+      link.className = "text-button";
+      link.href = job.platform_url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = "平台链接";
+      actions.appendChild(link);
+    }
+    if (job.status === "FAILED") {
+      actions.appendChild(createHistoryVisibilitySelect(job, "retryVisibility", "重试任务可见范围"));
+      actions.appendChild(createHistoryButton("立即发送", "primary-button", "retryJob"));
+    }
+    if (job.status === "NEED_REVIEW") {
+      actions.appendChild(createHistoryButton("打开创作者中心", "secondary-button", "openCreator"));
+      actions.appendChild(createHistoryButton("标记已发布", "secondary-button", "markPublished"));
+      actions.appendChild(createHistoryButton("标记失败", "secondary-button", "markFailed"));
+    }
+    if (job.is_user_removed) {
+      actions.appendChild(createHistoryButton("重新加入内容准备", "secondary-button", "restoreJob"));
+    }
+    if (["PUBLISHED", "FAILED", "EXPORTED", "CANCELLED"].includes(job.status)) {
+      actions.appendChild(createHistoryButton("删除记录", "text-button danger", "historyHide"));
+    }
+    actions.appendChild(createHistoryButton("执行详情", "text-button", "viewEvents"));
+  }
+
+  function renderHistoryRow(job) {
+    const row = document.createElement("article");
+    row.className = "publish-execution-row";
+    row.dataset.publishRow = "";
+    row.dataset.historyRecord = "";
+    row.dataset.jobId = job.id;
+    row.dataset.accountId = job.account_id || "";
+    row.dataset.platform = job.platform;
+    row.dataset.visibility = job.visibility || "public";
+    row.dataset.status = job.status;
+    row.dataset.section = "history";
+    row.dataset.sendReadiness = JSON.stringify(job.send_readiness || {});
+
+    const selectCell = document.createElement("label");
+    selectCell.className = "publish-history-select";
+    if (historyDeletedView || ["PUBLISHED", "FAILED", "EXPORTED", "CANCELLED"].includes(job.status)) {
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = job.id;
+      checkbox.dataset.historySelect = "";
+      checkbox.setAttribute("aria-label", `选择 ${job.title || "执行记录"}`);
+      checkbox.checked = selectedHistoryJobIds.has(job.id);
+      selectCell.appendChild(checkbox);
+    } else {
+      selectCell.textContent = "—";
+    }
+
+    const identity = document.createElement("div");
+    identity.className = "publish-history-identity";
+    const title = document.createElement("strong");
+    title.dataset.rowTitle = "";
+    title.textContent = job.title || "未命名任务";
+    const platform = document.createElement("small");
+    platform.textContent = job.platform_label || platformLabel(job.platform);
+    identity.append(title, platform);
+    const executionMessage = job.error_message || job.execution_phase_label || "";
+    if (executionMessage) {
+      const message = document.createElement("small");
+      message.className = "publish-send-readiness";
+      message.dataset.executionMessage = "";
+      message.textContent = executionMessage;
+      identity.appendChild(message);
+    }
+    if (job.error_message) {
+      const details = document.createElement("details");
+      details.className = "publish-error-detail";
+      const summary = document.createElement("summary");
+      summary.textContent = "查看错误";
+      const errorText = document.createElement("p");
+      errorText.textContent = job.error_message;
+      const code = document.createElement("code");
+      code.textContent = job.error_code || "";
+      details.append(summary, errorText, code);
+      identity.appendChild(details);
+    }
+
+    const account = document.createElement("span");
+    account.dataset.rowAccount = "";
+    account.textContent = job.account_name || "未选择账号";
+    const scheduled = document.createElement("time");
+    scheduled.dataset.rowSchedule = "";
+    scheduled.dataset.utc = job.scheduled_at_utc || job.scheduled_at || "";
+    scheduled.textContent = job.scheduled_at_display || "未排期";
+    const started = document.createElement("time");
+    started.textContent = `开始 ${job.started_at_display || "—"}`;
+    const finished = document.createElement("time");
+    finished.textContent = `结束 ${job.finished_at_display || "—"}`;
+    const actualTimes = document.createElement("span");
+    actualTimes.className = "publish-history-time-stack";
+    actualTimes.append(started, finished);
+    const status = document.createElement("span");
+    status.className = `status-pill tone-${job.status_tone || "blue"}`;
+    status.dataset.rowStatus = "";
+    status.textContent = job.status_label || statusLabel(job.status);
+    const actions = document.createElement("div");
+    actions.className = "publish-row-actions publish-history-actions";
+    const mode = document.createElement("small");
+    mode.className = "publish-history-mode";
+    mode.textContent = job.publish_mode_label || "";
+    actions.appendChild(mode);
+    renderHistoryActions(actions, job);
+    row.append(selectCell, identity, account, scheduled, actualTimes, status, actions);
+    applyRowReadiness(row);
+    return row;
+  }
+
+  function updateHistorySelectionUi() {
+    document.querySelectorAll("[data-history-select]").forEach((checkbox) => {
+      checkbox.checked = selectedHistoryJobIds.has(checkbox.value);
+    });
+    const count = selectedHistoryJobIds.size;
+    if (historySelectedCount) historySelectedCount.textContent = String(count);
+    if (historyBatchBar) historyBatchBar.hidden = count === 0;
+    if (historyBatchHideButton) historyBatchHideButton.hidden = historyDeletedView;
+    if (historyBatchRestoreButton) historyBatchRestoreButton.hidden = !historyDeletedView;
+  }
+
+  function clearHistorySelection() {
+    selectedHistoryJobIds.clear();
+    updateHistorySelectionUi();
+  }
+
+  function renderHistoryRecords(data) {
+    const jobs = data.jobs || [];
+    const visibleIds = new Set(jobs.map((job) => job.id));
+    Array.from(selectedHistoryJobIds).forEach((jobId) => {
+      if (!visibleIds.has(jobId)) selectedHistoryJobIds.delete(jobId);
+    });
+    historyListNode?.replaceChildren(...jobs.map(renderHistoryRow));
+    const pagination = data.pagination || {};
+    historyPage = Number(pagination.page || 1);
+    historyTotalPages = Number(pagination.total_pages || 0);
+    const total = Number(pagination.total || 0);
+    if (historyEmpty) historyEmpty.hidden = jobs.length > 0;
+    if (historyPagination) historyPagination.hidden = historyTotalPages <= 1;
+    if (historyPageSummary) {
+      historyPageSummary.textContent = historyTotalPages
+        ? `第 ${historyPage} / ${historyTotalPages} 页`
+        : "暂无记录";
+    }
+    if (historyPreviousButton) historyPreviousButton.disabled = historyPage <= 1;
+    if (historyNextButton) historyNextButton.disabled = !historyTotalPages || historyPage >= historyTotalPages;
+    if (historyListTitle) {
+      historyListTitle.textContent = historyDeletedView
+        ? "已删除记录"
+        : (historySelectedDate ? `${historySelectedDate} 执行记录` : "全部执行记录");
+    }
+    if (historyListEyebrow) historyListEyebrow.textContent = historyDeletedView ? "Deleted Records" : "History";
+    if (historyListSummary) {
+      historyListSummary.textContent = historyDeletedView
+        ? `共 ${total} 条 · 删除仅影响页面展示`
+        : `共 ${total} 条 · 页面及归档日期均使用北京时间`;
+    }
+    if (historyClearDateButton) historyClearDateButton.hidden = historyDeletedView || !historySelectedDate;
+    updateHistorySelectionUi();
+  }
+
+  function renderHistoryCalendar(data) {
+    if (!historyCalendarNode) return;
+    const { year, month } = historyMonth;
+    if (historyCalendarTitle) historyCalendarTitle.textContent = `${year} 年 ${month} 月 · ${platformLabel()}执行日历`;
+    const dayMap = new Map((data.days || []).map((item) => [item.date, item]));
+    const firstDay = new Date(Date.UTC(year, month - 1, 1));
+    const mondayOffset = (firstDay.getUTCDay() + 6) % 7;
+    const gridStart = new Date(Date.UTC(year, month - 1, 1 - mondayOffset));
+    const todayParts = beijingDateParts();
+    const todayKey = `${todayParts.year}-${String(todayParts.month).padStart(2, "0")}-${String(todayParts.day).padStart(2, "0")}`;
+    const statusItems = [
+      ["SCHEDULED", "待", "tone-blue"],
+      ["PUBLISHING", "中", "tone-purple"],
+      ["PUBLISHED", "成", "tone-green"],
+      ["FAILED", "败", "tone-red"],
+      ["NEED_REVIEW", "核", "tone-amber"],
+      ["EXPORTED", "导", "tone-neutral"],
+      ["CANCELLED", "取", "tone-neutral"],
+    ];
+    historyCalendarNode.replaceChildren();
+    for (let index = 0; index < 42; index += 1) {
+      const date = new Date(gridStart.getTime() + index * 86400000);
+      const cellYear = date.getUTCFullYear();
+      const cellMonth = date.getUTCMonth() + 1;
+      const cellDay = date.getUTCDate();
+      const key = `${cellYear}-${String(cellMonth).padStart(2, "0")}-${String(cellDay).padStart(2, "0")}`;
+      const day = dayMap.get(key);
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "publish-calendar-day publish-history-calendar-day";
+      cell.dataset.historyDate = key;
+      cell.setAttribute("role", "gridcell");
+      cell.setAttribute("aria-label", `${key}${day ? `，共 ${day.total} 条执行记录` : "，没有执行记录"}`);
+      cell.classList.toggle("is-outside", cellMonth !== month);
+      cell.classList.toggle("is-today", key === todayKey);
+      cell.classList.toggle("is-selected", key === historySelectedDate);
+      const number = document.createElement("span");
+      number.className = "calendar-day-number";
+      number.textContent = String(cellDay);
+      cell.appendChild(number);
+      if (day?.total) {
+        const total = document.createElement("small");
+        total.className = "history-calendar-total";
+        total.textContent = `共 ${day.total} 条`;
+        cell.appendChild(total);
+        const statuses = document.createElement("span");
+        statuses.className = "history-calendar-statuses";
+        statusItems.forEach(([status, label, tone]) => {
+          const count = Number(day.counts?.[status] || 0);
+          if (!count) return;
+          const badge = document.createElement("small");
+          badge.className = tone;
+          badge.textContent = `${label}${count}`;
+          statuses.appendChild(badge);
+        });
+        cell.appendChild(statuses);
+      }
+      historyCalendarNode.appendChild(cell);
+    }
+  }
+
+  async function refreshHistory(options = {}) {
+    if (!historyListNode || !historyPanelIsActive()) return;
+    const includeCalendar = options.calendar !== false && !historyDeletedView;
+    const includeRecords = options.records !== false;
+    if (historyRefreshInFlight) {
+      historyRefreshQueuedCalendar = historyRefreshQueuedCalendar || includeCalendar;
+      historyRefreshQueuedRecords = historyRefreshQueuedRecords || includeRecords;
+      return;
+    }
+    historyRefreshInFlight = true;
+    const sequence = ++historyRequestSequence;
+    const requests = [];
+    if (includeCalendar) {
+      const calendarUrl = `/api/publish/history/calendar?platform=${encodeURIComponent(activePlatform)}&month=${encodeURIComponent(historyMonthKey())}`;
+      requests.push(
+        window.apiFetch(calendarUrl).then((data) => {
+          if (sequence === historyRequestSequence) renderHistoryCalendar(data);
+        }),
+      );
+    }
+    if (includeRecords) {
+      const params = new URLSearchParams({
+        platform: activePlatform,
+        status: String(historyFilter?.value || "all"),
+        deleted: historyDeletedView ? "true" : "false",
+        page: String(historyPage),
+        page_size: "50",
+      });
+      if (historySelectedDate && !historyDeletedView) params.set("date", historySelectedDate);
+      requests.push(
+        window.apiFetch(`/api/publish/history/records?${params.toString()}`).then((data) => {
+          if (sequence === historyRequestSequence) renderHistoryRecords(data);
+        }),
+      );
+    }
+    try {
+      await Promise.all(requests);
+    } catch (error) {
+      if (sequence === historyRequestSequence) showMessage(`加载执行记录失败：${error.message}`, "error");
+    } finally {
+      historyRefreshInFlight = false;
+      if (historyRefreshQueuedCalendar || historyRefreshQueuedRecords) {
+        const queuedCalendar = historyRefreshQueuedCalendar;
+        const queuedRecords = historyRefreshQueuedRecords;
+        historyRefreshQueuedCalendar = false;
+        historyRefreshQueuedRecords = false;
+        void refreshHistory({ calendar: queuedCalendar, records: queuedRecords });
+      }
+    }
+  }
+
+  function queueHistoryRefresh(includeCalendar = true) {
+    if (!historyPanelIsActive()) return;
+    historyRefreshCalendar = historyRefreshCalendar || includeCalendar;
+    if (historyRefreshFrame) window.cancelAnimationFrame(historyRefreshFrame);
+    historyRefreshFrame = window.requestAnimationFrame(() => {
+      const refreshCalendar = historyRefreshCalendar;
+      historyRefreshFrame = 0;
+      historyRefreshCalendar = false;
+      void refreshHistory({ calendar: refreshCalendar, records: true });
+    });
+  }
+
+  async function updateHistoryVisibility(hidden, jobIds) {
+    const ids = Array.from(new Set(jobIds.filter(Boolean)));
+    if (!ids.length) return;
+    const actionLabel = hidden ? "删除" : "恢复";
+    const confirmation = hidden
+      ? `确认安全删除 ${ids.length} 条执行记录？\n\n记录会从正常列表和日历中隐藏，但视频、执行明细、数据库历史和平台作品都不会删除。`
+      : `确认恢复 ${ids.length} 条已删除记录？`;
+    if (!window.confirm(confirmation)) return;
+    try {
+      const endpoint = hidden ? "hide" : "restore";
+      const data = await window.apiFetch(`/api/publish/history/records/${endpoint}`, {
+        method: "POST",
+        body: JSON.stringify({ platform: activePlatform, job_ids: ids }),
+      });
+      clearHistorySelection();
+      showMessage(data.message || `${actionLabel}成功。`, "success");
+      await refreshHistory({ calendar: true, records: true });
+    } catch (error) {
+      showMessage(`${actionLabel}执行记录失败：${error.message}`, "error");
     }
   }
 
@@ -439,16 +877,14 @@ if (publishCenterRoot) {
   function sectionAllows(section, status) {
     if (section === "content") return ["DRAFT", "WAITING", "SCHEDULED"].includes(status);
     if (section === "schedule") return ["WAITING", "SCHEDULED"].includes(status);
-    if (section === "history") return !["DRAFT", "WAITING", "SCHEDULED"].includes(status);
+    if (section === "history") {
+      return ["SCHEDULED", "PUBLISHING", "PUBLISHED", "EXPORTED", "FAILED", "NEED_REVIEW", "CANCELLED"].includes(status);
+    }
     return true;
   }
 
   function applyHistoryFilter() {
-    const filter = String(historyFilter?.value || "all");
-    document.querySelectorAll('[data-publish-row][data-section="history"]').forEach((row) => {
-      const allowed = sectionAllows("history", row.dataset.status || "");
-      row.hidden = !allowed || row.dataset.platform !== activePlatform || (filter !== "all" && row.dataset.status !== filter);
-    });
+    queueHistoryRefresh(true);
   }
 
   function updateSelectionUi() {
@@ -471,12 +907,17 @@ if (publishCenterRoot) {
     activePlatform = next;
     if (changed) {
       selectedJobIds.clear();
+      historySelectedDate = "";
+      historyPage = 1;
+      clearHistorySelection();
       invalidatePreview();
       closeDrawer();
+      document.querySelectorAll("[data-publish-task-group]").forEach((group) => setTaskGroupExpanded(group, false));
       showMessage(`已切换到${platformLabel()}；之前勾选的任务已清空，不会跨平台发送。`, "success");
     }
     updateSelectionUi();
     refreshScheduleViews();
+    if (changed) queueHistoryRefresh(true);
   }
 
   function switchTab(tab) {
@@ -488,6 +929,7 @@ if (publishCenterRoot) {
       panel.hidden = !active;
       panel.classList.toggle("active", active);
     });
+    if (tab === "history") void refreshHistory({ calendar: true, records: true });
   }
 
   function updateRowFromJob(job) {
@@ -524,7 +966,18 @@ if (publishCenterRoot) {
         if (resolvedMode && editor.elements.publish_mode?.querySelector(`option[value="${CSS.escape(resolvedMode)}"]`)) {
           editor.elements.publish_mode.value = resolvedMode;
         }
+        if (job.cover_file_path !== undefined && editor.elements.cover_file_path) {
+          editor.elements.cover_file_path.value = job.cover_file_path || "";
+        }
+        if (job.cover_time_seconds !== undefined && editor.elements.cover_time_seconds) {
+          editor.elements.cover_time_seconds.value = String(job.cover_time_seconds || 0);
+        }
         syncPlatformFields(editor);
+      }
+      const coverPreview = row.querySelector("[data-cover-preview]");
+      if (coverPreview && job.cover_media_url) {
+        coverPreview.src = job.cover_media_url;
+        coverPreview.hidden = false;
       }
       const readyNode = row.querySelector("[data-content-ready]");
       if (readyNode && job.content_complete !== undefined) {
@@ -532,6 +985,8 @@ if (publishCenterRoot) {
         readyNode.classList.toggle("tone-green", Boolean(job.content_complete));
         readyNode.classList.toggle("tone-amber", !job.content_complete);
       }
+      const restoreButton = row.querySelector("[data-restore-job]");
+      if (restoreButton && job.is_user_removed !== undefined) restoreButton.hidden = !job.is_user_removed;
       const timeNode = row.querySelector("[data-row-schedule]");
       if (timeNode) {
         const utcValue = job.scheduled_at_utc || job.scheduled_at || "";
@@ -546,6 +1001,7 @@ if (publishCenterRoot) {
     }
     applyHistoryFilter();
     queueScheduleRefresh();
+    updateBackfillCoversButton();
   }
 
   function cloneRowsForRetry(sourceId, job) {
@@ -576,10 +1032,20 @@ if (publishCenterRoot) {
     return JSON.stringify({ ...payload, confirmed_schedule: undefined });
   }
 
+  function showScheduleFeedback(message = "", tone = "info") {
+    if (!scheduleFeedbackNode) return;
+    scheduleFeedbackNode.hidden = !message;
+    scheduleFeedbackNode.textContent = message;
+    scheduleFeedbackNode.classList.toggle("tone-red", tone === "error");
+    scheduleFeedbackNode.classList.toggle("tone-blue", tone !== "error");
+  }
+
   function invalidatePreview() {
     latestPreviewSignature = "";
     latestPreviewItems = [];
     if (confirmScheduleButton) confirmScheduleButton.disabled = true;
+    if (previewList) previewList.innerHTML = '<p class="form-hint">请先生成预览，再确认应用。</p>';
+    showScheduleFeedback();
   }
 
   function openDrawer() {
@@ -724,18 +1190,34 @@ if (publishCenterRoot) {
     try {
       const data = await window.apiFetch("/api/publish/scheduler/health");
       const statusNode = document.querySelector("[data-worker-status]");
+      const runtimeNode = document.querySelector("[data-scheduler-runtime]");
       const message = document.querySelector("[data-worker-message]");
       const help = document.querySelector("[data-worker-help]");
       const dot = document.querySelector("[data-scheduler-health] .health-dot");
       workerAvailable = Boolean(data.worker_available);
       workerMessage = data.worker_message || "Windows 发布 Worker 未连接";
-      if (schedulerHealthNode) schedulerHealthNode.dataset.workerAvailable = workerAvailable ? "true" : "false";
+      const schedulerFailures = Number(data.consecutive_failures || 0);
+      const schedulerHealthy = Boolean(data.running && schedulerFailures === 0);
+      if (schedulerHealthNode) {
+        schedulerHealthNode.dataset.workerAvailable = workerAvailable ? "true" : "false";
+        schedulerHealthNode.dataset.schedulerFailures = String(schedulerFailures);
+      }
       if (statusNode) statusNode.textContent = data.worker_available ? "正常" : "未连接";
-      if (message) message.textContent = `${data.worker_message} · 页面及排期均使用北京时间`;
+      if (runtimeNode) runtimeNode.textContent = schedulerFailures ? "异常重试中" : (data.running ? "正常" : "已停止");
+      if (message) {
+        const schedulerMessage = schedulerFailures ? `${data.last_error_message || "调度扫描异常，正在自动重试"} · ` : "";
+        message.textContent = `${schedulerMessage}${data.worker_message} · 页面及排期均使用北京时间`;
+      }
       if (help) help.hidden = Boolean(data.worker_available);
-      if (dot) dot.classList.toggle("is-ok", Boolean(data.running && data.worker_available));
+      if (dot) dot.classList.toggle("is-ok", Boolean(schedulerHealthy && data.worker_available));
       document.querySelectorAll('[data-publish-row][data-section="schedule"], [data-publish-row][data-section="history"]').forEach((row) => applyRowReadiness(row));
-      if (showResult) showMessage(data.worker_available ? "Windows Worker 已连接，可以打开账号登录窗口。" : "Worker 仍未连接，请按卡片中的连接修复步骤操作。", data.worker_available ? "success" : "error");
+      if (showResult) {
+        const ready = schedulerHealthy && data.worker_available;
+        const resultMessage = schedulerFailures
+          ? (data.last_error_message || "调度扫描异常，正在自动重试")
+          : (data.worker_available ? "调度器与 Windows Worker 均已连接。" : "发送服务仍在随 Docker 项目自动启动；请稍候，或在 Docker Desktop 中停止后重新运行本项目。");
+        showMessage(resultMessage, ready ? "success" : "error");
+      }
     } catch (error) {
       if (showResult) showMessage(`检测失败：${error.message}`, "error");
     } finally {
@@ -772,9 +1254,91 @@ if (publishCenterRoot) {
     row.classList.add("is-calendar-focus");
     window.setTimeout(() => row.classList.remove("is-calendar-focus"), 1600);
   });
-  historyFilter?.addEventListener("change", applyHistoryFilter);
+  historyFilter?.addEventListener("change", () => {
+    historyPage = 1;
+    clearHistorySelection();
+    void refreshHistory({ calendar: false, records: true });
+  });
+  document.querySelector("[data-history-calendar-previous]")?.addEventListener("click", () => {
+    const previous = new Date(Date.UTC(historyMonth.year, historyMonth.month - 2, 1));
+    historyMonth = { year: previous.getUTCFullYear(), month: previous.getUTCMonth() + 1 };
+    historySelectedDate = "";
+    historyPage = 1;
+    clearHistorySelection();
+    void refreshHistory({ calendar: true, records: true });
+  });
+  document.querySelector("[data-history-calendar-next]")?.addEventListener("click", () => {
+    const next = new Date(Date.UTC(historyMonth.year, historyMonth.month, 1));
+    historyMonth = { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1 };
+    historySelectedDate = "";
+    historyPage = 1;
+    clearHistorySelection();
+    void refreshHistory({ calendar: true, records: true });
+  });
+  document.querySelector("[data-history-calendar-today]")?.addEventListener("click", () => {
+    historyMonth = currentBeijingMonth();
+    historySelectedDate = "";
+    historyPage = 1;
+    clearHistorySelection();
+    void refreshHistory({ calendar: true, records: true });
+  });
+  historyCalendarNode?.addEventListener("click", (event) => {
+    const cell = event.target.closest("[data-history-date]");
+    if (!cell) return;
+    const [year, month] = String(cell.dataset.historyDate || "").split("-").map(Number);
+    if (year && month) historyMonth = { year, month };
+    historySelectedDate = String(cell.dataset.historyDate || "");
+    historyPage = 1;
+    clearHistorySelection();
+    void refreshHistory({ calendar: true, records: true });
+  });
+  historyClearDateButton?.addEventListener("click", () => {
+    historySelectedDate = "";
+    historyPage = 1;
+    clearHistorySelection();
+    void refreshHistory({ calendar: true, records: true });
+  });
+  document.querySelectorAll("[data-history-view]").forEach((button) => {
+    button.addEventListener("click", () => {
+      historyDeletedView = button.dataset.historyView === "deleted";
+      document.querySelectorAll("[data-history-view]").forEach((item) => {
+        item.classList.toggle("is-active", item === button);
+      });
+      if (historyCalendarCard) historyCalendarCard.hidden = historyDeletedView;
+      historySelectedDate = "";
+      historyPage = 1;
+      clearHistorySelection();
+      void refreshHistory({ calendar: !historyDeletedView, records: true });
+    });
+  });
+  historyPreviousButton?.addEventListener("click", () => {
+    if (historyPage <= 1) return;
+    historyPage -= 1;
+    clearHistorySelection();
+    void refreshHistory({ calendar: false, records: true });
+  });
+  historyNextButton?.addEventListener("click", () => {
+    if (!historyTotalPages || historyPage >= historyTotalPages) return;
+    historyPage += 1;
+    clearHistorySelection();
+    void refreshHistory({ calendar: false, records: true });
+  });
+  historyBatchHideButton?.addEventListener("click", () => {
+    void updateHistoryVisibility(true, Array.from(selectedHistoryJobIds));
+  });
+  historyBatchRestoreButton?.addEventListener("click", () => {
+    void updateHistoryVisibility(false, Array.from(selectedHistoryJobIds));
+  });
+  document.querySelector("[data-history-clear-selection]")?.addEventListener("click", clearHistorySelection);
 
   document.addEventListener("change", (event) => {
+    const historyCheckbox = event.target.closest("[data-history-select]");
+    if (historyCheckbox) {
+      if (historyCheckbox.checked) selectedHistoryJobIds.add(historyCheckbox.value);
+      else selectedHistoryJobIds.delete(historyCheckbox.value);
+      updateHistorySelectionUi();
+      return;
+    }
     const checkbox = event.target.closest("[data-publish-select]");
     if (checkbox) {
       const row = checkbox.closest("[data-publish-row]");
@@ -859,9 +1423,48 @@ if (publishCenterRoot) {
       return;
     }
 
+    const historyHide = event.target.closest("[data-history-hide]");
+    if (historyHide) {
+      const jobId = historyHide.closest("[data-history-record]")?.dataset.jobId;
+      if (jobId) await updateHistoryVisibility(true, [jobId]);
+      return;
+    }
+
+    const historyRestore = event.target.closest("[data-history-restore]");
+    if (historyRestore) {
+      const jobId = historyRestore.closest("[data-history-record]")?.dataset.jobId;
+      if (jobId) await updateHistoryVisibility(false, [jobId]);
+      return;
+    }
+
     const setupButton = event.target.closest("[data-send-setup]");
     if (setupButton) {
       await handleSendSetup(setupButton.closest("[data-publish-row]"));
+      return;
+    }
+
+    const dismissButton = event.target.closest("[data-dismiss-job]");
+    if (dismissButton) {
+      const row = dismissButton.closest("[data-publish-row]");
+      const jobId = row?.dataset.jobId;
+      const taskName = row?.closest("[data-publish-task-group]")?.querySelector("h3")?.textContent?.trim() || "未命名任务";
+      const clipName = row?.querySelector("[data-row-title]")?.textContent?.trim() || "当前片段";
+      const confirmation = [
+        `确认把“${clipName}”移出${platformLabel(row?.dataset.platform)}内容准备？`,
+        "",
+        `所属任务：${taskName}`,
+        "如果已经排期，排期会同时取消。原视频、裁剪成片、字幕和另一个平台的内容都不会删除。",
+        "以后可以在“执行记录”中重新加入。",
+      ].join("\n");
+      if (!jobId || !window.confirm(confirmation)) return;
+      dismissButton.disabled = true;
+      try {
+        const data = await window.apiFetch(`/api/publish/jobs/${jobId}/dismiss`, { method: "POST" });
+        updateRowFromJob(data.job);
+        showMessage(data.message || "已从当前平台内容准备中移出。", "success");
+      } catch (error) {
+        showMessage(`移出失败：${error.message}`, "error");
+      } finally { dismissButton.disabled = false; }
       return;
     }
 
@@ -884,8 +1487,9 @@ if (publishCenterRoot) {
         if (accountId) queryParams.set("account_id", accountId);
         const query = `?${queryParams.toString()}`;
         const data = await window.apiFetch(`/api/publish/jobs/${sourceId}/repair-and-publish${query}`, { method: "POST" });
-        cloneRowsForRetry(sourceId, data.job);
+        if (!row?.matches("[data-history-record]")) cloneRowsForRetry(sourceId, data.job);
         showMessage(data.message || "旧记录已保留，替代任务已进入统一调度器。", "success");
+        await refreshHistory({ calendar: true, records: true });
       } catch (error) {
         if (!applyReadinessError(error, row)) showMessage(`修复发送失败：${error.message}`, "error");
       } finally { repairButton.disabled = false; }
@@ -928,12 +1532,50 @@ if (publishCenterRoot) {
 
     const cancelButton = event.target.closest("[data-cancel-job]");
     if (cancelButton) {
-      const jobId = cancelButton.closest("[data-publish-row]")?.dataset.jobId;
-      if (!window.confirm("确认取消这条发布任务？")) return;
+      const row = cancelButton.closest("[data-publish-row]");
+      const jobId = row?.dataset.jobId;
+      const confirmation = [
+        "确认取消这条发送安排并返回“内容准备”？",
+        "",
+        "当前排期会清除；视频、标题、简介、话题和封面都会保留。",
+      ].join("\n");
+      if (!jobId || !window.confirm(confirmation)) return;
+      cancelButton.disabled = true;
       try {
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/cancel`, { method: "POST" });
         updateRowFromJob(data.job);
-      } catch (error) { showMessage(`取消失败：${error.message}`, "error"); }
+        selectedJobIds.delete(jobId);
+        updateSelectionUi();
+        syncContentTaskGroups();
+        const contentRow = document.querySelector(
+          `[data-publish-row][data-section="content"][data-job-id="${CSS.escape(jobId)}"]`,
+        );
+        setTaskGroupExpanded(contentRow?.closest("[data-publish-task-group]"), true);
+        switchTab("content");
+        contentRow?.scrollIntoView({ behavior: "smooth", block: "center" });
+        showMessage(data.message || "已取消发送并返回内容准备。", "success");
+      } catch (error) {
+        showMessage(`取消发送失败：${error.message}`, "error");
+      } finally {
+        cancelButton.disabled = false;
+      }
+      return;
+    }
+
+    const restoreButton = event.target.closest("[data-restore-job]");
+    if (restoreButton) {
+      const row = restoreButton.closest("[data-publish-row]");
+      const jobId = row?.dataset.jobId;
+      if (!jobId || !window.confirm(`确认把这条${platformLabel(row?.dataset.platform)}内容重新加入“内容准备”？\n\n恢复后不会自动排期或发送。`)) return;
+      restoreButton.disabled = true;
+      try {
+        const data = await window.apiFetch(`/api/publish/jobs/${jobId}/restore`, { method: "POST" });
+        updateRowFromJob(data.job);
+        showMessage(data.message || "已重新加入内容准备。", "success");
+        await refreshHistory({ calendar: true, records: true });
+      } catch (error) {
+        showMessage(`恢复失败：${error.message}`, "error");
+      } finally { restoreButton.disabled = false; }
       return;
     }
 
@@ -1006,12 +1648,18 @@ if (publishCenterRoot) {
       const sourceId = retryButton.closest("[data-publish-row]")?.dataset.jobId;
       const retryRow = retryButton.closest("[data-publish-row]");
       const visibility = retryRow?.querySelector("[data-retry-visibility]")?.value || retryRow?.dataset.visibility || "public";
-      if (!window.confirm(`${sendConfirmation(retryRow, "确认创建重试任务？", visibility)}\n\n系统会保留原失败记录。`)) return;
+      if (!window.confirm(`${sendConfirmation(retryRow, "确认立即发送？", visibility)}\n\n系统会保留原失败记录，并创建一条立即执行的新任务。`)) return;
+      retryButton.disabled = true;
       try {
         const data = await window.apiFetch(`/api/publish/jobs/${sourceId}/retry`, { method: "POST", body: JSON.stringify({ visibility }) });
-        cloneRowsForRetry(sourceId, data.job);
-        showMessage(`已创建重试任务 ${data.job_id}，并交给统一调度器。`, "success");
-      } catch (error) { showMessage(`重试失败：${error.message}`, "error"); }
+        if (!retryRow?.matches("[data-history-record]")) cloneRowsForRetry(sourceId, data.job);
+        showMessage("原失败记录已保留，新任务已进入统一调度器并开始立即发送。", "success");
+        await refreshHistory({ calendar: true, records: true });
+      } catch (error) {
+        if (!applyReadinessError(error, retryRow)) showMessage(`立即发送失败：${error.message}`, "error");
+      } finally {
+        retryButton.disabled = false;
+      }
       return;
     }
 
@@ -1024,6 +1672,7 @@ if (publishCenterRoot) {
       try {
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/mark-published`, { method: "POST", body: JSON.stringify({ platform_url: platformUrl }) });
         updateRowFromJob(data.job || { id: jobId, status: "PUBLISHED", platform_url: platformUrl });
+        await refreshHistory({ calendar: true, records: true });
       } catch (error) { showMessage(`标记失败：${error.message}`, "error"); }
       return;
     }
@@ -1035,6 +1684,7 @@ if (publishCenterRoot) {
       try {
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/mark-failed`, { method: "POST" });
         updateRowFromJob(data.job || { id: jobId, status: "FAILED" });
+        await refreshHistory({ calendar: true, records: true });
       } catch (error) { showMessage(`标记失败：${error.message}`, "error"); }
       return;
     }
@@ -1119,15 +1769,49 @@ if (publishCenterRoot) {
     showMessage("所选任务的 AI 标题和简介已补齐。", "success");
   });
 
+  backfillCoversButton?.addEventListener("click", async () => {
+    const missingCount = missingCoverRows().length;
+    if (!missingCount) {
+      showMessage("当前没有需要补充封面的未发布任务。", "success");
+      updateBackfillCoversButton();
+      return;
+    }
+    backfillCoversButton.dataset.loading = "true";
+    updateBackfillCoversButton();
+    try {
+      const data = await window.apiFetch("/api/publish/covers/backfill", { method: "POST" });
+      (data.jobs || []).forEach(updateRowFromJob);
+      const errorText = (data.errors || [])
+        .slice(0, 3)
+        .map((item) => `${item.output_file_name || item.output_clip_id}：${item.message}`)
+        .join("；");
+      showMessage(
+        `${data.message || "封面补充完成。"}${errorText ? ` ${errorText}` : ""}`,
+        data.status === "partial" ? "error" : "success",
+      );
+    } catch (error) {
+      showMessage(`一键补充封面失败：${error.message}`, "error");
+    } finally {
+      backfillCoversButton.dataset.loading = "false";
+      updateBackfillCoversButton();
+    }
+  });
+
+  scheduleForm?.addEventListener("input", invalidatePreview);
+
   scheduleForm?.elements.interval_preset?.addEventListener("change", () => {
     document.querySelector("[data-custom-interval]").hidden = scheduleForm.elements.interval_preset.value !== "custom";
   });
 
-  document.querySelector("[data-preview-schedule]")?.addEventListener("click", async () => {
+  previewScheduleButton?.addEventListener("click", async () => {
     const payload = schedulePayload("apply");
     if (!payload.start_at_local || beijingInputToTimestamp(payload.start_at_local) <= Date.now()) {
-      showMessage("请选择晚于当前时间的北京时间。", "error"); return;
+      showScheduleFeedback("请选择晚于当前时间的北京时间。", "error");
+      return;
     }
+    previewScheduleButton.disabled = true;
+    previewScheduleButton.textContent = "正在生成预览…";
+    showScheduleFeedback("正在按北京时间计算每一条发布时间，请稍候。");
     try {
       const data = await window.apiFetch("/api/publish/schedules/preview", { method: "POST", body: JSON.stringify(payload) });
       previewList.innerHTML = "";
@@ -1140,9 +1824,14 @@ if (publishCenterRoot) {
       });
       latestPreviewSignature = previewSignature(payload);
       confirmScheduleButton.disabled = false;
+      showScheduleFeedback(`已生成 ${latestPreviewItems.length} 条具体发布时间，请核对后确认应用。`);
     } catch (error) {
       const row = document.querySelector(`[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(payload.job_ids[0] || "")}"]`);
-      if (!applyReadinessError(error, row)) showMessage(`排期预览失败：${error.message}`, "error");
+      applyReadinessError(error, row);
+      showScheduleFeedback(`排期预览失败：${error.message}`, "error");
+    } finally {
+      previewScheduleButton.disabled = false;
+      previewScheduleButton.textContent = "预览排期";
     }
   });
 
@@ -1150,9 +1839,13 @@ if (publishCenterRoot) {
     event.preventDefault();
     const payload = schedulePayload("apply");
     if (latestPreviewSignature !== previewSignature(payload) || !latestPreviewItems.length) {
-      showMessage("排期参数已变化，请重新预览。", "error"); return;
+      showScheduleFeedback("排期参数已变化，请重新预览。", "error");
+      return;
     }
     payload.confirmed_schedule = latestPreviewItems;
+    confirmScheduleButton.disabled = true;
+    confirmScheduleButton.textContent = "正在应用排期…";
+    showScheduleFeedback("正在保存已确认的具体发布时间，请稍候。");
     try {
       const data = await window.apiFetch("/api/publish/jobs/schedule-batch", { method: "PATCH", body: JSON.stringify(payload) });
       (data.jobs || []).forEach(updateRowFromJob);
@@ -1161,7 +1854,11 @@ if (publishCenterRoot) {
       selectedJobIds.clear(); updateSelectionUi(); closeDrawer(); invalidatePreview();
     } catch (error) {
       const row = document.querySelector(`[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(payload.job_ids[0] || "")}"]`);
-      if (!applyReadinessError(error, row)) showMessage(`排期保存失败：${error.message}`, "error");
+      applyReadinessError(error, row);
+      showScheduleFeedback(`排期保存失败：${error.message}`, "error");
+      confirmScheduleButton.disabled = false;
+    } finally {
+      confirmScheduleButton.textContent = "确认应用具体时间";
     }
   });
 
@@ -1181,7 +1878,7 @@ if (publishCenterRoot) {
   filterAccountOptions(document.querySelector("[data-batch-account]"), activePlatform);
   if (scheduleForm?.elements.start_at_local) scheduleForm.elements.start_at_local.value = beijingDatetimeValue(Date.now() + 10 * 60 * 1000);
   document.querySelectorAll('[data-publish-row][data-section="schedule"], [data-publish-row][data-section="history"]').forEach((row) => applyRowReadiness(row));
-  updateSelectionUi(); applyHistoryFilter(); refreshScheduleViews();
+  updateSelectionUi(); applyHistoryFilter(); refreshScheduleViews(); updateBackfillCoversButton();
   if (focus?.dataset.taskId) {
     const group = document.querySelector(
       `[data-publish-task-group][data-task-id="${CSS.escape(focus.dataset.taskId)}"]`,

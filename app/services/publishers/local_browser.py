@@ -58,19 +58,11 @@ class LocalBrowserPublisher(BasePublisher):
                 logged_in=login_status == "normal",
             )
         if login_status != "normal":
-            result = PublishResult(
+            return PublishResult(
                 outcome=PublishOutcome.NEED_REVIEW,
                 message=str(login.get("message") or "账号登录失效，请重新登录"),
                 error_code="account_login_required",
                 needs_manual_review=True,
                 provider_response={"login_status": login_status},
             )
-            self._record(job, result)
-            return result
-        result = self.worker_client.publish(self.build_payload(job))
-        self._record(job, result)
-        return result
-
-    def _record(self, job: dict[str, Any], result: PublishResult) -> None:
-        if self.repository is not None:
-            self.repository.record_provider_result(str(job.get("id") or ""), result)
+        return self.worker_client.publish(self.build_payload(job))

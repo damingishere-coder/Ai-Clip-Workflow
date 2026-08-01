@@ -10,6 +10,7 @@ from app.models.task import (
     PublishBatchTargetUpdate,
     PublishCoverCreate,
     PublishCoverFrameBatchCreate,
+    PublishHistoryRecordBatchUpdate,
     PublishJobContentUpdate,
     PublishJobCreate,
     PublishJobScheduleUpdate,
@@ -110,6 +111,59 @@ async def list_publish_jobs() -> dict:
     return {"jobs": publish_service.list_publish_jobs()}
 
 
+@router.get("/history/calendar")
+async def get_publish_history_calendar(
+    platform: str = Query(default="douyin"),
+    month: str = Query(..., min_length=7, max_length=7),
+) -> dict:
+    try:
+        return publish_service.get_publish_history_calendar(platform, month)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/history/records")
+async def list_publish_history_records(
+    platform: str = Query(default="douyin"),
+    date: str = Query(default="", max_length=10),
+    status: str = Query(default="all", max_length=20),
+    deleted: bool = Query(default=False),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=50),
+) -> dict:
+    try:
+        return publish_service.list_publish_history_records(
+            platform=platform,
+            date=date,
+            status=status,
+            deleted=deleted,
+            page=page,
+            page_size=page_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/history/records/hide")
+async def hide_publish_history_records(payload: PublishHistoryRecordBatchUpdate) -> dict:
+    try:
+        return publish_service.hide_publish_history_records(payload.job_ids, platform=payload.platform)
+    except PublishPlatformIsolationBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/history/records/restore")
+async def restore_publish_history_records(payload: PublishHistoryRecordBatchUpdate) -> dict:
+    try:
+        return publish_service.restore_publish_history_records(payload.job_ids, platform=payload.platform)
+    except PublishPlatformIsolationBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/jobs/{job_id}/events")
 async def list_publish_job_events(job_id: str) -> dict:
     from app.services.publish_repository import PublishRepository
@@ -200,6 +254,16 @@ async def generate_publish_cover(payload: PublishCoverCreate) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/covers/backfill")
+async def backfill_missing_publish_covers() -> dict:
+    import asyncio
+
+    try:
+        return await asyncio.to_thread(publish_service.backfill_missing_publish_covers)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/covers/frames")
 async def generate_publish_cover_frames(payload: PublishCoverFrameBatchCreate) -> dict:
     try:
@@ -233,13 +297,21 @@ async def regenerate_send_job_metadata(job_id: str, use_ai: bool = Query(default
 
 
 @router.post("/jobs/{job_id}/retry")
-async def retry_publish_job(job_id: str, payload: PublishRetryRequest | None = None) -> dict:
+async def retry_publish_job(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    payload: PublishRetryRequest | None = None,
+) -> dict:
     try:
-        return PublishScheduler().retry_failed(
+        result = PublishScheduler().retry_failed(
             job_id,
             (payload.scheduled_at if payload else "") or None,
             visibility=(payload.visibility if payload else None),
         )
+        background_tasks.add_task(PublishScheduler().run_once)
+        return result
+    except SendReadinessBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.readiness) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -371,6 +443,22 @@ async def update_publish_jobs_target_batch(payload: PublishBatchTargetUpdate) ->
         return publish_service.update_publish_jobs_target_batch(payload)
     except PublishPlatformIsolationBlocked as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/dismiss")
+async def dismiss_publish_job(job_id: str) -> dict:
+    try:
+        return publish_service.dismiss_publish_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/restore")
+async def restore_publish_job(job_id: str) -> dict:
+    try:
+        return publish_service.restore_publish_job(job_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

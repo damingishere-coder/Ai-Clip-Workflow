@@ -16,38 +16,49 @@ class PublishRepository:
             row = connection.execute("SELECT * FROM publish_jobs WHERE id = ?", (job_id,)).fetchone()
         return dict(row) if row else None
 
-    def record_provider_result(self, job_id: str, result: PublishResult) -> None:
-        now = utc_now_iso()
+    def record_provider_result(
+        self,
+        job_id: str,
+        result: PublishResult,
+        *,
+        connection=None,
+        updated_at: str | None = None,
+    ) -> None:
+        """保存脱敏平台结果；复用连接时由调用方统一提交事务。"""
+
+        now = updated_at or utc_now_iso()
         provider_json = json.dumps(
             sanitize_provider_response(result.provider_response), ensure_ascii=False
         )
         result_json = json.dumps(result.as_dict(), ensure_ascii=False)
-        with get_connection() as connection:
-            connection.execute(
-                """
-                UPDATE publish_jobs
-                SET remote_video_id = ?, platform_item_id = ?, platform_url = ?,
-                    provider_response = ?, publish_result = ?, published_at = ?,
-                    error_code = ?, last_error = ?, error_message = ?,
-                    needs_manual_review = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    result.remote_video_id,
-                    result.remote_video_id,
-                    result.platform_url,
-                    provider_json,
-                    result_json,
-                    result.published_at or None,
-                    result.error_code,
-                    result.message if result.error_code else "",
-                    result.message if result.error_code else "",
-                    int(result.needs_manual_review),
-                    now,
-                    job_id,
-                ),
-            )
-            connection.commit()
+        values = (
+            result.remote_video_id,
+            result.remote_video_id,
+            result.platform_url,
+            provider_json,
+            result_json,
+            result.published_at or None,
+            result.error_code,
+            result.message if result.error_code else "",
+            result.message if result.error_code else "",
+            int(result.needs_manual_review),
+            now,
+            job_id,
+        )
+        sql = """
+            UPDATE publish_jobs
+            SET remote_video_id = ?, platform_item_id = ?, platform_url = ?,
+                provider_response = ?, publish_result = ?, published_at = ?,
+                error_code = ?, last_error = ?, error_message = ?,
+                needs_manual_review = ?, updated_at = ?
+            WHERE id = ?
+        """
+        if connection is not None:
+            connection.execute(sql, values)
+            return
+        with get_connection() as owned:
+            owned.execute(sql, values)
+            owned.commit()
 
     def update_execution_phase(
         self,

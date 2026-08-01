@@ -54,8 +54,8 @@ class PublishWorkerClient:
             reason = getattr(exc, "reason", exc)
             timed_out = isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in str(reason).lower()
             raise PublishWorkerUnavailable(
-                "Windows 发布 Worker 未启动或当前不可达。请在项目目录运行 "
-                r".\scripts\start_niuma_studio.ps1；脚本会同时启动 Worker、Docker 和发送中心。",
+                "发送服务正在随 Docker 中的牛马片场项目自动启动。"
+                "如果刚刚运行项目，请稍候并重新检测；持续未连接时，请在 Docker Desktop 中停止后重新运行本项目。",
                 request_may_have_been_received=timed_out,
             ) from exc
         if not raw:
@@ -69,7 +69,7 @@ class PublishWorkerClient:
         return parsed
 
     def health(self) -> dict[str, Any]:
-        return self._request("GET", "/health")
+        return self._request("GET", "/v1/health")
 
     def check_account(self, platform: str, account_id: str) -> dict[str, Any]:
         return self._request("POST", "/v1/accounts/check", {"platform": platform, "account_id": account_id})
