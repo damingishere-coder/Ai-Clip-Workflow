@@ -92,19 +92,19 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
     generated_cover = tmp_path / "browser-batch-cover.jpg"
     generated_cover.write_bytes(b"fake-cover")
 
-    def fake_backfill_covers():
+    def fake_backfill_covers(platform=None):
         with get_connection() as connection:
             rows = connection.execute(
-                "SELECT id FROM publish_jobs WHERE task_id LIKE ? AND status = 'WAITING'",
-                (f"{PREFIX}%",),
+                "SELECT id FROM publish_jobs WHERE task_id LIKE ? AND status = 'WAITING' AND platform = ?",
+                (f"{PREFIX}%", platform),
             ).fetchall()
             connection.execute(
                 """
                 UPDATE publish_jobs
                 SET cover_mode = 'time', cover_time_seconds = 30, cover_file_path = ?
-                WHERE task_id LIKE ? AND status = 'WAITING'
+                WHERE task_id LIKE ? AND status = 'WAITING' AND platform = ?
                 """,
-                (str(generated_cover), f"{PREFIX}%"),
+                (str(generated_cover), f"{PREFIX}%", platform),
             )
             connection.commit()
         jobs = [publish_service.get_publish_job(row["id"]) for row in rows]
@@ -154,11 +154,12 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
                 f'[data-publish-row][data-section="content"][data-job-id="{newest}"]'
             )
             cover_button = page.locator("[data-backfill-covers]")
-            assert "11" in cover_button.inner_text()
+            assert "抖音" in cover_button.inner_text()
+            assert "10" in cover_button.inner_text()
             unsaved_title = newest_content.locator('[name="title"]')
             unsaved_title.fill("这段标题还没有保存")
             cover_button.click()
-            page.locator("#send-center-message").filter(has_text="已补齐 11 条").wait_for()
+            page.locator("#send-center-message").filter(has_text="已补齐 10 条").wait_for()
             assert unsaved_title.input_value() == "这段标题还没有保存"
             assert newest_content.locator('[name="cover_file_path"]').input_value() == str(generated_cover)
             assert newest_content.locator("[data-cover-preview]").is_visible()
@@ -181,6 +182,8 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
 
             page.locator('[data-publish-platform="bilibili"]').click()
             assert "B站" in page.locator("[data-calendar-title]").inner_text()
+            assert "B站" in cover_button.inner_text()
+            assert "1" in cover_button.inner_text()
             assert page.locator(
                 f'[data-publish-row][data-section="schedule"][data-job-id="{bilibili}"]'
             ).is_visible()

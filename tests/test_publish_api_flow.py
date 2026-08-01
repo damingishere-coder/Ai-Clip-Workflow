@@ -147,7 +147,13 @@ def test_backfill_covers_api_returns_batch_result(monkeypatch):
         "errors": [],
         "jobs": [],
     }
-    monkeypatch.setattr(publish_router.publish_service, "backfill_missing_publish_covers", lambda: expected)
-    response = TestClient(app).post("/api/publish/covers/backfill", headers=_headers())
+    requested_platforms = []
+    monkeypatch.setattr(
+        publish_router.publish_service,
+        "backfill_missing_publish_covers",
+        lambda platform=None: requested_platforms.append(platform) or expected,
+    )
+    response = TestClient(app).post("/api/publish/covers/backfill?platform=douyin", headers=_headers())
     assert response.status_code == 200
     assert response.json() == expected
+    assert requested_platforms == ["douyin"]

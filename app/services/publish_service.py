@@ -2192,7 +2192,10 @@ def _update_job_cover(job_id: str, cover: dict) -> None:
         connection.commit()
 
 
-def _list_missing_publish_cover_jobs() -> list[dict]:
+def _list_missing_publish_cover_jobs(platform: str | None = None) -> list[dict]:
+    normalized_platform = str(platform or "").strip().lower()
+    if normalized_platform and normalized_platform not in PLATFORM_LABELS:
+        raise ValueError("暂不支持这个发布平台。")
     with get_connection() as connection:
         rows = connection.execute(
             """
@@ -2216,12 +2219,14 @@ def _list_missing_publish_cover_jobs() -> list[dict]:
             LEFT JOIN subtitle_jobs
               ON subtitle_jobs.output_clip_id = output_clip.id
              AND subtitle_jobs.is_active = 1
-            WHERE publish_jobs.status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'NEED_REVIEW')
+            WHERE publish_jobs.status IN ('DRAFT', 'WAITING', 'SCHEDULED')
               AND TRIM(COALESCE(publish_jobs.cover_file_path, '')) = ''
               AND output_clip.is_active = 1
               AND tasks.is_deleted = 0
+              AND (? = '' OR publish_jobs.platform = ?)
             ORDER BY output_clip.created_at ASC, publish_jobs.created_at ASC
-            """
+            """,
+            (normalized_platform, normalized_platform),
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -2272,7 +2277,7 @@ def _apply_cover_to_missing_jobs(jobs: list[dict], cover: dict) -> list[str]:
                     provider_response = ?,
                     updated_at = ?
                 WHERE id = ?
-                  AND status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'NEED_REVIEW')
+                  AND status IN ('DRAFT', 'WAITING', 'SCHEDULED')
                   AND TRIM(COALESCE(cover_file_path, '')) = ''
                 """,
                 (
@@ -2289,8 +2294,8 @@ def _apply_cover_to_missing_jobs(jobs: list[dict], cover: dict) -> list[str]:
     return updated_ids
 
 
-def backfill_missing_publish_covers() -> dict:
-    missing_jobs = _list_missing_publish_cover_jobs()
+def backfill_missing_publish_covers(platform: str | None = None) -> dict:
+    missing_jobs = _list_missing_publish_cover_jobs(platform)
     grouped_jobs: dict[tuple[str, str], list[dict]] = {}
     for job in missing_jobs:
         key = (
@@ -4171,17 +4176,22 @@ def get_publish_center_context(*, focus_task_id: str = "") -> dict:
     published_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_PUBLISHED)
     failed_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_FAILED)
     need_review_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_NEED_REVIEW)
-    missing_cover_count = sum(
-        1
-        for job in jobs
-        if job.get("status") in {
-            PUBLISH_STATUS_DRAFT,
-            PUBLISH_STATUS_WAITING,
-            PUBLISH_STATUS_SCHEDULED,
-            PUBLISH_STATUS_NEED_REVIEW,
-        }
-        and not str(job.get("cover_file_path") or "").strip()
-    )
+    missing_cover_counts = {
+        platform: sum(
+            1
+            for job in jobs
+            if job.get("platform") == platform
+            and job.get("status") in {
+                PUBLISH_STATUS_DRAFT,
+                PUBLISH_STATUS_WAITING,
+                PUBLISH_STATUS_SCHEDULED,
+            }
+            and job.get("output_is_active") is not False
+            and not str(job.get("cover_file_path") or "").strip()
+        )
+        for platform in PLATFORM_LABELS
+    }
+    missing_cover_count = sum(missing_cover_counts.values())
     opencli_status = _opencli_status()
     return {
         "publish_items": publish_items,
@@ -4192,6 +4202,7 @@ def get_publish_center_context(*, focus_task_id: str = "") -> dict:
         "scheduled_jobs": scheduled_jobs,
         "history_jobs": history_jobs,
         "missing_cover_count": missing_cover_count,
+        "missing_cover_counts": missing_cover_counts,
         "jobs_by_platform": jobs_by_platform,
         "platforms": [{"id": platform, "label": label} for platform, label in PLATFORM_LABELS.items()],
         "accounts": list_accounts(),

@@ -70,11 +70,15 @@ if (publishCenterRoot) {
   }
 
   function missingCoverRows() {
-    const eligibleStatuses = new Set(["DRAFT", "WAITING", "SCHEDULED", "NEED_REVIEW"]);
     return Array.from(document.querySelectorAll('[data-publish-row][data-section="content"]')).filter((row) => {
       const editor = row.querySelector("[data-publish-editor]");
       const coverPath = String(editor?.elements?.cover_file_path?.value || "").trim();
-      return eligibleStatuses.has(String(row.dataset.status || "").toUpperCase()) && !coverPath;
+      return (
+        row.dataset.platform === activePlatform
+        && row.dataset.outputActive !== "false"
+        && sectionAllows("content", String(row.dataset.status || "").toUpperCase())
+        && !coverPath
+      );
     });
   }
 
@@ -85,8 +89,8 @@ if (publishCenterRoot) {
     backfillCoversButton.dataset.missingCount = String(count);
     backfillCoversButton.disabled = loading || count === 0;
     backfillCoversButton.textContent = loading
-      ? `正在补充 ${count} 条封面…`
-      : `一键补充所有封面${count ? `（${count}）` : ""}`;
+      ? `正在补充${platformLabel()} ${count} 条封面…`
+      : `一键补充${platformLabel()}缺失封面${count ? `（${count}）` : ""}`;
   }
 
   function beijingDatetimeValue(timestamp) {
@@ -239,6 +243,7 @@ if (publishCenterRoot) {
     filterAccountOptions(document.querySelector("[data-batch-account]"), activePlatform);
     if (platformListTitle) platformListTitle.textContent = `${platformLabel()}任务清单`;
     if (scheduleEmpty) scheduleEmpty.hidden = visibleCount > 0;
+    updateBackfillCoversButton();
     applyHistoryFilter();
   }
 
@@ -1779,7 +1784,10 @@ if (publishCenterRoot) {
     backfillCoversButton.dataset.loading = "true";
     updateBackfillCoversButton();
     try {
-      const data = await window.apiFetch("/api/publish/covers/backfill", { method: "POST" });
+      const data = await window.apiFetch(
+        `/api/publish/covers/backfill?platform=${encodeURIComponent(activePlatform)}`,
+        { method: "POST" },
+      );
       (data.jobs || []).forEach(updateRowFromJob);
       const errorText = (data.errors || [])
         .slice(0, 3)

@@ -153,6 +153,45 @@ def test_backfill_generates_once_and_updates_both_platforms(monkeypatch, tmp_pat
     assert all(row["cover_file_path"] == str(cover_path) for row in rows)
 
 
+def test_backfill_only_updates_requested_platform(monkeypatch, tmp_path):
+    clip = _seed_clip(tmp_path)
+    douyin_job = _seed_job(clip, platform="douyin")
+    bilibili_job = _seed_job(clip, platform="bilibili")
+    cover_path = tmp_path / "douyin-only.jpg"
+    cover_path.write_bytes(b"cover")
+
+    monkeypatch.setattr(
+        publish_service,
+        "generate_publish_cover_for_item",
+        lambda *_args, **_kwargs: {
+            "cover_file_path": str(cover_path),
+            "cover_media_url": "/fake-cover",
+            "cover_time_seconds": 20,
+            "cover_source": "midpoint_fallback",
+        },
+    )
+
+    result = publish_service.backfill_missing_publish_covers("douyin")
+
+    assert result["updated_job_count"] == 1
+    assert [job["id"] for job in result["jobs"]] == [douyin_job]
+    with get_connection() as connection:
+        rows = {
+            row["id"]: dict(row)
+            for row in connection.execute(
+                "SELECT id, cover_file_path FROM publish_jobs WHERE id IN (?, ?)",
+                (douyin_job, bilibili_job),
+            ).fetchall()
+        }
+    assert rows[douyin_job]["cover_file_path"] == str(cover_path)
+    assert rows[bilibili_job]["cover_file_path"] in {"", None}
+
+
+def test_backfill_rejects_unsupported_platform():
+    with pytest.raises(ValueError, match="暂不支持"):
+        publish_service.backfill_missing_publish_covers("unknown")
+
+
 def test_backfill_reuses_existing_cover_and_skips_cancelled(monkeypatch, tmp_path):
     clip = _seed_clip(tmp_path, cover_time_seconds=12.5)
     existing_cover = tmp_path / "existing.jpg"

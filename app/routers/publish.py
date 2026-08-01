@@ -255,11 +255,11 @@ async def generate_publish_cover(payload: PublishCoverCreate) -> dict:
 
 
 @router.post("/covers/backfill")
-async def backfill_missing_publish_covers() -> dict:
+async def backfill_missing_publish_covers(platform: str | None = Query(default=None)) -> dict:
     import asyncio
 
     try:
-        return await asyncio.to_thread(publish_service.backfill_missing_publish_covers)
+        return await asyncio.to_thread(publish_service.backfill_missing_publish_covers, platform)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

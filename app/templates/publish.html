@@ -173,6 +173,8 @@
 </nav>
 
 <section class="panel publish-center-panel active" data-center-panel="content">
+  {% set initial_platform = focus_platform if focus_platform in ["douyin", "bilibili"] else "douyin" %}
+  {% set initial_missing_cover_count = missing_cover_counts.get(initial_platform, 0) %}
   <div class="panel-header publish-content-header">
     <div><h2>内容准备</h2><p>这里不展示历史错误；内容、平台和账号完整后再加入排期。</p></div>
     <div class="publish-content-header-actions">
@@ -180,9 +182,9 @@
         type="button"
         class="secondary-button"
         data-backfill-covers
-        data-missing-count="{{ missing_cover_count }}"
-        {% if not missing_cover_count %}disabled{% endif %}
-      >一键补充所有封面{% if missing_cover_count %}（{{ missing_cover_count }}）{% endif %}</button>
+        data-missing-count="{{ initial_missing_cover_count }}"
+        {% if not initial_missing_cover_count %}disabled{% endif %}
+      >一键补充{{ 'B站' if initial_platform == 'bilibili' else '抖音' }}缺失封面{% if initial_missing_cover_count %}（{{ initial_missing_cover_count }}）{% endif %}</button>
     </div>
   </div>
   <div class="publish-content-list">
