@@ -293,6 +293,23 @@ async def batch_update_clip_candidates(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/{task_id}/clips/sync-publish")
+async def sync_reviewed_clips_to_publish_center(
+    task_id: str,
+    payload: ClipCandidateBatchUpdate,
+) -> dict:
+    try:
+        return await run_in_threadpool(
+            task_service.sync_reviewed_clips_to_publish_center,
+            task_id,
+            payload.clips,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.get("/{task_id}/clips/{clip_id}/transcript-excerpt")
 async def get_clip_transcript_excerpt(
     task_id: str,

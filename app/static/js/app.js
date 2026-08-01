@@ -787,6 +787,19 @@ function collectClipReviewPayload() {
   }));
 }
 
+async function persistClipReviewChanges() {
+  if (!clipReviewForm) throw new Error("当前页面没有可保存的候选片段");
+  const taskId = clipReviewForm.dataset.taskId;
+  const response = await fetch(`/api/tasks/${taskId}/clips/batch-update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clips: collectClipReviewPayload() }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "保存失败");
+  return data;
+}
+
 async function deleteClipCard(card, button) {
   if (!clipReviewForm || !card) return;
   const taskId = clipReviewForm.dataset.taskId;
@@ -1152,15 +1165,7 @@ if (saveClipsButton && clipReviewForm) {
     showClipReviewMessage("正在保存候选片段修改...", "info");
 
     try {
-      const response = await fetch(`/api/tasks/${taskId}/clips/batch-update`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clips: collectClipReviewPayload() }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "保存失败");
-      }
+      const data = await persistClipReviewChanges();
       showClipReviewMessage(data.message || "保存成功。", "success");
     } catch (error) {
       showClipReviewMessage(`保存失败：${error.message}`, "error");
@@ -1388,9 +1393,12 @@ if (generateClipsButton) {
     const originalText = generateClipsButton.textContent;
     generateClipsButton.disabled = true;
     generateClipsButton.textContent = "正在确认...";
-    showClipReviewMessage("正在请求生成切片...", "info");
+    showClipReviewMessage("正在保存当前审核选择...", "info");
 
     try {
+      await persistClipReviewChanges();
+      generateClipsButton.textContent = "正在生成...";
+      showClipReviewMessage("审核选择已保存，正在生成最新切片...", "info");
       const response = await fetch(generateClipsButton.dataset.endpoint, { method: "POST" });
       const data = await response.json();
       if (!response.ok) {
@@ -1438,10 +1446,29 @@ document.querySelectorAll("[data-sync-publish-task]").forEach((button) => {
     button.disabled = true;
     button.textContent = "正在同步...";
     try {
-      const data = await window.apiFetch(
-        `/api/publish/tasks/${encodeURIComponent(taskId)}/sync?prefer_subtitled=${preferSubtitled ? "true" : "false"}`,
-        { method: "POST" },
-      );
+      const syncReviewedClips = button.dataset.syncReviewedClips === "true";
+      let data;
+      if (syncReviewedClips) {
+        const clips = collectClipReviewPayload();
+        if (!clips.some((clip) => clip.enabled)) {
+          throw new Error("请至少启用一条候选片段后再同步发送中心");
+        }
+        button.textContent = "正在保存并生成...";
+        showClipReviewMessage("正在保存审核选择；如选择有变化，将自动生成最新切片并同步...", "info");
+        data = await window.apiFetch(
+          `/api/tasks/${encodeURIComponent(taskId)}/clips/sync-publish`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clips }),
+          },
+        );
+      } else {
+        data = await window.apiFetch(
+          `/api/publish/tasks/${encodeURIComponent(taskId)}/sync?prefer_subtitled=${preferSubtitled ? "true" : "false"}`,
+          { method: "POST" },
+        );
+      }
       const summary = document.querySelector("[data-publish-link-summary]");
       if (summary) {
         summary.innerHTML = `<strong>发送中心关联：${data.link_state?.label || "同步完成"}</strong><span>${data.message || ""}</span>`;
@@ -1449,6 +1476,14 @@ document.querySelectorAll("[data-sync-publish-task]").forEach((button) => {
       showClipReviewMessage(data.message || "发送中心同步完成。", data.status === "partial" ? "error" : "success");
       if (!document.querySelector("#process-result")) {
         window.alert(data.message || "发送中心同步完成。");
+      }
+      if (syncReviewedClips && data.status !== "partial") {
+        const params = new URLSearchParams({
+          task_id: taskId,
+          tab: "content",
+          publish_message: data.message || "发送中心同步完成。",
+        });
+        window.location.assign(`/publish?${params.toString()}`);
       }
     } catch (error) {
       const message = `同步发送中心失败：${error.message}`;

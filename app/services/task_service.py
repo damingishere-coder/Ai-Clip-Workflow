@@ -706,8 +706,30 @@ def update_clip_candidates_batch(task_id: str, payloads: list[ClipCandidateBatch
         validated.append((payload.id, _validate_clip_update(task, payload)))
 
     now = _now_iso()
+    changed_count = 0
     with get_connection() as connection:
         for clip_id, data in validated:
+            current = connection.execute(
+                """
+                SELECT title, start_time, end_time, duration_seconds, enabled, summary
+                FROM clip_candidates
+                WHERE id = ? AND task_id = ? AND is_deleted = 0
+                """,
+                (clip_id, task_id),
+            ).fetchone()
+            if current is None:
+                raise ValueError(f"候选片段不存在：{clip_id}")
+            if any(
+                (
+                    str(current["title"] or "") != data["title"],
+                    str(current["start_time"] or "") != data["start_time"],
+                    str(current["end_time"] or "") != data["end_time"],
+                    int(current["duration_seconds"] or 0) != int(data["duration_seconds"]),
+                    int(current["enabled"] or 0) != int(data["enabled"]),
+                    str(current["summary"] or "") != data["summary"],
+                )
+            ):
+                changed_count += 1
             cursor = connection.execute(
                 """
                 UPDATE clip_candidates
@@ -735,8 +757,87 @@ def update_clip_candidates_batch(task_id: str, payloads: list[ClipCandidateBatch
     _append_task_log(task_id, f"已批量保存 {len(validated)} 条候选片段审核修改")
     return {
         "message": f"已保存 {len(validated)} 条候选片段，任务状态仍保持 AI 结果待检查。",
+        "changed_count": changed_count,
         "task": get_task(task_id, include_video_probe=False),
         "clips": list_clip_candidates(task_id),
+    }
+
+
+def _active_outputs_match_enabled_candidates(task_id: str) -> bool:
+    with get_connection() as connection:
+        enabled_rows = connection.execute(
+            """
+            SELECT id
+            FROM clip_candidates
+            WHERE task_id = ? AND enabled = 1 AND is_deleted = 0
+            """,
+            (task_id,),
+        ).fetchall()
+        output_rows = connection.execute(
+            """
+            SELECT clip_candidate_id, output_file_path
+            FROM output_clip
+            WHERE task_id = ? AND is_active = 1 AND status = 'completed'
+            """,
+            (task_id,),
+        ).fetchall()
+
+    enabled_ids = {str(row["id"]) for row in enabled_rows}
+    if not enabled_ids or len(output_rows) != len(enabled_ids):
+        return False
+
+    output_ids = {str(row["clip_candidate_id"] or "") for row in output_rows}
+    if output_ids != enabled_ids:
+        return False
+
+    return all(
+        bool(
+            (resolved := resolve_video_file_path(str(row["output_file_path"] or "")))
+            and resolved.exists()
+            and resolved.is_file()
+        )
+        for row in output_rows
+    )
+
+
+def sync_reviewed_clips_to_publish_center(
+    task_id: str,
+    payloads: list[ClipCandidateBatchItem],
+) -> dict:
+    save_result = update_clip_candidates_batch(task_id, payloads)
+    needs_regeneration = bool(save_result["changed_count"]) or not _active_outputs_match_enabled_candidates(task_id)
+
+    if needs_regeneration:
+        cut_result = process_task_video_cuts(task_id)
+        publish_sync = cut_result.get("publish_sync") or {
+            "status": "partial",
+            "message": "最新切片已生成，但没有取得发送中心同步结果。",
+            "errors": ["发送中心同步结果缺失"],
+        }
+        action_message = "已保存当前审核选择，并重新生成最新切片。"
+    else:
+        from app.services.publish_service import sync_task_publish_jobs
+
+        cut_result = None
+        publish_sync = sync_task_publish_jobs(
+            task_id,
+            prefer_subtitled=False,
+            restore_removed=True,
+        )
+        action_message = "已保存当前审核选择，现有切片与选择一致，无需重复生成。"
+
+    return {
+        "status": publish_sync.get("status") or "ok",
+        "message": f"{action_message}{publish_sync.get('message') or '发送中心同步完成。'}",
+        "regenerated": needs_regeneration,
+        "saved_count": len(payloads),
+        "changed_count": save_result["changed_count"],
+        "review_save": save_result,
+        "cut_result": cut_result,
+        "publish_sync": publish_sync,
+        "link_state": publish_sync.get("link_state") or {},
+        "errors": publish_sync.get("errors") or [],
+        "warnings": publish_sync.get("warnings") or [],
     }
 
 
