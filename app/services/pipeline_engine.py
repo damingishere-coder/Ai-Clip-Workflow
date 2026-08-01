@@ -143,6 +143,8 @@ class PipelineEngine:
         task = task_service.get_task(task_id, include_video_probe=False)
         if not task:
             raise ValueError("任务不存在")
+        if task.get("is_deleted"):
+            raise ValueError("任务已永久删除，已停止后续自动处理")
         return task
 
     def _load_auto_config(self, task: dict) -> dict:

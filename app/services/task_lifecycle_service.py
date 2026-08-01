@@ -8,8 +8,35 @@ from uuid import uuid4
 
 from app.db.database import get_connection
 from app.models.task import TaskCreate, TaskStatus
-from app.services.storage_service import allocate_task_dir_name, create_task_directory, validate_source_video_path
+from app.services.storage_service import (
+    apply_task_media_cleanup_plan,
+    allocate_task_dir_name,
+    build_task_media_cleanup_plan,
+    create_task_directory,
+    validate_source_video_path,
+)
 from app.services.task_log_service import append_task_log
+
+
+class TaskDeletionConflictError(RuntimeError):
+    """任务仍在执行，暂时不能删除其媒体文件。"""
+
+
+ACTIVE_TASK_STATUSES = {
+    TaskStatus.CREATED.value,
+    TaskStatus.PREPARING_SOURCE.value,
+    TaskStatus.TRANSCRIBING.value,
+    TaskStatus.AI_ANALYZING.value,
+    TaskStatus.CLIP_SELECTING.value,
+    TaskStatus.VIDEO_CUTTING.value,
+    TaskStatus.METADATA_GENERATING.value,
+    TaskStatus.SCHEDULE_CREATING.value,
+    TaskStatus.PUBLISH_JOB_CREATING.value,
+    TaskStatus.audio_extracting.value,
+    TaskStatus.transcribing.value,
+    TaskStatus.ai_analyzing.value,
+    TaskStatus.cutting.value,
+}
 
 
 def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir_name: str | None = None) -> dict:
@@ -228,34 +255,109 @@ def update_task_selection_settings(
     }
 
 
-def soft_delete_task(task_id: str) -> dict:
+def delete_task_permanently(task_id: str) -> dict:
     from app.services.task_service import _now_iso, get_task  # noqa: F811
 
     task = get_task(task_id, include_video_probe=False)
     if not task:
         raise ValueError("任务不存在")
-    if task.get("is_deleted"):
-        return {
-            "message": "任务已隐藏，无需重复操作。",
-            "task_id": task_id,
-            "task_dir": task["task_dir"],
-        }
-
+    cleanup_plan = build_task_media_cleanup_plan(task)
+    existing_target_count = len(cleanup_plan.existing_targets)
     now = _now_iso()
     with get_connection() as connection:
-        connection.execute(
-            """
-            UPDATE tasks
-            SET is_deleted = 1, deleted_at = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (now, now, task_id),
-        )
-        connection.commit()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                "SELECT status, COALESCE(is_deleted, 0) AS is_deleted FROM tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+            if not current:
+                raise ValueError("任务不存在")
 
-    append_task_log(task_id, "任务已从列表隐藏，文件未删除")
+            if not current["is_deleted"] and str(current["status"] or "") in ACTIVE_TASK_STATUSES:
+                raise TaskDeletionConflictError("任务正在处理，请等待处理结束后再永久删除。")
+
+            conflicting_task = connection.execute(
+                """
+                SELECT id
+                FROM tasks
+                WHERE id != ? AND COALESCE(is_deleted, 0) = 0
+                  AND LOWER(COALESCE(task_dir_name, id)) = LOWER(?)
+                LIMIT 1
+                """,
+                (task_id, str(task.get("task_dir_name") or task_id)),
+            ).fetchone()
+            if conflicting_task:
+                raise TaskDeletionConflictError(
+                    "该目录仍被另一条有效任务使用，已拒绝删除以避免误删。"
+                )
+
+            running_job = connection.execute(
+                "SELECT id FROM workflow_jobs WHERE task_id = ? AND status = 'running' LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            if running_job:
+                raise TaskDeletionConflictError("任务仍有后台切片工作正在运行，请等待结束后再删除。")
+
+            publishing_job = connection.execute(
+                "SELECT id FROM publish_jobs WHERE task_id = ? AND status = 'PUBLISHING' LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            if publishing_job:
+                raise TaskDeletionConflictError("任务正在向平台发送视频，请等待发送结束后再删除。")
+
+            cleanup_result = apply_task_media_cleanup_plan(cleanup_plan)
+            connection.execute(
+                """
+                UPDATE workflow_jobs
+                SET status = 'cancelled', progress = 100,
+                    message = '任务已永久删除，排队任务已取消',
+                    error_message = '任务已永久删除', finished_at = ?, updated_at = ?
+                WHERE task_id = ? AND status = 'queued'
+                """,
+                (now, now, task_id),
+            )
+            connection.execute(
+                """
+                UPDATE publish_jobs
+                SET status = 'CANCELLED', scheduled_at = '', next_attempt_at = NULL,
+                    error_code = 'task_deleted', error_message = '任务已永久删除',
+                    last_error = '任务已永久删除', history_hidden = 1,
+                    finished_at = ?, updated_at = ?
+                WHERE task_id = ?
+                  AND status NOT IN ('PUBLISHED', 'EXPORTED', 'NEED_REVIEW', 'CANCELLED')
+                """,
+                (now, now, task_id),
+            )
+            connection.execute(
+                """
+                UPDATE tasks
+                SET is_deleted = 1, deleted_at = COALESCE(deleted_at, ?), updated_at = ?
+                WHERE id = ?
+                """,
+                (now, now, task_id),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+    status = "already_deleted" if task.get("is_deleted") and existing_target_count == 0 else "deleted"
+    freed_mb = cleanup_result.freed_bytes / (1024 * 1024)
+    if status == "already_deleted":
+        message = "任务已经永久删除，当前没有残留的任务视频文件。"
+    else:
+        message = f"任务已永久删除，共释放约 {freed_mb:.1f} MB；数据库历史记录已隐藏保留。"
     return {
-        "message": "任务已隐藏，原视频、切片和任务目录都已保留。",
+        "status": status,
         "task_id": task_id,
-        "task_dir": task["task_dir"],
+        "freed_bytes": cleanup_result.freed_bytes,
+        "external_source_preserved": cleanup_result.external_source_preserved,
+        "deleted_paths": list(cleanup_result.deleted_paths),
+        "message": message,
     }
+
+
+def soft_delete_task(task_id: str) -> dict:
+    """兼容旧调用名称；实际执行永久媒体删除并保留隐藏数据库记录。"""
+    return delete_task_permanently(task_id)

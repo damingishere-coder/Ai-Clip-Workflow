@@ -80,7 +80,7 @@
             <a href="/tasks/{{ task.id }}/clips/review">审核</a>
             <a href="/subtitles/{{ task.id }}">字幕</a>
             {% if task.output_clip_count > 0 %}<a href="/publish?task_id={{ task.id }}&tab=content">发送中心</a>{% endif %}
-            <button class="link-button danger js-hide-task" type="button" data-task-id="{{ task.id }}" data-task-title="{{ task.title }}">移入回收站</button>
+            <button class="link-button danger js-hide-task" type="button" data-task-id="{{ task.id }}" data-task-title="{{ task.title }}">永久删除</button>
           </td>
         </tr>
         {% endfor %}

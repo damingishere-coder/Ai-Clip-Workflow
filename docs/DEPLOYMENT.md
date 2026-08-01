@@ -71,6 +71,9 @@ copy .env.example .env
 然后用记事本或 VS Code 打开 `.env`，按注释填写：
 
 - `STORAGE_ROOT`：任务产物存放目录（默认 `E:\直播间切片工作流存储`）
+- `TASKS_DIR`：每条任务的原片、音频、切片和字幕目录，默认与 `STORAGE_ROOT` 相同
+- `UPLOAD_TEMP_DIR`：浏览器上传大视频时的临时目录，默认 `E:\直播间切片工作流存储\_临时上传`
+- `PUBLISH_SCHEDULER_EXPORT_DIR`：手动发布包目录，默认 `E:\直播间切片工作流存储\_发布包`
 - `AI_ANALYSIS_REMOTE_API_KEY`：DeepSeek API Key（可选，用远程 AI 分析时需要）
 - `VOLCENGINE_ASR_API_KEY`：火山引擎转写 Key（可选，用远程转写时需要）
 - `LOCAL_ADMIN_TOKEN`：管理接口鉴权 Token（可留空或设随机字符串）
@@ -261,6 +264,8 @@ Windows 主机（运行 FastAPI）
 | --- | --- | --- |
 | `STORAGE_ROOT` | `E:\直播间切片工作流存储` | 任务产物根目录 |
 | `TASKS_DIR` | 同 `STORAGE_ROOT` | 任务目录（优先级高于 STORAGE_ROOT） |
+| `UPLOAD_TEMP_DIR` | `{TASKS_DIR}\_临时上传` | FastAPI 接收大视频时的进程临时目录，不回退到 C 盘 |
+| `PUBLISH_SCHEDULER_EXPORT_DIR` | `{STORAGE_ROOT}\_发布包` | 手动导出的本地发布包目录 |
 | `DATA_DIR` | 项目目录 `data/` | 数据库存放目录 |
 | `DATABASE_PATH` | `data/workflow.sqlite3` | 数据库文件路径 |
 | `AI_ANALYSIS_REMOTE_API_KEY` | 空 | DeepSeek API Key |

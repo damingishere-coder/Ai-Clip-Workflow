@@ -15,6 +15,7 @@ from app.services.database_backup_service import (
     BackupSafetyError,
     apply_cleanup_plan,
     build_cleanup_plan,
+    create_media_cleanup_backup,
     create_publish_migration_backup,
     sqlite_quick_check,
 )
@@ -105,6 +106,17 @@ def test_repeated_backup_within_24_hours_creates_only_one_file(tmp_path):
     assert second is None
     assert backups == [first]
     assert sqlite_quick_check(first) == "ok"
+
+
+def test_media_cleanup_backup_is_always_created_and_valid(tmp_path):
+    database_path = tmp_path / "workflow.sqlite3"
+    backup_dir = tmp_path / "backups"
+    _create_database(database_path)
+
+    backup = create_media_cleanup_backup(database_path, backup_dir)
+
+    assert backup.name.startswith("workflow-before-media-cleanup-")
+    assert sqlite_quick_check(backup) == "ok"
 
 
 def test_concurrent_publish_migration_creates_one_valid_backup(monkeypatch, tmp_path):

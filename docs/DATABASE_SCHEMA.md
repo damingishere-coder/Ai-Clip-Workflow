@@ -65,7 +65,7 @@
 - `tasks` 表新增 `task_dir_name` 字段，用来记录任务在存储盘里的实际文件夹名。
 - `id` 仍是任务唯一 ID，用于数据库关联和网页地址；本地文件夹不再默认使用短 ID，而是使用 `task_dir_name`。
 - 新建任务时会根据 `task_name` 生成安全的 Windows 文件夹名；重名时自动追加序号，避免覆盖旧目录。
-- `DELETE /api/tasks/{task_id}` 现在会把 `is_deleted` 设为 `1`，写入 `deleted_at`，并把任务文件夹移动到存储根目录下的 `_回收站`；不会删除文件。
+- `DELETE /api/tasks/{task_id}` 会永久删除系统托管的任务目录和发布包，再把 `is_deleted` 设为 `1` 并写入 `deleted_at`；NAS 或任务目录外的原片不会删除。
 - 一次性迁移脚本为 `scripts/migrate_task_dirs_to_project_names.py`，默认 dry-run，带 `--apply` 才会移动文件夹并更新路径字段。
 
 ## 2026-05-25：发布后台新增表
@@ -218,7 +218,7 @@ data/workflow.sqlite3
 | --- | --- | --- |
 | `id` | TEXT | 任务唯一 ID，创建时自动生成 |
 | `task_name` | TEXT | 任务名称 |
-| `task_dir_name` | TEXT | 存储盘实际任务文件夹名；正常任务通常等于项目名，已移入回收站的任务为 `_回收站\项目名` |
+| `task_dir_name` | TEXT | 存储盘实际任务文件夹名；永久删除后保留原值作为隐藏历史记录，但对应目录不再存在 |
 | `source_type` | TEXT | 视频来源：`upload` 或 `nas` |
 | `platform` | TEXT | 平台类型：`douyin`、`bilibili`、`general` |
 | `original_video_path` | TEXT | 本地上传视频路径，后续接真实上传后写入 |
@@ -366,7 +366,7 @@ data/workflow.sqlite3
 为了不破坏已有本地数据库，旧字段不会被强制删除。后续代码以本文件列出的当前字段为准。
 新任务默认值调整不会批量更新已有 `tasks` 记录；历史任务已经保存的最大时长和候选数量保持不变。
 
-任务移入回收站采用软删除方式：`DELETE /api/tasks/{task_id}` 会把 `is_deleted` 改为 `1`、写入 `deleted_at`，并把该任务的存储目录移动到 `_回收站`。工作台、任务列表和片段审核总览默认不显示已移入回收站的任务，原视频、音频、转写、AI 分析文件、切片输出和字幕输出都会保留。
+任务删除采用“媒体永久删除、数据库历史隐藏保留”的方式：`DELETE /api/tasks/{task_id}` 只允许删除 `TASKS_DIR` 下与任务精确对应的目录、该任务的手动发布包和可确认归属的旧版项目 `tasks` 目录。删除成功后把 `is_deleted` 改为 `1` 并写入 `deleted_at`，候选片段、切片、字幕和发布历史仍留在 SQLite 中用于审计。NAS 或任务目录外的原片永远不参与删除；运行中的转写、切片或真实发送任务返回 409，避免后台进程重新生成文件。
 
 `clip_candidates.reason` 是早期推荐理由字段，当前审核页优先读取 `highlight_reason`。数据库初始化时会把已有 `reason` 自动补到 `highlight_reason`。
 
@@ -377,6 +377,8 @@ data/workflow.sqlite3
 任务产物路径当前由 `task_dir_name` 决定；`task_id` 只作为内部唯一 ID 使用，不再直接决定存储文件夹名。
 
 历史任务可能仍兼容 `task_id` 目录，但新逻辑以 `task_dir_name` 为准。
+
+浏览器上传超过内存阈值后的临时文件使用 `UPLOAD_TEMP_DIR`，默认位于 `{TASKS_DIR}\_临时上传`；显式手动导出的发布包使用 `PUBLISH_SCHEDULER_EXPORT_DIR`，默认位于 `{STORAGE_ROOT}\_发布包`。应用启动时会验证这些目录可写，不可用时直接报错，不会回退到 C 盘。
 
 正式任务目录结构：
 

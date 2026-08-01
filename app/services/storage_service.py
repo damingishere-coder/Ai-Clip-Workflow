@@ -1,7 +1,10 @@
+from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
+import os
 import re
 import sqlite3
 import shutil
+import tempfile
 from typing import BinaryIO
 from uuid import uuid4
 
@@ -24,6 +27,62 @@ _WINDOWS_RESERVED_NAMES = {
 
 # 路径遍历攻击的标记
 _PATH_TRAVERSAL_MARKERS = ("..", "~")
+
+
+class StorageSafetyError(RuntimeError):
+    """存储路径不安全或不满足清理条件。"""
+
+
+@dataclass(frozen=True)
+class ManagedMediaTarget:
+    label: str
+    path: Path
+
+
+@dataclass(frozen=True)
+class TaskMediaCleanupPlan:
+    task_id: str
+    targets: tuple[ManagedMediaTarget, ...]
+    external_source_path: Path | None
+
+    @property
+    def existing_targets(self) -> tuple[ManagedMediaTarget, ...]:
+        return tuple(target for target in self.targets if target.path.exists())
+
+
+@dataclass(frozen=True)
+class TaskMediaCleanupResult:
+    deleted_paths: tuple[str, ...]
+    freed_bytes: int
+    external_source_preserved: bool
+
+
+def _ensure_writable_directory(path: Path, label: str) -> Path:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe_path = path / f".niuma-write-test-{uuid4().hex}"
+        probe_path.write_bytes(b"ok")
+        probe_path.unlink()
+    except OSError as exc:
+        raise RuntimeError(f"{label}不可用或不可写：{path}；原因：{exc}") from exc
+    return path.resolve()
+
+
+def configure_runtime_media_storage() -> dict[str, str]:
+    """准备大文件目录，并把当前应用进程的临时目录固定到存储盘。"""
+    tasks_dir = _ensure_writable_directory(settings.tasks_dir, "任务存储目录")
+    upload_temp_dir = _ensure_writable_directory(settings.upload_temp_dir, "上传临时目录")
+    export_dir = _ensure_writable_directory(settings.publish_scheduler_export_dir, "发布包目录")
+
+    temp_value = str(upload_temp_dir)
+    os.environ["TEMP"] = temp_value
+    os.environ["TMP"] = temp_value
+    tempfile.tempdir = temp_value
+    return {
+        "tasks_dir": str(tasks_dir),
+        "upload_temp_dir": temp_value,
+        "publish_export_dir": str(export_dir),
+    }
 
 
 def _collect_allowed_roots() -> list[Path]:
@@ -107,6 +166,11 @@ def ensure_storage_root() -> Path:
     return settings.storage_root
 
 
+def ensure_tasks_root() -> Path:
+    settings.tasks_dir.mkdir(parents=True, exist_ok=True)
+    return settings.tasks_dir
+
+
 def _storage_relative_parts(task_dir_name: str) -> tuple[str, ...]:
     return tuple(part for part in PureWindowsPath(task_dir_name).parts if part not in {"", "."})
 
@@ -159,14 +223,14 @@ def allocate_task_dir_name(
     base_name = sanitize_task_dir_name(task_name, fallback=exclude_task_id or "untitled")
     parent_parts = _storage_relative_parts(parent_dir_name or "")
     existing_names = _get_existing_task_dir_names(exclude_task_id=exclude_task_id)
-    root = ensure_storage_root().joinpath(*parent_parts)
+    root = ensure_tasks_root().joinpath(*parent_parts)
     root.mkdir(parents=True, exist_ok=True)
 
     for index in range(1, 1000):
         candidate_name = base_name if index == 1 else f"{base_name} ({index})"
         candidate_parts = (*parent_parts, candidate_name)
         relative_name = str(PureWindowsPath(*candidate_parts))
-        candidate_path = ensure_storage_root().joinpath(*candidate_parts)
+        candidate_path = ensure_tasks_root().joinpath(*candidate_parts)
         if relative_name.lower() not in existing_names and not candidate_path.exists():
             return relative_name
 
@@ -308,10 +372,9 @@ def get_source_video_path(task: dict) -> Path | None:
 
 
 def save_uploaded_video(task_id: str, filename: str, file_object: BinaryIO, task_dir_name: str | None = None) -> Path:
-    create_task_directory(task_id, task_dir_name)
-
     # 扩展名校验
     _validate_upload_extension(filename)
+    create_task_directory(task_id, task_dir_name)
 
     safe_name = Path(filename or "source_video").name
     if not Path(safe_name).suffix:
@@ -321,23 +384,174 @@ def save_uploaded_video(task_id: str, filename: str, file_object: BinaryIO, task
     # 流式写入 + 大小限制检查
     max_size = settings.max_upload_size_bytes
     written = 0
-    with output_path.open("wb") as target:
-        while True:
-            chunk = file_object.read(1024 * 1024)  # 1MB chunks
-            if not chunk:
-                break
-            written += len(chunk)
-            if written > max_size:
-                # 删除已写入的部分
-                try:
-                    output_path.unlink()
-                except OSError:
-                    pass
-                max_gb = max_size / (1024 * 1024 * 1024)
-                raise ValueError(f"上传文件超过大小限制（{max_gb:.1f} GB）")
-            target.write(chunk)
+    try:
+        with output_path.open("wb") as target:
+            while True:
+                chunk = file_object.read(1024 * 1024)  # 1MB chunks
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_size:
+                    max_gb = max_size / (1024 * 1024 * 1024)
+                    raise ValueError(f"上传文件超过大小限制（{max_gb:.1f} GB）")
+                target.write(chunk)
+    except Exception:
+        try:
+            output_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
     return output_path
+
+
+def remove_failed_task_directory(task_id: str, task_dir_name: str) -> None:
+    """仅清理本次尚未写入数据库的新任务目录。"""
+    if _fetch_task_dir_name(task_id):
+        return
+    task_dir = get_task_directory(task_id, task_dir_name)
+    tasks_root = settings.tasks_dir.resolve()
+    resolved = task_dir.resolve(strict=False)
+    try:
+        within_root = resolved.is_relative_to(tasks_root)
+    except AttributeError:  # pragma: no cover - Python 3.8 兼容
+        within_root = str(resolved).lower().startswith(str(tasks_root).lower() + os.sep)
+    if resolved == tasks_root or not within_root or task_dir.is_symlink():
+        raise StorageSafetyError(f"拒绝清理不安全的任务目录：{task_dir}")
+    if task_dir.exists():
+        shutil.rmtree(task_dir)
+
+
+def _safe_relative_parts(value: str, label: str) -> tuple[str, ...]:
+    windows_path = PureWindowsPath(str(value or "").strip())
+    parts = tuple(part for part in windows_path.parts if part not in {"", "."})
+    if (
+        not parts
+        or windows_path.is_absolute()
+        or windows_path.drive
+        or any(part in _PATH_TRAVERSAL_MARKERS for part in parts)
+    ):
+        raise StorageSafetyError(f"{label}包含不安全路径：{value}")
+    return parts
+
+
+def _safe_managed_child(root: Path, parts: tuple[str, ...], label: str) -> Path:
+    resolved_root = root.resolve(strict=False)
+    candidate = root.joinpath(*parts)
+    resolved_candidate = candidate.resolve(strict=False)
+    try:
+        within_root = resolved_candidate.is_relative_to(resolved_root)
+    except AttributeError:  # pragma: no cover - Python 3.8 兼容
+        within_root = str(resolved_candidate).lower().startswith(str(resolved_root).lower() + os.sep)
+    if resolved_candidate == resolved_root or not within_root or candidate.is_symlink():
+        raise StorageSafetyError(f"拒绝删除不安全的{label}：{candidate}")
+    return candidate
+
+
+def _deduplicate_targets(targets: list[ManagedMediaTarget]) -> tuple[ManagedMediaTarget, ...]:
+    unique: list[ManagedMediaTarget] = []
+    seen: set[str] = set()
+    for target in targets:
+        key = str(target.path.resolve(strict=False)).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(target)
+    return tuple(unique)
+
+
+def _path_is_within(path: Path, parent: Path) -> bool:
+    try:
+        return path.resolve(strict=False).is_relative_to(parent.resolve(strict=False))
+    except (AttributeError, OSError, ValueError):
+        path_value = str(path.resolve(strict=False)).lower()
+        parent_value = str(parent.resolve(strict=False)).lower()
+        return path_value.startswith(parent_value + os.sep)
+
+
+def build_task_media_cleanup_plan(task: dict, *, include_legacy: bool = True) -> TaskMediaCleanupPlan:
+    task_id = str(task.get("id") or "").strip()
+    task_id_parts = _safe_relative_parts(task_id, "任务 ID")
+    if len(task_id_parts) != 1:
+        raise StorageSafetyError(f"任务 ID 必须是单层目录名：{task_id}")
+
+    task_dir_name = str(task.get("task_dir_name") or task_id)
+    task_parts = _safe_relative_parts(task_dir_name, "任务目录名")
+    task_dir = _safe_managed_child(settings.tasks_dir, task_parts, "任务目录")
+    targets = [ManagedMediaTarget("E 盘任务目录", task_dir)]
+
+    export_dir = _safe_managed_child(
+        settings.publish_scheduler_export_dir,
+        task_id_parts,
+        "发布包目录",
+    )
+    targets.append(ManagedMediaTarget("E 盘发布包目录", export_dir))
+
+    if include_legacy:
+        legacy_root = settings.project_root / "tasks"
+        legacy_values = [task_id]
+        if len(task_parts) == 1 and task_dir_name.lower() != task_id.lower():
+            legacy_values.append(task_dir_name)
+        for legacy_value in legacy_values:
+            legacy_parts = _safe_relative_parts(legacy_value, "旧版任务目录名")
+            legacy_path = _safe_managed_child(legacy_root, legacy_parts, "旧版 C 盘任务目录")
+            targets.append(ManagedMediaTarget("旧版 C 盘任务目录", legacy_path))
+
+    managed_targets = _deduplicate_targets(targets)
+    source_path = get_source_video_path(task)
+    external_source_path = None
+    if source_path and source_path.exists():
+        if not any(_path_is_within(source_path, target.path) for target in managed_targets):
+            external_source_path = source_path
+
+    return TaskMediaCleanupPlan(
+        task_id=task_id,
+        targets=managed_targets,
+        external_source_path=external_source_path,
+    )
+
+
+def _directory_size_bytes(path: Path) -> int:
+    total = 0
+    for child in path.rglob("*"):
+        try:
+            if child.is_file() and not child.is_symlink():
+                total += child.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def task_media_cleanup_plan_size(plan: TaskMediaCleanupPlan) -> int:
+    return sum(
+        _directory_size_bytes(target.path)
+        for target in plan.existing_targets
+        if target.path.is_dir() and not target.path.is_symlink()
+    )
+
+
+def apply_task_media_cleanup_plan(plan: TaskMediaCleanupPlan) -> TaskMediaCleanupResult:
+    deleted_paths: list[str] = []
+    freed_bytes = 0
+    for target in plan.targets:
+        path = target.path
+        if not path.exists():
+            continue
+        if path.is_symlink() or not path.is_dir():
+            raise StorageSafetyError(f"拒绝删除异常的{target.label}：{path}")
+        size = _directory_size_bytes(path)
+        try:
+            shutil.rmtree(path)
+        except OSError as exc:
+            raise RuntimeError(f"删除{target.label}失败：{path}；原因：{exc}") from exc
+        freed_bytes += size
+        deleted_paths.append(str(path))
+
+    return TaskMediaCleanupResult(
+        deleted_paths=tuple(deleted_paths),
+        freed_bytes=freed_bytes,
+        external_source_preserved=plan.external_source_path is not None,
+    )
 
 
 def move_task_directory_to_trash(task_id: str, task_name: str, task_dir_name: str | None = None) -> tuple[str, Path]:

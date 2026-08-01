@@ -19,7 +19,13 @@ from app.models.task import (
 from app.services import task_service
 from app.services.ai_prompt_preset_service import update_task_ai_prompt_preset
 from app.services.pipeline_engine import start_auto_pipeline
-from app.services.storage_service import allocate_task_dir_name, save_uploaded_video
+from app.services.storage_service import (
+    allocate_task_dir_name,
+    remove_failed_task_directory,
+    save_uploaded_video,
+    StorageSafetyError,
+)
+from app.services.task_lifecycle_service import TaskDeletionConflictError
 from app.services import job_service
 from app.services import job_worker
 
@@ -67,40 +73,51 @@ async def create_upload_task(
 ) -> dict:
     task_id = uuid4().hex[:12]
     task_dir_name = allocate_task_dir_name(task_name, exclude_task_id=task_id)
-    saved_path = save_uploaded_video(
-        task_id,
-        video_file.filename or "source_video.mp4",
-        video_file.file,
-        task_dir_name=task_dir_name,
-    )
-    payload = TaskCreate(
-        task_name=task_name,
-        source_type="upload",
-        platform=platform,
-        original_video_path=str(saved_path),
-        max_clip_duration=max_clip_duration,
-        candidate_clip_count=candidate_clip_count,
-        selection_profile=selection_profile,
-        final_clip_target=final_clip_target,
-        ai_preference=ai_preference,
-        auto_mode=auto_mode,
-        auto_clip_count=auto_clip_count,
-        auto_min_clip_seconds=auto_min_clip_seconds,
-        auto_max_clip_seconds=auto_max_clip_seconds,
-        auto_schedule_mode=auto_schedule_mode,
-        auto_schedule_start_at=auto_schedule_start_at,
-        auto_schedule_interval_hours=auto_schedule_interval_hours,
-        auto_schedule_daily_start_time=auto_schedule_daily_start_time,
-        auto_schedule_daily_end_time=auto_schedule_daily_end_time,
-        auto_metadata_use_ai=auto_metadata_use_ai,
-    )
+    task_record_created = False
     try:
+        saved_path = await run_in_threadpool(
+            save_uploaded_video,
+            task_id,
+            video_file.filename or "source_video.mp4",
+            video_file.file,
+            task_dir_name,
+        )
+        payload = TaskCreate(
+            task_name=task_name,
+            source_type="upload",
+            platform=platform,
+            original_video_path=str(saved_path),
+            max_clip_duration=max_clip_duration,
+            candidate_clip_count=candidate_clip_count,
+            selection_profile=selection_profile,
+            final_clip_target=final_clip_target,
+            ai_preference=ai_preference,
+            auto_mode=auto_mode,
+            auto_clip_count=auto_clip_count,
+            auto_min_clip_seconds=auto_min_clip_seconds,
+            auto_max_clip_seconds=auto_max_clip_seconds,
+            auto_schedule_mode=auto_schedule_mode,
+            auto_schedule_start_at=auto_schedule_start_at,
+            auto_schedule_interval_hours=auto_schedule_interval_hours,
+            auto_schedule_daily_start_time=auto_schedule_daily_start_time,
+            auto_schedule_daily_end_time=auto_schedule_daily_end_time,
+            auto_metadata_use_ai=auto_metadata_use_ai,
+        )
         result = task_service.create_task_record(payload, task_id=task_id, task_dir_name=task_dir_name)
+        task_record_created = True
         if payload.auto_mode:
             result["auto_pipeline"] = start_auto_pipeline(task_id, background_tasks=background_tasks)
         return result
     except ValueError as exc:
+        if not task_record_created:
+            await run_in_threadpool(remove_failed_task_directory, task_id, task_dir_name)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        if not task_record_created:
+            await run_in_threadpool(remove_failed_task_directory, task_id, task_dir_name)
+        raise
+    finally:
+        await video_file.close()
 
 
 @router.get("/{task_id}")
@@ -131,8 +148,14 @@ async def get_ai_analysis_status(task_id: str) -> dict:
 async def delete_task(task_id: str) -> dict:
     try:
         return task_service.soft_delete_task(task_id)
+    except TaskDeletionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except StorageSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.patch("/{task_id}/status")
@@ -291,6 +314,23 @@ async def batch_update_clip_candidates(
         return task_service.update_clip_candidates_batch(task_id, payload.clips)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/clips/sync-publish")
+async def sync_reviewed_clips_to_publish_center(
+    task_id: str,
+    payload: ClipCandidateBatchUpdate,
+) -> dict:
+    try:
+        return await run_in_threadpool(
+            task_service.sync_reviewed_clips_to_publish_center,
+            task_id,
+            payload.clips,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/{task_id}/clips/{clip_id}/transcript-excerpt")

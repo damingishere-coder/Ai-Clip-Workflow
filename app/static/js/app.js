@@ -1464,23 +1464,24 @@ document.querySelectorAll("[data-sync-publish-task]").forEach((button) => {
 document.querySelectorAll(".js-hide-task").forEach((button) => {
   button.addEventListener("click", async () => {
     const taskTitle = button.dataset.taskTitle || "这条任务";
-    const confirmed = window.confirm(`确认把“${taskTitle}”移入 E 盘回收站吗？\n\n这会从列表隐藏任务，并把对应项目文件夹移动到 E:\\直播间切片工作流存储\\_回收站，不会删除原视频、切片文件和任务目录。`);
+    const confirmed = window.confirm(`确认永久删除“${taskTitle}”吗？\n\n系统会永久删除 E 盘任务目录内的原片副本、音频、转写、切片、字幕、封面和发布包，删除后无法恢复。\n\nNAS 或任务目录外的原始视频不会被删除。`);
     if (!confirmed) return;
 
     const originalText = button.textContent;
     button.disabled = true;
-    button.textContent = "移动中...";
+    button.textContent = "删除中...";
 
     try {
       const response = await fetch(`/api/tasks/${button.dataset.taskId}`, { method: "DELETE" });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.detail || "移入回收站失败");
+        throw new Error(data.detail || "永久删除失败");
       }
-      window.alert(data.message || "任务已移入回收站。");
+      const externalNotice = data.external_source_preserved ? "\n\n任务目录外的原始视频已保留。" : "";
+      window.alert(`${data.message || "任务已永久删除。"}${externalNotice}`);
       window.location.reload();
     } catch (error) {
-      window.alert(`移入回收站失败：${error.message}`);
+      window.alert(`永久删除失败：${error.message}`);
     } finally {
       button.disabled = false;
       button.textContent = originalText;

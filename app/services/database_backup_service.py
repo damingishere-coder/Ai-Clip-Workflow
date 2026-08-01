@@ -17,6 +17,7 @@ PUBLISH_MIGRATION_BACKUP_GLOB = (
 PUBLISH_MIGRATION_JOURNAL_GLOB = f"{PUBLISH_MIGRATION_BACKUP_GLOB}-journal"
 PUBLISH_MIGRATION_BACKUP_COOLDOWN = timedelta(hours=24)
 PUBLISH_MIGRATION_BACKUP_KEEP_DAYS = 14
+MEDIA_CLEANUP_BACKUP_PREFIX = "workflow-before-media-cleanup-"
 BACKUP_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
@@ -257,6 +258,56 @@ def create_publish_migration_backup(
         if isinstance(exc, BackupSafetyError):
             raise
         raise BackupSafetyError(f"创建迁移前备份失败：{exc}") from exc
+    finally:
+        if backup_connection is not None:
+            backup_connection.close()
+        if source_connection is not None:
+            source_connection.close()
+
+
+def create_media_cleanup_backup(
+    database_path: Path,
+    backup_dir: Path,
+    *,
+    now: datetime | None = None,
+) -> Path:
+    """永久删除任务媒体前，原子创建一份仅包含 SQLite 元数据的备份。"""
+    database_path = database_path.resolve()
+    backup_dir = backup_dir.resolve()
+    now = now.astimezone(BACKUP_TIMEZONE) if now else datetime.now(BACKUP_TIMEZONE)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = now.strftime("%Y%m%d-%H%M%S-%f")
+    final_path = backup_dir / (
+        f"{MEDIA_CLEANUP_BACKUP_PREFIX}{timestamp}-{os.getpid()}-{uuid4().hex[:8]}.sqlite3"
+    )
+    temporary_path = final_path.with_name(f"{final_path.name}.tmp-{uuid4().hex}")
+    source_connection: sqlite3.Connection | None = None
+    backup_connection: sqlite3.Connection | None = None
+    try:
+        source_connection = sqlite3.connect(
+            f"{database_path.as_uri()}?mode=ro",
+            uri=True,
+            timeout=10,
+        )
+        backup_connection = sqlite3.connect(str(temporary_path), timeout=10)
+        source_connection.backup(backup_connection)
+        backup_connection.close()
+        backup_connection = None
+        source_connection.close()
+        source_connection = None
+
+        integrity = sqlite_quick_check(temporary_path)
+        if integrity != "ok":
+            raise BackupSafetyError(f"媒体清理前备份完整性检查失败：{integrity}")
+        os.replace(temporary_path, final_path)
+        return final_path
+    except Exception as exc:
+        if temporary_path.exists():
+            temporary_path.unlink()
+        if isinstance(exc, BackupSafetyError):
+            raise
+        raise BackupSafetyError(f"创建媒体清理前备份失败：{exc}") from exc
     finally:
         if backup_connection is not None:
             backup_connection.close()

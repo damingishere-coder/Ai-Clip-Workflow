@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+import os
+import tempfile
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -8,6 +10,7 @@ from app.core.config import settings
 from app.db.database import init_db
 from app.routers import ai_prompts, files, media, pages, publish, settings as settings_router, tasks
 from app.services.publish_scheduler import start_scheduler_background
+from app.services.storage_service import configure_runtime_media_storage
 
 
 # /media 和 /static 的 Origin 白名单
@@ -43,6 +46,9 @@ def _build_allow_origin_header(origin: str) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    previous_temp = tempfile.tempdir
+    previous_temp_env = {name: os.environ.get(name) for name in ("TEMP", "TMP")}
+    app.state.media_storage = configure_runtime_media_storage()
     init_db()
     scheduler = await start_scheduler_background()
     app.state.publish_scheduler = scheduler
@@ -51,6 +57,12 @@ async def lifespan(app: FastAPI):
     finally:
         if scheduler:
             scheduler.stop()
+        tempfile.tempdir = previous_temp
+        for name, value in previous_temp_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 app = FastAPI(

@@ -60,6 +60,10 @@ class Settings:
     data_dir: Path = _env_path("DATA_DIR", PROJECT_ROOT / "data")
     storage_root: Path = _env_path("STORAGE_ROOT", EXTERNAL_STORAGE_ROOT)
     tasks_dir: Path = _env_path("TASKS_DIR", _env_path("STORAGE_ROOT", EXTERNAL_STORAGE_ROOT))
+    upload_temp_dir: Path = _env_path(
+        "UPLOAD_TEMP_DIR",
+        _env_path("TASKS_DIR", _env_path("STORAGE_ROOT", EXTERNAL_STORAGE_ROOT)) / "_临时上传",
+    )
     database_path: Path = _env_path(
         "DATABASE_PATH",
         _env_path("DATA_DIR", PROJECT_ROOT / "data") / "workflow.sqlite3",
@@ -200,7 +204,7 @@ class Settings:
     publish_worker_allowed_roots: str = _env("PUBLISH_WORKER_ALLOWED_ROOTS", "")
     publish_scheduler_export_dir: Path = _env_path(
         "PUBLISH_SCHEDULER_EXPORT_DIR",
-        PROJECT_ROOT / "outputs" / "publish_packages",
+        _env_path("STORAGE_ROOT", EXTERNAL_STORAGE_ROOT) / "_发布包",
     )
     publish_scheduler_allow_publish_without_review: bool = _env_bool(
         "PUBLISH_SCHEDULER_ALLOW_PUBLISH_WITHOUT_REVIEW",
