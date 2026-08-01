@@ -53,6 +53,7 @@ suggested_editing 必须给出可执行剪辑建议，例如开头保留哪类�
       "start_time": "00:12:10",
       "end_time": "00:16:40",
       "duration_seconds": 270,
+      "cover_time_seconds": 35,
       "summary": "这段先交代了什么情境，再出现什么核心笑点或观点，最后如何自然收住。",
       "highlight_reason": "说明这段为什么值得剪，重点写笑点、冲突、反差、讨论价值或人物关系张力。",
       "spread_value": "高",

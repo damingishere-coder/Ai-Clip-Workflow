@@ -12,6 +12,7 @@ from app.models.task import TaskStatus
 from app.services import task_service
 from app.services.auto_publish_service import create_auto_publish_jobs, platforms_for_task
 from app.services.metadata_generator import MetadataGenerator
+from app.services.publish_service import generate_publish_cover_for_item
 from app.services.storage_service import (
     create_task_directory,
     get_artifact_paths,
@@ -223,7 +224,7 @@ class PipelineEngine:
             raise ValueError("没有可用于自动切片的候选片段，请先重新运行 AI 分析")
 
         target_count = self._resolve_target_count(task, config)
-        max_duration_seconds = max(1, int(task.get("max_clip_duration") or 5)) * 60
+        max_duration_seconds = max(1, int(task.get("max_clip_duration") or 10)) * 60
         valid_candidates = []
         skipped = []
         for clip in candidates:
@@ -240,10 +241,19 @@ class PipelineEngine:
                 continue
             valid_candidates.append({**clip, "start_seconds": start, "end_seconds": end, "duration": duration})
 
-        selected = sorted(valid_candidates, key=lambda item: float(item.get("confidence_score") or 0), reverse=True)
+        eligible = [item for item in valid_candidates if bool(item.get("selected_by_default"))]
+        if task.get("selection_profile") == "variety_comedy":
+            eligible = [item for item in eligible if item.get("quality_tier") == "A"]
+        selected = sorted(
+            eligible,
+            key=lambda item: float(item.get("quality_score") or item.get("confidence_score") or 0),
+            reverse=True,
+        )
         selected = sorted(selected[:target_count], key=lambda item: float(item["start_seconds"]))
         if not selected:
-            raise ValueError("候选片段的时间戳均无效或超过单条切片最长时长")
+            if task.get("selection_profile") == "variety_comedy":
+                raise ValueError("本集没有达到 A 级质量门槛的综艺片段，已停止自动切片，避免为了数量强行输出")
+            raise ValueError("没有同时满足默认入选和时间戳要求的候选片段")
         selected_ids = {clip["id"] for clip in selected}
         self._update_selected_clips(task_id, selected_ids)
         payload = {
@@ -272,7 +282,7 @@ class PipelineEngine:
 
     def _cut_video(self, task_id: str, context: dict) -> dict:
         append_task_log(task_id, "全自动模式：开始原视频裁切，本轮明确跳过字幕烧录")
-        result = task_service.process_task_video_cuts(task_id)
+        result = task_service.process_task_video_cuts(task_id, sync_publish_jobs=False)
         output_clips = task_service.list_output_clips(task_id)
         success = [clip for clip in output_clips if clip.get("status") == "completed" and clip.get("file_exists")]
         failed = [item for item in result.get("results") or [] if item.get("status") == "failed"]
@@ -294,11 +304,16 @@ class PipelineEngine:
         generator = MetadataGenerator(use_ai=config["auto_metadata_use_ai"])
         metadata_items = []
         for output_clip in output_clips:
+            cover = generate_publish_cover_for_item(
+                output_clip,
+                preferred_time_seconds=output_clip.get("cover_time_seconds"),
+            )
             for platform in platforms_for_task(task):
                 metadata_items.append(
                     {
                         "output_clip": output_clip,
                         "metadata": generator.generate(output_clip, platform),
+                        "cover": cover,
                     }
                 )
         paths = get_artifact_paths(task_id)
@@ -358,7 +373,9 @@ class PipelineEngine:
                 """
                 SELECT id, task_id, clip_key, title, start_time, end_time, duration_seconds,
                        summary, reason, highlight_reason, spread_value, suggested_editing,
-                       confidence_score, selected_by_default, enabled, reviewed, is_deleted
+                       confidence_score, quality_tier, quality_score, humor_score,
+                       completeness_score, audio_reaction_score,
+                       selected_by_default, enabled, reviewed, is_deleted
                 FROM clip_candidates
                 WHERE task_id = ? AND is_deleted = 0
                 ORDER BY start_time ASC
@@ -368,7 +385,9 @@ class PipelineEngine:
         return [dict(row) for row in rows]
 
     def _resolve_target_count(self, task: dict, config: dict) -> int:
-        return max(1, min(50, int(task.get("candidate_clip_count") or 5)))
+        if task.get("selection_profile") == "variety_comedy":
+            return max(1, min(12, int(task.get("final_clip_target") or 5)))
+        return max(1, min(50, int(task.get("candidate_clip_count") or 12)))
 
     def _update_selected_clips(self, task_id: str, selected_ids: set[str]) -> None:
         now = task_service._now_iso()
@@ -395,9 +414,11 @@ class PipelineEngine:
     def _write_clip_metadata(self, task_id: str, output_clips: list[dict], metadata_items: list[dict]) -> None:
         paths = get_artifact_paths(task_id)
         metadata_by_clip: dict[str, list[dict]] = {}
+        cover_by_clip: dict[str, dict] = {}
         for item in metadata_items:
             clip_id = item["output_clip"]["id"]
             metadata_by_clip.setdefault(clip_id, []).append(item["metadata"])
+            cover_by_clip[clip_id] = item.get("cover") or {}
         payload = []
         for clip in output_clips:
             payload.append(
@@ -408,6 +429,7 @@ class PipelineEngine:
                     "status": clip.get("status") or "",
                     "error_message": clip.get("error_message") or "",
                     "recommend_reason": clip.get("highlight_reason") or clip.get("clip_summary") or "",
+                    "cover": cover_by_clip.get(clip.get("id") or "", {}),
                     "metadata": metadata_by_clip.get(clip.get("id") or "", []),
                 }
             )

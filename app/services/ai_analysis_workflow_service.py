@@ -18,6 +18,7 @@ from app.services.ai.ai_clip_analyzer import (
     inspect_local_analysis_plan,
     result_to_jsonable,
 )
+from app.services.ai.variety_comedy_analyzer import ComedyAnalysisRequest, analyze_variety_comedy
 from app.services.ai.diagnostics import ensure_local_ai_ready
 from app.services.ai_prompt_preset_service import get_task_ai_prompt_preset
 from app.services.storage_service import get_artifact_paths
@@ -179,10 +180,13 @@ def _insert_clip_candidates_with_connection(connection, task_id: str, clips: lis
             """
             INSERT INTO clip_candidates (
                 id, task_id, clip_key, title, start_time, end_time, duration_seconds,
-                summary, reason, highlight_reason, spread_value, suggested_editing,
-                confidence_score, selected_by_default, enabled, reviewed, created_at, updated_at
+                cover_time_seconds, summary, reason, highlight_reason, spread_value, suggested_editing,
+                confidence_score, quality_tier, quality_score, text_quality_score, humor_score,
+                completeness_score, audio_reaction_score, topic_key, key_moment_time,
+                quality_evidence_json, rejection_reason,
+                selected_by_default, enabled, reviewed, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 database_id or f"{task_id}_clip_{index:03d}",
@@ -192,14 +196,26 @@ def _insert_clip_candidates_with_connection(connection, task_id: str, clips: lis
                 clip["start_time"],
                 clip["end_time"],
                 clip["duration_seconds"],
+                clip.get("cover_time_seconds"),
                 clip["summary"],
                 clip["highlight_reason"],
                 clip["highlight_reason"],
                 clip["spread_value"],
                 clip["suggested_editing"],
                 clip["confidence_score"],
+                clip.get("quality_tier") or "",
+                float(clip.get("quality_score") or 0),
+                float(clip.get("text_quality_score") or 0),
+                float(clip.get("humor_score") or 0),
+                float(clip.get("completeness_score") or 0),
+                float(clip.get("audio_reaction_score") or 0),
+                clip.get("topic_key") or "",
+                clip.get("key_moment_time") or "",
+                json.dumps(clip.get("quality_evidence") or {}, ensure_ascii=False),
+                clip.get("rejection_reason") or "",
                 1 if selected_by_default else 0,
                 1 if selected_by_default else 0,
+                0,
                 now,
                 now,
             ),
@@ -209,9 +225,6 @@ def _insert_clip_candidates_with_connection(connection, task_id: str, clips: lis
 def _replace_clip_candidates(task_id: str, clips: list[dict]) -> None:
     """在同一个事务里替换候选片段，失败时保留原结果。"""
     from app.services.task_service import _now_iso
-
-    if not clips:
-        raise ValueError("AI 没有生成可保存的候选片段")
 
     now = _now_iso()
     with get_connection() as connection:
@@ -229,6 +242,7 @@ def _summarize_analysis_clips(clips: list[dict]) -> list[dict]:
                 "start_time": clip.get("start_time") or "",
                 "end_time": clip.get("end_time") or "",
                 "duration_seconds": int(clip.get("duration_seconds") or 0),
+                "cover_time_seconds": clip.get("cover_time_seconds"),
             }
         )
     return summaries
@@ -438,7 +452,7 @@ def _ensure_ai_analysis_history_from_current_file(task_id: str) -> None:
         model=meta.get("model") or _ai_model_name(provider),
         fallback_notice="",
         prompt_preset=prompt_preset,
-        requested_clip_count=len(clips) or int(task.get("candidate_clip_count") or 5),
+        requested_clip_count=len(clips) or int(task.get("candidate_clip_count") or 12),
     )
 
 
@@ -528,6 +542,33 @@ def _analyze_with_provider(task_id: str, task: dict, paths: dict[str, Path], pro
     if not prompt_template:
         raise AIAnalysisError(f"当前选择的 AI Prompt 方案\"{prompt_preset.get('name')}\"还没有填写 Prompt 内容")
 
+    append_task_log(task_id, f"AI Prompt 方案：{prompt_preset.get('slot')}号 - {prompt_preset.get('name')}")
+    if provider_name == "local":
+        ensure_local_ai_ready()
+
+    if task.get("selection_profile") == "variety_comedy":
+        window_seconds = 180 if provider_name == "local" else 300
+        overlap_seconds = 45 if provider_name == "local" else 60
+        append_task_log(
+            task_id,
+            "综艺笑点优先 V2："
+            f"{window_seconds // 60} 分钟重叠召回窗口，重叠 {overlap_seconds} 秒；"
+            f"候选池最多 {min(12, int(task['candidate_clip_count']))} 条，"
+            f"最终最多启用 {int(task.get('final_clip_target') or 5)} 条 A 级片段",
+        )
+        return analyze_variety_comedy(
+            ComedyAnalysisRequest(
+                task_id=task_id,
+                transcript_path=paths["transcript_path"],
+                audio_path=paths["audio_path"],
+                candidate_pool_limit=int(task["candidate_clip_count"]),
+                final_clip_target=int(task.get("final_clip_target") or 5),
+                ai_preference=task.get("ai_preference") or "",
+                prompt_template=prompt_template,
+                provider_name=provider_name,
+            )
+        )
+
     request = AnalysisRequest(
         task_id=task_id,
         transcript_path=paths["transcript_path"],
@@ -537,9 +578,6 @@ def _analyze_with_provider(task_id: str, task: dict, paths: dict[str, Path], pro
         prompt_template=prompt_template,
         provider_name=provider_name,
     )
-    append_task_log(task_id, f"AI Prompt 方案：{prompt_preset.get('slot')}号 - {prompt_preset.get('name')}")
-    if provider_name == "local":
-        ensure_local_ai_ready()
     plan = inspect_local_analysis_plan(request)
     provider_label = _ai_provider_label(provider_name)
     append_task_log(
@@ -618,6 +656,8 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             "provider": used_provider,
             "provider_label": _ai_provider_label(used_provider),
             "model": _ai_model_name(used_provider),
+            "selection_profile": task.get("selection_profile") or "general",
+            "final_clip_target": int(task.get("final_clip_target") or 5),
             "generated_at": _now_iso(),
         }
         prompt_preset = get_task_ai_prompt_preset(task_id)

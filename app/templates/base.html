@@ -8,7 +8,8 @@
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', path='img/brand/niuma-studio-favicon-32.png') }}?v=20260604-favicon">
     <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', path='img/brand/niuma-studio-apple-touch-icon.png') }}?v=20260604-favicon">
     <meta name="theme-color" content="#f6f9ff">
-    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260625-auto-pipeline-schedule">
+    <meta name="local-admin-token" content="{{ settings.local_admin_token }}">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260722-publish-task-groups">
     {% block extra_head %}{% endblock %}
   </head>
   <body>
@@ -60,7 +61,7 @@
       </main>
     </div>
 
+    <script src="{{ url_for('static', path='js/app.js') }}?v=20260719-remove-legacy-publish-ui"></script>
     {% block extra_scripts %}{% endblock %}
-    <script src="{{ url_for('static', path='js/app.js') }}?v=20260625-auto-pipeline-schedule"></script>
   </body>
 </html>

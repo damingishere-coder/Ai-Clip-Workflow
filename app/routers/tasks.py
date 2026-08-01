@@ -5,12 +5,14 @@ from starlette.concurrency import run_in_threadpool
 
 from app.models.task import (
     ClipCandidateBatchUpdate,
+    ClipFeedbackCreate,
     ClipCandidateUpdate,
     SubtitleStyleUpdate,
     TaskAIPreferenceUpdate,
     TaskAIPromptPresetUpdate,
     TaskCandidateClipCountUpdate,
     TaskCreate,
+    TaskSelectionSettingsUpdate,
     TaskStatus,
     TaskStatusUpdate,
 )
@@ -46,8 +48,10 @@ async def create_upload_task(
     background_tasks: BackgroundTasks,
     task_name: str = Form(...),
     platform: str = Form("general"),
-    max_clip_duration: int = Form(5),
-    candidate_clip_count: int = Form(5),
+    max_clip_duration: int = Form(10),
+    candidate_clip_count: int = Form(12),
+    selection_profile: str = Form("general"),
+    final_clip_target: int = Form(5),
     ai_preference: str | None = Form(None),
     auto_mode: bool = Form(False),
     auto_clip_count: str = Form("auto"),
@@ -76,6 +80,8 @@ async def create_upload_task(
         original_video_path=str(saved_path),
         max_clip_duration=max_clip_duration,
         candidate_clip_count=candidate_clip_count,
+        selection_profile=selection_profile,
+        final_clip_target=final_clip_target,
         ai_preference=ai_preference,
         auto_mode=auto_mode,
         auto_clip_count=auto_clip_count,
@@ -157,6 +163,18 @@ async def patch_task_ai_prompt_preset(task_id: str, payload: TaskAIPromptPresetU
 async def patch_task_candidate_clip_count(task_id: str, payload: TaskCandidateClipCountUpdate) -> dict:
     try:
         return task_service.update_task_candidate_clip_count(task_id, payload.candidate_clip_count)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/{task_id}/selection-settings")
+async def patch_task_selection_settings(task_id: str, payload: TaskSelectionSettingsUpdate) -> dict:
+    try:
+        return task_service.update_task_selection_settings(
+            task_id,
+            payload.selection_profile,
+            payload.final_clip_target,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -275,6 +293,23 @@ async def batch_update_clip_candidates(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/{task_id}/clips/sync-publish")
+async def sync_reviewed_clips_to_publish_center(
+    task_id: str,
+    payload: ClipCandidateBatchUpdate,
+) -> dict:
+    try:
+        return await run_in_threadpool(
+            task_service.sync_reviewed_clips_to_publish_center,
+            task_id,
+            payload.clips,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.get("/{task_id}/clips/{clip_id}/transcript-excerpt")
 async def get_clip_transcript_excerpt(
     task_id: str,
@@ -286,6 +321,14 @@ async def get_clip_transcript_excerpt(
         return task_service.get_clip_transcript_excerpt(task_id, clip_id, start_time, end_time)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/clips/{clip_id}/feedback")
+async def save_clip_feedback(task_id: str, clip_id: str, payload: ClipFeedbackCreate) -> dict:
+    try:
+        return task_service.save_clip_feedback(task_id, clip_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{task_id}/process/cuts")

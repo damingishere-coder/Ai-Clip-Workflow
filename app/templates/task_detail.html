@@ -28,6 +28,10 @@
       {% if task.candidate_count > 0 %}
       <a class="secondary-button" href="/tasks/{{ task.id }}/clips/review">检查候选片段</a>
       {% endif %}
+      {% if task.output_clip_count > 0 %}
+      <button class="secondary-button" type="button" data-sync-publish-task data-task-id="{{ task.id }}">同步发送中心</button>
+      <a class="secondary-button" href="/publish?task_id={{ task.id }}&tab=content">发送中心 · {{ publish_link_state.label }}</a>
+      {% endif %}
     {% elif task.transcript_exists %}
     <button class="secondary-button" id="start-workflow-button" type="button" disabled>转写已完成</button>
     <button class="secondary-button js-process-action" type="button" data-confirm="重新生成会覆盖当前转写文件，并且需要重新等待转写完成。确认重新生成吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?force=true">重新生成转写</button>
@@ -40,6 +44,10 @@
     {% if not task.auto_mode %}
     <button class="secondary-button js-process-action" id="local-transcript-button" type="button" data-confirm="远程转写失败后才建议使用本地模型。本地模型会占用电脑性能，速度可能更慢。确认改用本地模型转写吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?force=true&provider=local" {% if task.transcript_exists or header_transcript_progress.status != "failed" or header_transcript_progress.provider == "local" %}hidden{% endif %}>改用本地模型转写</button>
     <a class="primary-button" href="/tasks/{{ task.id }}/clips/review">进入片段审核</a>
+    {% endif %}
+    {% if not task.auto_mode and task.output_clip_count > 0 %}
+    <button class="secondary-button" type="button" data-sync-publish-task data-task-id="{{ task.id }}">同步发送中心</button>
+    <a class="secondary-button" href="/publish?task_id={{ task.id }}&tab=content">发送中心 · {{ publish_link_state.label }}</a>
     {% endif %}
   </div>
 </section>
@@ -118,9 +126,23 @@
     <form id="ai-analysis-form" class="settings-form ai-prompt-form" data-task-id="{{ task.id }}">
       <div class="ai-analysis-controls">
         <label>
-          <span>候选片段数量</span>
+          <span>候选池上限</span>
           <span class="unit-input">
-            <input id="ai-candidate-count-input" name="candidate_clip_count" type="number" min="1" max="50" step="1" value="{{ task.candidate_clip_count or 5 }}">
+            <input id="ai-candidate-count-input" name="candidate_clip_count" type="number" min="1" max="50" step="1" value="{{ task.candidate_clip_count or 12 }}">
+            <small>条</small>
+          </span>
+        </label>
+        <label>
+          <span>选片模式</span>
+          <select id="ai-selection-profile" name="selection_profile">
+            <option value="general" {{ "selected" if task.selection_profile == "general" else "" }}>通用内容价值</option>
+            <option value="variety_comedy" {{ "selected" if task.selection_profile == "variety_comedy" else "" }}>综艺笑点优先</option>
+          </select>
+        </label>
+        <label>
+          <span>最终启用目标</span>
+          <span class="unit-input">
+            <input id="ai-final-clip-target" name="final_clip_target" type="number" min="1" max="12" step="1" value="{{ task.final_clip_target or 5 }}">
             <small>条</small>
           </span>
         </label>
@@ -150,7 +172,7 @@
         </article>
         {% endfor %}
       </div>
-      <p class="empty-note">选择的方案会直接作为本次 AI 片段分析 Prompt。系统会自动替换最大时长、候选数量、AI 偏好和转写文本变量；最终成片仍需要进入人工审核确认。</p>
+      <p class="empty-note">通用模式直接使用所选 Prompt；综艺笑点优先模式会把所选 Prompt 作为口味补充，再执行重叠召回、边界扩展、音频复核和全局评审。</p>
       <div class="button-row align-end">
         <button class="secondary-button" id="save-ai-prompts-button" type="button">保存 Prompt 方案</button>
         <button class="secondary-button js-ai-process-action" type="button" data-provider="remote">远程 AI 分析</button>

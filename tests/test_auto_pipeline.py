@@ -57,6 +57,13 @@ def _fake_video(name: str = "source.mp4") -> Path:
     return path
 
 
+def _fake_cover(name: str = "cover.jpg") -> Path:
+    path = settings.tasks_dir / "_test_inputs" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"fake jpg")
+    return path
+
+
 def _create_auto_task(task_id: str = "test-auto-task") -> dict:
     video = _fake_video(f"{task_id}.mp4")
     payload = TaskCreate(
@@ -70,6 +77,16 @@ def _create_auto_task(task_id: str = "test-auto-task") -> dict:
     )
     create_task_record(payload, task_id=task_id)
     return get_task(task_id, include_video_probe=False)
+
+
+def test_clip_candidates_schema_has_nullable_cover_time():
+    with get_connection() as connection:
+        columns = {
+            row["name"]: dict(row)
+            for row in connection.execute("PRAGMA table_info(clip_candidates)").fetchall()
+        }
+    assert "cover_time_seconds" in columns
+    assert columns["cover_time_seconds"]["notnull"] == 0
 
 
 def test_auto_mode_false_does_not_start_pipeline(monkeypatch):
@@ -223,6 +240,11 @@ def test_create_auto_publish_job_records_scheduled_at():
     scheduled_items = [
         {
             "output_clip": {"id": "out-1", "output_file_path": str(clip_path)},
+            "cover": {
+                "cover_file_path": str(_fake_cover("publish_clip_cover.jpg")),
+                "cover_time_seconds": 12.5,
+                "cover_source": "ai_frame",
+            },
             "metadata": {
                 "platform": "douyin",
                 "title": "康熙名场面",
@@ -239,12 +261,16 @@ def test_create_auto_publish_job_records_scheduled_at():
     assert result["created_count"] == 1
     with get_connection() as connection:
         row = connection.execute(
-            "SELECT scheduled_at, status, video_source FROM publish_jobs WHERE task_id = ?",
+            "SELECT scheduled_at, status, video_source, cover_mode, cover_time_seconds, cover_file_path FROM publish_jobs WHERE task_id = ?",
             (task["id"],),
         ).fetchone()
     assert row["scheduled_at"] == "2026-06-23T08:10:00+00:00"
-    assert row["status"] == "SCHEDULED"
+    # local_browser 需要明确账号；没有可用账号时保留计划时间，但先停在 WAITING，避免到点直接失败。
+    assert row["status"] == "WAITING"
     assert row["video_source"] == "original"
+    assert row["cover_mode"] == "time"
+    assert row["cover_time_seconds"] == 12.5
+    assert row["cover_file_path"].endswith("publish_clip_cover.jpg")
 
 
 def test_create_auto_publish_job_without_schedule_waits_for_send_center():
@@ -268,6 +294,11 @@ def test_create_auto_publish_job_without_schedule_waits_for_send_center():
         [
             {
                 "output_clip": {"id": "out-waiting", "output_file_path": str(clip_path)},
+                "cover": {
+                    "cover_file_path": str(_fake_cover("publish_waiting_cover.jpg")),
+                    "cover_time_seconds": 20,
+                    "cover_source": "midpoint_fallback",
+                },
                 "metadata": {
                     "platform": "douyin",
                     "title": "待排期片段",
@@ -289,6 +320,54 @@ def test_create_auto_publish_job_without_schedule_waits_for_send_center():
         ).fetchone()
     assert row["scheduled_at"] == ""
     assert row["status"] == "WAITING"
+
+
+def test_auto_metadata_generates_one_cover_for_both_platforms(monkeypatch):
+    task = _create_auto_task("test-auto-cover-once")
+    clip_path = _fake_video("auto_cover_once.mp4")
+    cover_path = _fake_cover("auto_cover_once.jpg")
+    output_clip = {
+        "id": "out-cover-once",
+        "task_id": task["id"],
+        "status": "completed",
+        "file_exists": True,
+        "output_file_path": str(clip_path),
+        "cover_time_seconds": 17.5,
+    }
+    cover_calls = []
+
+    def fake_cover(item, preferred_time_seconds=None, video_source="original"):
+        cover_calls.append((item["id"], preferred_time_seconds, video_source))
+        return {
+            "cover_file_path": str(cover_path),
+            "cover_time_seconds": preferred_time_seconds,
+            "cover_source": "ai_frame",
+        }
+
+    def fake_metadata(_self, _item, platform):
+        return {
+            "platform": platform,
+            "title": f"{platform} 标题",
+            "caption": "简介",
+            "hashtags": ["测试"],
+            "cover_text": "封面",
+            "risk_flags": [],
+            "source": "rule",
+        }
+
+    monkeypatch.setattr("app.services.pipeline_engine.task_service.list_output_clips", lambda _task_id: [output_clip])
+    monkeypatch.setattr("app.services.pipeline_engine.generate_publish_cover_for_item", fake_cover)
+    monkeypatch.setattr("app.services.pipeline_engine.MetadataGenerator.generate", fake_metadata)
+
+    result = PipelineEngine()._generate_metadata(
+        task["id"],
+        {"config": {"auto_metadata_use_ai": False}},
+    )
+
+    assert cover_calls == [("out-cover-once", 17.5, "original")]
+    assert len(result["metadata_items"]) == 2
+    assert {item["metadata"]["platform"] for item in result["metadata_items"]} == {"douyin", "bilibili"}
+    assert {item["cover"]["cover_file_path"] for item in result["metadata_items"]} == {str(cover_path)}
 
 
 def test_prepare_source_uses_pathlib_and_writes_reference():

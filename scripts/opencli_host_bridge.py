@@ -142,14 +142,10 @@ class OpenCLIHostBridgeHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Windows opencli helper for Docker-hosted NiuMa Studio.")
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8765)
-    args = parser.parse_args()
+    # 兼容旧启动命令，但实际启动 v1.5 的受保护发布 Worker。
+    from scripts.publish_host_worker import main as worker_main
 
-    server = ThreadingHTTPServer((args.host, args.port), OpenCLIHostBridgeHandler)
-    print(f"Windows opencli helper listening on http://{args.host}:{args.port}", flush=True)
-    server.serve_forever()
+    worker_main()
 
 
 if __name__ == "__main__":

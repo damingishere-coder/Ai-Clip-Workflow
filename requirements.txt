@@ -14,6 +14,12 @@ python-multipart>=0.0.28
 # 数据校验
 pydantic>=2.13.0
 
+# Windows 的 zoneinfo IANA 时区数据库（排期需要 Asia/Shanghai 等名称）
+tzdata
+
+# Windows 发布 Worker 使用系统 Chrome；单元测试会 Mock，不会打开真实浏览器。
+playwright>=1.58.0
+
 # 异步文件操作
 aiofiles>=25.1.0
 

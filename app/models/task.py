@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, validator
 
@@ -43,8 +43,10 @@ class TaskCreate(BaseModel):
     platform: Literal["douyin", "bilibili", "general"] = "general"
     original_video_path: Optional[str] = None
     nas_file_path: Optional[str] = None
-    max_clip_duration: int = Field(default=5, ge=1, le=60)
-    candidate_clip_count: int = Field(default=5, ge=1, le=50)
+    max_clip_duration: int = Field(default=10, ge=1, le=60)
+    candidate_clip_count: int = Field(default=12, ge=1, le=50)
+    selection_profile: Literal["general", "variety_comedy"] = "general"
+    final_clip_target: int = Field(default=5, ge=1, le=12)
     ai_preference: Optional[str] = None
     auto_mode: bool = False
     auto_clip_count: str = Field(default="auto", max_length=10)
@@ -101,7 +103,26 @@ class TaskAIPromptPresetUpdate(BaseModel):
 
 
 class TaskCandidateClipCountUpdate(BaseModel):
-    candidate_clip_count: int = Field(default=5, ge=1, le=50)
+    candidate_clip_count: int = Field(default=12, ge=1, le=50)
+
+
+class TaskSelectionSettingsUpdate(BaseModel):
+    selection_profile: Literal["general", "variety_comedy"] = "general"
+    final_clip_target: int = Field(default=5, ge=1, le=12)
+
+
+class ClipFeedbackCreate(BaseModel):
+    decision: Literal["keep", "reject"]
+    reason_code: Literal[
+        "worth_publishing",
+        "not_funny",
+        "fragmented",
+        "missing_setup",
+        "duplicate",
+        "dragging",
+        "other",
+    ]
+    note: Optional[str] = Field(default="", max_length=500)
 
 
 class SubtitleStyleUpdate(BaseModel):
@@ -144,9 +165,9 @@ class PublishAccountCreate(BaseModel):
 class PublishJobCreate(BaseModel):
     task_id: str = Field(..., min_length=1, max_length=80)
     output_clip_id: str = Field(..., min_length=1, max_length=80)
-    platform: Literal["douyin", "bilibili", "manual_export", "local_browser"]
+    platform: Literal["douyin", "bilibili"]
     account_id: Optional[str] = Field(default="", max_length=80)
-    publish_mode: Literal["draft", "manual_review", "manual_export", "local_browser", "api_publish", "opencli_publish"] = "manual_review"
+    publish_mode: Literal["manual_export", "local_browser", "api_publish", "opencli_publish"] = "local_browser"
     video_source: Literal["original", "subtitled"] = "original"
     title: str = Field(..., min_length=1, max_length=120)
     description: Optional[str] = Field(default="", max_length=2000)
@@ -168,11 +189,14 @@ class PublishJobScheduleUpdate(BaseModel):
 
 class PublishBatchScheduleUpdate(BaseModel):
     job_ids: list[str] = Field(default_factory=list)
+    platform: Optional[Literal["douyin", "bilibili"]] = None
     action: Literal["apply", "clear"] = "apply"
-    start_at: Optional[str] = Field(default="", max_length=80)
-    interval_hours: int = Field(default=3, ge=1, le=168)
+    start_at_local: Optional[str] = Field(default="", max_length=80)
+    timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=80)
+    interval_minutes: int = Field(default=180, ge=1, le=10080)
     daily_start_time: str = Field(default="09:00", min_length=5, max_length=5)
     daily_end_time: str = Field(default="21:00", min_length=5, max_length=5)
+    confirmed_schedule: list[dict[str, str]] = Field(default_factory=list)
 
     @validator("job_ids")
     def validate_schedule_job_ids(cls, value: list[str]) -> list[str]:
@@ -194,7 +218,7 @@ class PublishBatchJobCreate(BaseModel):
     output_clip_ids: list[str] = Field(default_factory=list)
     platform: Literal["douyin", "bilibili"]
     account_id: Optional[str] = Field(default="", max_length=80)
-    publish_mode: Literal["draft", "manual_review"] = "manual_review"
+    publish_mode: Literal["manual_export", "local_browser", "api_publish", "opencli_publish"] = "local_browser"
     video_source: Literal["original", "subtitled"] = "original"
     title_prefix: Optional[str] = Field(default="", max_length=80)
     description: Optional[str] = Field(default="", max_length=2000)
@@ -228,8 +252,44 @@ class PublishSendJobUpdate(BaseModel):
     bilibili_source: Optional[str] = Field(default="", max_length=300)
 
 
-class PublishSendStart(BaseModel):
+class PublishRetryRequest(BaseModel):
+    scheduled_at: Optional[str] = Field(default="", max_length=80)
+    visibility: Optional[Literal["public", "friends", "private"]] = None
+
+
+class PublishHistoryRecordBatchUpdate(BaseModel):
+    platform: Literal["douyin", "bilibili"]
     job_ids: list[str] = Field(default_factory=list)
+
+    @validator("job_ids")
+    def validate_history_job_ids(cls, value: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
+        if not normalized:
+            raise ValueError("至少选择一条执行记录")
+        if len(normalized) > 100:
+            raise ValueError("每次最多处理 100 条执行记录")
+        return normalized
+
+
+class PublishMarkPublishedRequest(BaseModel):
+    platform_url: str = Field(..., min_length=8, max_length=2000)
+
+
+class PublishJobTargetUpdate(BaseModel):
+    platform: Literal["douyin", "bilibili"]
+    account_id: Optional[str] = Field(default="", max_length=80)
+    publish_mode: Literal["manual_export", "local_browser"] = "local_browser"
+
+
+class PublishBatchTargetUpdate(PublishJobTargetUpdate):
+    job_ids: list[str] = Field(default_factory=list)
+
+    @validator("job_ids")
+    def validate_target_job_ids(cls, value: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
+        if not normalized:
+            raise ValueError("至少选择一条发布任务")
+        return normalized
 
 
 class PublishCoverFrameBatchCreate(BaseModel):
@@ -248,6 +308,7 @@ class ClipCandidate(BaseModel):
     start_time: str
     end_time: str
     duration_seconds: int
+    cover_time_seconds: Optional[float] = Field(default=None, ge=0)
     summary: str = ""
     highlight_reason: str = ""
     spread_value: str = ""
@@ -282,12 +343,23 @@ class AIClipItem(BaseModel):
     start_time: str = Field(..., min_length=1, max_length=16)
     end_time: str = Field(..., min_length=1, max_length=16)
     duration_seconds: int = Field(..., ge=1)
+    cover_time_seconds: float = Field(..., ge=0)
     summary: str = Field(..., min_length=1, max_length=1000)
     highlight_reason: str = Field(..., min_length=1, max_length=1000)
     spread_value: str = Field(..., min_length=1, max_length=40)
     suggested_editing: str = Field(..., min_length=1, max_length=1000)
     confidence_score: float = Field(..., ge=0, le=1)
     selected_by_default: bool = True
+    quality_tier: str = Field(default="", max_length=8)
+    quality_score: float = Field(default=0, ge=0, le=100)
+    text_quality_score: float = Field(default=0, ge=0, le=100)
+    humor_score: float = Field(default=0, ge=0, le=100)
+    completeness_score: float = Field(default=0, ge=0, le=100)
+    audio_reaction_score: float = Field(default=0, ge=0, le=100)
+    topic_key: str = Field(default="", max_length=120)
+    key_moment_time: str = Field(default="", max_length=16)
+    quality_evidence: dict[str, Any] = Field(default_factory=dict)
+    rejection_reason: str = Field(default="", max_length=1000)
 
     @validator("start_time", "end_time")
     def validate_time_text(cls, value: str) -> str:

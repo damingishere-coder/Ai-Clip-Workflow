@@ -60,6 +60,8 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
             "nas_file_path": payload.nas_file_path,
             "max_clip_duration": payload.max_clip_duration,
             "candidate_clip_count": payload.candidate_clip_count,
+            "selection_profile": payload.selection_profile,
+            "final_clip_target": payload.final_clip_target,
             "ai_preference": payload.ai_preference,
             "ai_prompt_preset_id": "preset_001",
             "auto_mode": 1 if payload.auto_mode else 0,
@@ -186,6 +188,42 @@ def update_task_candidate_clip_count(task_id: str, candidate_clip_count: int) ->
     return {
         "status": "ok",
         "message": f"候选片段数量已更新为 {candidate_clip_count} 条。",
+        "task": get_task(task_id, include_video_probe=False),
+    }
+
+
+def update_task_selection_settings(
+    task_id: str,
+    selection_profile: str,
+    final_clip_target: int,
+) -> dict:
+    from app.services.task_service import _now_iso, get_task  # noqa: F811
+
+    task = get_task(task_id, include_video_probe=False)
+    if not task:
+        raise ValueError("任务不存在")
+    if selection_profile not in {"general", "variety_comedy"}:
+        raise ValueError("选片模式只能是通用模式或综艺笑点优先")
+    if final_clip_target < 1 or final_clip_target > 12:
+        raise ValueError("最终启用目标必须在 1 到 12 条之间")
+
+    now = _now_iso()
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE tasks
+            SET selection_profile = ?, final_clip_target = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (selection_profile, final_clip_target, now, task_id),
+        )
+        connection.commit()
+
+    profile_label = "综艺笑点优先" if selection_profile == "variety_comedy" else "通用模式"
+    append_task_log(task_id, f"已更新选片模式：{profile_label}，最终启用目标：{final_clip_target} 条")
+    return {
+        "status": "ok",
+        "message": f"已保存{profile_label}，最终启用目标为 {final_clip_target} 条。",
         "task": get_task(task_id, include_video_probe=False),
     }
 

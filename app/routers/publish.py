@@ -7,17 +7,23 @@ from app.models.task import (
     PublishAccountCreate,
     PublishBatchJobCreate,
     PublishBatchScheduleUpdate,
+    PublishBatchTargetUpdate,
     PublishCoverCreate,
     PublishCoverFrameBatchCreate,
+    PublishHistoryRecordBatchUpdate,
     PublishJobContentUpdate,
     PublishJobCreate,
     PublishJobScheduleUpdate,
+    PublishJobTargetUpdate,
+    PublishMarkPublishedRequest,
     PublishPlatformConfigUpdate,
+    PublishRetryRequest,
     PublishSendJobUpdate,
-    PublishSendStart,
 )
 from app.services import publish_service
-from app.services.publish_scheduler import PublishScheduler, queue_snapshot
+from app.services.publish_readiness import PublishPlatformIsolationBlocked, SendReadinessBlocked
+from app.services.publish_scheduler import PublishScheduler, queue_snapshot, scheduler_health
+from app.services.publishers.base import PublishError
 
 
 router = APIRouter(prefix="/api/publish", tags=["publish"])
@@ -76,9 +82,96 @@ async def create_account(payload: PublishAccountCreate) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/accounts/{account_id}/login", status_code=202)
+async def login_browser_account(account_id: str) -> dict:
+    try:
+        return publish_service.start_browser_account_login(account_id)
+    except (ValueError, PublishError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/accounts/{account_id}/check")
+async def check_browser_account(account_id: str) -> dict:
+    try:
+        return publish_service.check_browser_account(account_id)
+    except (ValueError, PublishError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/accounts/{account_id}/open-center", status_code=202)
+async def open_browser_creator_center(account_id: str) -> dict:
+    try:
+        return publish_service.open_browser_creator_center(account_id)
+    except (ValueError, PublishError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/jobs")
 async def list_publish_jobs() -> dict:
     return {"jobs": publish_service.list_publish_jobs()}
+
+
+@router.get("/history/calendar")
+async def get_publish_history_calendar(
+    platform: str = Query(default="douyin"),
+    month: str = Query(..., min_length=7, max_length=7),
+) -> dict:
+    try:
+        return publish_service.get_publish_history_calendar(platform, month)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/history/records")
+async def list_publish_history_records(
+    platform: str = Query(default="douyin"),
+    date: str = Query(default="", max_length=10),
+    status: str = Query(default="all", max_length=20),
+    deleted: bool = Query(default=False),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=50),
+) -> dict:
+    try:
+        return publish_service.list_publish_history_records(
+            platform=platform,
+            date=date,
+            status=status,
+            deleted=deleted,
+            page=page,
+            page_size=page_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/history/records/hide")
+async def hide_publish_history_records(payload: PublishHistoryRecordBatchUpdate) -> dict:
+    try:
+        return publish_service.hide_publish_history_records(payload.job_ids, platform=payload.platform)
+    except PublishPlatformIsolationBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/history/records/restore")
+async def restore_publish_history_records(payload: PublishHistoryRecordBatchUpdate) -> dict:
+    try:
+        return publish_service.restore_publish_history_records(payload.job_ids, platform=payload.platform)
+    except PublishPlatformIsolationBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/jobs/{job_id}/events")
+async def list_publish_job_events(job_id: str) -> dict:
+    from app.services.publish_repository import PublishRepository
+
+    repository = PublishRepository()
+    if not repository.get_job(job_id):
+        raise HTTPException(status_code=404, detail="发布任务不存在")
+    return {"events": repository.list_events(job_id)}
 
 
 @router.get("/queue")
@@ -93,13 +186,46 @@ async def get_publish_queue_snapshot(task_id: str | None = None) -> dict:
 
 @router.post("/scheduler/run-once")
 async def run_publish_scheduler_once() -> dict:
-    return PublishScheduler().run_once()
+    import asyncio
+
+    return await asyncio.to_thread(PublishScheduler().run_once)
+
+
+@router.get("/scheduler/health")
+async def get_publish_scheduler_health() -> dict:
+    return scheduler_health()
 
 
 @router.post("/queue/refresh")
-async def refresh_send_queue(use_ai: bool = Query(default=False)) -> dict:
+async def refresh_send_queue(
+    use_ai: bool = Query(default=False),
+    platform: str | None = Query(default=None),
+) -> dict:
     try:
-        return publish_service.refresh_send_queue(use_ai=use_ai)
+        return publish_service.refresh_send_queue(use_ai=use_ai, platform=platform)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/tasks/{task_id}/link-state")
+async def get_task_publish_link_state(task_id: str) -> dict:
+    try:
+        return publish_service.get_task_publish_link_state(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/tasks/{task_id}/sync")
+async def sync_task_publish_jobs(
+    task_id: str,
+    prefer_subtitled: bool = Query(default=True),
+) -> dict:
+    try:
+        return publish_service.sync_task_publish_jobs(
+            task_id,
+            prefer_subtitled=prefer_subtitled,
+            restore_removed=True,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -124,6 +250,16 @@ async def create_batch_publish_jobs(payload: PublishBatchJobCreate) -> dict:
 async def generate_publish_cover(payload: PublishCoverCreate) -> dict:
     try:
         return publish_service.generate_publish_cover(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/covers/backfill")
+async def backfill_missing_publish_covers(platform: str | None = Query(default=None)) -> dict:
+    import asyncio
+
+    try:
+        return await asyncio.to_thread(publish_service.backfill_missing_publish_covers, platform)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -160,37 +296,55 @@ async def regenerate_send_job_metadata(job_id: str, use_ai: bool = Query(default
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/jobs/{job_id}/send")
-async def send_publish_job(job_id: str, background_tasks: BackgroundTasks) -> dict:
-    try:
-        return publish_service.start_opencli_send_batch(
-            PublishSendStart(job_ids=[job_id]),
-            background_tasks=background_tasks,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/send/start")
-async def start_send_queue(payload: PublishSendStart, background_tasks: BackgroundTasks) -> dict:
-    try:
-        return publish_service.start_opencli_send_batch(payload, background_tasks=background_tasks)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
 @router.post("/jobs/{job_id}/retry")
-async def retry_publish_job(job_id: str) -> dict:
+async def retry_publish_job(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    payload: PublishRetryRequest | None = None,
+) -> dict:
     try:
-        return publish_service.retry_publish_job(job_id)
+        result = PublishScheduler().retry_failed(
+            job_id,
+            (payload.scheduled_at if payload else "") or None,
+            visibility=(payload.visibility if payload else None),
+        )
+        background_tasks.add_task(PublishScheduler().run_once)
+        return result
+    except SendReadinessBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.readiness) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/jobs/{job_id}/publish-now")
-async def publish_job_now(job_id: str) -> dict:
+async def publish_job_now(job_id: str, background_tasks: BackgroundTasks) -> dict:
     try:
-        return PublishScheduler().publish_now(job_id)
+        result = PublishScheduler().publish_now(job_id)
+        background_tasks.add_task(PublishScheduler().run_once)
+        return result
+    except SendReadinessBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.readiness) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/repair-and-publish")
+async def repair_and_publish_job(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    account_id: str = Query(default=""),
+    visibility: str = Query(default=""),
+) -> dict:
+    try:
+        result = PublishScheduler().repair_and_publish(
+            job_id,
+            account_id=account_id,
+            visibility=visibility,
+        )
+        background_tasks.add_task(PublishScheduler().run_once)
+        return result
+    except SendReadinessBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.readiness) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -204,9 +358,9 @@ async def skip_publish_job(job_id: str) -> dict:
 
 
 @router.post("/jobs/{job_id}/approve-review")
-async def approve_review_publish_job(job_id: str) -> dict:
+async def approve_review_publish_job(job_id: str, payload: PublishMarkPublishedRequest) -> dict:
     try:
-        return PublishScheduler().approve_review(job_id)
+        return PublishScheduler().approve_review(job_id, payload.platform_url)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -215,6 +369,8 @@ async def approve_review_publish_job(job_id: str) -> dict:
 async def update_publish_job_schedule(job_id: str, payload: PublishJobScheduleUpdate) -> dict:
     try:
         return publish_service.update_publish_job_schedule(job_id, payload)
+    except SendReadinessBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.readiness) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -224,12 +380,41 @@ async def update_publish_jobs_schedule_batch(payload: PublishBatchScheduleUpdate
     try:
         return PublishScheduler().update_batch_schedule(
             payload.job_ids,
+            platform=payload.platform,
             action=payload.action,
-            start_at=payload.start_at or "",
-            interval_hours=payload.interval_hours,
+            start_at_local=payload.start_at_local or "",
+            timezone_name=payload.timezone,
+            interval_minutes=payload.interval_minutes,
+            daily_start_time=payload.daily_start_time,
+            daily_end_time=payload.daily_end_time,
+            confirmed_schedule=payload.confirmed_schedule,
+        )
+    except PublishPlatformIsolationBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SendReadinessBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.readiness) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/schedules/preview")
+async def preview_publish_jobs_schedule(payload: PublishBatchScheduleUpdate) -> dict:
+    if payload.action != "apply":
+        raise HTTPException(status_code=400, detail="排期预览只支持 apply")
+    try:
+        return PublishScheduler().preview_batch_schedule(
+            payload.job_ids,
+            platform=payload.platform,
+            start_at_local=payload.start_at_local or "",
+            timezone_name=payload.timezone,
+            interval_minutes=payload.interval_minutes,
             daily_start_time=payload.daily_start_time,
             daily_end_time=payload.daily_end_time,
         )
+    except PublishPlatformIsolationBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SendReadinessBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.readiness) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -242,10 +427,46 @@ async def update_publish_job_content(job_id: str, payload: PublishJobContentUpda
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/jobs/{job_id}/mark-published")
-async def mark_publish_job_published(job_id: str) -> dict:
+@router.patch("/jobs/{job_id}/target")
+async def update_publish_job_target(job_id: str, payload: PublishJobTargetUpdate) -> dict:
     try:
-        return publish_service.update_publish_job_status(job_id, "published")
+        return publish_service.update_publish_job_target(job_id, payload)
+    except PublishPlatformIsolationBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/jobs/target-batch")
+async def update_publish_jobs_target_batch(payload: PublishBatchTargetUpdate) -> dict:
+    try:
+        return publish_service.update_publish_jobs_target_batch(payload)
+    except PublishPlatformIsolationBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/dismiss")
+async def dismiss_publish_job(job_id: str) -> dict:
+    try:
+        return publish_service.dismiss_publish_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/restore")
+async def restore_publish_job(job_id: str) -> dict:
+    try:
+        return publish_service.restore_publish_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/mark-published")
+async def mark_publish_job_published(job_id: str, payload: PublishMarkPublishedRequest) -> dict:
+    try:
+        return PublishScheduler().mark_published_manually(job_id, payload.platform_url)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -253,7 +474,7 @@ async def mark_publish_job_published(job_id: str) -> dict:
 @router.post("/jobs/{job_id}/mark-failed")
 async def mark_publish_job_failed(job_id: str) -> dict:
     try:
-        return publish_service.update_publish_job_status(job_id, "failed", "人工标记失败")
+        return PublishScheduler().mark_failed_manually(job_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

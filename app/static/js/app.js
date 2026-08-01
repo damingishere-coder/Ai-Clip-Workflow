@@ -1,3 +1,36 @@
+async function apiFetch(url, options = {}) {
+  const requestOptions = { ...options };
+  const headers = new Headers(options.headers || {});
+  const token = document.querySelector('meta[name="local-admin-token"]')?.content || "";
+  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  requestOptions.headers = headers;
+  const response = await fetch(url, requestOptions);
+  let data = {};
+  try {
+    data = await response.json();
+  } catch (_error) {
+    data = {};
+  }
+  if (!response.ok) {
+    const detail = data.detail;
+    const message = typeof detail === "object" && detail
+      ? (detail.message || data.message || `请求失败（HTTP ${response.status}）`)
+      : (detail || data.message || `请求失败（HTTP ${response.status}）`);
+    const error = new Error(message);
+    error.status = response.status;
+    error.details = typeof detail === "object" && detail ? detail : null;
+    throw error;
+  }
+  return data;
+}
+
+window.apiFetch = apiFetch;
+
 const newTaskForm = document.querySelector("#new-task-form");
 const newTaskAutoMode = newTaskForm?.querySelector("input[name='auto_mode']");
 const newTaskSubmitButton = document.querySelector("#new-task-submit-button");
@@ -31,8 +64,10 @@ if (newTaskForm) {
       const uploadData = new FormData();
       uploadData.append("task_name", payload.task_name || "");
       uploadData.append("platform", payload.platform || "general");
-      uploadData.append("max_clip_duration", payload.max_clip_duration || "5");
-      uploadData.append("candidate_clip_count", payload.candidate_clip_count || "5");
+      uploadData.append("max_clip_duration", payload.max_clip_duration || "10");
+      uploadData.append("candidate_clip_count", payload.candidate_clip_count || "12");
+      uploadData.append("selection_profile", payload.selection_profile || "general");
+      uploadData.append("final_clip_target", payload.final_clip_target || "5");
       uploadData.append("ai_preference", "");
       uploadData.append("auto_mode", payload.auto_mode === "true" ? "true" : "false");
       uploadData.append("auto_metadata_use_ai", "false");
@@ -292,6 +327,8 @@ const aiProcessResult = document.querySelector("#ai-process-result");
 const aiAnalysisSummary = document.querySelector("#ai-analysis-summary");
 const aiCandidateCountPill = document.querySelector("#ai-candidate-count-pill");
 const aiCandidateCountInput = document.querySelector("#ai-candidate-count-input");
+const aiSelectionProfile = document.querySelector("#ai-selection-profile");
+const aiFinalClipTarget = document.querySelector("#ai-final-clip-target");
 const showAiHistoryButton = document.querySelector("#show-ai-history-button");
 const refreshAiHistoryButton = document.querySelector("#refresh-ai-history-button");
 const aiAnalysisHistory = document.querySelector("#ai-analysis-history");
@@ -461,7 +498,7 @@ async function refreshAiAnalysisHistory() {
 async function saveTaskCandidateClipCount() {
   if (!aiAnalysisForm || !aiCandidateCountInput) return null;
   const taskId = aiAnalysisForm.dataset.taskId;
-  const count = Number(aiCandidateCountInput.value || 5);
+  const count = Number(aiCandidateCountInput.value || 12);
   if (!Number.isInteger(count) || count < 1 || count > 50) {
     throw new Error("候选片段数量必须是 1 到 50 之间的整数。");
   }
@@ -543,6 +580,7 @@ if (saveAiPromptsButton && aiAnalysisForm) {
     try {
       const data = await saveTaskAiPromptSettings();
       await saveTaskCandidateClipCount();
+      await saveTaskSelectionSettings();
       if (aiProcessResult) aiProcessResult.textContent = data.message || "AI Prompt 方案已保存。";
     } catch (error) {
       if (aiProcessResult) aiProcessResult.textContent = `保存失败：${error.message}`;
@@ -586,6 +624,7 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
     try {
       await saveTaskAiPromptSettings();
       await saveTaskCandidateClipCount();
+      await saveTaskSelectionSettings();
       pollAiAnalysisStatus(true).catch(() => {});
       const response = await fetch(`/api/tasks/${taskId}/process/ai?provider=${provider}`, {
         method: "POST",
@@ -748,6 +787,19 @@ function collectClipReviewPayload() {
   }));
 }
 
+async function persistClipReviewChanges() {
+  if (!clipReviewForm) throw new Error("当前页面没有可保存的候选片段");
+  const taskId = clipReviewForm.dataset.taskId;
+  const response = await fetch(`/api/tasks/${taskId}/clips/batch-update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clips: collectClipReviewPayload() }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "保存失败");
+  return data;
+}
+
 async function deleteClipCard(card, button) {
   if (!clipReviewForm || !card) return;
   const taskId = clipReviewForm.dataset.taskId;
@@ -783,6 +835,40 @@ async function deleteClipCard(card, button) {
       button.textContent = originalText;
     }
     showClipReviewMessage(`\u5220\u9664\u5931\u8d25\uff1a${error.message}`, "error");
+  }
+}
+
+async function saveClipFeedback(card, button) {
+  if (!clipReviewForm || !card || !button) return;
+  const taskId = clipReviewForm.dataset.taskId;
+  const clipId = card.dataset.clipId;
+  const decision = button.dataset.feedbackDecision;
+  const reasonCode = button.dataset.feedbackReason;
+  const feedbackButtons = Array.from(card.querySelectorAll("[data-feedback-decision]"));
+  feedbackButtons.forEach((item) => { item.disabled = true; });
+  showClipReviewMessage("正在记录你的审片判断...", "info");
+
+  try {
+    const response = await fetch(`/api/tasks/${taskId}/clips/${clipId}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision, reason_code: reasonCode }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "保存反馈失败");
+    }
+    feedbackButtons.forEach((item) => {
+      item.classList.toggle("is-active", item === button);
+      item.setAttribute("aria-pressed", item === button ? "true" : "false");
+    });
+    const enabledInput = card.querySelector("[name='enabled']");
+    if (enabledInput) enabledInput.checked = Boolean(data.enabled);
+    showClipReviewMessage(data.message || "反馈已保存。", "success");
+  } catch (error) {
+    showClipReviewMessage(`保存反馈失败：${error.message}`, "error");
+  } finally {
+    feedbackButtons.forEach((item) => { item.disabled = false; });
   }
 }
 
@@ -1079,15 +1165,7 @@ if (saveClipsButton && clipReviewForm) {
     showClipReviewMessage("正在保存候选片段修改...", "info");
 
     try {
-      const response = await fetch(`/api/tasks/${taskId}/clips/batch-update`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clips: collectClipReviewPayload() }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "保存失败");
-      }
+      const data = await persistClipReviewChanges();
       showClipReviewMessage(data.message || "保存成功。", "success");
     } catch (error) {
       showClipReviewMessage(`保存失败：${error.message}`, "error");
@@ -1218,6 +1296,12 @@ document.querySelectorAll("[data-delete-trigger]").forEach((button) => {
   });
 });
 
+document.querySelectorAll("[data-feedback-decision]").forEach((button) => {
+  button.addEventListener("click", () => {
+    saveClipFeedback(button.closest("[data-clip-card]"), button);
+  });
+});
+
 if (closeTranscriptDrawerButton) {
   closeTranscriptDrawerButton.addEventListener("click", closeTranscriptDrawer);
 }
@@ -1309,15 +1393,22 @@ if (generateClipsButton) {
     const originalText = generateClipsButton.textContent;
     generateClipsButton.disabled = true;
     generateClipsButton.textContent = "正在确认...";
-    showClipReviewMessage("正在请求生成切片...", "info");
+    showClipReviewMessage("正在保存当前审核选择...", "info");
 
     try {
+      await persistClipReviewChanges();
+      generateClipsButton.textContent = "正在生成...";
+      showClipReviewMessage("审核选择已保存，正在生成最新切片...", "info");
       const response = await fetch(generateClipsButton.dataset.endpoint, { method: "POST" });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.detail || "生成切片请求失败");
       }
-      showClipReviewMessage(`${data.message || "切片生成完成。"} 可进入“字幕推送”继续加字幕、打码和发布配置。`, "success");
+      const syncMessage = data.publish_sync?.message ? ` ${data.publish_sync.message}` : "";
+      showClipReviewMessage(
+        `${data.message || "切片生成完成。"}${syncMessage} 可进入“字幕推送”继续处理，或查看本任务发送内容。`,
+        data.publish_sync?.status === "partial" ? "error" : "success",
+      );
     } catch (error) {
       showClipReviewMessage(`生成切片失败：${error.message}`, "error");
     } finally {
@@ -1326,6 +1417,84 @@ if (generateClipsButton) {
     }
   });
 }
+
+async function saveTaskSelectionSettings() {
+  if (!aiAnalysisForm || !aiSelectionProfile || !aiFinalClipTarget) return null;
+  const finalTarget = Number(aiFinalClipTarget.value || 5);
+  if (!Number.isInteger(finalTarget) || finalTarget < 1 || finalTarget > 12) {
+    throw new Error("最终启用目标必须是 1 到 12 之间的整数。");
+  }
+  const response = await fetch(`/api/tasks/${aiAnalysisForm.dataset.taskId}/selection-settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      selection_profile: aiSelectionProfile.value || "general",
+      final_clip_target: finalTarget,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "选片设置保存失败");
+  return data;
+}
+
+document.querySelectorAll("[data-sync-publish-task]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const taskId = button.dataset.taskId;
+    if (!taskId) return;
+    const originalText = button.textContent;
+    const preferSubtitled = button.dataset.preferSubtitled === "true";
+    button.disabled = true;
+    button.textContent = "正在同步...";
+    try {
+      const syncReviewedClips = button.dataset.syncReviewedClips === "true";
+      let data;
+      if (syncReviewedClips) {
+        const clips = collectClipReviewPayload();
+        if (!clips.some((clip) => clip.enabled)) {
+          throw new Error("请至少启用一条候选片段后再同步发送中心");
+        }
+        button.textContent = "正在保存并生成...";
+        showClipReviewMessage("正在保存审核选择；如选择有变化，将自动生成最新切片并同步...", "info");
+        data = await window.apiFetch(
+          `/api/tasks/${encodeURIComponent(taskId)}/clips/sync-publish`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clips }),
+          },
+        );
+      } else {
+        data = await window.apiFetch(
+          `/api/publish/tasks/${encodeURIComponent(taskId)}/sync?prefer_subtitled=${preferSubtitled ? "true" : "false"}`,
+          { method: "POST" },
+        );
+      }
+      const summary = document.querySelector("[data-publish-link-summary]");
+      if (summary) {
+        summary.innerHTML = `<strong>发送中心关联：${data.link_state?.label || "同步完成"}</strong><span>${data.message || ""}</span>`;
+      }
+      showClipReviewMessage(data.message || "发送中心同步完成。", data.status === "partial" ? "error" : "success");
+      if (!document.querySelector("#process-result")) {
+        window.alert(data.message || "发送中心同步完成。");
+      }
+      if (syncReviewedClips && data.status !== "partial") {
+        const params = new URLSearchParams({
+          task_id: taskId,
+          tab: "content",
+          publish_message: data.message || "发送中心同步完成。",
+        });
+        window.location.assign(`/publish?${params.toString()}`);
+      }
+    } catch (error) {
+      const message = `同步发送中心失败：${error.message}`;
+      showClipReviewMessage(message, "error");
+      if (!document.querySelector("#process-result")) window.alert(message);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
+});
 
 document.querySelectorAll(".js-hide-task").forEach((button) => {
   button.addEventListener("click", async () => {
@@ -1896,838 +2065,4 @@ if (aiConfigForm) {
   });
 }
 
-document.querySelectorAll("[data-publish-tab]").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    const platform = tab.dataset.publishTab;
-    document.querySelectorAll("[data-publish-tab]").forEach((item) => {
-      item.classList.toggle("active", item === tab);
-    });
-    document.querySelectorAll("[data-publish-panel]").forEach((panel) => {
-      panel.classList.toggle("active", panel.dataset.publishPanel === platform);
-    });
-  });
-});
-
-function setPublishMessage(node, message, tone = "info") {
-  if (!node) return;
-  node.textContent = message;
-  node.dataset.tone = tone;
-}
-
-function publishFormPayload(form, submitter = null) {
-  const formData = new FormData(form);
-  const payload = Object.fromEntries(formData.entries());
-  if (submitter?.dataset.publishMode) {
-    payload.publish_mode = submitter.dataset.publishMode;
-  }
-  if (submitter?.dataset.batchMode) {
-    payload.publish_mode = submitter.dataset.batchMode;
-  }
-  payload.allow_download = Boolean(form.elements.allow_download?.checked);
-  payload.cover_time_seconds = Number(payload.cover_time_seconds || 0);
-  return payload;
-}
-
-function setCoverPreview(form, coverUrl) {
-  const preview = form.querySelector("[data-cover-preview]");
-  const image = preview?.querySelector("img");
-  const emptyText = preview?.querySelector("span");
-  if (!preview || !image || !emptyText) return;
-  if (coverUrl) {
-    image.src = `${coverUrl}?t=${Date.now()}`;
-    image.hidden = false;
-    emptyText.hidden = true;
-    preview.classList.add("has-cover");
-    return;
-  }
-  image.removeAttribute("src");
-  image.hidden = true;
-  emptyText.hidden = false;
-  preview.classList.remove("has-cover");
-}
-
-document.querySelectorAll("[data-publish-config-form]").forEach((form) => {
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const resultNode = form.querySelector("[data-publish-config-result]");
-    const submitButton = form.querySelector("button[type='submit']");
-    const payload = publishFormPayload(form);
-    submitButton.disabled = true;
-    setPublishMessage(resultNode, "正在保存平台配置...");
-
-    try {
-      const response = await fetch(`/api/publish/platforms/${form.dataset.platform}/config`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "保存失败");
-      }
-      setPublishMessage(resultNode, data.message || "配置已保存。", "success");
-    } catch (error) {
-      setPublishMessage(resultNode, `保存失败：${error.message}`, "error");
-    } finally {
-      submitButton.disabled = false;
-    }
-  });
-});
-
-document.querySelectorAll("[data-test-publish-config]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const form = button.closest("[data-publish-config-form]");
-    const resultNode = form?.querySelector("[data-publish-config-result]");
-    button.disabled = true;
-    setPublishMessage(resultNode, "正在检查配置...");
-
-    try {
-      const response = await fetch(`/api/publish/platforms/${button.dataset.platform}/test`, { method: "POST" });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "检查失败");
-      }
-      setPublishMessage(resultNode, data.message || "配置检查完成。", data.status === "ok" ? "success" : "error");
-    } catch (error) {
-      setPublishMessage(resultNode, `检查失败：${error.message}`, "error");
-    } finally {
-      button.disabled = false;
-    }
-  });
-});
-
-document.querySelectorAll("[data-douyin-oauth]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const form = button.closest("[data-publish-config-form]");
-    const resultNode = form?.querySelector("[data-publish-config-result]");
-    button.disabled = true;
-    setPublishMessage(resultNode, "正在生成抖音授权链接...");
-
-    try {
-      const response = await fetch("/api/publish/douyin/oauth-url");
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "生成授权链接失败");
-      }
-      window.open(data.url, "_blank", "noopener,noreferrer");
-      setPublishMessage(resultNode, "已打开抖音授权页。授权后会回到本地发布中心。", "success");
-    } catch (error) {
-      setPublishMessage(resultNode, `授权失败：${error.message}`, "error");
-    } finally {
-      button.disabled = false;
-    }
-  });
-});
-
-document.querySelectorAll("[data-publish-account-form]").forEach((form) => {
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const resultNode = form.querySelector("[data-publish-account-result]");
-    const submitButton = form.querySelector("button[type='submit']");
-    const payload = publishFormPayload(form);
-    submitButton.disabled = true;
-    setPublishMessage(resultNode, "正在保存账号...");
-
-    try {
-      const response = await fetch("/api/publish/accounts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "账号保存失败");
-      }
-      setPublishMessage(resultNode, data.message || "账号已保存，正在刷新...", "success");
-      window.setTimeout(() => window.location.reload(), 600);
-    } catch (error) {
-      setPublishMessage(resultNode, `账号保存失败：${error.message}`, "error");
-    } finally {
-      submitButton.disabled = false;
-    }
-  });
-});
-
-document.querySelectorAll("[data-publish-job-form]").forEach((form) => {
-  form.querySelectorAll("input[name='video_source']").forEach((input) => {
-    input.addEventListener("change", () => {
-      form.elements.cover_file_path.value = "";
-      form.elements.cover_mode.value = "auto";
-      setCoverPreview(form, "");
-      setPublishMessage(form.querySelector("[data-cover-result]"), "视频版本已切换，请重新生成封面。");
-    });
-  });
-});
-
-document.querySelectorAll("[data-generate-cover]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const form = button.closest("[data-publish-job-form]");
-    if (!form) return;
-    const resultNode = form.querySelector("[data-cover-result]");
-    const payload = publishFormPayload(form);
-    payload.cover_mode = "time";
-    if (!String(payload.title || "").trim()) {
-      setPublishMessage(resultNode, "请先填写标题，封面会使用这个标题作为大字。", "error");
-      return;
-    }
-
-    const originalText = button.textContent;
-    button.disabled = true;
-    button.textContent = "生成中...";
-    setPublishMessage(resultNode, "正在截取视频画面并生成封面...");
-
-    try {
-      const response = await fetch("/api/publish/covers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          task_id: payload.task_id,
-          output_clip_id: payload.output_clip_id,
-          video_source: payload.video_source,
-          title: payload.title,
-          cover_time_seconds: payload.cover_time_seconds,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || data.message || "封面生成失败");
-      }
-      form.elements.cover_file_path.value = data.cover_file_path || "";
-      form.elements.cover_mode.value = "time";
-      setCoverPreview(form, data.cover_media_url);
-      setPublishMessage(resultNode, data.message || "封面已生成。", "success");
-    } catch (error) {
-      setPublishMessage(resultNode, `封面生成失败：${error.message}`, "error");
-    } finally {
-      button.disabled = false;
-      button.textContent = originalText;
-    }
-  });
-});
-
-document.querySelectorAll("[data-publish-job-form]").forEach((form) => {
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const submitter = event.submitter;
-    const payload = publishFormPayload(form, submitter);
-    const resultNode = form.querySelector("[data-publish-job-result]");
-    const originalText = submitter?.textContent || "";
-
-    if (payload.publish_mode === "api_publish") {
-      const platformLabel = form.dataset.platform === "douyin" ? "抖音" : "B站";
-      const confirmed = window.confirm(`确认发布到真实${platformLabel}平台吗？\n\n请确认账号、标题、视频版本和标签都已经检查过。`);
-      if (!confirmed) return;
-    }
-
-    if (submitter) {
-      submitter.disabled = true;
-      submitter.textContent = "处理中...";
-    }
-    setPublishMessage(resultNode, "正在创建发布任务...");
-
-    try {
-      const response = await fetch("/api/publish/jobs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || data.message || "创建发布任务失败");
-      }
-      setPublishMessage(resultNode, data.message || "发布任务已创建。", data.status === "failed" ? "error" : "success");
-      window.setTimeout(() => window.location.reload(), 900);
-    } catch (error) {
-      setPublishMessage(resultNode, `创建失败：${error.message}`, "error");
-    } finally {
-      if (submitter) {
-        submitter.disabled = false;
-        submitter.textContent = originalText;
-      }
-    }
-  });
-});
-
-document.querySelectorAll("[data-publish-batch-form]").forEach((form) => {
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const submitter = event.submitter;
-    const platform = form.dataset.platform;
-    const resultNode = form.querySelector("[data-publish-batch-result]");
-    const selectedIds = Array.from(document.querySelectorAll(`[data-batch-output-id='${platform}']:checked`)).map(
-      (item) => item.value
-    );
-    const payload = publishFormPayload(form, submitter);
-    payload.platform = platform;
-    payload.output_clip_ids = selectedIds;
-    if (!selectedIds.length) {
-      setPublishMessage(resultNode, "请先勾选至少一条切片。", "error");
-      return;
-    }
-
-    const originalText = submitter?.textContent || "";
-    if (submitter) {
-      submitter.disabled = true;
-      submitter.textContent = "处理中...";
-    }
-    setPublishMessage(resultNode, "正在批量创建发布任务...");
-
-    try {
-      const response = await fetch("/api/publish/jobs/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "批量创建失败");
-      }
-      setPublishMessage(resultNode, data.message || "批量任务已创建。", "success");
-      window.setTimeout(() => window.location.reload(), 800);
-    } catch (error) {
-      setPublishMessage(resultNode, `批量创建失败：${error.message}`, "error");
-    } finally {
-      if (submitter) {
-        submitter.disabled = false;
-        submitter.textContent = originalText;
-      }
-    }
-  });
-});
-
-document.querySelectorAll("[data-publish-job-action]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const row = button.closest("[data-publish-job-id]");
-    const jobId = row?.dataset.publishJobId;
-    const action = button.dataset.publishJobAction;
-    const endpointMap = {
-      retry: `/api/publish/jobs/${jobId}/retry`,
-      "mark-published": `/api/publish/jobs/${jobId}/mark-published`,
-      "mark-failed": `/api/publish/jobs/${jobId}/mark-failed`,
-      cancel: `/api/publish/jobs/${jobId}/cancel`,
-    };
-    if (!jobId || !endpointMap[action]) return;
-    if (action === "retry" && !window.confirm("确认重试真实发布吗？")) return;
-
-    const originalText = button.textContent;
-    button.disabled = true;
-    button.textContent = "处理中...";
-
-    try {
-      const response = await fetch(endpointMap[action], { method: "POST" });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || data.message || "操作失败");
-      }
-      window.location.reload();
-    } catch (error) {
-      window.alert(`操作失败：${error.message}`);
-    } finally {
-      button.disabled = false;
-      button.textContent = originalText;
-    }
-  });
-});
-
-const sendCenterMessage = document.querySelector("#send-center-message");
-const sendPublishingOverlay = document.querySelector("[data-send-publishing-overlay]");
-const sendPreviewPanel = document.querySelector("[data-send-preview-panel]");
-const publishScheduleForm = document.querySelector("[data-publish-schedule-form]");
-const publishScheduleResult = document.querySelector("[data-publish-schedule-result]");
-const scheduleSelectedCount = document.querySelector("[data-schedule-selected-count]");
-
-function setSendCenterMessage(message, tone = "info") {
-  if (!sendCenterMessage) return;
-  sendCenterMessage.hidden = false;
-  sendCenterMessage.textContent = message;
-  sendCenterMessage.classList.toggle("tone-red", tone === "error");
-  sendCenterMessage.classList.toggle("tone-blue", tone !== "error");
-}
-
-function showSendPublishingOverlay(title = "正在发布", text = "opencli 正在操作平台页面，请不要关闭 Chrome 或本地后台。") {
-  if (!sendPublishingOverlay) return;
-  const titleNode = sendPublishingOverlay.querySelector("[data-send-publishing-title]");
-  const textNode = sendPublishingOverlay.querySelector("[data-send-publishing-text]");
-  if (titleNode) titleNode.textContent = title;
-  if (textNode) textNode.textContent = text;
-  sendPublishingOverlay.hidden = false;
-}
-
-function hideSendPublishingOverlay() {
-  if (sendPublishingOverlay) sendPublishingOverlay.hidden = true;
-}
-
-function publishScheduleCheckboxes() {
-  return Array.from(document.querySelectorAll("[data-publish-schedule-checkbox]"));
-}
-
-function selectedPublishScheduleJobIds() {
-  return Array.from(
-    new Set(
-      publishScheduleCheckboxes()
-        .filter((checkbox) => checkbox.checked)
-        .map((checkbox) => checkbox.value)
-        .filter(Boolean)
-    )
-  );
-}
-
-function updateScheduleSelectedCount() {
-  if (!scheduleSelectedCount) return;
-  scheduleSelectedCount.textContent = `已选 ${selectedPublishScheduleJobIds().length} 条`;
-}
-
-function localDatetimeValue(date) {
-  const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return offsetDate.toISOString().slice(0, 16);
-}
-
-function setScheduleResult(message, tone = "info") {
-  if (!publishScheduleResult) return;
-  publishScheduleResult.textContent = message;
-  publishScheduleResult.classList.toggle("error-text", tone === "error");
-}
-
-function formatScheduledTimes() {
-  document.querySelectorAll("[data-publish-scheduled-at]").forEach((node) => {
-    const value = node.dataset.publishScheduledAt || "";
-    if (!value) {
-      node.textContent = "未排期";
-      return;
-    }
-    const parsed = new Date(value);
-    if (!Number.isNaN(parsed.getTime())) {
-      node.textContent = parsed.toLocaleString([], {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    }
-  });
-}
-
-async function submitBatchSchedule(action) {
-  if (!publishScheduleForm) return;
-  const jobIds = selectedPublishScheduleJobIds();
-  if (!jobIds.length) {
-    setScheduleResult("请先勾选至少一条未发布任务。", "error");
-    return;
-  }
-
-  const startValue = String(publishScheduleForm.elements.start_at?.value || "");
-  if (action === "apply" && !startValue) {
-    setScheduleResult("请先选择起始时间。", "error");
-    return;
-  }
-  const startDate = startValue ? new Date(startValue) : null;
-  if (action === "apply" && (!startDate || Number.isNaN(startDate.getTime()))) {
-    setScheduleResult("起始时间无效，请重新选择。", "error");
-    return;
-  }
-
-  setScheduleResult(action === "apply" ? "正在应用发布计划..." : "正在清除发布时间...");
-  const response = await fetch("/api/publish/jobs/schedule-batch", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      job_ids: jobIds,
-      action,
-      start_at: startDate ? startDate.toISOString() : "",
-      interval_hours: Number(publishScheduleForm.elements.interval_hours?.value || 3),
-      daily_start_time: String(publishScheduleForm.elements.daily_start_time?.value || "09:00"),
-      daily_end_time: String(publishScheduleForm.elements.daily_end_time?.value || "21:00"),
-    }),
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.detail || data.message || "发布计划保存失败");
-  }
-  setScheduleResult(data.message || "发布计划已更新。");
-  reloadSendCenter(700);
-}
-
-if (publishScheduleForm) {
-  const startInput = publishScheduleForm.elements.start_at;
-  if (startInput && !startInput.value) {
-    startInput.value = localDatetimeValue(new Date(Date.now() + 10 * 60 * 1000));
-  }
-  publishScheduleForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      await submitBatchSchedule("apply");
-    } catch (error) {
-      setScheduleResult(`保存失败：${error.message}`, "error");
-    }
-  });
-}
-
-document.querySelectorAll("[data-publish-schedule-checkbox]").forEach((checkbox) => {
-  checkbox.addEventListener("change", () => {
-    publishScheduleCheckboxes()
-      .filter((item) => item.value === checkbox.value)
-      .forEach((item) => {
-        item.checked = checkbox.checked;
-      });
-    updateScheduleSelectedCount();
-  });
-});
-
-document.querySelector("[data-select-all-schedule]")?.addEventListener("click", () => {
-  const checkboxes = publishScheduleCheckboxes();
-  const shouldCheck = checkboxes.some((checkbox) => !checkbox.checked);
-  checkboxes.forEach((checkbox) => {
-    checkbox.checked = shouldCheck;
-  });
-  updateScheduleSelectedCount();
-});
-
-document.querySelector("[data-clear-batch-schedule]")?.addEventListener("click", async () => {
-  try {
-    await submitBatchSchedule("clear");
-  } catch (error) {
-    setScheduleResult(`清除失败：${error.message}`, "error");
-  }
-});
-
-formatScheduledTimes();
-updateScheduleSelectedCount();
-
-function sendJobPayload(form) {
-  const formData = new FormData(form);
-  return {
-    title: String(formData.get("title") || "").trim(),
-    description: String(formData.get("description") || "").trim(),
-    tags: String(formData.get("tags") || "").trim(),
-    visibility: String(formData.get("visibility") || "public"),
-    cover_file_path: String(formData.get("cover_file_path") || "").trim(),
-    cover_time_seconds: Number(formData.get("cover_time_seconds") || 0),
-    allow_download: Boolean(form.elements.allow_download?.checked),
-    bilibili_tid: String(formData.get("bilibili_tid") || "娱乐").trim(),
-    bilibili_copyright: String(formData.get("bilibili_copyright") || "original"),
-    bilibili_source: String(formData.get("bilibili_source") || "").trim(),
-  };
-}
-
-function previewValue(value, fallback = "") {
-  return String(value || fallback || "").trim();
-}
-
-function updateSendPreviewFromForm(form) {
-  if (!sendPreviewPanel || !form) return;
-  const card = form.closest("[data-send-card]");
-  const previewImage = sendPreviewPanel.querySelector("[data-send-preview-image]");
-  const previewVideo = sendPreviewPanel.querySelector("[data-send-preview-video]");
-  const previewTitle = sendPreviewPanel.querySelector("[data-send-preview-title]");
-  const previewTags = sendPreviewPanel.querySelector("[data-send-preview-tags]");
-  const previewDescription = sendPreviewPanel.querySelector("[data-send-preview-description]");
-  const coverImage = card?.querySelector("[data-cover-preview] img:not([hidden])");
-  const video = card?.querySelector(".send-card-media video");
-  const coverUrl = coverImage?.getAttribute("src") || "";
-  const videoUrl = video?.getAttribute("src") || "";
-  if (previewImage && previewVideo) {
-    if (coverUrl) {
-      previewImage.src = coverUrl;
-      previewImage.hidden = false;
-      previewVideo.hidden = true;
-    } else if (videoUrl) {
-      previewVideo.src = videoUrl;
-      previewVideo.hidden = false;
-      previewImage.hidden = true;
-    }
-  }
-  if (previewTitle) previewTitle.textContent = previewValue(form.elements.title?.value, "未填写标题");
-  if (previewTags) previewTags.textContent = previewValue(form.elements.tags?.value, "未填写 #话题");
-  if (previewDescription) {
-    previewDescription.textContent = previewValue(form.elements.description?.value, "未填写正文 / 简介");
-  }
-  document.querySelectorAll("[data-send-card]").forEach((item) => item.classList.toggle("is-previewing", item === card));
-}
-
-function reloadSendCenter(delay = 900) {
-  window.setTimeout(() => window.location.reload(), delay);
-}
-
-function activeSendJobIds() {
-  return Array.from(document.querySelectorAll("[data-send-job-checkbox]:checked")).map((checkbox) => checkbox.value);
-}
-
-function updateSendFilter(filter) {
-  const normalizedFilter = (filter || "all").toLowerCase();
-  document.querySelectorAll("[data-send-card]").forEach((card) => {
-    const platform = (card.dataset.platform || "").toLowerCase();
-    const status = (card.dataset.status || "").toLowerCase();
-    const visible = normalizedFilter === "all" || normalizedFilter === platform || normalizedFilter === status;
-    card.classList.toggle("is-hidden", !visible);
-  });
-}
-
-const autoPipelineMonitor = document.querySelector("[data-auto-pipeline-monitor]");
-if (autoPipelineMonitor?.dataset.running === "true") {
-  window.setTimeout(() => window.location.reload(), 5000);
-}
-
-document.querySelectorAll("[data-send-filter]").forEach((button) => {
-  button.addEventListener("click", () => {
-    document.querySelectorAll("[data-send-filter]").forEach((item) => item.classList.toggle("active", item === button));
-    updateSendFilter(button.dataset.sendFilter || "all");
-  });
-});
-
-document.querySelectorAll("[data-refresh-send-queue]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const useAi = button.dataset.useAi === "true";
-    const originalText = button.textContent;
-    button.disabled = true;
-    button.textContent = useAi ? "AI 生成中..." : "刷新中...";
-    setSendCenterMessage(useAi ? "正在用 AI 补齐标题、#话题和简介，并自动选择封面帧..." : "正在从已完成切片刷新发送队列，并自动选择封面帧...");
-
-    try {
-      const response = await fetch(`/api/publish/queue/refresh?use_ai=${useAi ? "true" : "false"}`, { method: "POST" });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || data.message || "刷新队列失败");
-      }
-      setSendCenterMessage(data.message || "发送队列已刷新，封面帧已自动选择。", "success");
-      reloadSendCenter();
-    } catch (error) {
-      setSendCenterMessage(`刷新失败：${error.message}`, "error");
-    } finally {
-      button.disabled = false;
-      button.textContent = originalText;
-    }
-  });
-});
-
-document.querySelectorAll("[data-send-job-form]").forEach((form) => {
-  form.addEventListener("focusin", () => updateSendPreviewFromForm(form));
-  form.addEventListener("input", () => updateSendPreviewFromForm(form));
-  form.addEventListener("change", () => updateSendPreviewFromForm(form));
-  form.closest("[data-send-card]")?.addEventListener("click", () => updateSendPreviewFromForm(form));
-
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const jobId = form.dataset.jobId;
-    const resultNode = form.querySelector("[data-send-job-result]");
-    const submitter = event.submitter;
-    if (!jobId) {
-      setPublishMessage(resultNode, "这条切片还没有入队，请先刷新发送队列。", "error");
-      return;
-    }
-
-    const originalText = submitter?.textContent || "";
-    if (submitter) {
-      submitter.disabled = true;
-      submitter.textContent = "保存中...";
-    }
-    setPublishMessage(resultNode, "正在保存发送内容...");
-
-    try {
-      const response = await fetch(`/api/publish/jobs/${jobId}/send-content`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sendJobPayload(form)),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || data.message || "保存失败");
-      }
-      updateSendPreviewFromForm(form);
-      setPublishMessage(resultNode, data.message || "发送内容已保存。", "success");
-    } catch (error) {
-      setPublishMessage(resultNode, `保存失败：${error.message}`, "error");
-    } finally {
-      if (submitter) {
-        submitter.disabled = false;
-        submitter.textContent = originalText;
-      }
-    }
-  });
-});
-
-function applyCoverFrame(form, frame, button = null) {
-  form.elements.cover_file_path.value = frame.cover_file_path || "";
-  form.elements.cover_time_seconds.value = Number(frame.cover_time_seconds || 0);
-  setCoverPreview(form, frame.cover_media_url || "");
-  form.querySelectorAll("[data-cover-frame-option]").forEach((item) => item.classList.toggle("active", item === button));
-  updateSendPreviewFromForm(form);
-}
-
-function renderCoverFrames(form, frames) {
-  const list = form.querySelector("[data-cover-frame-list]");
-  if (!list) return;
-  list.innerHTML = "";
-  frames.forEach((frame, index) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "cover-frame-option";
-    button.dataset.coverFrameOption = "true";
-    button.innerHTML = `<img src="${frame.cover_media_url}" alt="候选封面 ${index + 1}"><span>${Number(frame.cover_time_seconds || 0).toFixed(1)}s</span>`;
-    button.addEventListener("click", () => applyCoverFrame(form, frame, button));
-    list.appendChild(button);
-    if (index === 0) {
-      applyCoverFrame(form, frame, button);
-    }
-  });
-}
-
-document.querySelectorAll("[data-generate-cover-frames]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const form = button.closest("[data-send-job-form]");
-    if (!form) return;
-    const resultNode = form.querySelector("[data-send-job-result]");
-    const originalText = button.textContent;
-    button.disabled = true;
-    button.textContent = "生成中...";
-    setPublishMessage(resultNode, "正在从视频里截取候选封面帧...");
-
-    try {
-      const response = await fetch("/api/publish/covers/frames", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          task_id: form.dataset.taskId,
-          output_clip_id: form.dataset.outputClipId,
-          video_source: "original",
-          title: form.elements.title?.value || "直播切片",
-          frame_count: 4,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || data.message || "候选封面生成失败");
-      }
-      renderCoverFrames(form, data.frames || []);
-      setPublishMessage(resultNode, data.message || "候选封面已生成，已先选中第一张；需要更换可点其他帧。", "success");
-    } catch (error) {
-      setPublishMessage(resultNode, `封面帧生成失败：${error.message}`, "error");
-    } finally {
-      button.disabled = false;
-      button.textContent = originalText;
-    }
-  });
-});
-
-document.querySelectorAll("[data-regenerate-send-metadata]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const form = button.closest("[data-send-job-form]");
-    const jobId = form?.dataset.jobId;
-    const resultNode = form?.querySelector("[data-send-job-result]");
-    if (!form || !jobId) return;
-    const originalText = button.textContent;
-    button.disabled = true;
-    button.textContent = "生成中...";
-    setPublishMessage(resultNode, "正在重新生成标题、#话题和简介...");
-
-    try {
-      const response = await fetch(`/api/publish/jobs/${jobId}/metadata?use_ai=true`, { method: "POST" });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || data.message || "重新生成失败");
-      }
-      const job = data.job || {};
-      if (form.elements.title) form.elements.title.value = job.title || form.elements.title.value;
-      if (form.elements.tags) form.elements.tags.value = job.tags || "";
-      if (form.elements.description) form.elements.description.value = job.description || "";
-      updateSendPreviewFromForm(form);
-      setPublishMessage(resultNode, data.message || "AI 元数据已更新。", "success");
-    } catch (error) {
-      setPublishMessage(resultNode, `重新生成失败：${error.message}`, "error");
-    } finally {
-      button.disabled = false;
-      button.textContent = originalText;
-    }
-  });
-});
-
-document.querySelectorAll("[data-send-single-job]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const form = button.closest("[data-send-job-form]");
-    const jobId = form?.dataset.jobId;
-    if (!jobId) return;
-    if (!window.confirm("确认开始发送这一条吗？请先确认 Chrome 已登录对应平台。")) return;
-    const originalText = button.textContent;
-    button.disabled = true;
-    button.textContent = "发送中...";
-    updateSendPreviewFromForm(form);
-    showSendPublishingOverlay("正在发布", "正在发送这一条，opencli 会打开平台页面并自动填写内容。");
-    setSendCenterMessage("已提交单条发送任务，opencli 会使用 Chrome 登录态打开平台页面。");
-
-    try {
-      const response = await fetch(`/api/publish/jobs/${jobId}/send`, { method: "POST" });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || data.message || "发送启动失败");
-      }
-      if (data.status === "empty") {
-        hideSendPublishingOverlay();
-      }
-      setSendCenterMessage(data.message || "发送任务已开始。", "success");
-      reloadSendCenter(1400);
-    } catch (error) {
-      hideSendPublishingOverlay();
-      setSendCenterMessage(`发送启动失败：${error.message}`, "error");
-      button.disabled = false;
-      button.textContent = originalText;
-    }
-  });
-});
-
-document.querySelectorAll("[data-start-send-queue]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const selectedIds = activeSendJobIds();
-    const label = selectedIds.length ? `${selectedIds.length} 条已勾选任务` : "全部待发送/失败任务";
-    if (!window.confirm(`确认开始发送 ${label} 吗？\n\n请先确认 Chrome 已登录抖音创作者中心和 B站创作中心。`)) return;
-    const originalText = button.textContent;
-    button.disabled = true;
-    button.textContent = "启动中...";
-    showSendPublishingOverlay("正在发布", selectedIds.length ? `正在发送 ${selectedIds.length} 条已勾选任务，一次只会执行一条。` : "正在发送全部待发送任务，一次只会执行一条。");
-    setSendCenterMessage("正在启动发送队列，一次只会执行一条任务。");
-
-    try {
-      const response = await fetch("/api/publish/send/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ job_ids: selectedIds }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || data.message || "启动队列失败");
-      }
-      if (data.status === "empty") {
-        hideSendPublishingOverlay();
-      }
-      setSendCenterMessage(data.message || "发送队列已启动。", data.status === "busy" ? "error" : "success");
-      reloadSendCenter(1400);
-    } catch (error) {
-      hideSendPublishingOverlay();
-      setSendCenterMessage(`启动队列失败：${error.message}`, "error");
-      button.disabled = false;
-      button.textContent = originalText;
-    }
-  });
-});
-
-document.querySelectorAll("[data-send-select-all]").forEach((checkbox) => {
-  checkbox.addEventListener("change", () => {
-    const visibleCards = Array.from(document.querySelectorAll("[data-send-card]")).filter(
-      (card) => !card.classList.contains("is-hidden")
-    );
-    visibleCards.forEach((card) => {
-      const item = card.querySelector("[data-send-job-checkbox]");
-      if (item && !item.disabled) item.checked = checkbox.checked;
-    });
-    updateScheduleSelectedCount();
-  });
-});
-
-if (document.querySelector("[data-send-card][data-status='publishing'], [data-send-card][data-status='PUBLISHING']")) {
-  showSendPublishingOverlay("正在发布", "已有任务正在发布中，页面会自动刷新状态。");
-  window.setTimeout(() => window.location.reload(), 5000);
-}
-
-const firstSendForm = document.querySelector("[data-send-job-form]");
-if (firstSendForm) {
-  updateSendPreviewFromForm(firstSendForm);
-}
+// 发送中心页面行为由 publish-center.js 独立维护，避免全局脚本重复绑定。

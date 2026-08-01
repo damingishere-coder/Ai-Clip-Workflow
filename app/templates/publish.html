@@ -2,314 +2,337 @@
 
 {% block title %}发送中心 - {{ settings.app_name }}{% endblock %}
 
+{% macro account_options(job) %}
+  <option value="">请选择账号</option>
+  {% for account in accounts %}
+  <option value="{{ account.id }}" data-account-platform="{{ account.platform }}" {% if job.account_id == account.id %}selected{% endif %}>
+    {{ account.account_name }} · {{ account.platform_label }} · {{ "正常" if account.login_status == "normal" else ("登录失效" if account.login_status == "invalid" else "需登录") }}
+  </option>
+  {% endfor %}
+{% endmacro %}
+
+{% macro content_row(job) %}
+<article class="publish-content-card" data-publish-row data-job-id="{{ job.id }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-section="content" {% if not job.output_is_active or job.status not in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
+  <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
+  <div class="publish-content-media">
+    <video muted preload="metadata" src="{{ job.video_media_url }}"></video>
+    <img data-cover-preview src="{{ job.cover_media_url }}" alt="{{ job.title }} 的封面" {% if not job.cover_media_url %}hidden{% endif %}>
+  </div>
+  <form class="publish-content-form" data-publish-editor>
+    <div class="publish-card-heading">
+      <div><small>裁剪片段</small><strong data-row-title>{{ job.output_file_name or job.title }}</strong></div>
+      <div class="publish-card-heading-actions">
+        <span class="status-pill tone-{{ 'green' if job.content_complete else 'amber' }}" data-content-ready>
+          {{ "内容完整" if job.content_complete else "缺少：" ~ (job.missing_fields|join("、")) }}
+        </span>
+        <button type="button" class="text-button danger" data-dismiss-job>移出内容准备</button>
+      </div>
+    </div>
+    <div class="publish-content-grid">
+      <label><span>标题</span><input name="title" value="{{ job.title }}" maxlength="120" required></label>
+      <label><span>话题 / 标签</span><input name="tags" value="{{ job.tags }}" maxlength="500" placeholder="多个标签用逗号分隔"></label>
+      <label class="span-2"><span>正文 / 简介</span><textarea name="description" maxlength="2000" required>{{ job.description }}</textarea></label>
+      <label><span>发布平台（创建后不可更改）</span><strong class="publish-locked-value" data-row-platform>{{ job.platform_label }}</strong><input type="hidden" name="platform" value="{{ job.platform }}"></label>
+      <label><span>发布账号</span><select name="account_id" data-account-select>{{ account_options(job) }}</select></label>
+      <label><span>发布方式</span><select name="publish_mode"><option value="local_browser" {% if job.publish_mode == "local_browser" %}selected{% endif %}>Windows Chrome 真实投稿</option><option value="manual_export" {% if job.publish_mode == "manual_export" %}selected{% endif %}>仅导出本地发布包</option></select></label>
+      <label><span>可见范围</span><select name="visibility"><option value="public" {% if job.visibility == "public" %}selected{% endif %}>公开</option><option value="friends" {% if job.visibility == "friends" %}selected{% endif %}>好友可见</option><option value="private" {% if job.visibility == "private" %}selected{% endif %}>仅自己可见</option></select></label>
+      <div class="publish-bilibili-fields span-2" data-bilibili-fields {% if job.platform != "bilibili" %}hidden{% endif %}>
+        <label><span>B站分区</span><input name="bilibili_tid" value="{{ job.bilibili_tid or '娱乐' }}" required></label>
+        <label><span>稿件类型</span><select name="bilibili_copyright" data-copyright-select><option value="original" {% if job.bilibili_copyright == "original" %}selected{% endif %}>原创</option><option value="repost" {% if job.bilibili_copyright == "repost" %}selected{% endif %}>转载</option></select></label>
+        <label class="span-2" data-repost-source {% if job.bilibili_copyright != "repost" %}hidden{% endif %}><span>转载来源</span><input name="bilibili_source" value="{{ job.bilibili_source or '' }}"></label>
+      </div>
+      <input type="hidden" name="cover_file_path" value="{{ job.cover_file_path or '' }}">
+      <input type="hidden" name="cover_time_seconds" value="{{ job.cover_time_seconds or 0 }}">
+      <label class="toggle-line"><input type="checkbox" name="allow_download" {% if job.allow_download %}checked{% endif %}>允许保存 / 下载</label>
+    </div>
+    <div class="button-row">
+      <button type="submit" class="primary-button">保存草稿</button>
+      <button type="button" class="secondary-button" data-generate-metadata>AI 补齐标题简介</button>
+      <button type="button" class="secondary-button" data-generate-cover data-task-id="{{ job.task_id }}" data-clip-id="{{ job.output_clip_id }}" data-video-source="{{ job.video_source or 'original' }}">生成 / 更换封面帧</button>
+      <button type="button" class="secondary-button" data-add-to-plan>加入发布计划</button>
+      <span class="form-hint" data-editor-result></span>
+    </div>
+  </form>
+</article>
+{% endmacro %}
+
+{% macro schedule_row(job) %}
+{% set readiness = job.send_readiness %}
+<article class="publish-plan-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.account_id or '' }}" data-platform="{{ job.platform }}" data-visibility="{{ job.visibility or 'public' }}" data-status="{{ job.status }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-section="schedule" data-send-readiness="{{ readiness | tojson | forceescape }}" {% if not job.output_is_active or job.status not in ["WAITING", "SCHEDULED"] %}hidden{% endif %}>
+  <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
+  <time data-row-schedule data-utc="{{ job.scheduled_at_utc }}">{{ job.scheduled_at_display }}</time>
+  <div class="publish-plan-video"><video muted preload="metadata" src="{{ job.video_media_url }}"></video><strong data-row-title>{{ job.title }}</strong></div>
+  <span data-row-platform>{{ job.platform_label }}</span>
+  <span data-row-account>{{ job.account_name }}</span>
+  <span class="status-pill tone-{{ job.status_tone }}" data-row-status>{{ job.status_label }}</span>
+  <div class="publish-row-actions">
+    <small class="publish-send-readiness {{ 'is-ready' if readiness.ready else 'is-blocked' }}" data-readiness-message>{{ readiness.message }}</small>
+    {% if readiness.ready or readiness.can_auto_resolve %}
+      <button type="button" class="primary-button" data-primary-send-action data-publish-now>{{ "立即导出" if readiness.action == "export" else ("转换并发送" if readiness.can_auto_resolve else "立即发送") }}</button>
+    {% else %}
+      <button type="button" class="secondary-button" data-primary-send-action data-send-setup>{{ {"login_account": "打开登录窗口", "create_account": "新增账号", "select_account": "选择账号", "complete_content": "完善内容", "start_worker": "连接 Worker"}.get(readiness.action, "完善发送配置") }}</button>
+    {% endif %}
+    {% if job.status == "SCHEDULED" %}<button type="button" class="secondary-button" data-clear-schedule>清除排期</button>{% endif %}
+    <button type="button" class="text-button" data-cancel-job>取消发送并返回准备</button>
+  </div>
+</article>
+{% endmacro %}
+
+{% macro history_row(job) %}
+{% set readiness = job.send_readiness %}
+<article class="publish-execution-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.account_id or '' }}" data-platform="{{ job.platform }}" data-visibility="{{ job.visibility or 'public' }}" data-status="{{ job.status }}" data-section="history" data-send-readiness="{{ readiness | tojson | forceescape }}" {% if job.status in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
+  <strong data-row-title>{{ job.title }}</strong>
+  <span data-row-platform>{{ job.platform_label }}</span>
+  <span data-row-account>{{ job.account_name }}</span>
+  <time data-row-schedule>{{ job.scheduled_at_display }}</time>
+  <time>{{ job.started_at or "—" }}</time>
+  <time>{{ job.finished_at or "—" }}</time>
+  <span class="status-pill tone-{{ job.status_tone }}" data-row-status>{{ job.status_label }}</span>
+  <small class="publish-send-readiness" data-execution-message>{{ job.error_message or job.execution_phase_label or "" }}</small>
+  <span>{{ job.publish_mode_label }}</span>
+  <div class="publish-row-actions">
+    {% if job.status == "NEED_REVIEW" and readiness.repairable %}
+      <small class="publish-send-readiness {{ 'is-ready' if readiness.dispatch_ready else 'is-blocked' }}" data-readiness-message>{{ readiness.message }}</small>
+      <select class="compact-filter" data-repair-visibility aria-label="替代任务可见范围"><option value="public" {% if job.visibility == 'public' %}selected{% endif %}>公开</option><option value="friends" {% if job.visibility == 'friends' %}selected{% endif %}>好友可见</option><option value="private" {% if job.visibility == 'private' %}selected{% endif %}>仅自己可见</option></select>
+      {% if readiness.action == "select_account" %}
+        <select class="compact-filter" data-repair-account-select aria-label="选择替代任务账号">
+          <option value="">请选择账号</option>
+          {% for account in accounts %}{% if account.platform == job.platform %}<option value="{{ account.id }}">{{ account.account_name }} · {{ "已登录" if account.login_status == "normal" else "需登录" }}</option>{% endif %}{% endfor %}
+        </select>
+        <button type="button" class="primary-button" data-primary-send-action data-repair-job>选择后修复并发送</button>
+      {% elif readiness.dispatch_ready %}
+        <button type="button" class="primary-button" data-primary-send-action data-repair-job>修复并发送</button>
+      {% else %}
+        <button type="button" class="secondary-button" data-primary-send-action data-send-setup>{{ {"login_account": "打开登录窗口", "create_account": "新增账号", "select_account": "选择账号", "complete_content": "完善内容", "start_worker": "连接 Worker"}.get(readiness.action, "完善发送配置") }}</button>
+      {% endif %}
+    {% endif %}
+    {% if job.platform_url %}<a class="text-button" href="{{ job.platform_url }}" target="_blank" rel="noreferrer">平台链接</a>{% endif %}
+    {% if job.status == "FAILED" %}
+      <select class="compact-filter" data-retry-visibility aria-label="重试任务可见范围"><option value="public" {% if job.visibility == 'public' %}selected{% endif %}>公开</option><option value="friends" {% if job.visibility == 'friends' %}selected{% endif %}>好友可见</option><option value="private" {% if job.visibility == 'private' %}selected{% endif %}>仅自己可见</option></select>
+      <button type="button" class="primary-button" data-retry-job>立即发送</button>
+    {% endif %}
+    {% if job.status == "NEED_REVIEW" %}
+      <button type="button" class="secondary-button" data-open-creator>打开创作者中心</button>
+      <button type="button" class="secondary-button" data-mark-published>标记已发布</button>
+      <button type="button" class="secondary-button" data-mark-failed>标记失败</button>
+    {% endif %}
+    {% if job.is_user_removed %}<button type="button" class="secondary-button" data-restore-job>重新加入内容准备</button>{% endif %}
+    <button type="button" class="text-button" data-view-events>执行详情</button>
+  </div>
+  {% if job.error_message %}<details class="publish-error-detail"><summary>查看错误</summary><p>{{ job.error_message }}</p><code>{{ job.error_code or '' }}</code></details>{% endif %}
+</article>
+{% endmacro %}
+
 {% block content %}
+<div
+  data-publish-focus
+  data-task-id="{{ focus_task_id }}"
+  data-platform="{{ focus_platform }}"
+  data-tab="{{ focus_tab }}"
+  hidden
+></div>
 <section class="page-heading send-heading">
-  <div>
-    <p class="eyebrow">Send Center 2.0</p>
-    <h1>抖音 + B站发送中心</h1>
-    <p>切好的视频、自动封面帧、AI 标题和平台 #话题在这里排队；确认后由 opencli 使用 Chrome 登录态逐条发送。</p>
-  </div>
-  <div class="button-row">
-    <button type="button" class="secondary-button" data-refresh-send-queue data-use-ai="false">刷新发送队列</button>
-    <button type="button" class="secondary-button" data-refresh-send-queue data-use-ai="true">AI 补齐标题/话题</button>
-    <button type="button" class="primary-button" data-start-send-queue>开始发送全部</button>
-  </div>
+  <div><p class="eyebrow">Publish Center</p><h1>发送中心</h1><p>先准备内容，再按北京时间排期，最后在执行记录中确认平台结果。</p></div>
+  <div class="button-row"><button type="button" class="secondary-button" data-open-account-drawer>账号管理</button><button type="button" class="secondary-button" data-supplement-publish-jobs>补充缺失任务</button></div>
 </section>
-
-{% if publish_message %}
-<section class="inline-alert tone-blue">{{ publish_message }}</section>
-{% endif %}
-
-{% if not opencli_available %}
-<section class="inline-alert tone-red">
-  <strong>{{ opencli_status.message }}</strong>
-  <p>请继续使用 Docker 主页面 <code>http://127.0.0.1:8001</code>，不要切到第二个网页。</p>
-  <p>推荐处理：在项目目录运行 <code>{{ opencli_status.restart_command }}</code>，脚本会启动 Windows opencli 辅助服务、刷新 Docker，并打开 <code>{{ opencli_status.publish_url }}</code>。</p>
-  <p>页面打开后按 <code>Ctrl + F5</code> 强制刷新，再回到发送中心测试自动发送。</p>
-</section>
-{% endif %}
 
 <section id="send-center-message" class="inline-alert tone-blue" hidden></section>
 
-<section class="send-publishing-overlay" data-send-publishing-overlay hidden>
-  <div class="send-publishing-box" role="status" aria-live="polite">
-    <span class="send-publishing-spinner"></span>
-    <strong data-send-publishing-title>正在发布</strong>
-    <p data-send-publishing-text>opencli 正在操作平台页面，请不要关闭 Chrome 或本地后台。</p>
+<section class="scheduler-health-card" data-scheduler-health data-worker-available="{{ 'true' if scheduler_health.worker_available else 'false' }}" data-scheduler-failures="{{ scheduler_health.consecutive_failures }}">
+  <div><span class="health-dot {{ 'is-ok' if scheduler_health.enabled and scheduler_health.running and scheduler_health.worker_available and not scheduler_health.consecutive_failures else '' }}"></span><strong>统一发布调度器</strong></div>
+  <span>调度状态：<strong data-scheduler-runtime>{{ '异常重试中' if scheduler_health.consecutive_failures else ('正常' if scheduler_health.running else '已停止') }}</strong></span><span>扫描：{{ scheduler_health.interval_seconds }} 秒</span>
+  <span>已排期：{{ scheduler_health.scheduled_count }}</span><span>发送中：{{ scheduler_health.publishing_count }}</span>
+  <span>Windows Worker：<strong data-worker-status>{{ '正常' if scheduler_health.worker_available else '未连接' }}</strong></span>
+  <button type="button" class="text-button worker-refresh-button" data-refresh-worker>重新检测</button>
+  <small data-worker-message>{% if scheduler_health.consecutive_failures %}{{ scheduler_health.last_error_message }} · {% endif %}{{ scheduler_health.worker_message }} · 页面及排期均使用北京时间</small>
+  <div class="worker-connection-help" data-worker-help {% if scheduler_health.worker_available %}hidden{% endif %}>
+    <strong>自动连接：</strong><span>发送服务会在 Docker 中的牛马片场项目运行后自动启动。若刚刚运行项目，请稍候并点击“重新检测”；持续未连接时，请在 Docker Desktop 中停止后重新运行本项目。</span>
   </div>
 </section>
 
-<section class="stat-grid send-stat-grid">
-  {% for stat in stats %}
-  <article class="stat-card tone-{{ stat.tone }}">
-    <span>{{ stat.label }}</span>
-    <strong>{{ stat.value }}</strong>
-  </article>
-  {% endfor %}
-</section>
-
-<section class="panel publish-schedule-panel">
-  <div class="panel-header">
-    <div>
-      <p class="eyebrow">Publish Schedule</p>
-      <h2>批量发布计划</h2>
-      <p>先勾选下方未发布任务，再统一设置起始时间、发布间隔和每天允许发布的时段。</p>
-    </div>
-    <span class="status-pill" data-schedule-selected-count>已选 0 条</span>
+<section class="publish-platform-context" aria-label="当前发布平台">
+  <div><p class="eyebrow">Current Platform</p><h2>当前只处理 <span data-active-platform-label>抖音</span></h2><p>切换平台会立即清空已选择任务，抖音与 B站不会混合发送。</p></div>
+  <div class="publish-platform-switch" role="group" aria-label="切换发送中心平台">
+    <button type="button" class="publish-platform-card is-active" data-publish-platform="douyin" aria-pressed="true">
+      <span class="platform-card-icon douyin">抖</span>
+      <span><strong>抖音</strong><small>待排期 <b data-platform-waiting="douyin">0</b> · 已排期 <b data-platform-scheduled="douyin">0</b></small></span>
+      <span class="platform-card-action">当前</span>
+    </button>
+    <button type="button" class="publish-platform-card" data-publish-platform="bilibili" aria-pressed="false">
+      <span class="platform-card-icon bilibili">B</span>
+      <span><strong>B站</strong><small>待排期 <b data-platform-waiting="bilibili">0</b> · 已排期 <b data-platform-scheduled="bilibili">0</b></small></span>
+      <span class="platform-card-action">切换</span>
+    </button>
   </div>
-  <form class="publish-schedule-form" data-publish-schedule-form>
-    <div class="publish-schedule-grid">
-      <label>
-        <span>起始时间</span>
-        <input name="start_at" type="datetime-local" required>
-      </label>
-      <label>
-        <span>间隔小时</span>
-        <input name="interval_hours" type="number" min="1" max="168" step="1" value="3" required>
-      </label>
-      <label>
-        <span>每日开始</span>
-        <input name="daily_start_time" type="time" value="09:00" required>
-      </label>
-      <label>
-        <span>每日结束</span>
-        <input name="daily_end_time" type="time" value="21:00" required>
-      </label>
-    </div>
-    <div class="publish-schedule-actions">
-      <p class="form-hint" data-publish-schedule-result>未排期任务会保持等待状态，不会被定时发送器自动执行。</p>
-      <div class="button-row">
-        <button class="secondary-button" type="button" data-select-all-schedule>选择全部未发布</button>
-        <button class="secondary-button" type="button" data-clear-batch-schedule>清除所选排期</button>
-        <button class="primary-button" type="submit">应用发布计划</button>
-      </div>
-    </div>
-  </form>
 </section>
 
-<section class="send-center-grid">
-  <section class="panel send-main-panel">
-    <div class="panel-header">
-      <div>
-        <p class="eyebrow">待发送队列</p>
-        <h2>已完成切片自动入队</h2>
-        <p>默认每条切片生成抖音和 B站两条发送任务，发送时一次只跑一条，避免平台窗口互相抢焦点。</p>
-      </div>
-      <label class="send-select-all">
-        <input type="checkbox" data-send-select-all>
-        全选可发送
-      </label>
-    </div>
+<nav class="publish-center-tabs" aria-label="发送中心区域">
+  <button type="button" class="active" data-center-tab="content">内容准备</button>
+  <button type="button" data-center-tab="schedule">排期计划</button>
+  <button type="button" data-center-tab="history">执行记录</button>
+</nav>
 
-    <div class="send-toolbar">
-      <button type="button" class="active" data-send-filter="all">全部</button>
-      <button type="button" data-send-filter="douyin">抖音</button>
-      <button type="button" data-send-filter="bilibili">B站</button>
-      <button type="button" data-send-filter="waiting">等待</button>
-      <button type="button" data-send-filter="scheduled">定时</button>
-      <button type="button" data-send-filter="publishing">发送中</button>
-      <button type="button" data-send-filter="published">已发布</button>
-      <button type="button" data-send-filter="failed">失败</button>
-      <button type="button" data-send-filter="need_review">需复核</button>
+<section class="panel publish-center-panel active" data-center-panel="content">
+  {% set initial_platform = focus_platform if focus_platform in ["douyin", "bilibili"] else "douyin" %}
+  {% set initial_missing_cover_count = missing_cover_counts.get(initial_platform, 0) %}
+  <div class="panel-header publish-content-header">
+    <div><h2>内容准备</h2><p>这里不展示历史错误；内容、平台和账号完整后再加入排期。</p></div>
+    <div class="publish-content-header-actions">
+      <button
+        type="button"
+        class="secondary-button"
+        data-backfill-covers
+        data-missing-count="{{ initial_missing_cover_count }}"
+        {% if not initial_missing_cover_count %}disabled{% endif %}
+      >一键补充{{ 'B站' if initial_platform == 'bilibili' else '抖音' }}缺失封面{% if initial_missing_cover_count %}（{{ initial_missing_cover_count }}）{% endif %}</button>
     </div>
-
-    <div class="send-queue">
-      {% for item in send_queue_items %}
-      <article class="send-card" data-send-card data-platform="{{ item.platform }}" data-status="{{ item.status }}">
-        <div class="send-card-media">
-          <video controls preload="metadata" src="{{ item.video_media_url }}"></video>
-          <div class="send-cover-preview{% if item.cover_media_url %} has-cover{% endif %}" data-cover-preview>
-            <img src="{{ item.cover_media_url }}" alt="封面预览" {% if not item.cover_media_url %}hidden{% endif %}>
-            <span {% if item.cover_media_url %}hidden{% endif %}>刷新队列后自动选帧</span>
-          </div>
+  </div>
+  <div class="publish-content-list">
+    {% for group in publish_task_groups %}
+    <section class="publish-task-group" data-publish-task-group data-task-id="{{ group.task_id }}" data-expanded="{{ 'true' if loop.first else 'false' }}">
+      <header class="publish-task-group-header">
+        <div class="publish-task-group-identity">
+          <p class="eyebrow">原始处理任务</p>
+          <h3>{{ group.task_name }}</h3>
+          <p title="{{ group.task_source_file_name }}">原视频：<strong>{{ group.task_source_file_name }}</strong></p>
+          <small>创建于 {{ group.task_created_at_display }} · <span data-task-group-count>0 条待准备</span></small>
         </div>
-
-        <form class="send-card-form" data-send-job-form data-job-id="{{ item.job_id }}" data-task-id="{{ item.task_id }}" data-output-clip-id="{{ item.output_clip_id }}" data-platform="{{ item.platform }}">
-          <input type="hidden" name="cover_file_path" value="{{ item.cover_file_path }}">
-          <input type="hidden" name="cover_time_seconds" value="{{ item.job.cover_time_seconds if item.job else 0 }}">
-
-          <div class="send-card-header">
-            <div>
-              <p class="send-meta-line">
-                <span class="status-pill tone-{{ item.status_tone }}">{{ item.platform_label }}</span>
-                <span class="status-pill tone-{{ item.status_tone }}">{{ item.status_label }}</span>
-                <span>{{ item.task_name or "未命名任务" }}</span>
-                {% if item.job_id %}
-                <span class="schedule-time-note">
-                  计划：
-                  <time data-publish-scheduled-at="{{ item.job.scheduled_at or '' }}" datetime="{{ item.job.scheduled_at or '' }}">{{ item.job.scheduled_at_display }}</time>
-                </span>
-                {% endif %}
-              </p>
-              <h3>{{ item.title }}</h3>
-              <p>{{ item.output_file_name or item.output_clip_id }}</p>
-            </div>
-            {% if item.job_id and item.status in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}
-            <label class="send-checkbox">
-              <input type="checkbox" data-send-job-checkbox data-publish-schedule-checkbox value="{{ item.job_id }}">
-              选择
-            </label>
-            {% endif %}
-          </div>
-
-          <div class="send-fields">
-            <label>
-              <span>AI 标题</span>
-              <input name="title" value="{{ item.title }}" maxlength="120" required>
-            </label>
-            <label>
-              <span>平台 #话题</span>
-              <input name="tags" value="{{ item.tags }}" maxlength="500" placeholder="例如 #直播切片 #高能名场面">
-            </label>
-            <label class="span-2">
-              <span>正文 / 简介</span>
-              <textarea name="description" maxlength="2000" placeholder="抖音会作为正文话题，B站会作为简介">{{ item.description }}</textarea>
-            </label>
-          </div>
-
-          <div class="send-platform-options">
-            <label>
-              <span>可见范围</span>
-              <select name="visibility">
-                <option value="public" {% if not item.job or item.job.visibility == "public" %}selected{% endif %}>公开</option>
-                <option value="friends" {% if item.job and item.job.visibility == "friends" %}selected{% endif %}>好友可见</option>
-                <option value="private" {% if item.job and item.job.visibility == "private" %}selected{% endif %}>仅自己可见</option>
-              </select>
-            </label>
-            <label>
-              <span>B站分区</span>
-              <input name="bilibili_tid" value="{{ item.job.bilibili_tid if item.job and item.job.bilibili_tid else '娱乐' }}" maxlength="80">
-            </label>
-            <label>
-              <span>B站声明</span>
-              <select name="bilibili_copyright">
-                <option value="original" {% if not item.job or item.job.bilibili_copyright == "original" %}selected{% endif %}>原创</option>
-                <option value="repost" {% if item.job and item.job.bilibili_copyright == "repost" %}selected{% endif %}>转载</option>
-              </select>
-            </label>
-            <label>
-              <span>转载来源</span>
-              <input name="bilibili_source" value="{{ item.job.bilibili_source if item.job else '' }}" maxlength="300" placeholder="原创可留空">
-            </label>
-            <label class="toggle-line">
-              <input type="checkbox" name="allow_download" {% if not item.job or item.job.allow_download %}checked{% endif %}>
-              允许保存 / 下载
-            </label>
-          </div>
-
-          <div class="cover-frame-list" data-cover-frame-list>
-            <span>系统会先自动选一帧；需要更换时再生成候选帧。</span>
-          </div>
-
-          {% if item.error_message %}
-          <p class="error-text">{{ item.error_message }}</p>
-          {% endif %}
-          {% if item.platform_url %}
-          <a class="text-link" href="{{ item.platform_url }}" target="_blank" rel="noreferrer">查看平台链接</a>
-          {% endif %}
-
-          <div class="send-actions">
-            <p class="form-hint" data-send-job-result>
-              {% if item.job_id %}任务编号：{{ item.job_id }}{% else %}还未入队，先点“刷新发送队列”。{% endif %}
-            </p>
-            <div class="button-row">
-              <button type="submit" class="secondary-button" {% if not item.job_id %}disabled{% endif %}>保存</button>
-              <button type="button" class="secondary-button" data-regenerate-send-metadata {% if not item.job_id %}disabled{% endif %}>重新生成标题/话题</button>
-              <button type="button" class="secondary-button" data-generate-cover-frames>更换封面帧</button>
-              <button type="button" class="primary-button" data-send-single-job {% if not item.job_id or item.status not in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}disabled{% endif %}>发送此条</button>
-            </div>
-          </div>
-        </form>
-      </article>
-      {% else %}
-      <div class="empty-state">
-        <h3>还没有可发送的切片</h3>
-        <p>先在片段审核里完成切片，再回到这里刷新发送队列。</p>
+        <div class="publish-task-group-actions">
+          <a class="text-button" href="/tasks/{{ group.task_id }}">查看任务详情</a>
+          <button type="button" class="secondary-button" data-task-group-toggle aria-expanded="{{ 'true' if loop.first else 'false' }}">
+            <span data-task-group-action>{{ '收起' if loop.first else '展开' }}</span>
+          </button>
+        </div>
+      </header>
+      <div class="publish-task-group-body" data-task-group-body {% if not loop.first %}hidden{% endif %}>
+        {% for job in group.jobs %}{{ content_row(job) }}{% endfor %}
       </div>
-      {% endfor %}
+    </section>
+    {% endfor %}
+  </div>
+  <div class="publish-plan-empty" data-content-empty hidden>当前平台没有待准备内容。</div>
+</section>
+
+<section class="panel publish-center-panel" data-center-panel="schedule" hidden>
+  <div class="panel-header"><div><h2>排期计划</h2><p>计划时间统一显示为北京时间；批量排期必须预览后才能保存。</p></div></div>
+  <section class="publish-calendar-card" aria-label="北京时间排期日历">
+    <header class="publish-calendar-toolbar">
+      <div><p class="eyebrow">Beijing Time</p><h3 data-calendar-title>排期日历</h3></div>
+      <div class="button-row calendar-navigation">
+        <button type="button" class="icon-button" data-calendar-previous aria-label="上个月">‹</button>
+        <button type="button" class="secondary-button" data-calendar-today>回到本月</button>
+        <button type="button" class="icon-button" data-calendar-next aria-label="下个月">›</button>
+      </div>
+    </header>
+    <div class="publish-calendar-scroll">
+      <div class="publish-calendar-weekdays" aria-hidden="true"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+      <div class="publish-calendar-grid" data-schedule-calendar role="grid" aria-label="排期月历"></div>
+    </div>
+  </section>
+  <div class="publish-plan-section-heading"><div><p class="eyebrow">Tasks</p><h3 data-platform-list-title>抖音任务清单</h3></div><small>未排期任务也会保留在清单中，勾选后可批量设置时间。</small></div>
+  <div class="publish-plan-header"><span></span><span>计划时间</span><span>视频</span><span>平台</span><span>账号</span><span>状态</span><span>操作</span></div>
+  <div class="publish-plan-list">{% for job in publish_jobs %}{{ schedule_row(job) }}{% endfor %}</div>
+  <div class="publish-plan-empty" data-schedule-empty hidden>当前平台没有待排期或已排期任务。</div>
+</section>
+
+<section class="panel publish-center-panel" data-center-panel="history" hidden>
+  <div class="panel-header publish-history-heading">
+    <div><h2>执行记录</h2><p>按计划日期查看当天结果；结果不确定时只会进入“需复核”，不会自动重复上传。</p></div>
+    <div class="publish-history-view-switch" role="group" aria-label="执行记录视图">
+      <button type="button" class="secondary-button is-active" data-history-view="active">执行记录</button>
+      <button type="button" class="secondary-button" data-history-view="deleted">已删除记录</button>
+    </div>
+  </div>
+
+  <section class="publish-calendar-card publish-history-calendar-card" data-history-calendar-card aria-label="北京时间执行日历">
+    <header class="publish-calendar-toolbar">
+      <div><p class="eyebrow">Execution Calendar</p><h3 data-history-calendar-title>执行日历</h3></div>
+      <div class="button-row calendar-navigation">
+        <button type="button" class="icon-button" data-history-calendar-previous aria-label="上个月">‹</button>
+        <button type="button" class="secondary-button" data-history-calendar-today>回到本月</button>
+        <button type="button" class="icon-button" data-history-calendar-next aria-label="下个月">›</button>
+      </div>
+    </header>
+    <div class="publish-history-legend" aria-label="执行状态图例">
+      <span class="tone-blue">待执行</span><span class="tone-purple">进行中</span><span class="tone-green">成功</span>
+      <span class="tone-red">失败</span><span class="tone-amber">待复核</span><span>已导出 / 已取消</span>
+    </div>
+    <div class="publish-calendar-scroll">
+      <div class="publish-calendar-weekdays" aria-hidden="true"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+      <div class="publish-calendar-grid publish-history-calendar-grid" data-history-calendar role="grid" aria-label="执行记录月历"></div>
     </div>
   </section>
 
-  <aside class="panel send-preview-panel" data-send-preview-panel>
-    <div class="panel-header">
-      <div>
-        <p class="eyebrow">平台投稿预览</p>
-        <h2>网页自动化会填写这些内容</h2>
-      </div>
-    </div>
-
-    {% set preview = send_queue_items[0] if send_queue_items else none %}
-    {% if preview %}
-    <div class="phone-preview">
-      <div class="phone-screen">
-        <img data-send-preview-image src="{{ preview.cover_media_url }}" alt="封面预览" {% if not preview.cover_media_url %}hidden{% endif %}>
-        <video data-send-preview-video muted loop playsinline preload="metadata" src="{{ preview.video_media_url }}" {% if preview.cover_media_url %}hidden{% endif %}></video>
-        <div class="phone-caption">
-          <strong data-send-preview-title>{{ preview.title }}</strong>
-          <span data-send-preview-tags>{{ preview.tags }}</span>
-        </div>
-      </div>
-    </div>
-    <div class="send-preview-copy">
-      <p data-send-preview-description>{{ preview.description }}</p>
-      <p><strong>抖音：</strong>上传视频，填写标题/正文 #话题，设置封面，点击发布。</p>
-      <p><strong>B站：</strong>上传视频，填写封面、标题、分区、标签、简介，点击立即投稿。</p>
-      <p>遇到验证码、登录失效或风控弹窗时，任务会进入失败，等待人工处理。</p>
-    </div>
-    {% else %}
-    <p class="form-hint">队列生成后，这里会显示第一条投稿预览。</p>
-    {% endif %}
-  </aside>
-</section>
-
-<section class="panel send-history-panel">
-  <div class="panel-header">
+  <div class="publish-history-toolbar">
     <div>
-      <p class="eyebrow">发送记录</p>
-      <h2>opencli 任务状态</h2>
+      <p class="eyebrow" data-history-list-eyebrow>History</p>
+      <h3 data-history-list-title>全部执行记录</h3>
+      <small data-history-list-summary>正在加载…</small>
+    </div>
+    <div class="publish-history-toolbar-actions">
+      <button type="button" class="text-button" data-history-clear-date hidden>查看全部日期</button>
+      <label class="compact-filter"><span>状态</span><select data-history-filter><option value="all">全部</option><option value="SCHEDULED">待执行</option><option value="PUBLISHING">发送中</option><option value="PUBLISHED">已发布</option><option value="FAILED">失败</option><option value="NEED_REVIEW">需复核</option><option value="CANCELLED">已取消</option><option value="EXPORTED">已导出</option></select></label>
     </div>
   </div>
 
-  <div class="publish-job-list">
-    {% for job in publish_jobs %}
-    <article class="publish-job-row" data-publish-job-id="{{ job.id }}">
-      <div>
-        <p class="send-meta-line">
-          <span class="status-pill tone-{{ job.status_tone }}">{{ job.platform_label }}</span>
-          <span class="status-pill tone-{{ job.status_tone }}">{{ job.status_label }}</span>
-          <span>{{ job.publish_mode_label }}</span>
-        </p>
-        <h3>{{ job.title or job.output_file_name or job.id }}</h3>
-        <p>{{ job.task_name or "未命名任务" }} · {{ job.updated_at or job.created_at }}</p>
-        <p class="schedule-time-note">
-          发布时间：
-          <time data-publish-scheduled-at="{{ job.scheduled_at or '' }}" datetime="{{ job.scheduled_at or '' }}">{{ job.scheduled_at_display }}</time>
-        </p>
-        {% if job.error_message %}<p class="error-text">{{ job.error_message }}</p>{% endif %}
-        {% if job.platform_url %}<a class="text-link" href="{{ job.platform_url }}" target="_blank" rel="noreferrer">平台链接</a>{% endif %}
-        {% if job.trace_path %}<p class="form-hint">Trace：{{ job.trace_path }}</p>{% endif %}
-      </div>
-      <div class="button-row">
-        {% if job.status not in ["PUBLISHED", "CANCELLED", "published", "cancelled"] %}
-        <label class="send-checkbox">
-          <input type="checkbox" data-publish-schedule-checkbox value="{{ job.id }}">
-          排期
-        </label>
-        {% endif %}
-        {% if job.status in ["WAITING", "SCHEDULED", "FAILED", "ready", "failed"] %}
-        <button type="button" class="secondary-button" data-publish-job-action="retry">重试</button>
-        {% endif %}
-        {% if job.status not in ["PUBLISHED", "published"] %}
-        <button type="button" class="secondary-button" data-publish-job-action="mark-published">标记已发</button>
-        {% endif %}
-        {% if job.status not in ["FAILED", "PUBLISHED", "failed", "published"] %}
-        <button type="button" class="secondary-button" data-publish-job-action="mark-failed">标记失败</button>
-        {% endif %}
-      </div>
-    </article>
-    {% else %}
-    <p class="form-hint">暂无发送记录。</p>
-    {% endfor %}
+  <div class="publish-history-batch-bar" data-history-batch-bar hidden>
+    <strong>已选 <span data-history-selected-count>0</span> 条</strong>
+    <span data-history-batch-hint>删除只会隐藏记录，不会删除视频、执行明细或平台作品。</span>
+    <button type="button" class="secondary-button danger" data-history-batch-hide>批量删除记录</button>
+    <button type="button" class="secondary-button" data-history-batch-restore hidden>批量恢复记录</button>
+    <button type="button" class="text-button" data-history-clear-selection>取消选择</button>
+  </div>
+
+  <div class="publish-execution-header">
+    <span>选择</span><span>任务</span><span>账号</span><span>计划时间</span><span>实际时间</span><span>状态</span><span>方式 / 操作</span>
+  </div>
+  <div class="publish-execution-list" data-history-list aria-live="polite"></div>
+  <div class="publish-plan-empty" data-history-empty hidden>当前筛选条件下没有执行记录。</div>
+  <div class="publish-history-pagination" data-history-pagination hidden>
+    <button type="button" class="secondary-button" data-history-previous>上一页</button>
+    <span data-history-page-summary></span>
+    <button type="button" class="secondary-button" data-history-next>下一页</button>
   </div>
 </section>
+
+<div class="publish-selection-bar" data-selection-bar hidden>
+  <strong>已选 <span data-selected-count>0</span> 条</strong>
+  <span class="status-pill tone-blue">仅限 <b data-selection-platform>抖音</b></span>
+  <select data-batch-account aria-label="批量账号">{{ account_options({}) }}</select>
+  <button type="button" class="secondary-button" data-apply-batch-target>批量设置当前平台账号</button>
+  <button type="button" class="secondary-button" data-batch-ai>批量 AI 补齐</button>
+  <button type="button" class="primary-button" data-open-schedule-drawer>设置排期</button>
+  <button type="button" class="text-button" data-clear-selection>取消选择</button>
+</div>
+
+<div class="schedule-drawer-backdrop" data-schedule-backdrop hidden></div>
+<aside class="schedule-drawer" data-schedule-drawer hidden aria-label="设置排期">
+  <div class="schedule-drawer-header"><div><p class="eyebrow">Schedule</p><h2>设置排期</h2><p>已选 <strong data-drawer-count>0</strong> 条</p></div><button type="button" class="icon-button" data-close-schedule-drawer aria-label="关闭">×</button></div>
+  <form data-schedule-form>
+    <label><span>第 1 条发布时间（北京时间）</span><input type="datetime-local" name="start_at_local" required></label>
+    <label><span>发布间隔</span><select name="interval_preset"><option value="60">1 小时</option><option value="120">2 小时</option><option value="180" selected>3 小时</option><option value="360">6 小时</option><option value="custom">自定义</option></select></label>
+    <label data-custom-interval hidden><span>自定义分钟</span><input type="number" name="interval_minutes" min="1" max="10080" value="180"></label>
+    <div>
+      <strong>后续每日可发布时间段</strong>
+      <div class="schedule-window-grid"><label><span>每日开始</span><input type="time" name="daily_start_time" value="09:00" required></label><label><span>每日结束</span><input type="time" name="daily_end_time" value="21:00" required></label></div>
+      <p class="form-hint schedule-window-help">第 1 条严格使用上方时间；例如 06:00 → 00:00 表示可发布到次日午夜，开始和结束相同表示全天。</p>
+    </div>
+    <p class="timezone-note">当前时区：<strong data-current-timezone>Asia/Shanghai（北京时间）</strong></p>
+    <button type="button" class="secondary-button" data-preview-schedule>预览排期</button>
+    <section class="inline-alert tone-blue schedule-feedback" data-schedule-feedback hidden aria-live="polite"></section>
+    <div class="schedule-preview-list" data-schedule-preview><p class="form-hint">请先生成预览，再确认应用。</p></div>
+    <button type="submit" class="primary-button" data-confirm-schedule disabled>确认应用具体时间</button>
+  </form>
+</aside>
+
+<div class="schedule-drawer-backdrop" data-account-backdrop hidden></div>
+<aside class="schedule-drawer account-drawer" data-account-drawer hidden aria-label="账号管理">
+  <div class="schedule-drawer-header"><div><p class="eyebrow">Accounts</p><h2>发布账号</h2><p>账号密码不会保存到数据库。</p></div><button type="button" class="icon-button" data-close-account-drawer aria-label="关闭">×</button></div>
+  <div class="publish-account-list" data-account-list>
+    {% for account in accounts %}<article data-account-row data-account-id="{{ account.id }}" data-account-platform="{{ account.platform }}"><div><strong>{{ account.account_name }}</strong><small>{{ account.platform_label }}</small><small data-account-message>{{ account.login_message or '' }}</small></div><span class="status-pill tone-{{ 'green' if account.login_status == 'normal' else ('red' if account.login_status == 'invalid' else 'amber') }}" data-account-status>{{ account.login_status_label }}</span><div class="button-row">{% if account.login_status == 'normal' %}<button type="button" class="secondary-button" data-account-open-center>打开创作者中心</button><button type="button" class="text-button" data-account-login>重新登录</button>{% else %}<button type="button" class="secondary-button" data-account-login>登录 / 重新登录</button><button type="button" class="text-button" data-account-check>检查状态</button>{% endif %}</div></article>{% endfor %}
+  </div>
+  <form class="publish-account-create" data-account-create><h3>新增账号</h3><label><span>当前平台</span><strong class="publish-locked-value" data-account-create-platform>抖音</strong><input type="hidden" name="platform" value="douyin"></label><label><span>账号备注名</span><input name="account_name" maxlength="120" required placeholder="例如：抖音主账号"></label><button type="submit" class="primary-button">保存并准备登录</button><span class="form-hint" data-account-form-result></span></form>
+</aside>
 {% endblock %}
+
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260728-history-calendar"></script>{% endblock %}
