@@ -125,6 +125,11 @@ async function handleProcessAction(button) {
         }
         return;
       }
+      if (button.dataset.endpoint.includes("/process/auto-")) {
+        if (result) result.textContent = data.message || "全自动流程已启动，状态会在当前页面自动更新。";
+        startTaskLiveStatusPolling(true);
+        return;
+      }
       window.location.reload();
     } catch (error) {
       if (result) result.textContent = `处理失败：${error.message}`;
@@ -339,7 +344,19 @@ const aiAnalysisProgressPercent = document.querySelector("#ai-analysis-progress-
 const aiAnalysisProgressBar = document.querySelector("#ai-analysis-progress-bar");
 const runtimeLogState = document.querySelector("#runtime-log-state");
 const runtimeLogLines = document.querySelector("#runtime-log-lines");
+const autoPipelineMonitor = document.querySelector("[data-auto-pipeline-monitor]");
+const taskLiveOverview = document.querySelector("[data-task-live-overview]");
+const taskLiveProgressBar = document.querySelector("[data-task-live-progress-bar]");
+const taskLiveProgressNumber = document.querySelector("[data-task-live-progress-number]");
+const taskLiveNote = document.querySelector("[data-task-live-note]");
+const taskLiveUpdatedAt = document.querySelector("[data-task-live-updated-at]");
+const taskLiveCandidateCount = document.querySelector("[data-task-live-candidate-count]");
+const taskLiveOutputCount = document.querySelector("[data-task-live-output-count]");
+const taskLiveActions = document.querySelector("[data-live-task-actions]");
 let aiStatusPollingTimer = null;
+let taskLiveStatusTimer = null;
+let taskLiveForcedPollingUntil = 0;
+const TASK_LIVE_STATUS_INTERVAL_MS = 3000;
 
 function summarizeErrorMessage(message, maxLength = 220) {
   const text = String(message || "").replace(/\s+/g, " ").trim();
@@ -787,6 +804,19 @@ function collectClipReviewPayload() {
   }));
 }
 
+async function persistClipReviewChanges() {
+  if (!clipReviewForm) throw new Error("当前页面没有可保存的候选片段");
+  const taskId = clipReviewForm.dataset.taskId;
+  const response = await fetch(`/api/tasks/${taskId}/clips/batch-update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clips: collectClipReviewPayload() }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "保存失败");
+  return data;
+}
+
 async function deleteClipCard(card, button) {
   if (!clipReviewForm || !card) return;
   const taskId = clipReviewForm.dataset.taskId;
@@ -1152,15 +1182,7 @@ if (saveClipsButton && clipReviewForm) {
     showClipReviewMessage("正在保存候选片段修改...", "info");
 
     try {
-      const response = await fetch(`/api/tasks/${taskId}/clips/batch-update`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clips: collectClipReviewPayload() }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "保存失败");
-      }
+      const data = await persistClipReviewChanges();
       showClipReviewMessage(data.message || "保存成功。", "success");
     } catch (error) {
       showClipReviewMessage(`保存失败：${error.message}`, "error");
@@ -1388,9 +1410,12 @@ if (generateClipsButton) {
     const originalText = generateClipsButton.textContent;
     generateClipsButton.disabled = true;
     generateClipsButton.textContent = "正在确认...";
-    showClipReviewMessage("正在请求生成切片...", "info");
+    showClipReviewMessage("正在保存当前审核选择...", "info");
 
     try {
+      await persistClipReviewChanges();
+      generateClipsButton.textContent = "正在生成...";
+      showClipReviewMessage("审核选择已保存，正在生成最新切片...", "info");
       const response = await fetch(generateClipsButton.dataset.endpoint, { method: "POST" });
       const data = await response.json();
       if (!response.ok) {
@@ -1438,10 +1463,29 @@ document.querySelectorAll("[data-sync-publish-task]").forEach((button) => {
     button.disabled = true;
     button.textContent = "正在同步...";
     try {
-      const data = await window.apiFetch(
-        `/api/publish/tasks/${encodeURIComponent(taskId)}/sync?prefer_subtitled=${preferSubtitled ? "true" : "false"}`,
-        { method: "POST" },
-      );
+      const syncReviewedClips = button.dataset.syncReviewedClips === "true";
+      let data;
+      if (syncReviewedClips) {
+        const clips = collectClipReviewPayload();
+        if (!clips.some((clip) => clip.enabled)) {
+          throw new Error("请至少启用一条候选片段后再同步发送中心");
+        }
+        button.textContent = "正在保存并生成...";
+        showClipReviewMessage("正在保存审核选择；如选择有变化，将自动生成最新切片并同步...", "info");
+        data = await window.apiFetch(
+          `/api/tasks/${encodeURIComponent(taskId)}/clips/sync-publish`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clips }),
+          },
+        );
+      } else {
+        data = await window.apiFetch(
+          `/api/publish/tasks/${encodeURIComponent(taskId)}/sync?prefer_subtitled=${preferSubtitled ? "true" : "false"}`,
+          { method: "POST" },
+        );
+      }
       const summary = document.querySelector("[data-publish-link-summary]");
       if (summary) {
         summary.innerHTML = `<strong>发送中心关联：${data.link_state?.label || "同步完成"}</strong><span>${data.message || ""}</span>`;
@@ -1449,6 +1493,14 @@ document.querySelectorAll("[data-sync-publish-task]").forEach((button) => {
       showClipReviewMessage(data.message || "发送中心同步完成。", data.status === "partial" ? "error" : "success");
       if (!document.querySelector("#process-result")) {
         window.alert(data.message || "发送中心同步完成。");
+      }
+      if (syncReviewedClips && data.status !== "partial") {
+        const params = new URLSearchParams({
+          task_id: taskId,
+          tab: "content",
+          publish_message: data.message || "发送中心同步完成。",
+        });
+        window.location.assign(`/publish?${params.toString()}`);
       }
     } catch (error) {
       const message = `同步发送中心失败：${error.message}`;
@@ -1546,13 +1598,142 @@ function renderRuntimeLog(status) {
       completed: "已完成",
       failed: "失败",
     };
-    runtimeLogState.textContent = labelMap[status.status] || status.task_status_label || "已刷新";
+    runtimeLogState.textContent = status.status_label || labelMap[status.status] || status.task_status_label || "已刷新";
     runtimeLogState.dataset.status = status.status || "idle";
   }
   if (!runtimeLogLines) return;
   const lines = Array.isArray(status.log_lines) ? status.log_lines : [];
-  runtimeLogLines.textContent = lines.length ? lines.join("\n") : "暂无运行日志。点击 AI 分析后，这里会自动刷新。";
+  runtimeLogLines.textContent = lines.length ? lines.join("\n") : "暂无运行日志。任务开始后，这里会自动刷新。";
   runtimeLogLines.scrollTop = runtimeLogLines.scrollHeight;
+}
+
+function formatTaskLiveRefreshTime() {
+  return new Date().toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function renderTaskLiveActions(data) {
+  if (!taskLiveActions) return;
+  const actions = data.actions || {};
+  let primaryAction = actions.primary || "none";
+  if (primaryAction === "publish" && !actions.publish) {
+    primaryAction = "none";
+  }
+
+  taskLiveActions.querySelectorAll("[data-live-primary-action]").forEach((node) => {
+    node.hidden = node.dataset.livePrimaryAction !== primaryAction;
+  });
+
+  const reviewAction = taskLiveActions.querySelector("[data-live-review-action]");
+  if (reviewAction) reviewAction.hidden = !actions.review;
+  const syncAction = taskLiveActions.querySelector("[data-live-sync-action]");
+  if (syncAction) syncAction.hidden = Number(data.counts?.outputs || 0) <= 0;
+}
+
+function renderTaskLiveStatus(data) {
+  const progress = Math.max(0, Math.min(100, Number(data.progress || 0)));
+  document.querySelectorAll("[data-task-live-status-label]").forEach((node) => {
+    node.textContent = data.status_label || data.status || "状态未知";
+  });
+  const headerStatus = document.querySelector("[data-task-live-header-status]");
+  if (headerStatus) headerStatus.textContent = data.status_label || data.status || "状态未知";
+  if (taskLiveProgressBar) taskLiveProgressBar.style.width = `${progress}%`;
+  if (taskLiveProgressNumber) taskLiveProgressNumber.textContent = `${progress}%`;
+  if (taskLiveUpdatedAt) taskLiveUpdatedAt.textContent = data.updated_at || "未知";
+
+  const candidateCount = Number(data.counts?.candidates || 0);
+  const outputCount = Number(data.counts?.outputs || 0);
+  if (taskLiveCandidateCount) taskLiveCandidateCount.textContent = `${candidateCount} 条`;
+  if (taskLiveOutputCount) taskLiveOutputCount.textContent = `${outputCount} 条`;
+  if (aiCandidateCountPill) aiCandidateCountPill.textContent = `${candidateCount} 条候选`;
+
+  const allowedStepStates = new Set(["done", "current", "pending", "warning"]);
+  (Array.isArray(data.workflow_steps) ? data.workflow_steps : []).forEach((step) => {
+    const node = taskLiveOverview?.querySelector(`[data-task-live-step="${step.index}"]`);
+    if (!node) return;
+    node.classList.remove("done", "current", "pending", "warning");
+    node.classList.add(allowedStepStates.has(step.state) ? step.state : "pending");
+    const number = node.querySelector("span");
+    const label = node.querySelector("strong");
+    if (number) number.textContent = step.index;
+    if (label) label.textContent = step.name;
+  });
+
+  renderRuntimeLog(data);
+  renderTaskLiveActions(data);
+  if (autoPipelineMonitor) {
+    autoPipelineMonitor.dataset.status = data.status || "";
+    autoPipelineMonitor.dataset.running = data.should_poll ? "true" : "false";
+  }
+  if (taskLiveNote) {
+    if (data.error_message) {
+      taskLiveNote.dataset.state = "error";
+      taskLiveNote.textContent = `流程已暂停：${summarizeErrorMessage(data.error_message)}`;
+    } else if (data.should_poll) {
+      taskLiveNote.dataset.state = "active";
+      taskLiveNote.textContent = `自动刷新中 · ${formatTaskLiveRefreshTime()} 已获取最新状态`;
+    } else {
+      taskLiveNote.dataset.state = "completed";
+      taskLiveNote.textContent = `状态已更新 · ${formatTaskLiveRefreshTime()}`;
+    }
+  }
+}
+
+function scheduleTaskLiveStatusPolling() {
+  if (!autoPipelineMonitor || document.hidden) return;
+  if (taskLiveStatusTimer) window.clearTimeout(taskLiveStatusTimer);
+  taskLiveStatusTimer = window.setTimeout(() => {
+    pollTaskLiveStatus().catch(() => {});
+  }, TASK_LIVE_STATUS_INTERVAL_MS);
+}
+
+async function pollTaskLiveStatus() {
+  if (!autoPipelineMonitor) return null;
+  const taskId = autoPipelineMonitor.dataset.taskId;
+  if (!taskId) return null;
+  if (taskLiveStatusTimer) {
+    window.clearTimeout(taskLiveStatusTimer);
+    taskLiveStatusTimer = null;
+  }
+
+  try {
+    const data = await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/live-status`);
+    renderTaskLiveStatus(data);
+    if (data.should_poll) taskLiveForcedPollingUntil = 0;
+    if (data.should_poll || Date.now() < taskLiveForcedPollingUntil) {
+      scheduleTaskLiveStatusPolling();
+    }
+    return data;
+  } catch (error) {
+    if (taskLiveNote) {
+      taskLiveNote.dataset.state = "error";
+      taskLiveNote.textContent = `自动更新暂时中断，正在重试：${summarizeErrorMessage(error.message)}`;
+    }
+    scheduleTaskLiveStatusPolling();
+    return null;
+  }
+}
+
+function startTaskLiveStatusPolling(forceRestart = false) {
+  if (!autoPipelineMonitor) return;
+  if (forceRestart) taskLiveForcedPollingUntil = Date.now() + 10000;
+  pollTaskLiveStatus().catch(() => {});
+}
+
+if (autoPipelineMonitor) {
+  startTaskLiveStatusPolling();
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      if (taskLiveStatusTimer) window.clearTimeout(taskLiveStatusTimer);
+      taskLiveStatusTimer = null;
+      return;
+    }
+    startTaskLiveStatusPolling();
+  });
 }
 
 async function pollAiAnalysisStatus(keepPolling = false) {

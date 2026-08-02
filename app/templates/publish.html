@@ -12,7 +12,7 @@
 {% endmacro %}
 
 {% macro content_row(job) %}
-<article class="publish-content-card" data-publish-row data-job-id="{{ job.id }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-section="content" {% if not job.output_is_active or job.status not in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
+<article class="publish-content-card{% if job.status == 'SCHEDULED' %} is-scheduled{% endif %}" data-publish-row data-job-id="{{ job.id }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-section="content" {% if not job.output_is_active or job.status not in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
   <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
   <div class="publish-content-media">
     <video muted preload="metadata" src="{{ job.video_media_url }}"></video>
@@ -22,6 +22,11 @@
     <div class="publish-card-heading">
       <div><small>裁剪片段</small><strong data-row-title>{{ job.output_file_name or job.title }}</strong></div>
       <div class="publish-card-heading-actions">
+        <span class="publish-schedule-badge" data-content-schedule {% if job.status != "SCHEDULED" %}hidden{% endif %}>
+          <span class="publish-schedule-dot" aria-hidden="true"></span>
+          <strong>已排期</strong>
+          <time data-content-schedule-time>{{ job.scheduled_at_display }}</time>
+        </span>
         <span class="status-pill tone-{{ 'green' if job.content_complete else 'amber' }}" data-content-ready>
           {{ "内容完整" if job.content_complete else "缺少：" ~ (job.missing_fields|join("、")) }}
         </span>
@@ -49,7 +54,7 @@
       <button type="submit" class="primary-button">保存草稿</button>
       <button type="button" class="secondary-button" data-generate-metadata>AI 补齐标题简介</button>
       <button type="button" class="secondary-button" data-generate-cover data-task-id="{{ job.task_id }}" data-clip-id="{{ job.output_clip_id }}" data-video-source="{{ job.video_source or 'original' }}">生成 / 更换封面帧</button>
-      <button type="button" class="secondary-button" data-add-to-plan>加入发布计划</button>
+      <button type="button" class="secondary-button" data-add-to-plan>{{ "调整排期" if job.status == "SCHEDULED" else "加入发布计划" }}</button>
       <span class="form-hint" data-editor-result></span>
     </div>
   </form>
@@ -228,6 +233,13 @@
       <div class="publish-calendar-weekdays" aria-hidden="true"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
       <div class="publish-calendar-grid" data-schedule-calendar role="grid" aria-label="排期月历"></div>
     </div>
+    <section class="publish-calendar-day-detail" data-calendar-day-detail hidden aria-live="polite">
+      <header>
+        <div><p class="eyebrow">Day Schedule</p><h4 data-calendar-day-title>当天排期</h4><small data-calendar-day-summary></small></div>
+        <button type="button" class="text-button" data-calendar-day-close>关闭</button>
+      </header>
+      <div class="publish-calendar-day-list" data-calendar-day-list></div>
+    </section>
   </section>
   <div class="publish-plan-section-heading"><div><p class="eyebrow">Tasks</p><h3 data-platform-list-title>抖音任务清单</h3></div><small>未排期任务也会保留在清单中，勾选后可批量设置时间。</small></div>
   <div class="publish-plan-header"><span></span><span>计划时间</span><span>视频</span><span>平台</span><span>账号</span><span>状态</span><span>操作</span></div>
@@ -339,4 +351,4 @@
 </aside>
 {% endblock %}
 
-{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260802-schedule-after-latest"></script>{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260803-calendar-day-order"></script>{% endblock %}

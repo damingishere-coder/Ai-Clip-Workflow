@@ -1,12 +1,51 @@
 # 牛马片场 / NiuMa Studio
 
-牛马片场是一个运行在 Windows 本地的 AI 高光生产后台，用来把直播录像、综艺访谈、长视频素材整理成可转写、可分析、可审核、可切割、可加字幕、可进入发送中心的短视频生产任务。
+牛马片场是一个运行在 Windows 本地的单用户 AI 高光生产后台，用来把直播录像、综艺访谈和其他长视频整理成可审核、可排期、可发送的短视频内容。
 
-当前版本：`1.5.0`。
+当前版本：`2.0.0`（界面简称 `v2.0`）。
 
-v1.5.0 将抖音和 B站的立即发送、定时发送统一到 `PublishScheduler → Registry → LocalBrowserPublisher → Windows Worker → 平台 Publisher`。FastAPI 或 Docker 负责排期，Windows Worker 使用系统 Chrome 的独立账号目录执行真实投稿。只有读取到平台作品 ID、稿件 ID 或明确成功链接才进入 `PUBLISHED`；登录失效、验证码、风控和结果不确定进入 `NEED_REVIEW`，不会自动重复上传。
+v2.0 把此前分散在多个开发分支里的素材管理、全自动处理、审核切片、内容准备、排期和真实发布能力收拢为一条稳定主线。FastAPI / Docker 负责业务与排期，Windows Worker 使用系统 Chrome 的独立账号目录执行抖音或 B站投稿。只有取得平台作品 ID、稿件 ID、作品链接或其他明确成功证据才进入 `PUBLISHED`；登录失效、验证码、风控和结果不确定统一进入 `NEED_REVIEW`，不会自动重复上传。
 
-## 定时发送快速说明
+## v2.0 项目现状
+
+| 范围 | 当前状态 | 说明 |
+| --- | --- | --- |
+| 本地生产闭环 | 已实现 | 素材入库、转写、AI 选片、人工审核、切片、文案、封面、排期和执行记录已经打通 |
+| 抖音 / B站发布架构 | 已实现 | 立即发送与定时发送共用 Scheduler、Registry、Windows Worker 和平台 Publisher |
+| 真实账号投稿 | 需逐账号灰度确认 | 平台页面、登录态和风控会变化，必须先用单条低风险素材人工验收 |
+| 运行形态 | Windows 本地单用户 | FastAPI + SQLite + 本地文件系统，不面向公网，不是多用户 SaaS |
+| 自动化边界 | 保守执行 | 不绕过二维码、短信、验证码、滑块、登录失效、平台风控或人工确认 |
+
+完整主流程：
+
+```text
+上传本地视频 / 选择 NAS 或本地已有视频
+→ E 盘任务目录与逐句时间戳转写
+→ DeepSeek / OpenAI-compatible 或 Ollama 分析高光
+→ 人工审核候选片段
+→ 保存选择并按需生成最新切片
+→ 自动准备标题、简介、话题和封面帧
+→ 发送中心核对内容与账号
+→ 立即发送或按北京时间排期
+→ Windows Chrome Worker 投稿抖音 / B站
+→ 成功、失败或人工复核记录
+```
+
+## 当前功能
+
+- **素材与存储**：支持浏览器上传、本地路径和 NAS 路径；生产视频、音频、转写、切片与发布包统一保存在配置的任务存储目录，默认使用 `E:\直播间切片工作流存储`。
+- **任务处理**：每条素材建立独立任务目录；全自动模式依次执行素材准备、转写、AI 分析、自动选片、视频切割、文案和发布任务创建。
+- **进度与恢复**：全自动任务详情每 3 秒局部更新状态、10 步进度、运行日志、候选数和输出数，不会刷新整页；失败后可从对应步骤重试或续跑。
+- **转写**：支持火山引擎远程转写和本地 faster-whisper，输出可复用的逐句时间戳原文。
+- **AI 选片**：支持远程 OpenAI-compatible / DeepSeek 与本地 Ollama；提供“通用内容价值”和“综艺笑点优先”模式，长内容可分段分析、去重和排序。
+- **审核与切片**：候选片段可启用、禁用并编辑标题、摘要和出入点；“保存并同步发送中心”会在选择变化或文件缺失时生成安全的新切片版本，一致时只做幂等同步。
+- **字幕**：保留独立字幕工作台和 ASS / FFmpeg 成片能力；v2.0 全自动主流程继续跳过字幕生成、烧录和叠加，避免把字幕步骤强绑到自动发布。
+- **内容准备**：按原始任务分组管理抖音 / B站内容，支持 AI 补齐标题简介、平台话题、候选封面帧、账号和可见范围；已排期卡片有明确状态与北京时间标记。
+- **排期计划**：支持批量预览、跨午夜每日窗口、续接当前平台最晚排期、月历日期详情、按时间升序、取消发送并返回内容准备。
+- **真实发送**：抖音和 B站使用各自 Publisher；默认 `local_browser`，`manual_export` 只做显式本地发布包导出，旧 `opencli_publish` 默认关闭。
+- **数据安全**：软删除与永久删除分开；永久删除只清理项目托管产物，外部唯一原片受保护，运行中的转写、切片或发送任务不能被删除。
+
+## 发布与排期要点
 
 - `platform` 只表示目标平台：`douyin` / `bilibili`。
 - `publish_mode` 表示执行方式：默认 `local_browser`；`manual_export` 只能显式选择；旧 `opencli_publish` 只有设置 `PUBLISH_ENABLE_OPENCLI_FALLBACK=true` 才能执行。
@@ -48,17 +87,17 @@ v1.5.0 将抖音和 B站的立即发送、定时发送统一到 `PublishSchedule
 - 用户确认后，将预览返回的精确时间列表作为 `confirmed_schedule` 调用 `PATCH /api/publish/jobs/schedule-batch`，后端逐条校验后写库。
 - 清除排期时提交 `action=clear`；普通任务回到 `WAITING`，`FAILED` 保持失败，`NEED_REVIEW` 保持复核状态。
 
-## 当前状态
+## 技术现状
 
-- 后端：FastAPI 可启动，当前 API 版本为 `1.5.0`。
+- 后端：FastAPI 可启动，当前 API 版本为 `2.0.0`。
 - 前端：HTML + CSS + JavaScript + Jinja2 后台页面，已完成 Apple 风格全页面美化。
 - 数据库：SQLite，保存任务、候选片段、输出片段、字幕任务、发送任务和 AI 配置等信息。
 - 视频处理：已接入 FFmpeg / FFprobe，用于音频提取、切片、封面帧和字幕成片。
 - 转写：支持火山引擎远程转写和本地 faster-whisper。
 - AI 分析：支持远程 OpenAI-compatible / DeepSeek 和本地 Ollama；长视频会按小段分析再合并候选片段。
 - 发送中心：分为内容准备、排期计划、执行记录；抖音 / B站真实发布由统一 Scheduler 和 Windows Chrome Worker 执行。
-- 安全边界：不会绕过验证码、登录失效、平台风控或人工确认；不会保存账号密码、cookie 或真实 API Key。
-- 配置安全：真实 `.env` 已被 Git 忽略，不会提交真实 API Key。
+- 安全边界：不会绕过验证码、登录失效、平台风控或人工确认；不会要求保存平台账号密码。
+- 配置安全：真实 `.env`、数据库、视频、日志、浏览器 Profile、Cookie 和 storage state 均被 Git 忽略；平台登录态只保留在本机专属浏览器目录。
 - 品牌说明：当前页面主名为“牛马片场”，英文代号为 `NiuMa Studio`，Docker 技术名为 `niuma-studio`。
 
 ## 新手启动方式
@@ -116,13 +155,13 @@ http://127.0.0.1:8001
 
 ---
 
-## v1.5.0 统一真实发布
+## v2.0 统一真实发布
 
 - 应用启动时会自动启动 `PublishScheduler`，默认每 5 秒扫描一次 `publish_jobs`。
 - 默认发布方式是 `local_browser`；Docker 中的 FastAPI 通过 `PUBLISH_WORKER_URL=http://host.docker.internal:8765` 调用 Windows Worker。
 - 日常启动只需打开 Docker Desktop 并运行 `niuma-studio`；Windows 后台观察器只在该容器运行时启动 Worker，项目停止 15 秒后自动关闭 Worker。
 - `.\scripts\start_niuma_studio.ps1` 和 `.\scripts\start_publish_worker.ps1` 继续保留为开发、诊断或手动维护工具，不再是日常启动必需步骤。
-- 可选的 `manual_export` 会把发布包导出到 `outputs/publish_packages/{task_id}/{clip_id}/`；发布包包含 `clip.mp4`、`title.txt`、`caption.txt`、`hashtags.txt`、`cover_text.txt`、`publish_plan.json` 和 `metadata.json`，成功状态为 `EXPORTED`。
+- 可选的 `manual_export` 会把发布包导出到 `PUBLISH_SCHEDULER_EXPORT_DIR`，默认是 `E:\直播间切片工作流存储\_发布包`；发布包包含视频、标题、简介、话题、封面文字、发布计划和元数据，成功状态为 `EXPORTED`。
 - 手动执行一次扫描：
 
 ```powershell

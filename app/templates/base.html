@@ -9,7 +9,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', path='img/brand/niuma-studio-apple-touch-icon.png') }}?v=20260604-favicon">
     <meta name="theme-color" content="#f6f9ff">
     <meta name="local-admin-token" content="{{ settings.local_admin_token }}">
-    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260722-publish-task-groups">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260803-calendar-day-order">
     {% block extra_head %}{% endblock %}
   </head>
   <body>
@@ -34,8 +34,8 @@
           <a class="{{ 'active' if active_page == 'system' else '' }}" href="/system"><span class="nav-icon">设</span><span>系统状态</span></a>
         </nav>
         <div class="sidebar-note">
-          <strong>v1.4 定时发送版</strong>
-          <span>上传、转写、AI 分析、审核、切片、字幕、封面帧和发送中心已打通，适合个人本地高光生产。</span>
+          <strong>v2.0 本地高光生产版</strong>
+          <span>素材、转写、AI 选片、审核、切片、排期和抖音 / B站发送链路已统一。</span>
         </div>
       </aside>
 
@@ -61,7 +61,7 @@
       </main>
     </div>
 
-    <script src="{{ url_for('static', path='js/app.js') }}?v=20260719-remove-legacy-publish-ui"></script>
+    <script src="{{ url_for('static', path='js/app.js') }}?v=20260802-task-live-status"></script>
     {% block extra_scripts %}{% endblock %}
   </body>
 </html>

@@ -38,6 +38,11 @@ if (publishCenterRoot) {
   const historyNextButton = document.querySelector("[data-history-next]");
   const calendarNode = document.querySelector("[data-schedule-calendar]");
   const calendarTitle = document.querySelector("[data-calendar-title]");
+  const calendarDayDetail = document.querySelector("[data-calendar-day-detail]");
+  const calendarDayTitle = document.querySelector("[data-calendar-day-title]");
+  const calendarDaySummary = document.querySelector("[data-calendar-day-summary]");
+  const calendarDayList = document.querySelector("[data-calendar-day-list]");
+  const scheduleListNode = document.querySelector(".publish-plan-list");
   const scheduleEmpty = document.querySelector("[data-schedule-empty]");
   const contentEmpty = document.querySelector("[data-content-empty]");
   const platformListTitle = document.querySelector("[data-platform-list-title]");
@@ -47,6 +52,7 @@ if (publishCenterRoot) {
   let latestPreviewItems = [];
   let activePlatform = "douyin";
   let calendarMonth = currentBeijingMonth();
+  let selectedCalendarDate = "";
   let historyMonth = currentBeijingMonth();
   let historySelectedDate = "";
   let historyDeletedView = false;
@@ -60,6 +66,8 @@ if (publishCenterRoot) {
   let historyRefreshQueuedRecords = false;
   const selectedHistoryJobIds = new Set();
   let scheduleRefreshFrame = 0;
+  let scheduleRowOrderSequence = 0;
+  const scheduleRowOrders = new WeakMap();
   let workerAvailable = schedulerHealthNode?.dataset.workerAvailable === "true";
   let workerMessage = document.querySelector("[data-worker-message]")?.textContent?.split(" · ")[0] || "Windows 发布 Worker 未连接";
 
@@ -143,6 +151,128 @@ if (publishCenterRoot) {
 
   function scheduleRows() {
     return Array.from(document.querySelectorAll('[data-publish-row][data-section="schedule"]'));
+  }
+
+  function scheduleRowOrder(row) {
+    if (!scheduleRowOrders.has(row)) {
+      scheduleRowOrders.set(row, scheduleRowOrderSequence);
+      scheduleRowOrderSequence += 1;
+    }
+    return scheduleRowOrders.get(row);
+  }
+
+  function scheduleTimestamp(row) {
+    if (String(row?.dataset.status || "").toUpperCase() !== "SCHEDULED") return Number.POSITIVE_INFINITY;
+    const timestamp = Date.parse(row.querySelector("[data-row-schedule]")?.dataset.utc || "");
+    return Number.isFinite(timestamp) ? timestamp : Number.POSITIVE_INFINITY;
+  }
+
+  function sortScheduleRows() {
+    if (!scheduleListNode) return;
+    const rows = scheduleRows();
+    rows.forEach(scheduleRowOrder);
+    rows.sort((first, second) => {
+      const firstTimestamp = scheduleTimestamp(first);
+      const secondTimestamp = scheduleTimestamp(second);
+      const firstScheduled = Number.isFinite(firstTimestamp);
+      const secondScheduled = Number.isFinite(secondTimestamp);
+      if (firstScheduled !== secondScheduled) return firstScheduled ? -1 : 1;
+      if (firstScheduled && firstTimestamp !== secondTimestamp) return firstTimestamp - secondTimestamp;
+      return scheduleRowOrder(first) - scheduleRowOrder(second);
+    });
+    rows.forEach((row) => scheduleListNode.appendChild(row));
+  }
+
+  function scheduledJobsByDate() {
+    const jobsByDate = new Map();
+    scheduleRows().forEach((row) => {
+      if (
+        row.dataset.platform !== activePlatform
+        || row.dataset.status !== "SCHEDULED"
+        || row.dataset.outputActive === "false"
+      ) return;
+      const utcValue = row.querySelector("[data-row-schedule]")?.dataset.utc || "";
+      const timestamp = Date.parse(utcValue);
+      const key = beijingDateKey(utcValue);
+      if (!key || !Number.isFinite(timestamp)) return;
+      if (!jobsByDate.has(key)) jobsByDate.set(key, []);
+      jobsByDate.get(key).push({
+        id: row.dataset.jobId,
+        title: row.querySelector("[data-row-title]")?.textContent?.trim() || "未命名任务",
+        account: row.querySelector("[data-row-account]")?.textContent?.trim() || "未选择账号",
+        status: row.querySelector("[data-row-status]")?.textContent?.trim() || "已排期",
+        time: formatBeijingTimestamp(utcValue).slice(11),
+        timestamp,
+        order: scheduleRowOrder(row),
+      });
+    });
+    jobsByDate.forEach((jobs) => {
+      jobs.sort((first, second) => first.timestamp - second.timestamp || first.order - second.order);
+    });
+    return jobsByDate;
+  }
+
+  function calendarDateLabel(value) {
+    const [year, month, day] = String(value || "").split("-").map(Number);
+    return year && month && day ? `${year} 年 ${month} 月 ${day} 日` : "当天排期";
+  }
+
+  function closeCalendarDayDetail() {
+    selectedCalendarDate = "";
+    if (calendarDayDetail) calendarDayDetail.hidden = true;
+    if (calendarDayList) calendarDayList.innerHTML = "";
+    calendarNode?.querySelectorAll("[data-calendar-date]").forEach((cell) => {
+      cell.classList.remove("is-selected");
+      cell.setAttribute("aria-selected", "false");
+    });
+  }
+
+  function renderCalendarDayDetail(jobsByDate) {
+    if (!calendarDayDetail || !calendarDayList || !selectedCalendarDate) {
+      if (calendarDayDetail) calendarDayDetail.hidden = true;
+      return;
+    }
+    const jobs = jobsByDate.get(selectedCalendarDate) || [];
+    if (!jobs.length) {
+      closeCalendarDayDetail();
+      return;
+    }
+    if (calendarDayTitle) calendarDayTitle.textContent = calendarDateLabel(selectedCalendarDate);
+    if (calendarDaySummary) {
+      calendarDaySummary.textContent = `${platformLabel()} · ${jobs.length} 条排期 · 按北京时间从早到晚`;
+    }
+    calendarDayList.innerHTML = "";
+    jobs.forEach((job) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "publish-calendar-day-item";
+      button.dataset.calendarDetailJob = job.id;
+      button.setAttribute("aria-label", `${job.time} ${job.title}，定位到任务`);
+      const time = document.createElement("time");
+      time.textContent = job.time;
+      const identity = document.createElement("span");
+      const title = document.createElement("strong");
+      title.textContent = job.title;
+      const meta = document.createElement("small");
+      meta.textContent = `${job.account} · ${job.status}`;
+      identity.append(title, meta);
+      const action = document.createElement("span");
+      action.className = "publish-calendar-day-action";
+      action.textContent = "定位到任务";
+      button.append(time, identity, action);
+      calendarDayList.appendChild(button);
+    });
+    calendarDayDetail.hidden = false;
+  }
+
+  function focusScheduleRow(jobId) {
+    const row = document.querySelector(
+      `[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(jobId || "")}"]`,
+    );
+    if (!row || row.hidden) return;
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.classList.add("is-calendar-focus");
+    window.setTimeout(() => row.classList.remove("is-calendar-focus"), 1600);
   }
 
   function setTaskGroupExpanded(group, expanded) {
@@ -258,19 +388,7 @@ if (publishCenterRoot) {
     const gridStart = new Date(Date.UTC(year, month - 1, 1 - mondayOffset));
     const todayParts = beijingDateParts();
     const todayKey = `${todayParts.year}-${String(todayParts.month).padStart(2, "0")}-${String(todayParts.day).padStart(2, "0")}`;
-    const jobsByDate = new Map();
-    scheduleRows().forEach((row) => {
-      if (row.dataset.platform !== activePlatform || row.dataset.status !== "SCHEDULED") return;
-      const utcValue = row.querySelector("[data-row-schedule]")?.dataset.utc || "";
-      const key = beijingDateKey(utcValue);
-      if (!key) return;
-      if (!jobsByDate.has(key)) jobsByDate.set(key, []);
-      jobsByDate.get(key).push({
-        id: row.dataset.jobId,
-        title: row.querySelector("[data-row-title]")?.textContent?.trim() || "未命名任务",
-        time: formatBeijingTimestamp(utcValue).slice(11),
-      });
-    });
+    const jobsByDate = scheduledJobsByDate();
     calendarNode.innerHTML = "";
     for (let index = 0; index < 42; index += 1) {
       const date = new Date(gridStart.getTime() + index * 86400000);
@@ -285,15 +403,21 @@ if (publishCenterRoot) {
       cell.dataset.date = key;
       cell.classList.toggle("is-outside", cellMonth !== month);
       cell.classList.toggle("is-today", key === todayKey);
+      cell.classList.toggle("is-has-jobs", jobs.length > 0);
+      cell.classList.toggle("is-selected", jobs.length > 0 && key === selectedCalendarDate);
+      cell.setAttribute("aria-selected", jobs.length > 0 && key === selectedCalendarDate ? "true" : "false");
+      if (jobs.length) {
+        cell.dataset.calendarDate = key;
+        cell.tabIndex = 0;
+        cell.setAttribute("aria-label", `${calendarDateLabel(key)}，${jobs.length} 条排期，点击查看全部`);
+      }
       const number = document.createElement("span");
       number.className = "calendar-day-number";
       number.textContent = String(cellDay);
       cell.appendChild(number);
       jobs.slice(0, 2).forEach((job) => {
-        const chip = document.createElement("button");
-        chip.type = "button";
+        const chip = document.createElement("span");
         chip.className = "calendar-job-chip";
-        chip.dataset.calendarJob = job.id;
         chip.title = `${job.time} ${job.title}`;
         chip.textContent = `${job.time} ${job.title}`;
         cell.appendChild(chip);
@@ -306,6 +430,7 @@ if (publishCenterRoot) {
       }
       calendarNode.appendChild(cell);
     }
+    renderCalendarDayDetail(jobsByDate);
   }
 
   function historyMonthKey() {
@@ -695,6 +820,7 @@ if (publishCenterRoot) {
   }
 
   function refreshScheduleViews() {
+    sortScheduleRows();
     renderPlatformSchedule();
     renderCalendar();
   }
@@ -914,6 +1040,7 @@ if (publishCenterRoot) {
     activePlatform = next;
     if (changed) {
       selectedJobIds.clear();
+      closeCalendarDayDetail();
       historySelectedDate = "";
       historyPage = 1;
       clearHistorySelection();
@@ -991,6 +1118,19 @@ if (publishCenterRoot) {
         readyNode.textContent = job.content_complete ? "内容完整" : `缺少：${(job.missing_fields || []).join("、")}`;
         readyNode.classList.toggle("tone-green", Boolean(job.content_complete));
         readyNode.classList.toggle("tone-amber", !job.content_complete);
+      }
+      const contentScheduleBadge = row.querySelector("[data-content-schedule]");
+      if (contentScheduleBadge) {
+        const isScheduled = status === "SCHEDULED";
+        const utcValue = job.scheduled_at_utc || job.scheduled_at || "";
+        row.classList.toggle("is-scheduled", isScheduled);
+        contentScheduleBadge.hidden = !isScheduled;
+        const contentScheduleTime = contentScheduleBadge.querySelector("[data-content-schedule-time]");
+        if (contentScheduleTime) {
+          contentScheduleTime.textContent = job.scheduled_at_display || (utcValue ? formatBeijingTimestamp(utcValue) : "");
+        }
+        const addToPlanButton = row.querySelector("[data-add-to-plan]");
+        if (addToPlanButton) addToPlanButton.textContent = isScheduled ? "调整排期" : "加入发布计划";
       }
       const restoreButton = row.querySelector("[data-restore-job]");
       if (restoreButton && job.is_user_removed !== undefined) restoreButton.hidden = !job.is_user_removed;
@@ -1250,25 +1390,37 @@ if (publishCenterRoot) {
   document.querySelector("[data-calendar-previous]")?.addEventListener("click", () => {
     const previous = new Date(Date.UTC(calendarMonth.year, calendarMonth.month - 2, 1));
     calendarMonth = { year: previous.getUTCFullYear(), month: previous.getUTCMonth() + 1 };
+    closeCalendarDayDetail();
     renderCalendar();
   });
   document.querySelector("[data-calendar-next]")?.addEventListener("click", () => {
     const next = new Date(Date.UTC(calendarMonth.year, calendarMonth.month, 1));
     calendarMonth = { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1 };
+    closeCalendarDayDetail();
     renderCalendar();
   });
   document.querySelector("[data-calendar-today]")?.addEventListener("click", () => {
     calendarMonth = currentBeijingMonth();
+    closeCalendarDayDetail();
     renderCalendar();
   });
   calendarNode?.addEventListener("click", (event) => {
-    const chip = event.target.closest("[data-calendar-job]");
-    if (!chip) return;
-    const row = document.querySelector(`[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(chip.dataset.calendarJob)}"]`);
-    if (!row || row.hidden) return;
-    row.scrollIntoView({ behavior: "smooth", block: "center" });
-    row.classList.add("is-calendar-focus");
-    window.setTimeout(() => row.classList.remove("is-calendar-focus"), 1600);
+    const cell = event.target.closest("[data-calendar-date]");
+    if (!cell) return;
+    selectedCalendarDate = cell.dataset.calendarDate || "";
+    renderCalendar();
+    calendarDayDetail?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
+  calendarNode?.addEventListener("keydown", (event) => {
+    const cell = event.target.closest("[data-calendar-date]");
+    if (!cell || !["Enter", " "].includes(event.key)) return;
+    event.preventDefault();
+    cell.click();
+  });
+  document.querySelector("[data-calendar-day-close]")?.addEventListener("click", closeCalendarDayDetail);
+  calendarDayList?.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-calendar-detail-job]");
+    if (item) focusScheduleRow(item.dataset.calendarDetailJob);
   });
   historyFilter?.addEventListener("change", () => {
     historyPage = 1;

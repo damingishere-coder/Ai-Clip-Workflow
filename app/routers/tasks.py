@@ -128,6 +128,14 @@ async def get_task_detail(task_id: str) -> dict:
     return task
 
 
+@router.get("/{task_id}/live-status")
+async def get_task_live_status(task_id: str) -> dict:
+    try:
+        return task_service.get_task_live_status(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/{task_id}/transcript-status")
 async def get_transcript_status(task_id: str) -> dict:
     try:

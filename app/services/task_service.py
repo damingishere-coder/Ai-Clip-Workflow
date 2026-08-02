@@ -185,6 +185,38 @@ STATUS_PROGRESS = {
     TaskStatus.failed.value: 0,
 }
 
+AUTO_PIPELINE_RUNNING_STATUSES = {
+    TaskStatus.CREATED.value,
+    TaskStatus.PREPARING_SOURCE.value,
+    TaskStatus.TRANSCRIBING.value,
+    TaskStatus.AI_ANALYZING.value,
+    TaskStatus.CLIP_SELECTING.value,
+    TaskStatus.VIDEO_CUTTING.value,
+    TaskStatus.METADATA_GENERATING.value,
+    TaskStatus.SCHEDULE_CREATING.value,
+    TaskStatus.PUBLISH_JOB_CREATING.value,
+    TaskStatus.transcribing.value,
+    TaskStatus.ai_analyzing.value,
+    TaskStatus.cutting.value,
+}
+
+AUTO_PIPELINE_FAILED_STATUSES = {
+    TaskStatus.FAILED_PREPARING_SOURCE.value,
+    TaskStatus.FAILED_TRANSCRIBING.value,
+    TaskStatus.FAILED_AI_ANALYZING.value,
+    TaskStatus.FAILED_CLIP_SELECTING.value,
+    TaskStatus.FAILED_VIDEO_CUTTING.value,
+    TaskStatus.FAILED_METADATA_GENERATING.value,
+    TaskStatus.FAILED_SCHEDULE_CREATING.value,
+    TaskStatus.FAILED_PUBLISH_JOB_CREATING.value,
+}
+
+AUTO_PIPELINE_RESUMABLE_STATUSES = {
+    TaskStatus.pending_review.value,
+    TaskStatus.completed_with_errors.value,
+    TaskStatus.failed.value,
+}
+
 PLATFORM_LABELS = {
     "douyin": "抖音",
     "bilibili": "B站",
@@ -234,6 +266,10 @@ def get_task_workflow_steps(task: dict) -> list[dict[str, str]]:
             TaskStatus.FAILED_METADATA_GENERATING.value: 7,
             TaskStatus.FAILED_SCHEDULE_CREATING.value: 8,
             TaskStatus.FAILED_PUBLISH_JOB_CREATING.value: 9,
+            TaskStatus.pending_review.value: 5,
+            TaskStatus.completed.value: 10,
+            TaskStatus.completed_with_errors.value: 10,
+            TaskStatus.failed.value: 1,
         }
         failed_statuses = {
             TaskStatus.FAILED_PREPARING_SOURCE.value,
@@ -244,8 +280,14 @@ def get_task_workflow_steps(task: dict) -> list[dict[str, str]]:
             TaskStatus.FAILED_METADATA_GENERATING.value,
             TaskStatus.FAILED_SCHEDULE_CREATING.value,
             TaskStatus.FAILED_PUBLISH_JOB_CREATING.value,
+            TaskStatus.completed_with_errors.value,
+            TaskStatus.failed.value,
         }
-        completed_statuses = {TaskStatus.READY_TO_PUBLISH.value, TaskStatus.COMPLETED.value}
+        completed_statuses = {
+            TaskStatus.READY_TO_PUBLISH.value,
+            TaskStatus.COMPLETED.value,
+            TaskStatus.completed.value,
+        }
         current_index = status_step_index.get(status, 1)
         steps = []
         for index, name in enumerate(AUTO_WORKFLOW_STEPS, start=1):
@@ -523,6 +565,62 @@ def get_task(task_id: str, include_video_probe: bool = True) -> dict | None:
     return _row_to_task(row, include_video_probe=include_video_probe) if row else None
 
 
+def get_task_live_status(task_id: str) -> dict:
+    task = get_task(task_id, include_video_probe=False)
+    if not task:
+        raise ValueError("任务不存在")
+
+    status = task["status"]
+    auto_mode = bool(task.get("auto_mode"))
+    is_running = auto_mode and status in AUTO_PIPELINE_RUNNING_STATUSES
+    should_poll = is_running or (auto_mode and status == TaskStatus.READY_TO_PUBLISH.value)
+    candidate_count = count_clip_candidates(task_id)
+    output_clip_count = int(task.get("output_clip_count") or 0)
+
+    primary_action = "none"
+    if auto_mode:
+        if status in AUTO_PIPELINE_FAILED_STATUSES:
+            primary_action = "retry"
+        elif status in {
+            TaskStatus.READY_TO_PUBLISH.value,
+            TaskStatus.COMPLETED.value,
+            TaskStatus.completed.value,
+        }:
+            primary_action = "publish"
+        elif status in AUTO_PIPELINE_RESUMABLE_STATUSES:
+            primary_action = "resume"
+        elif is_running:
+            primary_action = "processing"
+
+    return {
+        "task_id": task_id,
+        "status": status,
+        "status_label": task["status_label"],
+        "progress": int(task.get("progress") or 0),
+        "updated_at": task["updated_at"],
+        "error_message": task.get("error_message") or "",
+        "is_running": is_running,
+        "should_poll": should_poll,
+        "workflow_steps": get_task_workflow_steps(task),
+        "log_lines": _read_task_log_tail(task_id),
+        "counts": {
+            "candidates": candidate_count,
+            "outputs": output_clip_count,
+        },
+        "actions": {
+            "primary": primary_action,
+            "review": candidate_count > 0,
+            "publish": output_clip_count > 0
+            and status
+            in {
+                TaskStatus.READY_TO_PUBLISH.value,
+                TaskStatus.COMPLETED.value,
+                TaskStatus.completed.value,
+            },
+        },
+    }
+
+
 def list_clip_candidates(task_id: str) -> list[dict]:
     ai_source_label = get_task_ai_source_label(task_id)
     with get_connection() as connection:
@@ -706,8 +804,30 @@ def update_clip_candidates_batch(task_id: str, payloads: list[ClipCandidateBatch
         validated.append((payload.id, _validate_clip_update(task, payload)))
 
     now = _now_iso()
+    changed_count = 0
     with get_connection() as connection:
         for clip_id, data in validated:
+            current = connection.execute(
+                """
+                SELECT title, start_time, end_time, duration_seconds, enabled, summary
+                FROM clip_candidates
+                WHERE id = ? AND task_id = ? AND is_deleted = 0
+                """,
+                (clip_id, task_id),
+            ).fetchone()
+            if current is None:
+                raise ValueError(f"候选片段不存在：{clip_id}")
+            if any(
+                (
+                    str(current["title"] or "") != data["title"],
+                    str(current["start_time"] or "") != data["start_time"],
+                    str(current["end_time"] or "") != data["end_time"],
+                    int(current["duration_seconds"] or 0) != int(data["duration_seconds"]),
+                    int(current["enabled"] or 0) != int(data["enabled"]),
+                    str(current["summary"] or "") != data["summary"],
+                )
+            ):
+                changed_count += 1
             cursor = connection.execute(
                 """
                 UPDATE clip_candidates
@@ -735,8 +855,87 @@ def update_clip_candidates_batch(task_id: str, payloads: list[ClipCandidateBatch
     _append_task_log(task_id, f"已批量保存 {len(validated)} 条候选片段审核修改")
     return {
         "message": f"已保存 {len(validated)} 条候选片段，任务状态仍保持 AI 结果待检查。",
+        "changed_count": changed_count,
         "task": get_task(task_id, include_video_probe=False),
         "clips": list_clip_candidates(task_id),
+    }
+
+
+def _active_outputs_match_enabled_candidates(task_id: str) -> bool:
+    with get_connection() as connection:
+        enabled_rows = connection.execute(
+            """
+            SELECT id
+            FROM clip_candidates
+            WHERE task_id = ? AND enabled = 1 AND is_deleted = 0
+            """,
+            (task_id,),
+        ).fetchall()
+        output_rows = connection.execute(
+            """
+            SELECT clip_candidate_id, output_file_path
+            FROM output_clip
+            WHERE task_id = ? AND is_active = 1 AND status = 'completed'
+            """,
+            (task_id,),
+        ).fetchall()
+
+    enabled_ids = {str(row["id"]) for row in enabled_rows}
+    if not enabled_ids or len(output_rows) != len(enabled_ids):
+        return False
+
+    output_ids = {str(row["clip_candidate_id"] or "") for row in output_rows}
+    if output_ids != enabled_ids:
+        return False
+
+    return all(
+        bool(
+            (resolved := resolve_video_file_path(str(row["output_file_path"] or "")))
+            and resolved.exists()
+            and resolved.is_file()
+        )
+        for row in output_rows
+    )
+
+
+def sync_reviewed_clips_to_publish_center(
+    task_id: str,
+    payloads: list[ClipCandidateBatchItem],
+) -> dict:
+    save_result = update_clip_candidates_batch(task_id, payloads)
+    needs_regeneration = bool(save_result["changed_count"]) or not _active_outputs_match_enabled_candidates(task_id)
+
+    if needs_regeneration:
+        cut_result = process_task_video_cuts(task_id)
+        publish_sync = cut_result.get("publish_sync") or {
+            "status": "partial",
+            "message": "最新切片已生成，但没有取得发送中心同步结果。",
+            "errors": ["发送中心同步结果缺失"],
+        }
+        action_message = "已保存当前审核选择，并重新生成最新切片。"
+    else:
+        from app.services.publish_service import sync_task_publish_jobs
+
+        cut_result = None
+        publish_sync = sync_task_publish_jobs(
+            task_id,
+            prefer_subtitled=False,
+            restore_removed=True,
+        )
+        action_message = "已保存当前审核选择，现有切片与选择一致，无需重复生成。"
+
+    return {
+        "status": publish_sync.get("status") or "ok",
+        "message": f"{action_message}{publish_sync.get('message') or '发送中心同步完成。'}",
+        "regenerated": needs_regeneration,
+        "saved_count": len(payloads),
+        "changed_count": save_result["changed_count"],
+        "review_save": save_result,
+        "cut_result": cut_result,
+        "publish_sync": publish_sync,
+        "link_state": publish_sync.get("link_state") or {},
+        "errors": publish_sync.get("errors") or [],
+        "warnings": publish_sync.get("warnings") or [],
     }
 
 

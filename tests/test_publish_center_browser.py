@@ -74,6 +74,7 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
     init_db()
     _cleanup()
     douyin_jobs = [_seed_job(tmp_path, index) for index in range(1, 11)]
+    unscheduled = _seed_job(tmp_path, 0)
     first = douyin_jobs[0]
     newest = douyin_jobs[-1]
     bilibili = _seed_job(tmp_path, 11, "bilibili")
@@ -92,11 +93,23 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
         connection.commit()
     generated_cover = tmp_path / "browser-batch-cover.jpg"
     generated_cover.write_bytes(b"fake-cover")
+    preserved_cover = tmp_path / "browser-preserved-cover.jpg"
+    preserved_cover.write_bytes(b"existing-cover")
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE publish_jobs SET cover_file_path = ? WHERE id = ?",
+            (str(preserved_cover), unscheduled),
+        )
+        connection.commit()
 
     def fake_backfill_covers(platform=None):
         with get_connection() as connection:
             rows = connection.execute(
-                "SELECT id FROM publish_jobs WHERE task_id LIKE ? AND status = 'WAITING' AND platform = ?",
+                """
+                SELECT id FROM publish_jobs
+                WHERE task_id LIKE ? AND status = 'WAITING' AND platform = ?
+                  AND TRIM(COALESCE(cover_file_path, '')) = ''
+                """,
                 (f"{PREFIX}%", platform),
             ).fetchall()
             connection.execute(
@@ -104,6 +117,7 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
                 UPDATE publish_jobs
                 SET cover_mode = 'time', cover_time_seconds = 30, cover_file_path = ?
                 WHERE task_id LIKE ? AND status = 'WAITING' AND platform = ?
+                  AND TRIM(COALESCE(cover_file_path, '')) = ''
                 """,
                 (str(generated_cover), f"{PREFIX}%", platform),
             )
@@ -123,6 +137,7 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
     monkeypatch.setattr(publish_service, "backfill_missing_publish_covers", fake_backfill_covers)
     future_start = datetime.now() + timedelta(days=2)
     future_day = future_start.strftime("%Y-%m-%d")
+    future_day_label = f"{future_start.year} 年 {future_start.month} 月 {future_start.day} 日"
     following_day = (future_start + timedelta(days=1)).strftime("%Y-%m-%d")
     port = _free_port()
     server = uvicorn.Server(
@@ -223,6 +238,9 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             assert page.locator('[name="daily_start_time"]').input_value() == "07:00"
             assert page.locator('[name="daily_end_time"]').input_value() == "00:00"
             page.locator("[data-use-latest-schedule]").click()
+            page.locator("[data-latest-schedule-note]").filter(
+                has_text=f"本次第 1 条：{future_day} 22:00"
+            ).wait_for()
             assert page.locator('[name="start_at_local"]').input_value() == f"{future_day}T22:00"
             assert page.locator("[data-latest-schedule-note]").inner_text() == (
                 f"当前最晚：{future_day} 19:00；本次第 1 条：{future_day} 22:00"
@@ -263,6 +281,37 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             assert f"{future_day} 06:00" in page.locator(
                 f'[data-publish-row][data-section="schedule"][data-job-id="{first}"] [data-row-schedule]'
             ).inner_text()
+            visible_test_rows = page.locator(
+                f'[data-publish-row][data-section="schedule"][data-job-id^="{PREFIX}"]:visible'
+            )
+            assert visible_test_rows.evaluate_all("rows => rows.map((row) => row.dataset.jobId)") == [
+                *douyin_jobs,
+                unscheduled,
+            ]
+
+            calendar_day = page.locator(f'[data-calendar-date="{future_day}"]')
+            assert calendar_day.locator(".calendar-job-chip").all_inner_texts() == [
+                "06:00 浏览器测试片段 1",
+                "09:00 浏览器测试片段 2",
+            ]
+            assert calendar_day.locator(".calendar-job-more").inner_text() == "另有 4 条"
+            calendar_day.click()
+            day_detail = page.locator("[data-calendar-day-detail]")
+            assert day_detail.is_visible()
+            assert day_detail.locator("[data-calendar-day-title]").inner_text() == future_day_label
+            assert "6 条排期" in day_detail.locator("[data-calendar-day-summary]").inner_text()
+            assert day_detail.locator(".publish-calendar-day-item time").all_inner_texts() == [
+                "06:00", "09:00", "12:00", "15:00", "18:00", "21:00",
+            ]
+            day_detail.locator(f'[data-calendar-detail-job="{first}"]').click()
+            assert "is-calendar-focus" in page.locator(
+                f'[data-publish-row][data-section="schedule"][data-job-id="{first}"]'
+            ).get_attribute("class")
+            page.locator("[data-calendar-day-close]").click()
+            assert day_detail.is_hidden()
+            calendar_day.focus()
+            calendar_day.press("Enter")
+            assert day_detail.is_visible()
 
             dialogs = []
             page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.accept()))
@@ -281,6 +330,13 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             assert "已取消发送并返回内容准备" in page.locator("#send-center-message").inner_text()
 
             page.locator('[data-center-tab="schedule"]').click()
+            assert page.locator(
+                f'[data-publish-row][data-section="schedule"][data-job-id^="{PREFIX}"]:visible'
+            ).evaluate_all("rows => rows.map((row) => row.dataset.jobId)") == [
+                *douyin_jobs[:-1],
+                newest,
+                unscheduled,
+            ]
             page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{first}"] [data-publish-now]').click()
             assert any("抖音" in message for message in dialogs)
             page.locator("#send-center-message").filter(has_text="统一调度").wait_for()

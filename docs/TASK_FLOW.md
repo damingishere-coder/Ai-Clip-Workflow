@@ -36,7 +36,7 @@ pending_video          ← 任务已创建，尚未上传视频
 - `completed` / `completed_with_errors` 代表"自动切割阶段结束"，不是平台发布完成。
 - 字幕和发布是独立于主任务状态的后续工作流。
 
-## 3. v1.3.0 全自动任务状态流
+## 3. v2.0.0 全自动任务状态流
 
 `auto_mode=true` 的任务使用独立的大写状态，不破坏原有手动流程：
 
@@ -78,7 +78,9 @@ FAILED_PUBLISH_JOB_CREATING
 - 自动选片数量读取 `tasks.candidate_clip_count`，时长上限读取 `tasks.max_clip_duration`；旧自动数量和最小/最大秒数只保留兼容，不再参与新任务决策。
 - 切片输出仍写入 `05_clips/`，并写入 `output_clip`；单个切片失败不会阻断其他成功切片生成文案和发布任务。
 - `SCHEDULE_CREATING` 当前表示整理发送队列，不再自动计算发布时间。
-- 发布任务先以 `WAITING` / `NEED_REVIEW` 创建；用户在发送中心批量设置时间后进入 `SCHEDULED`，再由 v1.4.0 调度器执行。
+- 发布任务先以 `WAITING` / `NEED_REVIEW` 创建；用户在发送中心批量设置时间后进入 `SCHEDULED`，再由当前 `PublishScheduler` 到点执行。
+- 任务详情调用 `GET /api/tasks/{task_id}/live-status`，处理中每 3 秒局部更新状态、进度、10 步时间线、日志、候选/输出数量和可用操作；完成或失败后停止轮询。
+- 网络短暂中断只显示重试提示，不会整页刷新，也不会清空正在编辑但尚未保存的 AI Prompt。
 
 ## 4. 失败流转
 
@@ -150,7 +152,8 @@ audio/source.wav
 
 ## 8. 自动切割阶段
 
-- 用户在片段审核页点击"生成切片"后，任务进入 `cutting`。
+- 用户在片段审核页点击“生成切片”时，页面会先保存当前启用状态、标题、摘要和出入点，再让任务进入 `cutting`。
+- 点击“保存并同步发送中心”会先比较当前启用候选与激活成片；有变化、文件缺失或数量不一致时生成新版本，完全一致时只执行幂等同步。
 - 所有启用片段都切割成功时，任务进入 `completed`。
 - 至少一个片段成功、同时存在失败片段时，任务进入 `completed_with_errors`。
 - 所有片段都失败时，任务进入 `failed`。
@@ -214,6 +217,8 @@ output_clip 生成成功
 ### 排期与立即发送
 
 - 浏览器提交北京时间 `start_at_local`；后端按 `Asia/Shanghai` 应用每日开始/结束窗口，跨日后顺延到次日开始时间。
+- 排期支持续接当前平台最晚未来任务；抖音和 B站独立计算，选中但尚未保存的任务不会被当成已有排期重复计算。
+- 排期月历可展开某天全部任务；当天详情和主任务清单都按北京时间升序，未排期任务保留在已排期任务之后。
 - `scheduled_at` 统一存 UTC ISO 8601，API 同时返回 `scheduled_at_utc` 与 `scheduled_at_local`。
 - 自动调度只读取到期的 `SCHEDULED`；`NEED_REVIEW` 即使有时间也不能执行。
 - “立即发送”允许 `DRAFT`、`WAITING`、`SCHEDULED`，只把 `scheduled_at` 更新为当前 UTC 并唤醒 Scheduler；不直接调用 opencli 或平台页面。

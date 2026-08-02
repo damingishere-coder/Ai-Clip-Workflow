@@ -155,6 +155,37 @@ def test_publish_page_renders_task_identity_without_full_source_path(tmp_path: P
     assert "移出内容准备" in html
 
 
+def test_scheduled_content_card_has_clear_schedule_marker(tmp_path: Path) -> None:
+    task_id, _ = _insert_task(tmp_path, "已排期标记任务", created_at=_time(-5))
+    job_id, _, _ = _insert_clip_job(
+        tmp_path,
+        task_id,
+        platform="douyin",
+        status="SCHEDULED",
+        created_at=_time(-4),
+    )
+
+    response = TestClient(app).get("/publish")
+    html = response.text
+    card_start = html.index(f'data-job-id="{job_id}"')
+    card_end = html.index("</article>", card_start)
+    card_html = html[card_start:card_end]
+
+    assert response.status_code == 200
+    assert 'data-status="SCHEDULED"' in card_html
+    assert "data-content-schedule" in card_html
+    assert "已排期" in card_html
+    assert "调整排期" in card_html
+
+
+def test_schedule_marker_updates_without_page_reload() -> None:
+    script = (settings.project_root / "app" / "static" / "js" / "publish-center.js").read_text(encoding="utf-8")
+
+    assert 'row.classList.toggle("is-scheduled", isScheduled)' in script
+    assert "contentScheduleBadge.hidden = !isScheduled" in script
+    assert 'isScheduled ? "调整排期" : "加入发布计划"' in script
+
+
 def test_dismiss_keeps_files_and_other_platform_and_blocks_recreation(tmp_path: Path) -> None:
     task_id, _ = _insert_task(tmp_path, "安全移出任务", created_at=_time(-5))
     douyin_job, clip_id, clip_path = _insert_clip_job(

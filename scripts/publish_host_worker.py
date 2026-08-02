@@ -148,7 +148,7 @@ def _resolve_media_path(raw_value: str, *, required: bool) -> str:
 
 def create_worker_app(token: str | None = None) -> FastAPI:
     worker_token = str(token if token is not None else settings.publish_worker_token)
-    worker = FastAPI(title="NiuMa Studio Publish Worker", version="1.5.0")
+    worker = FastAPI(title="NiuMa Studio Publish Worker", version="2.0.0")
 
     def require_token(authorization: str = Header(default="")) -> None:
         if not worker_token:

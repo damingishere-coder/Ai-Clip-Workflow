@@ -473,8 +473,8 @@ class PipelineEngine:
             "publish_job_count": publish_job_count,
             "need_review_clips": need_review,
             "failures": failures,
-            "next_step": "打开发布中心人工确认发布任务；真正定时发送将在 v1.4.0 实现。",
-            "subtitle_note": "v1.3.0 全自动模式已跳过加字幕、字幕样式渲染和字幕烧录。",
+            "next_step": "打开发送中心核对内容、账号与北京时间；确认后可立即发送或设置排期。",
+            "subtitle_note": "v2.0 全自动模式继续跳过加字幕、字幕样式渲染和字幕烧录。",
         }
         summary_path = paths["analysis_path"].parent / "task_summary.json"
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

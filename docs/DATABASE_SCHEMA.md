@@ -408,7 +408,7 @@ data/workflow.sqlite3
 
 ## 2026-06-09 v1.2 补充说明
 
-- 以上 v1.2 说明仅是历史记录。v1.5.0 已由 `PublishScheduler` 执行到期任务，并通过 Windows Worker 调用抖音/B站 Publisher。
+- 以上 v1.2 说明仅是历史记录。v2.0.0 已由 `PublishScheduler` 执行到期任务，并通过 Windows Worker 调用抖音/B站 Publisher。
 - 平台发送不绕过验证码、登录失效、风控和人工确认；结果不确定写 `NEED_REVIEW`。
 - 代码中仍存在兼容性 `clips` 子目录（`TASK_SUBDIRECTORIES` 同时包含 `clips` 和 `05_clips`），新任务的正式输出目录是 `05_clips`。旧 `clips` 目录为兼容保留，不建议删除。
 # 2026-06-23：v1.4.0 定时发送字段
@@ -417,7 +417,7 @@ data/workflow.sqlite3
 - 旧字段继续兼容：`output_clip_id` 等同于 `clip_id`，`description` 等同于 `caption`，`tags` 等同于 `hashtags`，`video_file_path` 等同于 `video_path`，`provider_response` 兼容 `publish_result`，`retry_count` 兼容 `attempt_count`。
 - 发布状态使用：`DRAFT`、`SCHEDULED`、`WAITING`、`PUBLISHING`、`PUBLISHED`、`FAILED`、`CANCELLED`、`NEED_REVIEW`。
 - 调度器只扫描 `status = SCHEDULED` 且 `scheduled_at <= 当前时间` 的任务；`NEED_REVIEW`、`CANCELLED`、`PUBLISHED` 不会自动发布。
-- 该 2026-06-23 版本曾默认使用 `manual_export`，2026-07-11 曾改为 `opencli_publish`；v1.5.0 当前默认是 `local_browser`。发布包导出成功写 `EXPORTED` 且不写 `published_at`；只有平台确认提交成功才写 `PUBLISHED` 和 `published_at`。
+- 该 2026-06-23 版本曾默认使用 `manual_export`，2026-07-11 曾改为 `opencli_publish`；v2.0.0 当前默认是 `local_browser`。发布包导出成功写 `EXPORTED` 且不写 `published_at`；只有平台确认提交成功才写 `PUBLISHED` 和 `published_at`。
 - 没有 `scheduled_at` 的旧手动发送任务迁移为 `WAITING`，避免被自动调度器误执行。
 
 ## 2026-07-27：取消发送状态兼容

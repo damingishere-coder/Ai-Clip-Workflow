@@ -1,4 +1,4 @@
-"""v1.3.0 全自动任务流水线最小测试。"""
+"""v2.0.0 全自动任务流水线回归测试。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ from app.models.task import TaskCreate, TaskStatus
 from app.services.auto_publish_service import create_auto_publish_jobs
 from app.services.pipeline_engine import PipelineEngine, build_schedule_times
 from app.services.storage_service import get_artifact_paths
-from app.services.task_lifecycle_service import create_task_record
+from app.services.task_lifecycle_service import create_task_record, update_task_status
+from app.services.task_log_service import append_task_log
 from app.services.task_service import get_task
 
 
@@ -460,3 +461,81 @@ def test_auto_resume_endpoint_starts_from_clip_selection(monkeypatch):
     assert starter.call_args.args[0] == task["id"]
     assert starter.call_args.kwargs["start_step"] == TaskStatus.CLIP_SELECTING
     assert starter.call_args.kwargs["background_tasks"] is not None
+
+
+def test_live_status_endpoint_tracks_running_auto_pipeline():
+    task = _create_auto_task("test-auto-live-running")
+    update_task_status(task["id"], TaskStatus.AI_ANALYZING)
+    append_task_log(task["id"], "实时状态测试日志")
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/tasks/{task['id']}/live-status", headers=_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == TaskStatus.AI_ANALYZING.value
+    assert payload["status_label"] == "AI 分析中"
+    assert payload["progress"] == 45
+    assert payload["is_running"] is True
+    assert payload["should_poll"] is True
+    assert payload["actions"]["primary"] == "processing"
+    assert len(payload["workflow_steps"]) == 10
+    assert payload["workflow_steps"][3]["state"] == "current"
+    assert any("实时状态测试日志" in line for line in payload["log_lines"])
+
+
+def test_live_status_endpoint_returns_failure_and_retry_action():
+    task = _create_auto_task("test-auto-live-failed")
+    update_task_status(task["id"], TaskStatus.FAILED_AI_ANALYZING, "模型服务暂时不可用")
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/tasks/{task['id']}/live-status", headers=_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["should_poll"] is False
+    assert payload["error_message"] == "模型服务暂时不可用"
+    assert payload["actions"]["primary"] == "retry"
+    assert payload["workflow_steps"][3]["state"] == "warning"
+
+
+def test_live_status_endpoint_returns_completed_actions(monkeypatch):
+    task = _create_auto_task("test-auto-live-completed")
+    update_task_status(task["id"], TaskStatus.COMPLETED)
+    monkeypatch.setattr("app.services.task_service.count_clip_candidates", lambda _task_id: 3)
+    monkeypatch.setattr("app.services.task_service.count_output_clips", lambda _task_id: 2)
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/tasks/{task['id']}/live-status", headers=_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["progress"] == 100
+    assert payload["should_poll"] is False
+    assert payload["counts"] == {"candidates": 3, "outputs": 2}
+    assert payload["actions"] == {"primary": "publish", "review": True, "publish": True}
+    assert all(step["state"] == "done" for step in payload["workflow_steps"])
+
+
+def test_live_status_endpoint_returns_404_for_missing_task():
+    with TestClient(app) as client:
+        response = client.get("/api/tasks/test-auto-missing/live-status", headers=_headers())
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "任务不存在"
+
+
+def test_task_detail_live_status_frontend_uses_partial_refresh():
+    template = (settings.project_root / "app" / "templates" / "task_detail.html").read_text(encoding="utf-8")
+    script = (settings.project_root / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    live_script = script[
+        script.index("function renderTaskLiveStatus"):
+        script.index("async function pollAiAnalysisStatus")
+    ]
+
+    assert "data-task-live-overview" in template
+    assert "data-live-task-actions" in template
+    assert "/live-status" in live_script
+    assert "TASK_LIVE_STATUS_INTERVAL_MS = 3000" in script
+    assert 'document.addEventListener("visibilitychange"' in live_script
+    assert "window.location.reload" not in live_script

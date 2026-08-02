@@ -180,7 +180,7 @@
       </div>
       <ul class="compact-list preview-action-notes">
         <li>保存后任务仍保持：{{ task.status_label }}，这里主要作为 AI 结果检查入口。</li>
-        <li>生成切片会使用当前启用片段，并把新版本安全同步到发送中心内容准备。</li>
+        <li>生成切片会先保存当前审核选择；“保存并同步发送中心”会在需要时自动生成最新切片。</li>
         <li>发送关联：{{ publish_link_state.label }}{% if publish_link_state.stale_pending_count %} · 旧版待处理 {{ publish_link_state.stale_pending_count }} 条{% endif %}</li>
         <li>AI 分析策略：优先选择有铺垫、爆点 / 观点、反应和自然收尾的完整片段。</li>
       </ul>
@@ -188,8 +188,8 @@
         <button class="secondary-button review-action-button" id="save-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/clips/batch-update" {{ "disabled" if not clips else "" }}>保存修改</button>
         <button class="primary-button review-action-button review-action-main" id="generate-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/cuts" {{ "disabled" if not clips else "" }}>生成切片</button>
         <a class="secondary-button review-action-button" href="/subtitles/{{ task.id }}">去字幕推送</a>
+        <button class="secondary-button review-action-button" type="button" data-sync-publish-task data-sync-reviewed-clips="true" data-task-id="{{ task.id }}" {{ "disabled" if not clips else "" }}>保存并同步发送中心</button>
         {% if output_clips %}
-        <button class="secondary-button review-action-button" type="button" data-sync-publish-task data-task-id="{{ task.id }}">同步发送中心</button>
         <a class="secondary-button review-action-button" href="/publish?task_id={{ task.id }}&tab=content">查看本任务发送内容</a>
         {% endif %}
       </div>
