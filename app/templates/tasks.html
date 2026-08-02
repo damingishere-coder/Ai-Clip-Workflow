@@ -64,6 +64,10 @@
           <td>
             {% if task.output_clip_count > 0 %}
             <span class="status-pill tone-blue">待加字幕</span>
+            {% set link = task.publish_link_state or {} %}
+            <span class="status-pill tone-{{ 'green' if link.state == 'linked' else ('amber' if link.state in ['needs_sync', 'attention'] else 'blue') }}">
+              {{ link.label or "等待发送关联" }}
+            </span>
             {% elif task.status in ["completed", "completed_with_errors"] %}
             <span class="status-pill tone-amber">等待切片文件</span>
             {% else %}
@@ -74,8 +78,9 @@
           <td class="action-links">
             <a href="/tasks/{{ task.id }}">详情</a>
             <a href="/tasks/{{ task.id }}/clips/review">审核</a>
-            <a href="/subtitles">字幕</a>
-            <button class="link-button danger js-hide-task" type="button" data-task-id="{{ task.id }}" data-task-title="{{ task.title }}">移入回收站</button>
+            <a href="/subtitles/{{ task.id }}">字幕</a>
+            {% if task.output_clip_count > 0 %}<a href="/publish?task_id={{ task.id }}&tab=content">发送中心</a>{% endif %}
+            <button class="link-button danger js-hide-task" type="button" data-task-id="{{ task.id }}" data-task-title="{{ task.title }}">永久删除</button>
           </td>
         </tr>
         {% endfor %}

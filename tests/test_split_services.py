@@ -15,7 +15,7 @@ from app.models.task import TaskCreate, TaskStatus
 from app.services.task_log_service import append_task_log, read_task_log_tail
 from app.services.task_lifecycle_service import (
     create_task_record,
-    soft_delete_task,
+    delete_task_permanently,
     update_task_candidate_clip_count,
     update_task_status,
 )
@@ -138,8 +138,8 @@ class TestTaskLifecycle:
         result = update_task_status("nonexistent-id", TaskStatus.completed)
         assert result is None
 
-    def test_soft_delete_task(self):
-        """软删除任务标记 is_deleted=1"""
+    def test_permanent_delete_task(self):
+        """永久删除任务文件并保留隐藏数据库记录"""
         payload = TaskCreate(
             task_name="删除测试",
             source_type="upload",
@@ -150,12 +150,12 @@ class TestTaskLifecycle:
         )
         create_task_record(payload, task_id="test-delete-001")
 
-        result = soft_delete_task("test-delete-001")
-        assert "已隐藏" in result["message"]
+        result = delete_task_permanently("test-delete-001")
+        assert result["status"] == "deleted"
+        assert "永久删除" in result["message"]
 
-        # 再次删除应提示无需重复操作
-        result2 = soft_delete_task("test-delete-001")
-        assert "无需重复" in result2["message"]
+        result2 = delete_task_permanently("test-delete-001")
+        assert result2["status"] == "already_deleted"
 
     def test_update_candidate_clip_count_invalid(self):
         """候选片段数量超出范围应报错"""

@@ -36,7 +36,7 @@ pending_video          ← 任务已创建，尚未上传视频
 - `completed` / `completed_with_errors` 代表"自动切割阶段结束"，不是平台发布完成。
 - 字幕和发布是独立于主任务状态的后续工作流。
 
-## 3. v1.3.0 全自动任务状态流
+## 3. v2.0.0 全自动任务状态流
 
 `auto_mode=true` 的任务使用独立的大写状态，不破坏原有手动流程：
 
@@ -78,7 +78,9 @@ FAILED_PUBLISH_JOB_CREATING
 - 自动选片数量读取 `tasks.candidate_clip_count`，时长上限读取 `tasks.max_clip_duration`；旧自动数量和最小/最大秒数只保留兼容，不再参与新任务决策。
 - 切片输出仍写入 `05_clips/`，并写入 `output_clip`；单个切片失败不会阻断其他成功切片生成文案和发布任务。
 - `SCHEDULE_CREATING` 当前表示整理发送队列，不再自动计算发布时间。
-- 发布任务先以 `WAITING` / `NEED_REVIEW` 创建；用户在发送中心批量设置时间后进入 `SCHEDULED`，再由 v1.4.0 调度器执行。
+- 发布任务先以 `WAITING` / `NEED_REVIEW` 创建；用户在发送中心批量设置时间后进入 `SCHEDULED`，再由当前 `PublishScheduler` 到点执行。
+- 任务详情调用 `GET /api/tasks/{task_id}/live-status`，处理中每 3 秒局部更新状态、进度、10 步时间线、日志、候选/输出数量和可用操作；完成或失败后停止轮询。
+- 网络短暂中断只显示重试提示，不会整页刷新，也不会清空正在编辑但尚未保存的 AI Prompt。
 
 ## 4. 失败流转
 
@@ -150,7 +152,8 @@ audio/source.wav
 
 ## 8. 自动切割阶段
 
-- 用户在片段审核页点击"生成切片"后，任务进入 `cutting`。
+- 用户在片段审核页点击“生成切片”时，页面会先保存当前启用状态、标题、摘要和出入点，再让任务进入 `cutting`。
+- 点击“保存并同步发送中心”会先比较当前启用候选与激活成片；有变化、文件缺失或数量不一致时生成新版本，完全一致时只执行幂等同步。
 - 所有启用片段都切割成功时，任务进入 `completed`。
 - 至少一个片段成功、同时存在失败片段时，任务进入 `completed_with_errors`。
 - 所有片段都失败时，任务进入 `failed`。
@@ -178,37 +181,54 @@ output_clip 生成成功
 发送中心是切片生成后的独立 `publish_jobs` 流程，不直接混入 `tasks.status`：
 
 ```text
-output_clip 生成成功 + 字幕完成
-→ /publish 发送中心
-→ 刷新发送队列（从已完成切片生成抖音 + B站双平台 opencli 任务）
-→ publish_jobs.status = ready
-→ 用户确认标题、话题、简介、封面帧
-→ 点击"发送此条"
-→ opencli 辅助浏览器打开平台投稿页
-→ 自动填写标题、简介、上传视频、选择封面
-→ 点击发布，等待平台成功信号
-→ publish_jobs.status = publishing → published / failed
+output_clip 生成成功
+→ 全自动流程按 metadata.platform 创建 publish_jobs
+→ DRAFT / WAITING
+→ 用户在“内容准备”复核内容、平台和账号
+→ 排期抽屉先调用 POST /api/publish/schedules/preview
+→ 确认后将精确时间列表提交 PATCH /api/publish/jobs/schedule-batch
+→ SCHEDULED（scheduled_at 保存 UTC +00:00，timezone 保存 Asia/Shanghai）
+→ 调度器到点使用 BEGIN IMMEDIATE 原子领取为 PUBLISHING
+→ Registry 按 platform + publish_mode 分发
+   ├─ local_browser → Windows Worker → DouyinPublisher / BilibiliPublisher
+   │    ├─ 平台确认成功 → PUBLISHED
+   │    ├─ 明确失败 → FAILED
+   │    └─ 登录/验证/风控/结果不确定 → NEED_REVIEW
+   ├─ manual_export → 本地发布包 → EXPORTED / FAILED
+   └─ opencli_publish → 显式兼容开关 → PUBLISHED / FAILED / NEED_REVIEW
 ```
+
+`platform` 只能是 `douyin` / `bilibili`；`publish_mode` 只能表示执行方式，禁止互相混用。发送中心的“补充缺失任务”只补缺，不覆盖已有任务的执行方式。
 
 ### 发送任务状态（publish_jobs.status）
 
 | 状态 | 说明 |
 | --- | --- |
-| `NEED_REVIEW` | 全自动文案含风险标记，需要人工复核后再发送 |
-| `ready` | 待发送，已整理好标题、封面和视频 |
-| `publishing` | 发送中，opencli 正在操作浏览器 |
-| `published` | 已发布，平台返回成功信号 |
-| `failed` | 发送失败，error_message 记录具体原因 |
-| `cancelled` | 已取消，用户主动取消 |
+| `DRAFT` | 草稿，尚未进入排期或执行 |
+| `WAITING` | 内容已生成，等待排期或立即发送 |
+| `SCHEDULED` | 已保存 UTC 计划时间，等待调度器扫描 |
+| `NEED_REVIEW` | 登录、验证码、风控或平台结果不确定，需要人工核对 |
+| `PUBLISHING` | 已被一个调度器原子领取，正在执行 |
+| `PUBLISHED` | 平台 Publisher 已取得作品 ID、稿件 ID、作品链接或明确成功证据 |
+| `EXPORTED` | 本地发布包已导出，不代表平台已发布 |
+| `FAILED` | 明确失败；手动重试会创建带 `retry_of_job_id` 的新任务并保留旧记录 |
+| `CANCELLED` | 用户取消，或迁移时取消了较旧的未发布重复任务 |
 
-### scheduled_at 字段说明
+### 排期与立即发送
 
-- `publish_jobs.scheduled_at` 当前可以由全自动流水线写入计划发布时间。
-- v1.3.0 还没有后台定时调度器，不会自动按 `scheduled_at` 发送。
-- 所有发送都需要用户手动在发送中心点击"发送此条"或"开始发送全部"触发。
+- 浏览器提交北京时间 `start_at_local`；后端按 `Asia/Shanghai` 应用每日开始/结束窗口，跨日后顺延到次日开始时间。
+- 排期支持续接当前平台最晚未来任务；抖音和 B站独立计算，选中但尚未保存的任务不会被当成已有排期重复计算。
+- 排期月历可展开某天全部任务；当天详情和主任务清单都按北京时间升序，未排期任务保留在已排期任务之后。
+- `scheduled_at` 统一存 UTC ISO 8601，API 同时返回 `scheduled_at_utc` 与 `scheduled_at_local`。
+- 自动调度只读取到期的 `SCHEDULED`；`NEED_REVIEW` 即使有时间也不能执行。
+- “立即发送”允许 `DRAFT`、`WAITING`、`SCHEDULED`，只把 `scheduled_at` 更新为当前 UTC 并唤醒 Scheduler；不直接调用 opencli 或平台页面。
+- 领取任务使用 `BEGIN IMMEDIATE` 与条件更新；只有 `SCHEDULED → PUBLISHING` 更新成功的 Worker 能执行。
+- Worker 未接收任务前的连接故障最多安全重试 3 次；上传开始、点击提交或执行阶段未知时禁止自动重试。
+- 启动恢复会查询 Worker 执行日志；确认未上传才重新排队，旧版未知 `PUBLISHING` 直接进入 `NEED_REVIEW`。
 
 ### 安全边界
 
-- 平台发送依赖 opencli 辅助浏览器操作。
+- 默认 `local_browser` 依赖 Windows Worker 和专属 Chrome 登录目录；健康状态见 `GET /api/publish/scheduler/health`。
 - 不绕过验证码、登录失效、风控和人工确认。
-- 遇到平台验证提示时，任务会标记为 `failed` 并记录具体原因，等待人工处理。
+- 遇到平台验证提示或发布结果不确定时进入 `NEED_REVIEW`，不会标记为已发布，也不会自动重传。
+- 人工标记 `PUBLISHED` 必须从 `NEED_REVIEW` 操作并填写对应平台作品链接。

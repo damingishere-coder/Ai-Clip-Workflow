@@ -4,7 +4,9 @@
 
 ### 1.1 架构形态
 
-当前 v1.3 为 **FastAPI 单体应用**，运行在 Windows 本地，所有组件打包在同一个进程中。
+当前 v2.0.0 保持 **FastAPI 单体应用 + SQLite + Windows 发布 Worker**。视频、AI、页面和调度器仍在同一个应用中；只有必须使用宿主系统 Chrome 的真实发布动作由 Windows Worker 执行，不引入 Redis、Celery 或微服务。
+
+v2.0 的架构目标不是云端多租户，而是把一台 Windows 电脑上的长视频生产与发布链路做完整、可恢复、可审计。SQLite 是唯一业务事实来源，E 盘任务目录保存大文件，浏览器 Profile 和平台登录态只保留在本机且不进入 Git。
 
 ```text
 ┌─────────────────────────────────────────────────────────┐
@@ -46,16 +48,21 @@
 | **视频处理** | FFmpeg / FFprobe | 音频提取、视频切割、字幕合成、封面帧 |
 | **语音转写** | faster-whisper / 火山引擎 | 本地模型或远程 API，输出逐句时间戳 |
 | **AI 分析** | DeepSeek API / Ollama | Provider 抽象层，支持 chat/completions 和 responses 协议 |
-| **发布辅助** | opencli | 调用已登录 Chrome 辅助浏览器投稿 |
+| **真实发布** | Playwright + 系统 Chrome | Windows Worker 使用每个平台/账号独立浏览器目录投稿 |
 | **容器化** | Docker + docker-compose | 可选部署方式，开发/测试用 |
 
 ### 1.3 核心设计决策
 
-- **单体进程**：所有路由、服务、数据库访问在同一 Python 进程中，无独立 Worker。
+- **单体业务应用**：页面、路由、视频、AI、SQLite 和 Scheduler 保持同一 FastAPI 应用；Windows Worker 只隔离宿主 Chrome 操作。
+- **SQLite 单写入者**：只有 Docker 内的 FastAPI 可以读写 `workflow.sqlite3`；Windows Worker 不导入数据库仓储、不打开 SQLite，只通过 HTTP 返回账号检查/发布结果并写独立执行日志。
 - **同步 FFmpeg**：视频处理通过 `subprocess` 同步调用，阻塞当前请求直到完成。
-- **无消息队列**：任务处理由前端按钮触发，无后台 Job Queue / Celery。
+- **无外部消息队列**：发布队列直接使用 SQLite 原子状态更新，无 Redis / Celery。
 - **无用户体系**：单用户本地使用，通过 `LOCAL_ADMIN_TOKEN` 做简易鉴权。
-- **无定时调度**：`publish_jobs.scheduled_at` 仅为字段预留，不自动发送。
+- **统一定时调度**：立即发送与未来排期都先写 `SCHEDULED`，再由 `PublishScheduler` 原子领取。
+- **终态原子提交**：平台结果、任务终态和事件由 FastAPI 在同一 SQLite 事务写入；任一步失败都会回滚，避免出现“平台结果已记但任务仍在发送中”。
+- **调度循环自恢复**：单条任务异常不会阻塞后续排期；SQLite 临时异常只结束当前扫描，常驻循环按配置间隔继续重试并在健康接口公开连续失败次数。
+- **执行日志恢复**：Worker 的 `/v1/executions/{execution_id}` 是跨进程中断恢复依据；已确认成功只补记终态，结果不确定一律进入人工复核，不自动重复投稿。
+- **保守结果语义**：只有平台成功证据进入 `PUBLISHED`；不确定结果进入 `NEED_REVIEW`，禁止自动重复上传。
 
 ---
 
@@ -87,8 +94,11 @@ app/
     ├── ai_clip_service.py   ← AI 片段分析编排
     ├── ai_config_service.py ← AI 配置读写
     ├── ai_prompt_preset_service.py ← Prompt 方案服务
-    ├── publish_service.py   ← 发送中心服务
-    ├── publish_providers.py ← 发布平台 Provider
+    ├── publish_service.py   ← 内容准备、账号和兼容 API
+    ├── publish_scheduler.py ← SQLite 排期、原子领取、恢复和状态机
+    ├── publish_repository.py← 发布结果脱敏与事件记录
+    ├── publish_time.py      ← 北京时间输入与 UTC 存储
+    ├── publishers/          ← Registry、模式 Publisher、抖音/B站 Publisher、Worker 客户端
     └── ai/
         ├── base.py          ← AI Provider 抽象基类
         ├── local_model_provider.py    ← Ollama 本地 Provider
@@ -108,7 +118,7 @@ app/
 - **迁移方式**：`init_db()` 启动时自动执行 `CREATE TABLE IF NOT EXISTS` + 逐列 ALTER TABLE 补齐
 - **种子数据**：启动时自动写入默认 AI Prompt 方案、字幕样式、平台配置
 
-### 3.2 表结构（10 张表）
+### 3.2 发布相关表
 
 | 表名 | 用途 |
 | --- | --- |
@@ -122,6 +132,7 @@ app/
 | `publish_platform_configs` | 平台 OAuth 配置 |
 | `publish_accounts` | 发布账号 |
 | `publish_jobs` | 发布任务队列 |
+| `publish_job_events` | 状态流转、领取、重试和平台结果事件 |
 
 详见 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)
 
@@ -161,32 +172,36 @@ app/
 
 ## 5. 发送中心架构
 
-```text
-output_clip 生成 + 字幕完成
-        │
-        ▼
-┌───────────────┐
-│  发送中心页面   │
-│  /publish      │
-└───────┬───────┘
-        │
-        ▼
-┌───────────────────────────────────────────┐
-│  publish_service.py                       │
-│                                           │
-│  ┌─────────┐  ┌─────────┐  ┌──────────┐ │
-│  │ 队列刷新 │  │ AI 文案 │  │ 封面帧   │ │
-│  │ 双平台   │  │ 标题/简介│  │ 07_covers│ │
-│  └─────────┘  └─────────┘  └──────────┘ │
-│                                           │
-│  ┌─────────────────────────────────────┐ │
-│  │  opencli 辅助浏览器投稿              │ │
-│  │  抖音 + B站 Chrome Profile          │ │
-│  └─────────────────────────────────────┘ │
-└───────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["发送中心：内容准备"] --> B["立即发送：当前时间"]
+    A --> C["排期计划：未来时间"]
+    B --> D["publish_jobs / SCHEDULED"]
+    C --> D
+    D --> E["SQLite BEGIN IMMEDIATE 原子领取"]
+    E --> F["PUBLISHING"]
+    F --> G["Publisher Registry"]
+    G --> H["LocalBrowserPublisher"]
+    H --> I["Windows Worker + 独立 Chrome Profile"]
+    I --> J["DouyinPublisher / BilibiliPublisher"]
+    J --> K["PUBLISHED"]
+    J --> L["FAILED"]
+    J --> M["NEED_REVIEW"]
 ```
 
+`manual_export` 是显式的独立模式，成功状态为 `EXPORTED`；真实平台发送失败不会切换成导出包。旧 `opencli_publish` 仅在兼容开关打开时走同一 Scheduler 状态机。
+
 **安全边界**：不绕过验证码、登录失效、风控和人工确认。
+
+### 5.1 切片版本与发送中心关联规则
+
+- `output_clip.is_active = 1` 是任务当前切片版本，也是内容准备和排期计划唯一允许使用的来源；不新增任务级外键或关联表。
+- 手动切片成功后调用任务级同步服务，为目标平台创建 `WAITING` 内容。通用任务目标为抖音和 B站；平台专属任务只创建对应平台。
+- 同一当前切片、同一平台已经存在非取消记录时保持幂等，不重复创建。全局补充尊重 `user_removed_from_preparation`；任务级显式同步可以恢复该记录，并始终清空旧排期。
+- 新切片激活后，旧切片上的 `DRAFT / WAITING / SCHEDULED` 改为 `CANCELLED + superseded_by_recut`，同时清除排期并写 `superseded_by_recut` 事件。
+- `PUBLISHING / NEED_REVIEW / PUBLISHED / EXPORTED / FAILED` 属于执行证据，不因重新切片而改写；旧版记录只允许出现在执行历史。
+- 新版内容可按 `clip_candidate_id + platform` 继承标题、简介、标签、账号与发布方式；视频路径、封面和排期不继承。封面按新视频生成，排期保持空。
+- 默认自动同步使用原始切片。字幕工作台显式同步优先使用已完成的带字幕成片，但只允许未排期的 `DRAFT / WAITING` 更换视频；`SCHEDULED` 只返回提示，要求先取消排期。
 
 ---
 
@@ -210,8 +225,16 @@ Docker 容器 (niuma-studio)
 ├── uvicorn app.main:app --host 0.0.0.0 --port 8001
 ├── 代码目录 volume 挂载（热更新）
 ├── 存储目录 volume 挂载（E:\ → /workspace/tasks）
-└── opencli 桥接（host.docker.internal:8765）
+└── 调用 Windows 发布 Worker（host.docker.internal:8765，Bearer Token）
+
+Windows 主机
+├── scripts/publish_host_worker.py
+├── 系统 Google Chrome（默认有界面）
+├── data/browser_profiles/{platform}/{account_id}
+└── data/publish_worker/ 执行阶段日志
 ```
+
+Worker 会把容器内 `/workspace/tasks/...` 映射到宿主 `.env` 的 `TASKS_DIR`，并把 `/app/...` 映射到 `PUBLISH_HOST_PROJECT_ROOT`；映射后仍必须通过允许目录和真实文件校验。
 
 详见 [DEPLOYMENT.md](DEPLOYMENT.md)
 
@@ -222,40 +245,49 @@ Docker 容器 (niuma-studio)
 ```text
 新建任务表单
 → 上传视频 / 选择 NAS 路径
+→ E 盘任务目录与安全文件边界
 → FFmpeg 提取音频
 → 转写（火山引擎远程 / faster-whisper 本地）
-→ AI 候选片段分析（DeepSeek / Ollama）
-→ 候选片段人工审核（启用/禁用/编辑时间）
-→ FFmpeg 自动切割 → 05_clips/
-→ ASS 字幕 + FFmpeg 合成 → 06_subtitled/
-→ 发送中心队列 → opencli 辅助投稿（抖音 + B站）
+→ AI 候选片段分析（DeepSeek / OpenAI-compatible / Ollama）
+→ 候选片段人工审核（启用/禁用/编辑标题、摘要与时间）
+→ 保存审核结果并按需生成安全的新切片版本
+→ FFmpeg 自动切割 + 文案 + 封面帧
+→ 全自动模式跳过字幕生成/烧录
+→ 发送中心内容准备、北京时间排期月历与执行记录
+→ Scheduler + Windows Worker 真实投稿（抖音 + B站）
+→ PUBLISHED / FAILED / NEED_REVIEW 可追溯终态
 ```
+
+任务详情通过轻量 `live-status` 接口每 3 秒局部更新，不重新加载整页；发送中心重新切片时保留旧执行证据，只让当前激活切片进入新的内容准备和排期。
 
 ---
 
 ## 8. 架构演进路线
 
-### 8.1 当前阶段：P2-1（已完成）
+### 8.1 当前阶段：v2.0 本地生产闭环（已完成）
 
 - FastAPI 单体应用
 - SQLite 单文件数据库
 - 本地文件系统存储
 - FFmpeg 同步本地处理
 - 本地/远程 AI Provider
-- opencli 发布辅助
+- 抖音/B站统一真实发布、人工复核和显式手动导出
+- 全自动任务状态轮询、失败续跑和片段审核同步
+- 内容准备、跨午夜排期、最晚排期续接、月历详情与执行记录
+- E 盘统一生产存储、外部原片保护和托管产物安全删除
 - 代码检查与 CI 流程
 
-### 8.2 短期演进（P2-2 ~ P2-3）
+### 8.2 v2.0 后续重点
 
-**目标**：不改变单体形态，增强本地可靠性和安全边界。
+**目标**：不扩大单用户本地范围，优先用真实素材与真实账号完成灰度验收并提高可靠性。
 
 | 方向 | 具体措施 |
 | --- | --- |
-| **数据库** | SQLite 保持不变，增加 WAL 模式、备份脚本 |
-| **Job Worker** | 引入本地后台 Job Queue（`threading` / `asyncio`），将耗时任务（转写、AI 分析、切割）异步化，不阻塞 HTTP 请求 |
-| **安全增强** | `LOCAL_ADMIN_TOKEN` 鉴权强化，敏感操作确认对话框，操作日志记录 |
-| **存储** | 支持 NAS 路径作为存储根目录，`STORAGE_ROOT` 可配置为网络路径 |
-| **错误恢复** | 任务失败后可从中断点重试，而非从头开始 |
+| **真实灰度发布** | 抖音、B站各用单条低风险素材验证当前页面选择器、成功证据和人工复核路径 |
+| **长期稳定性** | 连续运行 Scheduler、Docker Watcher 和 Windows Worker，观察中断恢复与日志完整性 |
+| **数据保护** | 定期验证 SQLite 备份、E 盘空间、外部原片保护和永久删除清单 |
+| **内容质量** | 用真实长视频继续校准综艺笑点与通用模式的候选质量、文案和封面时间点 |
+| **平台维护** | 平台页面改版后更新 Publisher 选择器，不通过绕过验证或静默重传维持“成功率” |
 
 ### 8.3 中期演进（P3）
 
@@ -293,7 +325,7 @@ Docker 容器 (niuma-studio)
 | 暂不做的 | 原因 |
 | --- | --- |
 | **SaaS 多租户** | 当前是个人本地工具，不需要租户隔离和计费系统 |
-| **真实全自动发布** | 平台有验证码、风控、登录失效，全自动不可行也不安全 |
+| **绕过验证的无人值守发布** | 平台有验证码、风控、登录失效；v2.0 只在登录有效且平台无需人工确认时自动执行 |
 | **强依赖云部署** | 首版定位 Windows 本地工具，不应强制要求云服务器 |
 | **移动端 App** | 核心工作流依赖 FFmpeg 和大文件处理，不适合移动端 |
 | **实时直播流处理** | 当前是录播后处理，实时流需要完全不同的技术栈 |

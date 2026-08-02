@@ -459,7 +459,10 @@ class TestSystemStatusContext:
         context = get_system_status_context()
 
         required_fields = [
-            "storage_root", "storage_exists", "database_path", "database_exists",
+            "storage_root", "storage_exists", "tasks_dir", "tasks_dir_exists",
+            "upload_temp_dir", "upload_temp_dir_exists",
+            "publish_export_dir", "publish_export_dir_exists",
+            "database_path", "database_exists",
             "ffmpeg_path", "ffmpeg_available", "ffprobe_path", "ffprobe_available",
             "task_count", "failed_count", "pending_count", "review_count",
             "completed_count", "recent_errors", "ai_config", "expected_server_url",

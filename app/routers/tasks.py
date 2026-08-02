@@ -5,19 +5,27 @@ from starlette.concurrency import run_in_threadpool
 
 from app.models.task import (
     ClipCandidateBatchUpdate,
+    ClipFeedbackCreate,
     ClipCandidateUpdate,
     SubtitleStyleUpdate,
     TaskAIPreferenceUpdate,
     TaskAIPromptPresetUpdate,
     TaskCandidateClipCountUpdate,
     TaskCreate,
+    TaskSelectionSettingsUpdate,
     TaskStatus,
     TaskStatusUpdate,
 )
 from app.services import task_service
 from app.services.ai_prompt_preset_service import update_task_ai_prompt_preset
 from app.services.pipeline_engine import start_auto_pipeline
-from app.services.storage_service import allocate_task_dir_name, save_uploaded_video
+from app.services.storage_service import (
+    allocate_task_dir_name,
+    remove_failed_task_directory,
+    save_uploaded_video,
+    StorageSafetyError,
+)
+from app.services.task_lifecycle_service import TaskDeletionConflictError
 from app.services import job_service
 from app.services import job_worker
 
@@ -46,8 +54,10 @@ async def create_upload_task(
     background_tasks: BackgroundTasks,
     task_name: str = Form(...),
     platform: str = Form("general"),
-    max_clip_duration: int = Form(5),
-    candidate_clip_count: int = Form(5),
+    max_clip_duration: int = Form(10),
+    candidate_clip_count: int = Form(12),
+    selection_profile: str = Form("general"),
+    final_clip_target: int = Form(5),
     ai_preference: str | None = Form(None),
     auto_mode: bool = Form(False),
     auto_clip_count: str = Form("auto"),
@@ -56,45 +66,58 @@ async def create_upload_task(
     auto_schedule_mode: str = Form("default"),
     auto_schedule_start_at: str | None = Form(""),
     auto_schedule_interval_hours: int = Form(3),
-    auto_schedule_daily_start_time: str = Form("09:00"),
-    auto_schedule_daily_end_time: str = Form("21:00"),
+    auto_schedule_daily_start_time: str = Form("07:00"),
+    auto_schedule_daily_end_time: str = Form("00:00"),
     auto_metadata_use_ai: bool = Form(False),
     video_file: UploadFile = File(...),
 ) -> dict:
     task_id = uuid4().hex[:12]
     task_dir_name = allocate_task_dir_name(task_name, exclude_task_id=task_id)
-    saved_path = save_uploaded_video(
-        task_id,
-        video_file.filename or "source_video.mp4",
-        video_file.file,
-        task_dir_name=task_dir_name,
-    )
-    payload = TaskCreate(
-        task_name=task_name,
-        source_type="upload",
-        platform=platform,
-        original_video_path=str(saved_path),
-        max_clip_duration=max_clip_duration,
-        candidate_clip_count=candidate_clip_count,
-        ai_preference=ai_preference,
-        auto_mode=auto_mode,
-        auto_clip_count=auto_clip_count,
-        auto_min_clip_seconds=auto_min_clip_seconds,
-        auto_max_clip_seconds=auto_max_clip_seconds,
-        auto_schedule_mode=auto_schedule_mode,
-        auto_schedule_start_at=auto_schedule_start_at,
-        auto_schedule_interval_hours=auto_schedule_interval_hours,
-        auto_schedule_daily_start_time=auto_schedule_daily_start_time,
-        auto_schedule_daily_end_time=auto_schedule_daily_end_time,
-        auto_metadata_use_ai=auto_metadata_use_ai,
-    )
+    task_record_created = False
     try:
+        saved_path = await run_in_threadpool(
+            save_uploaded_video,
+            task_id,
+            video_file.filename or "source_video.mp4",
+            video_file.file,
+            task_dir_name,
+        )
+        payload = TaskCreate(
+            task_name=task_name,
+            source_type="upload",
+            platform=platform,
+            original_video_path=str(saved_path),
+            max_clip_duration=max_clip_duration,
+            candidate_clip_count=candidate_clip_count,
+            selection_profile=selection_profile,
+            final_clip_target=final_clip_target,
+            ai_preference=ai_preference,
+            auto_mode=auto_mode,
+            auto_clip_count=auto_clip_count,
+            auto_min_clip_seconds=auto_min_clip_seconds,
+            auto_max_clip_seconds=auto_max_clip_seconds,
+            auto_schedule_mode=auto_schedule_mode,
+            auto_schedule_start_at=auto_schedule_start_at,
+            auto_schedule_interval_hours=auto_schedule_interval_hours,
+            auto_schedule_daily_start_time=auto_schedule_daily_start_time,
+            auto_schedule_daily_end_time=auto_schedule_daily_end_time,
+            auto_metadata_use_ai=auto_metadata_use_ai,
+        )
         result = task_service.create_task_record(payload, task_id=task_id, task_dir_name=task_dir_name)
+        task_record_created = True
         if payload.auto_mode:
             result["auto_pipeline"] = start_auto_pipeline(task_id, background_tasks=background_tasks)
         return result
     except ValueError as exc:
+        if not task_record_created:
+            await run_in_threadpool(remove_failed_task_directory, task_id, task_dir_name)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        if not task_record_created:
+            await run_in_threadpool(remove_failed_task_directory, task_id, task_dir_name)
+        raise
+    finally:
+        await video_file.close()
 
 
 @router.get("/{task_id}")
@@ -103,6 +126,14 @@ async def get_task_detail(task_id: str) -> dict:
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
     return task
+
+
+@router.get("/{task_id}/live-status")
+async def get_task_live_status(task_id: str) -> dict:
+    try:
+        return task_service.get_task_live_status(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/{task_id}/transcript-status")
@@ -125,8 +156,14 @@ async def get_ai_analysis_status(task_id: str) -> dict:
 async def delete_task(task_id: str) -> dict:
     try:
         return task_service.soft_delete_task(task_id)
+    except TaskDeletionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except StorageSafetyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.patch("/{task_id}/status")
@@ -157,6 +194,18 @@ async def patch_task_ai_prompt_preset(task_id: str, payload: TaskAIPromptPresetU
 async def patch_task_candidate_clip_count(task_id: str, payload: TaskCandidateClipCountUpdate) -> dict:
     try:
         return task_service.update_task_candidate_clip_count(task_id, payload.candidate_clip_count)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/{task_id}/selection-settings")
+async def patch_task_selection_settings(task_id: str, payload: TaskSelectionSettingsUpdate) -> dict:
+    try:
+        return task_service.update_task_selection_settings(
+            task_id,
+            payload.selection_profile,
+            payload.final_clip_target,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -275,6 +324,23 @@ async def batch_update_clip_candidates(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/{task_id}/clips/sync-publish")
+async def sync_reviewed_clips_to_publish_center(
+    task_id: str,
+    payload: ClipCandidateBatchUpdate,
+) -> dict:
+    try:
+        return await run_in_threadpool(
+            task_service.sync_reviewed_clips_to_publish_center,
+            task_id,
+            payload.clips,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.get("/{task_id}/clips/{clip_id}/transcript-excerpt")
 async def get_clip_transcript_excerpt(
     task_id: str,
@@ -286,6 +352,14 @@ async def get_clip_transcript_excerpt(
         return task_service.get_clip_transcript_excerpt(task_id, clip_id, start_time, end_time)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/clips/{clip_id}/feedback")
+async def save_clip_feedback(task_id: str, clip_id: str, payload: ClipFeedbackCreate) -> dict:
+    try:
+        return task_service.save_clip_feedback(task_id, clip_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{task_id}/process/cuts")

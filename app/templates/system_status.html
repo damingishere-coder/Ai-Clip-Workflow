@@ -26,6 +26,12 @@
     <strong>{{ "正常" if storage_exists else "异常" }}</strong>
     <small>{{ storage_root }}</small>
   </article>
+  <article class="stat-card tone-{{ 'green' if upload_temp_dir_exists and publish_export_dir_exists else 'red' }}">
+    <div class="stat-icon"></div>
+    <span>视频临时与导出目录</span>
+    <strong>{{ "E 盘就绪" if upload_temp_dir_exists and publish_export_dir_exists else "目录异常" }}</strong>
+    <small>上传临时：{{ upload_temp_dir }}<br>发布包：{{ publish_export_dir }}</small>
+  </article>
   <article class="stat-card tone-{{ 'green' if ffmpeg_available else 'red' }}">
     <div class="stat-icon"></div>
     <span>FFmpeg</span>

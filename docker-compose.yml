@@ -19,6 +19,12 @@ services:
       AI_LOCAL_BASE_URL: http://host.docker.internal:11434/v1
       OPENCLI_LOCAL_BASE_URL: http://127.0.0.1:8001
       OPENCLI_HOST_BRIDGE_URL: http://host.docker.internal:8765
+      APP_TIMEZONE: Asia/Shanghai
+      PUBLISH_DEFAULT_MODE: local_browser
+      PUBLISH_SCHEDULER_INTERVAL_SECONDS: 5
+      PUBLISH_WORKER_URL: http://host.docker.internal:8765
+      PUBLISH_WORKER_TOKEN: ${PUBLISH_WORKER_TOKEN:-}
+      PUBLISH_ENABLE_OPENCLI_FALLBACK: ${PUBLISH_ENABLE_OPENCLI_FALLBACK:-false}
       TRANSCRIPTION_DEVICE: cpu
       TRANSCRIPTION_COMPUTE_TYPE: int8
     volumes:

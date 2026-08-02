@@ -10,24 +10,18 @@
       <span>任务 ID：{{ task.id }}</span>
       <span>写入时间：{{ task.created_at }}</span>
       <span>主题：{{ task.title }}</span>
-      <span>当前状态：{{ task.status_label }}</span>
+      <span>当前状态：<strong data-task-live-header-status>{{ task.status_label }}</strong></span>
     </p>
   </div>
   {% set header_transcript_progress = task.transcript_progress or {} %}
-  <div class="button-row">
+  <div class="button-row"{% if task.auto_mode %} data-live-task-actions{% endif %}>
     {% if task.auto_mode %}
-      {% if task.status.startswith("FAILED_") %}
-      <button class="primary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/auto-retry">重试全自动流程</button>
-      {% elif task.status in ["pending_review", "completed", "completed_with_errors", "failed"] %}
-      <button class="primary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/auto-resume">继续全自动流程</button>
-      {% elif task.status in ["READY_TO_PUBLISH", "COMPLETED"] %}
-      <a class="primary-button" href="/publish">前往发送中心</a>
-      {% else %}
-      <button class="secondary-button" type="button" disabled>全自动处理中</button>
-      {% endif %}
-      {% if task.candidate_count > 0 %}
-      <a class="secondary-button" href="/tasks/{{ task.id }}/clips/review">检查候选片段</a>
-      {% endif %}
+      <button class="primary-button js-process-action" type="button" data-live-primary-action="retry" data-endpoint="/api/tasks/{{ task.id }}/process/auto-retry" {% if not task.status.startswith("FAILED_") %}hidden{% endif %}>重试全自动流程</button>
+      <button class="primary-button js-process-action" type="button" data-live-primary-action="resume" data-endpoint="/api/tasks/{{ task.id }}/process/auto-resume" {% if task.status not in ["pending_review", "completed_with_errors", "failed"] %}hidden{% endif %}>继续全自动流程</button>
+      <a class="primary-button" data-live-primary-action="publish" href="/publish?task_id={{ task.id }}&tab=content" {% if task.status not in ["READY_TO_PUBLISH", "COMPLETED", "completed"] %}hidden{% endif %}>前往发送中心</a>
+      <button class="secondary-button" type="button" data-live-primary-action="processing" disabled {% if task.status.startswith("FAILED_") or task.status in ["pending_review", "completed", "completed_with_errors", "failed", "READY_TO_PUBLISH", "COMPLETED"] %}hidden{% endif %}>全自动处理中</button>
+      <a class="secondary-button" data-live-review-action href="/tasks/{{ task.id }}/clips/review" {% if not task.analysis_exists %}hidden{% endif %}>检查候选片段</a>
+      <button class="secondary-button" type="button" data-live-sync-action data-sync-publish-task data-task-id="{{ task.id }}" {% if task.output_clip_count <= 0 %}hidden{% endif %}>同步发送中心</button>
     {% elif task.transcript_exists %}
     <button class="secondary-button" id="start-workflow-button" type="button" disabled>转写已完成</button>
     <button class="secondary-button js-process-action" type="button" data-confirm="重新生成会覆盖当前转写文件，并且需要重新等待转写完成。确认重新生成吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?force=true">重新生成转写</button>
@@ -41,6 +35,10 @@
     <button class="secondary-button js-process-action" id="local-transcript-button" type="button" data-confirm="远程转写失败后才建议使用本地模型。本地模型会占用电脑性能，速度可能更慢。确认改用本地模型转写吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?force=true&provider=local" {% if task.transcript_exists or header_transcript_progress.status != "failed" or header_transcript_progress.provider == "local" %}hidden{% endif %}>改用本地模型转写</button>
     <a class="primary-button" href="/tasks/{{ task.id }}/clips/review">进入片段审核</a>
     {% endif %}
+    {% if not task.auto_mode and task.output_clip_count > 0 %}
+    <button class="secondary-button" type="button" data-sync-publish-task data-task-id="{{ task.id }}">同步发送中心</button>
+    <a class="secondary-button" href="/publish?task_id={{ task.id }}&tab=content">发送中心 · {{ publish_link_state.label }}</a>
+    {% endif %}
   </div>
 </section>
 
@@ -53,7 +51,7 @@
   data-running="{{ 'true' if task.status in ['CREATED', 'PREPARING_SOURCE', 'TRANSCRIBING', 'AI_ANALYZING', 'CLIP_SELECTING', 'VIDEO_CUTTING', 'METADATA_GENERATING', 'SCHEDULE_CREATING', 'PUBLISH_JOB_CREATING'] else 'false' }}"
 >
   <strong>全自动模式已接管这个任务。</strong>
-  <p>系统会自动推进音频提取、转写、AI 选片和视频切割；页面在处理中会自动刷新。只有失败或历史任务中断时才需要点击重试/继续。</p>
+  <p>系统会自动推进音频提取、转写、AI 选片和视频切割；状态概览与运行日志每 3 秒自动更新，不会刷新整张页面。只有失败或历史任务中断时才需要点击重试/继续。</p>
 </section>
 {% endif %}
 
@@ -70,31 +68,31 @@
       <div><dt>视频来源</dt><dd>{{ task.source_type_label }}</dd></div>
       <div><dt>视频时长</dt><dd>{{ task.duration }}</dd></div>
       <div><dt>视频大小</dt><dd>{{ task.video_size }}</dd></div>
-      <div><dt>候选片段</dt><dd>{{ task.candidate_count }} 条</dd></div>
+      <div><dt>候选片段</dt><dd data-task-live-candidate-count>{{ task.candidate_count }} 条</dd></div>
       <div><dt>最长切片</dt><dd>{{ task.max_clip_duration }} 分钟</dd></div>
       <div><dt>创建时间</dt><dd>{{ task.created_at }}</dd></div>
-      <div><dt>更新时间</dt><dd>{{ task.updated_at }}</dd></div>
+      <div><dt>更新时间</dt><dd data-task-live-updated-at>{{ task.updated_at }}</dd></div>
       <div><dt>源文件状态</dt><dd>{{ "可访问" if task.source_exists else "不可访问 / 未选择" }}</dd></div>
-      <div><dt>切片输出</dt><dd>{{ task.output_clip_count }} 条</dd></div>
+      <div><dt>切片输出</dt><dd data-task-live-output-count>{{ task.output_clip_count }} 条</dd></div>
       <div><dt>任务目录</dt><dd class="path-text">{{ task.task_dir }}</dd></div>
     </dl>
   </article>
 
-  <article class="panel status-overview-card">
+  <article class="panel status-overview-card" data-task-live-overview aria-live="polite">
     <div class="panel-header">
       <div>
         <p class="eyebrow">Status</p>
         <h2>状态概览</h2>
       </div>
-      <span class="status-pill">{{ task.status_label }}</span>
+      <span class="status-pill" data-task-live-status-label>{{ task.status_label }}</span>
     </div>
     <div class="large-progress">
-      <span style="width: {{ task.progress }}%"></span>
+      <span data-task-live-progress-bar style="width: {{ task.progress }}%"></span>
     </div>
-    <strong class="progress-number">{{ task.progress }}%</strong>
+    <strong class="progress-number" data-task-live-progress-number>{{ task.progress }}%</strong>
     <ol class="metro-timeline" aria-label="处理进度时间线">
       {% for step in workflow_steps %}
-      <li class="metro-step {{ step.state }}">
+      <li class="metro-step {{ step.state }}" data-task-live-step="{{ step.index }}">
         <span>{{ step.index }}</span>
         <strong>{{ step.name }}</strong>
       </li>
@@ -105,6 +103,7 @@
       <span><i class="current"></i>当前阶段</span>
       <span><i class="warning"></i>异常 / 待处理</span>
     </div>
+    <p class="live-status-note" data-task-live-note data-state="ready">正在连接任务进度…</p>
   </article>
 
   <article class="panel transcript-panel ai-analysis-panel">
@@ -118,9 +117,23 @@
     <form id="ai-analysis-form" class="settings-form ai-prompt-form" data-task-id="{{ task.id }}">
       <div class="ai-analysis-controls">
         <label>
-          <span>候选片段数量</span>
+          <span>候选池上限</span>
           <span class="unit-input">
-            <input id="ai-candidate-count-input" name="candidate_clip_count" type="number" min="1" max="50" step="1" value="{{ task.candidate_clip_count or 5 }}">
+            <input id="ai-candidate-count-input" name="candidate_clip_count" type="number" min="1" max="50" step="1" value="{{ task.candidate_clip_count or 12 }}">
+            <small>条</small>
+          </span>
+        </label>
+        <label>
+          <span>选片模式</span>
+          <select id="ai-selection-profile" name="selection_profile">
+            <option value="general" {{ "selected" if task.selection_profile == "general" else "" }}>通用内容价值</option>
+            <option value="variety_comedy" {{ "selected" if task.selection_profile == "variety_comedy" else "" }}>综艺笑点优先</option>
+          </select>
+        </label>
+        <label>
+          <span>最终启用目标</span>
+          <span class="unit-input">
+            <input id="ai-final-clip-target" name="final_clip_target" type="number" min="1" max="12" step="1" value="{{ task.final_clip_target or 5 }}">
             <small>条</small>
           </span>
         </label>
@@ -150,7 +163,7 @@
         </article>
         {% endfor %}
       </div>
-      <p class="empty-note">选择的方案会直接作为本次 AI 片段分析 Prompt。系统会自动替换最大时长、候选数量、AI 偏好和转写文本变量；最终成片仍需要进入人工审核确认。</p>
+      <p class="empty-note">通用模式直接使用所选 Prompt；综艺笑点优先模式会把所选 Prompt 作为口味补充，再执行重叠召回、边界扩展、音频复核和全局评审。</p>
       <div class="button-row align-end">
         <button class="secondary-button" id="save-ai-prompts-button" type="button">保存 Prompt 方案</button>
         <button class="secondary-button js-ai-process-action" type="button" data-provider="remote">远程 AI 分析</button>
@@ -264,7 +277,7 @@
       </div>
       <span class="status-pill" id="runtime-log-state">待刷新</span>
     </div>
-    <pre id="runtime-log-lines">点击 AI 分析后，这里会显示最新运行日志。</pre>
+    <pre id="runtime-log-lines">任务开始后，这里会自动显示最新运行日志。</pre>
     <p class="form-hint" id="process-result"></p>
   </aside>
 </section>

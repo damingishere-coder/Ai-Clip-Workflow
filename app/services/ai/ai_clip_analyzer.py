@@ -22,6 +22,14 @@ ANALYSIS_CHUNK_SECONDS = 180
 ANALYSIS_MAX_CONTEXT_CHARS = 4500
 LOCAL_ANALYSIS_CHUNK_SECONDS = ANALYSIS_CHUNK_SECONDS
 LOCAL_ANALYSIS_MAX_CONTEXT_CHARS = ANALYSIS_MAX_CONTEXT_CHARS
+COVER_TIME_PROMPT_REQUIREMENT = """
+【程序必填字段补充要求】
+每个 clips 项必须额外包含 cover_time_seconds。
+cover_time_seconds 表示相对于该条短视频开头的封面画面秒数，必须是数字，满足 0 <= cover_time_seconds < duration_seconds。
+请选择最能代表核心观点、笑点、冲突或人物反应的时刻，避免使用明显的片头、片尾、寒暄或空白画面。
+示例：片段从原视频 00:12:10 开始，适合的封面画面位于原视频 00:12:25，则 cover_time_seconds 应填写 15。
+只返回严格 JSON，不要解释这个补充要求。
+""".strip()
 
 
 class AIAnalysisError(RuntimeError):
@@ -107,8 +115,9 @@ def _analyze_task_transcript_in_chunks(
                 retry_instruction = (
                     "上一次输出无法被程序解析或校验。请重新输出严格 JSON，"
                     "不要 Markdown，不要解释文字。每个 clips 项必须包含："
-                    "clip_id、title、start_time、end_time、duration_seconds、summary、"
+                    "clip_id、title、start_time、end_time、duration_seconds、cover_time_seconds、summary、"
                     "highlight_reason、spread_value、suggested_editing、confidence_score、selected_by_default。"
+                    "cover_time_seconds 是相对于短视频开头的秒数，必须大于或等于 0 且小于 duration_seconds。"
                     "spread_value 只能是“高”“中”“低”。片段时长不能超限。"
                 )
                 raw_text = provider.generate_json(prompt, retry_instruction=retry_instruction)
@@ -239,7 +248,7 @@ def _render_prompt(
     prompt = template
     for key, value in replacements.items():
         prompt = prompt.replace(key, value)
-    return prompt
+    return f"{prompt.rstrip()}\n\n{COVER_TIME_PROMPT_REQUIREMENT}"
 
 
 def _build_local_analysis_chunks(request: AnalysisRequest, transcript_text: str) -> list[TranscriptChunk]:
@@ -433,6 +442,11 @@ def _normalize_ai_clip_item(clip: dict[str, Any], index: int) -> dict[str, Any]:
     _copy_first_text(item, "spread_value", ("viral_value", "share_value", "virality", "shareability"))
     _copy_first_text(item, "suggested_editing", ("editing_suggestion", "edit_suggestion", "suggestion"))
     _copy_first_text(item, "confidence_score", ("confidence", "score"))
+    _copy_first_text(
+        item,
+        "cover_time_seconds",
+        ("cover_second", "cover_seconds", "cover_time", "cover_timestamp_seconds", "thumbnail_time_seconds"),
+    )
 
     if not _has_text(item.get("clip_id")):
         item["clip_id"] = f"clip_{index:03d}"
@@ -454,6 +468,10 @@ def _normalize_ai_clip_item(clip: dict[str, Any], index: int) -> dict[str, Any]:
     duration_seconds = _duration_seconds_from_clip(item)
     if duration_seconds is not None:
         item["duration_seconds"] = duration_seconds
+    item["cover_time_seconds"] = _normalize_cover_time_seconds(
+        item.get("cover_time_seconds"),
+        duration_seconds,
+    )
 
     item["clip_id"] = _limit_text(item["clip_id"], 80)
     item["title"] = _limit_text(item["title"], 160)
@@ -501,6 +519,30 @@ def _normalize_confidence_score(value: Any) -> float:
     elif 10 < score <= 100:
         score = score / 100
     return min(1, max(0, score))
+
+
+def _midpoint_cover_time_seconds(duration_seconds: int | float | None) -> float:
+    try:
+        duration = float(duration_seconds or 0)
+    except (TypeError, ValueError):
+        duration = 0
+    if not math.isfinite(duration) or duration <= 0:
+        return 0.0
+    return round(max(0.0, min(duration - 0.001, duration / 2)), 3)
+
+
+def _normalize_cover_time_seconds(value: Any, duration_seconds: int | float | None) -> float:
+    fallback = _midpoint_cover_time_seconds(duration_seconds)
+    try:
+        seconds = float(value)
+        duration = float(duration_seconds or 0)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(seconds) or not math.isfinite(duration):
+        return fallback
+    if seconds < 0 or duration <= 0 or seconds >= duration:
+        return fallback
+    return round(seconds, 3)
 
 
 def _normalize_spread_value(value: Any) -> str:
@@ -790,6 +832,8 @@ def _validate_clip_constraints(
             raise AIAnalysisError(f"{clip.clip_id} 超过用户设置的单条最长时长")
         if abs(real_duration - clip.duration_seconds) > 3:
             raise AIAnalysisError(f"{clip.clip_id} 的 duration_seconds 与起止时间不一致")
+        if clip.cover_time_seconds < 0 or clip.cover_time_seconds >= real_duration:
+            raise AIAnalysisError(f"{clip.clip_id} 的 cover_time_seconds 必须位于片段时长范围内")
         if start_seconds < transcript_start or end_seconds > transcript_end:
             raise AIAnalysisError(f"{clip.clip_id} 的起止时间超出转写文本时间范围")
 

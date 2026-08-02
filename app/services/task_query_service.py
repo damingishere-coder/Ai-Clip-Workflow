@@ -407,6 +407,12 @@ def get_system_status_context() -> dict:
     return {
         "storage_root": str(settings.storage_root),
         "storage_exists": settings.storage_root.exists(),
+        "tasks_dir": str(settings.tasks_dir),
+        "tasks_dir_exists": settings.tasks_dir.exists(),
+        "upload_temp_dir": str(settings.upload_temp_dir),
+        "upload_temp_dir_exists": settings.upload_temp_dir.exists(),
+        "publish_export_dir": str(settings.publish_scheduler_export_dir),
+        "publish_export_dir_exists": settings.publish_scheduler_export_dir.exists(),
         "database_path": str(settings.database_path),
         "database_exists": settings.database_path.exists(),
         "ffmpeg_path": ffmpeg_path or "未找到",

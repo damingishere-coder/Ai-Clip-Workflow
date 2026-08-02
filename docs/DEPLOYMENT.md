@@ -2,38 +2,38 @@
 
 ## 1. 当前部署模式
 
-v1.3 支持两种部署方式：
+v2.0.0 支持两种运行方式。日常使用推荐 Docker Desktop；真实抖音 / B站投稿无论使用哪种方式，都必须由 Windows 主机上的 Chrome Worker 执行。
 
-### 方式 A：Windows 本地直接运行（推荐日常使用）
+### 方式 A：Docker Desktop + Windows Worker（推荐日常使用）
 
 ```
 你的 Windows 电脑
-├── Python 3.12（系统安装）
+├── Docker Desktop 运行 niuma-studio
+│   └── FastAPI + SQLite Scheduler + FFmpeg
+├── NiuMa Studio Docker Watcher
+│   └── 容器运行时自动启动 Windows Chrome Worker
+├── 系统 Chrome 独立账号目录
+└── 浏览器打开 http://127.0.0.1:8001
+```
+
+**适用场景**：日常处理、排期和真实灰度发布。平时不需要手动打开 PowerShell。
+
+### 方式 B：Windows 本地 Python 直接运行（开发 / 诊断）
+
+```
+你的 Windows 电脑
+├── Python 3.12 + .venv
 ├── FFmpeg（系统安装，需在 PATH 中）
-├── 项目代码（任意目录）
-├── .venv（Python 虚拟环境）
+├── uvicorn 监听 8001 端口
+├── scripts/publish_host_worker.py（真实投稿时）
 └── 浏览器打开 http://127.0.0.1:8001
 ```
 
-**适用场景**：日常使用、开发调试、单机处理。
-
-### 方式 B：Docker 容器运行（推荐测试/隔离环境）
-
-```
-你的 Windows 电脑
-├── Docker Desktop
-├── 项目代码（任意目录）
-├── 容器 niuma-studio
-│   ├── Python 3.12 + FFmpeg（容器内预装）
-│   └── uvicorn 监听 8001 端口
-└── 浏览器打开 http://127.0.0.1:8001
-```
-
-**适用场景**：不想装 Python/FFmpeg、测试环境隔离、CI 验证。
+**适用场景**：代码开发、自动化测试、发布 Worker 诊断。
 
 ---
 
-## 2. 方式 A 详细步骤：Windows 本地直接运行
+## 2. Windows 本地 Python 方式详细步骤
 
 ### 2.1 环境要求
 
@@ -71,6 +71,9 @@ copy .env.example .env
 然后用记事本或 VS Code 打开 `.env`，按注释填写：
 
 - `STORAGE_ROOT`：任务产物存放目录（默认 `E:\直播间切片工作流存储`）
+- `TASKS_DIR`：每条任务的原片、音频、切片和字幕目录，默认与 `STORAGE_ROOT` 相同
+- `UPLOAD_TEMP_DIR`：浏览器上传大视频时的临时目录，默认 `E:\直播间切片工作流存储\_临时上传`
+- `PUBLISH_SCHEDULER_EXPORT_DIR`：手动发布包目录，默认 `E:\直播间切片工作流存储\_发布包`
 - `AI_ANALYSIS_REMOTE_API_KEY`：DeepSeek API Key（可选，用远程 AI 分析时需要）
 - `VOLCENGINE_ASR_API_KEY`：火山引擎转写 Key（可选，用远程转写时需要）
 - `LOCAL_ADMIN_TOKEN`：管理接口鉴权 Token（可留空或设随机字符串）
@@ -102,7 +105,7 @@ http://127.0.0.1:8001
 
 ---
 
-## 3. 方式 B 详细步骤：Docker 运行
+## 3. Docker 方式详细步骤
 
 ### 3.1 环境要求
 
@@ -110,7 +113,7 @@ http://127.0.0.1:8001
 
 ### 3.2 配置环境变量
 
-与方式 A 相同，先 `copy .env.example .env` 并填写配置。
+与本地 Python 方式相同，先 `copy .env.example .env` 并填写配置。
 
 ### 3.3 构建并启动
 
@@ -144,7 +147,7 @@ docker compose down
 - **存储目录**：`docker-compose.yml` 默认将 `E:\直播间切片工作流存储` 挂载到容器内 `/workspace/tasks`。如果你的存储目录在其他位置，请修改 `docker-compose.yml` 中的 `volumes` 配置。
 - **代码热更新**：`app/` 和 `prompts/` 目录以 volume 方式挂载，修改代码后容器自动重载。
 - **Ollama 连接**：如果 Ollama 在宿主机运行，容器内通过 `http://host.docker.internal:11434/v1` 访问。
-- **opencli 桥接**：容器内通过 `http://host.docker.internal:8765` 访问宿主机上的 opencli 桥接服务。
+- **Windows 发布 Worker**：容器内通过 `http://host.docker.internal:8765` 访问宿主机受 Token 保护的 Chrome Worker；旧 opencli 仅是默认关闭的兼容模式。
 
 ---
 
@@ -154,9 +157,9 @@ docker compose down
 
 | 局限 | 说明 | 影响 |
 | --- | --- | --- |
-| **单进程** | API 和视频处理在同一进程 | 处理大视频时页面可能卡住（请求阻塞） |
-| **无后台队列** | 没有独立 Worker 进程 | 转写、AI 分析、切割都在请求线程中同步执行 |
-| **单机存储** | 任务产物必须在本地磁盘 | 不能跨机器共享任务数据 |
+| **单业务进程** | API、全自动流水线和 Scheduler 在同一个 FastAPI 进程 | 进程重启会中断正在处理的步骤，需从失败点重试或续跑 |
+| **无外部任务队列** | 使用 FastAPI BackgroundTasks 和轻量 SQLite Job 记录，没有 Redis / Celery | 适合个人单机，不适合多机并发处理 |
+| **单机主存储** | 生产任务目录由当前 Windows 主机 / Docker 挂载负责 | 可引用 NAS 原片，但不支持多台处理机共同写同一任务 |
 | **无负载均衡** | 不支持多实例部署 | 只能一个人用，不能横向扩展 |
 | **无 HTTPS** | 只有 HTTP | 只适合本地使用，不要暴露到公网 |
 | **单用户** | 没有登录和用户隔离 | 谁打开浏览器都能操作所有任务 |
@@ -261,6 +264,8 @@ Windows 主机（运行 FastAPI）
 | --- | --- | --- |
 | `STORAGE_ROOT` | `E:\直播间切片工作流存储` | 任务产物根目录 |
 | `TASKS_DIR` | 同 `STORAGE_ROOT` | 任务目录（优先级高于 STORAGE_ROOT） |
+| `UPLOAD_TEMP_DIR` | `{TASKS_DIR}\_临时上传` | FastAPI 接收大视频时的进程临时目录，不回退到 C 盘 |
+| `PUBLISH_SCHEDULER_EXPORT_DIR` | `{STORAGE_ROOT}\_发布包` | 手动导出的本地发布包目录 |
 | `DATA_DIR` | 项目目录 `data/` | 数据库存放目录 |
 | `DATABASE_PATH` | `data/workflow.sqlite3` | 数据库文件路径 |
 | `AI_ANALYSIS_REMOTE_API_KEY` | 空 | DeepSeek API Key |

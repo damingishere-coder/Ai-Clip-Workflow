@@ -1,91 +1,31 @@
-param(
+﻿param(
     [int]$BridgePort = 8765,
     [switch]$NoBrowser
 )
 
 $ErrorActionPreference = "Stop"
-
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $ProjectRoot
 
-if ($env:APPDATA) {
-    $npmDir = Join-Path $env:APPDATA "npm"
-    if (Test-Path $npmDir) {
-        $env:PATH = "$npmDir;$env:PATH"
-    }
-}
+Write-Host '此兼容脚本现在会启动 v2.0 Windows Chrome 发布 Worker。'
+& (Join-Path $PSScriptRoot 'start_publish_worker.ps1') -Port $BridgePort
 
-$opencli = Get-Command opencli -ErrorAction SilentlyContinue
-if (-not $opencli) {
-    Write-Host 'opencli was not found. Please install opencli and make sure where opencli returns a path.'
-    exit 1
-}
-Write-Host ('opencli found: {0}' -f $opencli.Source)
-
-$bridgeConnections = Get-NetTCPConnection -LocalPort $BridgePort -State Listen -ErrorAction SilentlyContinue
-$bridgeProcessIds = @($bridgeConnections | Select-Object -ExpandProperty OwningProcess -Unique)
-foreach ($processId in $bridgeProcessIds) {
-    if (-not $processId -or $processId -eq $PID) {
-        continue
-    }
-    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
-    if ($process) {
-        Write-Host ('Stopping old opencli helper: PID {0} ({1})' -f $processId, $process.ProcessName)
-        Stop-Process -Id $processId -Force
-    }
-}
-
-$python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-if (-not (Test-Path $python)) {
-    $python = "python"
-}
-
-$bridgeOutLog = Join-Path $ProjectRoot "opencli_bridge_$BridgePort.out.log"
-$bridgeErrLog = Join-Path $ProjectRoot "opencli_bridge_$BridgePort.err.log"
-Write-Host ('Starting Windows opencli helper: http://127.0.0.1:{0}' -f $BridgePort)
-$bridgeScript = Join-Path $ProjectRoot "scripts\opencli_host_bridge.py"
-$bridgeArguments = @("`"$bridgeScript`"", "--host", "0.0.0.0", "--port", "$BridgePort")
-Start-Process `
-    -FilePath $python `
-    -ArgumentList $bridgeArguments `
-    -WorkingDirectory $ProjectRoot `
-    -RedirectStandardOutput $bridgeOutLog `
-    -RedirectStandardError $bridgeErrLog `
-    -WindowStyle Hidden
-
-Start-Sleep -Seconds 2
-$previousErrorActionPreference = $ErrorActionPreference
-$ErrorActionPreference = "SilentlyContinue"
-$bridgeHealth = Invoke-WebRequest -Uri "http://127.0.0.1:$BridgePort/health" -UseBasicParsing -TimeoutSec 5
-$ErrorActionPreference = $previousErrorActionPreference
-if ($bridgeHealth) {
-    Write-Host 'opencli helper is running.'
-} else {
-    Write-Host ('opencli helper is not responding yet. Log: {0}' -f $bridgeErrLog)
-}
-
-Write-Host 'Cleaning old Docker services that may occupy port 8001.'
+Write-Host '正在刷新 Docker 服务：http://127.0.0.1:8001'
 docker compose down --remove-orphans
-$portContainerIds = @(docker ps --filter 'publish=8001' --format '{{.ID}}')
-foreach ($containerId in $portContainerIds) {
-    if ($containerId) {
-        Write-Host ('Stopping old container on port 8001: {0}' -f $containerId)
-        docker rm -f $containerId | Out-Null
-    }
+if ($LASTEXITCODE -ne 0) {
+    throw 'docker compose down 执行失败，请确认 Docker Desktop 已启动。'
 }
-
-Write-Host 'Refreshing Docker service: http://127.0.0.1:8001'
 docker compose up -d --build
+if ($LASTEXITCODE -ne 0) {
+    throw 'docker compose up 执行失败，请查看上方 Docker 错误。'
+}
 
 Start-Sleep -Seconds 3
-$previousErrorActionPreference = $ErrorActionPreference
-$ErrorActionPreference = "SilentlyContinue"
-$dockerHealth = Invoke-WebRequest -Uri "http://127.0.0.1:8001/health" -UseBasicParsing -TimeoutSec 8
-$ErrorActionPreference = $previousErrorActionPreference
-if ($dockerHealth) {
-    Write-Host 'Docker page is running: http://127.0.0.1:8001'
-} else {
-    Write-Host 'Docker started, but health check is not ready yet. Wait 5 seconds and refresh http://127.0.0.1:8001'
+try {
+    Invoke-WebRequest -Uri 'http://127.0.0.1:8001/health' -UseBasicParsing -TimeoutSec 8 | Out-Null
+    Write-Host '牛马片场 Docker 页面已启动：http://127.0.0.1:8001'
+} catch {
+    Write-Host 'Docker 已启动但页面还在初始化，请稍等 5 秒后刷新。'
 }
 
 if (-not $NoBrowser) {

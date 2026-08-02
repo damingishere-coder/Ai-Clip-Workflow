@@ -1,4 +1,4 @@
-"""v1.3.0 全自动任务流水线最小测试。"""
+"""v2.0.0 全自动任务流水线回归测试。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ from app.models.task import TaskCreate, TaskStatus
 from app.services.auto_publish_service import create_auto_publish_jobs
 from app.services.pipeline_engine import PipelineEngine, build_schedule_times
 from app.services.storage_service import get_artifact_paths
-from app.services.task_lifecycle_service import create_task_record
+from app.services.task_lifecycle_service import create_task_record, update_task_status
+from app.services.task_log_service import append_task_log
 from app.services.task_service import get_task
 
 
@@ -57,6 +58,13 @@ def _fake_video(name: str = "source.mp4") -> Path:
     return path
 
 
+def _fake_cover(name: str = "cover.jpg") -> Path:
+    path = settings.tasks_dir / "_test_inputs" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"fake jpg")
+    return path
+
+
 def _create_auto_task(task_id: str = "test-auto-task") -> dict:
     video = _fake_video(f"{task_id}.mp4")
     payload = TaskCreate(
@@ -70,6 +78,16 @@ def _create_auto_task(task_id: str = "test-auto-task") -> dict:
     )
     create_task_record(payload, task_id=task_id)
     return get_task(task_id, include_video_probe=False)
+
+
+def test_clip_candidates_schema_has_nullable_cover_time():
+    with get_connection() as connection:
+        columns = {
+            row["name"]: dict(row)
+            for row in connection.execute("PRAGMA table_info(clip_candidates)").fetchall()
+        }
+    assert "cover_time_seconds" in columns
+    assert columns["cover_time_seconds"]["notnull"] == 0
 
 
 def test_auto_mode_false_does_not_start_pipeline(monkeypatch):
@@ -204,6 +222,27 @@ def test_schedule_generation_defaults_to_ten_minutes_then_three_hours():
     assert scheduled[1].startswith("2026-06-23T11:10:00")
 
 
+def test_daily_window_schedule_supports_seven_to_midnight_without_looping():
+    local_zone = datetime.now().astimezone().tzinfo
+    start = datetime(2026, 6, 23, 21, 0, tzinfo=local_zone)
+    scheduled = build_schedule_times(
+        3,
+        {
+            "auto_schedule_mode": "daily_window",
+            "auto_schedule_start_at": start.isoformat(timespec="minutes"),
+            "auto_schedule_interval_hours": 3,
+            "auto_schedule_daily_start_time": "07:00",
+            "auto_schedule_daily_end_time": "00:00",
+        },
+        now=start,
+    )
+    assert [datetime.fromisoformat(item).strftime("%Y-%m-%d %H:%M") for item in scheduled] == [
+        "2026-06-23 21:00",
+        "2026-06-24 00:00",
+        "2026-06-24 07:00",
+    ]
+
+
 def test_create_auto_publish_job_records_scheduled_at():
     task = _create_auto_task("test-auto-publish-job")
     clip_path = _fake_video("publish_clip.mp4")
@@ -223,6 +262,11 @@ def test_create_auto_publish_job_records_scheduled_at():
     scheduled_items = [
         {
             "output_clip": {"id": "out-1", "output_file_path": str(clip_path)},
+            "cover": {
+                "cover_file_path": str(_fake_cover("publish_clip_cover.jpg")),
+                "cover_time_seconds": 12.5,
+                "cover_source": "ai_frame",
+            },
             "metadata": {
                 "platform": "douyin",
                 "title": "康熙名场面",
@@ -239,12 +283,16 @@ def test_create_auto_publish_job_records_scheduled_at():
     assert result["created_count"] == 1
     with get_connection() as connection:
         row = connection.execute(
-            "SELECT scheduled_at, status, video_source FROM publish_jobs WHERE task_id = ?",
+            "SELECT scheduled_at, status, video_source, cover_mode, cover_time_seconds, cover_file_path FROM publish_jobs WHERE task_id = ?",
             (task["id"],),
         ).fetchone()
     assert row["scheduled_at"] == "2026-06-23T08:10:00+00:00"
-    assert row["status"] == "SCHEDULED"
+    # local_browser 需要明确账号；没有可用账号时保留计划时间，但先停在 WAITING，避免到点直接失败。
+    assert row["status"] == "WAITING"
     assert row["video_source"] == "original"
+    assert row["cover_mode"] == "time"
+    assert row["cover_time_seconds"] == 12.5
+    assert row["cover_file_path"].endswith("publish_clip_cover.jpg")
 
 
 def test_create_auto_publish_job_without_schedule_waits_for_send_center():
@@ -268,6 +316,11 @@ def test_create_auto_publish_job_without_schedule_waits_for_send_center():
         [
             {
                 "output_clip": {"id": "out-waiting", "output_file_path": str(clip_path)},
+                "cover": {
+                    "cover_file_path": str(_fake_cover("publish_waiting_cover.jpg")),
+                    "cover_time_seconds": 20,
+                    "cover_source": "midpoint_fallback",
+                },
                 "metadata": {
                     "platform": "douyin",
                     "title": "待排期片段",
@@ -289,6 +342,54 @@ def test_create_auto_publish_job_without_schedule_waits_for_send_center():
         ).fetchone()
     assert row["scheduled_at"] == ""
     assert row["status"] == "WAITING"
+
+
+def test_auto_metadata_generates_one_cover_for_both_platforms(monkeypatch):
+    task = _create_auto_task("test-auto-cover-once")
+    clip_path = _fake_video("auto_cover_once.mp4")
+    cover_path = _fake_cover("auto_cover_once.jpg")
+    output_clip = {
+        "id": "out-cover-once",
+        "task_id": task["id"],
+        "status": "completed",
+        "file_exists": True,
+        "output_file_path": str(clip_path),
+        "cover_time_seconds": 17.5,
+    }
+    cover_calls = []
+
+    def fake_cover(item, preferred_time_seconds=None, video_source="original"):
+        cover_calls.append((item["id"], preferred_time_seconds, video_source))
+        return {
+            "cover_file_path": str(cover_path),
+            "cover_time_seconds": preferred_time_seconds,
+            "cover_source": "ai_frame",
+        }
+
+    def fake_metadata(_self, _item, platform):
+        return {
+            "platform": platform,
+            "title": f"{platform} 标题",
+            "caption": "简介",
+            "hashtags": ["测试"],
+            "cover_text": "封面",
+            "risk_flags": [],
+            "source": "rule",
+        }
+
+    monkeypatch.setattr("app.services.pipeline_engine.task_service.list_output_clips", lambda _task_id: [output_clip])
+    monkeypatch.setattr("app.services.pipeline_engine.generate_publish_cover_for_item", fake_cover)
+    monkeypatch.setattr("app.services.pipeline_engine.MetadataGenerator.generate", fake_metadata)
+
+    result = PipelineEngine()._generate_metadata(
+        task["id"],
+        {"config": {"auto_metadata_use_ai": False}},
+    )
+
+    assert cover_calls == [("out-cover-once", 17.5, "original")]
+    assert len(result["metadata_items"]) == 2
+    assert {item["metadata"]["platform"] for item in result["metadata_items"]} == {"douyin", "bilibili"}
+    assert {item["cover"]["cover_file_path"] for item in result["metadata_items"]} == {str(cover_path)}
 
 
 def test_prepare_source_uses_pathlib_and_writes_reference():
@@ -360,3 +461,81 @@ def test_auto_resume_endpoint_starts_from_clip_selection(monkeypatch):
     assert starter.call_args.args[0] == task["id"]
     assert starter.call_args.kwargs["start_step"] == TaskStatus.CLIP_SELECTING
     assert starter.call_args.kwargs["background_tasks"] is not None
+
+
+def test_live_status_endpoint_tracks_running_auto_pipeline():
+    task = _create_auto_task("test-auto-live-running")
+    update_task_status(task["id"], TaskStatus.AI_ANALYZING)
+    append_task_log(task["id"], "实时状态测试日志")
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/tasks/{task['id']}/live-status", headers=_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == TaskStatus.AI_ANALYZING.value
+    assert payload["status_label"] == "AI 分析中"
+    assert payload["progress"] == 45
+    assert payload["is_running"] is True
+    assert payload["should_poll"] is True
+    assert payload["actions"]["primary"] == "processing"
+    assert len(payload["workflow_steps"]) == 10
+    assert payload["workflow_steps"][3]["state"] == "current"
+    assert any("实时状态测试日志" in line for line in payload["log_lines"])
+
+
+def test_live_status_endpoint_returns_failure_and_retry_action():
+    task = _create_auto_task("test-auto-live-failed")
+    update_task_status(task["id"], TaskStatus.FAILED_AI_ANALYZING, "模型服务暂时不可用")
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/tasks/{task['id']}/live-status", headers=_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["should_poll"] is False
+    assert payload["error_message"] == "模型服务暂时不可用"
+    assert payload["actions"]["primary"] == "retry"
+    assert payload["workflow_steps"][3]["state"] == "warning"
+
+
+def test_live_status_endpoint_returns_completed_actions(monkeypatch):
+    task = _create_auto_task("test-auto-live-completed")
+    update_task_status(task["id"], TaskStatus.COMPLETED)
+    monkeypatch.setattr("app.services.task_service.count_clip_candidates", lambda _task_id: 3)
+    monkeypatch.setattr("app.services.task_service.count_output_clips", lambda _task_id: 2)
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/tasks/{task['id']}/live-status", headers=_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["progress"] == 100
+    assert payload["should_poll"] is False
+    assert payload["counts"] == {"candidates": 3, "outputs": 2}
+    assert payload["actions"] == {"primary": "publish", "review": True, "publish": True}
+    assert all(step["state"] == "done" for step in payload["workflow_steps"])
+
+
+def test_live_status_endpoint_returns_404_for_missing_task():
+    with TestClient(app) as client:
+        response = client.get("/api/tasks/test-auto-missing/live-status", headers=_headers())
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "任务不存在"
+
+
+def test_task_detail_live_status_frontend_uses_partial_refresh():
+    template = (settings.project_root / "app" / "templates" / "task_detail.html").read_text(encoding="utf-8")
+    script = (settings.project_root / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    live_script = script[
+        script.index("function renderTaskLiveStatus"):
+        script.index("async function pollAiAnalysisStatus")
+    ]
+
+    assert "data-task-live-overview" in template
+    assert "data-live-task-actions" in template
+    assert "/live-status" in live_script
+    assert "TASK_LIVE_STATUS_INTERVAL_MS = 3000" in script
+    assert 'document.addEventListener("visibilitychange"' in live_script
+    assert "window.location.reload" not in live_script

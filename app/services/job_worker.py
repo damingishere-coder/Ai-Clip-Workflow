@@ -17,6 +17,8 @@ def execute_job(job_id: str) -> dict:
     job = job_service.get_job(job_id)
     if not job:
         raise ValueError(f"job 不存在：{job_id}")
+    if job.get("status") == job_service.JOB_STATUS_CANCELLED:
+        return job
 
     job_type = job.get("job_type")
     task_id = job.get("task_id")

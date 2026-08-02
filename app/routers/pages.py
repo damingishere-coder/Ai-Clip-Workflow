@@ -5,7 +5,11 @@ from fastapi.templating import Jinja2Templates
 
 from app.core.config import settings
 from app.services.ai_prompt_preset_service import list_ai_prompt_presets
-from app.services.publish_service import get_publish_center_context
+from app.services.publish_service import (
+    get_publish_center_context,
+    get_publish_link_states,
+    get_task_publish_link_state,
+)
 from app.services.task_query_service import (
     get_clips_overview_context,
     get_dashboard_context,
@@ -48,6 +52,10 @@ async def dashboard(request: Request):
 
 @router.get("/tasks")
 async def tasks_page(request: Request):
+    tasks = list_tasks()
+    link_states = get_publish_link_states([task["id"] for task in tasks])
+    for task in tasks:
+        task["publish_link_state"] = link_states.get(task["id"], {})
     return templates.TemplateResponse(
         name="tasks.html",
         request=request,
@@ -55,7 +63,7 @@ async def tasks_page(request: Request):
             "request": request,
             "active_page": "tasks",
             "settings": settings,
-            "tasks": list_tasks(),
+            "tasks": tasks,
         },
     )
 
@@ -89,6 +97,7 @@ async def task_detail_page(request: Request, task_id: str):
             "active_page": "tasks",
             "settings": settings,
             "task": task,
+            "publish_link_state": get_task_publish_link_state(task_id),
             "workflow_steps": get_task_workflow_steps(task),
             "transcript_lines": get_transcript_preview(task_id),
             "output_clips": list_output_clips(task_id),
@@ -132,12 +141,18 @@ def _filter_and_sort_clips(clips: list[dict], clip_filter: str, sort_by: str) ->
         clips = [
             clip
             for clip in clips
-            if "高" in clip.get("spread_value", "") or clip.get("spread_value", "").lower() == "high"
+            if clip.get("quality_tier") == "A"
+            or "高" in clip.get("spread_value", "")
+            or clip.get("spread_value", "").lower() == "high"
         ]
 
     if sort_by == "time":
         return sorted(clips, key=lambda clip: clip.get("start_seconds", 0))
-    return sorted(clips, key=lambda clip: clip.get("confidence_score", 0), reverse=True)
+    return sorted(
+        clips,
+        key=lambda clip: clip.get("quality_score") or clip.get("confidence_score", 0),
+        reverse=True,
+    )
 
 
 async def _render_clip_review_page(
@@ -166,6 +181,7 @@ async def _render_clip_review_page(
             "clip_filter": clip_filter,
             "sort_by": sort_by,
             "output_clips": list_output_clips(task_id),
+            "publish_link_state": get_task_publish_link_state(task_id),
         },
     )
 
@@ -234,6 +250,7 @@ async def subtitle_task_page(request: Request, task_id: str):
             "active_page": "subtitles",
             "settings": settings,
             "subtitle_task_mode": True,
+            "publish_link_state": get_task_publish_link_state(task_id),
             **context,
         },
     )
@@ -241,6 +258,7 @@ async def subtitle_task_page(request: Request, task_id: str):
 
 @router.get("/publish")
 async def publish_center_page(request: Request):
+    focus_task_id = request.query_params.get("task_id", "")
     return templates.TemplateResponse(
         name="publish.html",
         request=request,
@@ -249,7 +267,10 @@ async def publish_center_page(request: Request):
             "active_page": "publish",
             "settings": settings,
             "publish_message": request.query_params.get("publish_message", ""),
-            **get_publish_center_context(),
+            "focus_task_id": focus_task_id,
+            "focus_platform": request.query_params.get("platform", ""),
+            "focus_tab": request.query_params.get("tab", ""),
+            **get_publish_center_context(focus_task_id=focus_task_id),
         },
     )
 

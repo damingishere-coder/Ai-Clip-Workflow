@@ -12,6 +12,8 @@ from app.models.task import TaskStatus
 from app.services import task_service
 from app.services.auto_publish_service import create_auto_publish_jobs, platforms_for_task
 from app.services.metadata_generator import MetadataGenerator
+from app.services.publish_service import generate_publish_cover_for_item
+from app.services.publish_time import next_allowed_schedule_time
 from app.services.storage_service import (
     create_task_directory,
     get_artifact_paths,
@@ -62,8 +64,8 @@ DEFAULT_AUTO_CONFIG = {
     "auto_schedule_mode": "default",
     "auto_schedule_start_at": "",
     "auto_schedule_interval_hours": 3,
-    "auto_schedule_daily_start_time": "09:00",
-    "auto_schedule_daily_end_time": "21:00",
+    "auto_schedule_daily_start_time": "07:00",
+    "auto_schedule_daily_end_time": "00:00",
     "auto_metadata_use_ai": False,
 }
 
@@ -142,6 +144,8 @@ class PipelineEngine:
         task = task_service.get_task(task_id, include_video_probe=False)
         if not task:
             raise ValueError("任务不存在")
+        if task.get("is_deleted"):
+            raise ValueError("任务已永久删除，已停止后续自动处理")
         return task
 
     def _load_auto_config(self, task: dict) -> dict:
@@ -223,7 +227,7 @@ class PipelineEngine:
             raise ValueError("没有可用于自动切片的候选片段，请先重新运行 AI 分析")
 
         target_count = self._resolve_target_count(task, config)
-        max_duration_seconds = max(1, int(task.get("max_clip_duration") or 5)) * 60
+        max_duration_seconds = max(1, int(task.get("max_clip_duration") or 10)) * 60
         valid_candidates = []
         skipped = []
         for clip in candidates:
@@ -240,10 +244,19 @@ class PipelineEngine:
                 continue
             valid_candidates.append({**clip, "start_seconds": start, "end_seconds": end, "duration": duration})
 
-        selected = sorted(valid_candidates, key=lambda item: float(item.get("confidence_score") or 0), reverse=True)
+        eligible = [item for item in valid_candidates if bool(item.get("selected_by_default"))]
+        if task.get("selection_profile") == "variety_comedy":
+            eligible = [item for item in eligible if item.get("quality_tier") == "A"]
+        selected = sorted(
+            eligible,
+            key=lambda item: float(item.get("quality_score") or item.get("confidence_score") or 0),
+            reverse=True,
+        )
         selected = sorted(selected[:target_count], key=lambda item: float(item["start_seconds"]))
         if not selected:
-            raise ValueError("候选片段的时间戳均无效或超过单条切片最长时长")
+            if task.get("selection_profile") == "variety_comedy":
+                raise ValueError("本集没有达到 A 级质量门槛的综艺片段，已停止自动切片，避免为了数量强行输出")
+            raise ValueError("没有同时满足默认入选和时间戳要求的候选片段")
         selected_ids = {clip["id"] for clip in selected}
         self._update_selected_clips(task_id, selected_ids)
         payload = {
@@ -272,7 +285,7 @@ class PipelineEngine:
 
     def _cut_video(self, task_id: str, context: dict) -> dict:
         append_task_log(task_id, "全自动模式：开始原视频裁切，本轮明确跳过字幕烧录")
-        result = task_service.process_task_video_cuts(task_id)
+        result = task_service.process_task_video_cuts(task_id, sync_publish_jobs=False)
         output_clips = task_service.list_output_clips(task_id)
         success = [clip for clip in output_clips if clip.get("status") == "completed" and clip.get("file_exists")]
         failed = [item for item in result.get("results") or [] if item.get("status") == "failed"]
@@ -294,11 +307,16 @@ class PipelineEngine:
         generator = MetadataGenerator(use_ai=config["auto_metadata_use_ai"])
         metadata_items = []
         for output_clip in output_clips:
+            cover = generate_publish_cover_for_item(
+                output_clip,
+                preferred_time_seconds=output_clip.get("cover_time_seconds"),
+            )
             for platform in platforms_for_task(task):
                 metadata_items.append(
                     {
                         "output_clip": output_clip,
                         "metadata": generator.generate(output_clip, platform),
+                        "cover": cover,
                     }
                 )
         paths = get_artifact_paths(task_id)
@@ -358,7 +376,9 @@ class PipelineEngine:
                 """
                 SELECT id, task_id, clip_key, title, start_time, end_time, duration_seconds,
                        summary, reason, highlight_reason, spread_value, suggested_editing,
-                       confidence_score, selected_by_default, enabled, reviewed, is_deleted
+                       confidence_score, quality_tier, quality_score, humor_score,
+                       completeness_score, audio_reaction_score,
+                       selected_by_default, enabled, reviewed, is_deleted
                 FROM clip_candidates
                 WHERE task_id = ? AND is_deleted = 0
                 ORDER BY start_time ASC
@@ -368,7 +388,9 @@ class PipelineEngine:
         return [dict(row) for row in rows]
 
     def _resolve_target_count(self, task: dict, config: dict) -> int:
-        return max(1, min(50, int(task.get("candidate_clip_count") or 5)))
+        if task.get("selection_profile") == "variety_comedy":
+            return max(1, min(12, int(task.get("final_clip_target") or 5)))
+        return max(1, min(50, int(task.get("candidate_clip_count") or 12)))
 
     def _update_selected_clips(self, task_id: str, selected_ids: set[str]) -> None:
         now = task_service._now_iso()
@@ -395,9 +417,11 @@ class PipelineEngine:
     def _write_clip_metadata(self, task_id: str, output_clips: list[dict], metadata_items: list[dict]) -> None:
         paths = get_artifact_paths(task_id)
         metadata_by_clip: dict[str, list[dict]] = {}
+        cover_by_clip: dict[str, dict] = {}
         for item in metadata_items:
             clip_id = item["output_clip"]["id"]
             metadata_by_clip.setdefault(clip_id, []).append(item["metadata"])
+            cover_by_clip[clip_id] = item.get("cover") or {}
         payload = []
         for clip in output_clips:
             payload.append(
@@ -408,6 +432,7 @@ class PipelineEngine:
                     "status": clip.get("status") or "",
                     "error_message": clip.get("error_message") or "",
                     "recommend_reason": clip.get("highlight_reason") or clip.get("clip_summary") or "",
+                    "cover": cover_by_clip.get(clip.get("id") or "", {}),
                     "metadata": metadata_by_clip.get(clip.get("id") or "", []),
                 }
             )
@@ -448,8 +473,8 @@ class PipelineEngine:
             "publish_job_count": publish_job_count,
             "need_review_clips": need_review,
             "failures": failures,
-            "next_step": "打开发布中心人工确认发布任务；真正定时发送将在 v1.4.0 实现。",
-            "subtitle_note": "v1.3.0 全自动模式已跳过加字幕、字幕样式渲染和字幕烧录。",
+            "next_step": "打开发送中心核对内容、账号与北京时间；确认后可立即发送或设置排期。",
+            "subtitle_note": "v2.0 全自动模式继续跳过加字幕、字幕样式渲染和字幕烧录。",
         }
         summary_path = paths["analysis_path"].parent / "task_summary.json"
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -531,20 +556,27 @@ def build_schedule_times(count: int, config: dict, now: datetime | None = None) 
         return [(start + index * interval).isoformat(timespec="seconds") for index in range(count)]
 
     if mode == "daily_window":
-        window_start = _parse_clock(str(config.get("auto_schedule_daily_start_time") or "09:00"), time(9, 0))
-        window_end = _parse_clock(str(config.get("auto_schedule_daily_end_time") or "21:00"), time(21, 0))
+        window_start = _parse_clock(
+            str(config.get("auto_schedule_daily_start_time") or "07:00"),
+            time(7, 0),
+        ).isoformat(timespec="minutes")
+        window_end = _parse_clock(
+            str(config.get("auto_schedule_daily_end_time") or "00:00"),
+            time(0, 0),
+        ).isoformat(timespec="minutes")
         scheduled = []
-        cursor = start
+        cursor = next_allowed_schedule_time(
+            start,
+            daily_start_time=window_start,
+            daily_end_time=window_end,
+        )
         while len(scheduled) < count:
-            day_start = datetime.combine(cursor.date(), window_start).replace(tzinfo=cursor.tzinfo)
-            day_end = datetime.combine(cursor.date(), window_end).replace(tzinfo=cursor.tzinfo)
-            if cursor < day_start:
-                cursor = day_start
-            if cursor > day_end:
-                cursor = datetime.combine(cursor.date() + timedelta(days=1), window_start).replace(tzinfo=cursor.tzinfo)
-                continue
             scheduled.append(cursor.isoformat(timespec="seconds"))
-            cursor = cursor + timedelta(hours=interval_hours)
+            cursor = next_allowed_schedule_time(
+                cursor + timedelta(hours=interval_hours),
+                daily_start_time=window_start,
+                daily_end_time=window_end,
+            )
         return scheduled
 
     return [(start + index * timedelta(hours=3)).isoformat(timespec="seconds") for index in range(count)]

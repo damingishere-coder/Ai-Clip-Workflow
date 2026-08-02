@@ -15,7 +15,16 @@
   <div class="button-row">
     <a class="secondary-button" href="/subtitles">返回字幕任务列表</a>
     <a class="secondary-button" href="/tasks/{{ task.id }}/clips/review">返回片段审核</a>
+    {% if output_clips %}
+    <button class="primary-button" type="button" data-sync-publish-task data-task-id="{{ task.id }}" data-prefer-subtitled="true">同步发送中心</button>
+    <a class="secondary-button" href="/publish?task_id={{ task.id }}&tab=content">查看本任务发送内容</a>
+    {% endif %}
   </div>
+</section>
+
+<section class="inline-alert tone-{{ 'green' if publish_link_state.state == 'linked' else 'blue' }}" data-publish-link-summary>
+  <strong>发送中心关联：{{ publish_link_state.label }}</strong>
+  <span>当前 {{ publish_link_state.active_clip_count }} 条切片，抖音 {{ publish_link_state.platforms.get('douyin', {}).get('linked', 0) }} 条，B站 {{ publish_link_state.platforms.get('bilibili', {}).get('linked', 0) }} 条。</span>
 </section>
 
 <section class="stat-grid review-stat-grid" aria-label="字幕任务统计">
@@ -73,7 +82,9 @@
             <p class="path-text">{{ output.output_file_path or "无输出路径" }}</p>
             <div class="subtitle-output-actions">
               <span class="status-pill" data-subtitle-status>{{ output.subtitle_status_label }}</span>
-              <span class="status-pill">{{ output.publish_stage }}</span>
+              {% set output_publish = publish_link_state.per_output.get(output.id, {}) %}
+              <span class="status-pill">抖音 {{ output_publish.get('douyin', '未关联') }}</span>
+              <span class="status-pill">B站 {{ output_publish.get('bilibili', '未关联') }}</span>
             </div>
             {% if output.subtitled_file_exists %}
             <div class="subtitled-preview">

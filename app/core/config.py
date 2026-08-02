@@ -60,6 +60,10 @@ class Settings:
     data_dir: Path = _env_path("DATA_DIR", PROJECT_ROOT / "data")
     storage_root: Path = _env_path("STORAGE_ROOT", EXTERNAL_STORAGE_ROOT)
     tasks_dir: Path = _env_path("TASKS_DIR", _env_path("STORAGE_ROOT", EXTERNAL_STORAGE_ROOT))
+    upload_temp_dir: Path = _env_path(
+        "UPLOAD_TEMP_DIR",
+        _env_path("TASKS_DIR", _env_path("STORAGE_ROOT", EXTERNAL_STORAGE_ROOT)) / "_临时上传",
+    )
     database_path: Path = _env_path(
         "DATABASE_PATH",
         _env_path("DATA_DIR", PROJECT_ROOT / "data") / "workflow.sqlite3",
@@ -161,13 +165,46 @@ class Settings:
     ai_local_health_timeout_seconds: int = int(_env("AI_LOCAL_HEALTH_TIMEOUT_SECONDS", "30"))
     opencli_local_base_url: str = _env("OPENCLI_LOCAL_BASE_URL", "http://127.0.0.1:8001")
     opencli_host_bridge_url: str = _env("OPENCLI_HOST_BRIDGE_URL", "")
+    app_timezone: str = _env("APP_TIMEZONE", "Asia/Shanghai")
     publish_scheduler_enabled: bool = _env_bool("PUBLISH_SCHEDULER_ENABLED", True)
-    publish_scheduler_interval_seconds: int = int(_env("PUBLISH_SCHEDULER_INTERVAL_SECONDS", "60"))
-    publish_scheduler_default_platform: str = _env("PUBLISH_SCHEDULER_DEFAULT_PLATFORM", "manual_export")
+    publish_scheduler_interval_seconds: int = int(_env("PUBLISH_SCHEDULER_INTERVAL_SECONDS", "5"))
+    publish_default_mode: str = _env("PUBLISH_DEFAULT_MODE", "local_browser")
+    # 已废弃：仅保留读取能力，旧值不再覆盖 publish_jobs.platform。
+    publish_scheduler_default_platform: str = _env("PUBLISH_SCHEDULER_DEFAULT_PLATFORM", "douyin")
+    publish_job_stale_minutes: int = int(_env("PUBLISH_JOB_STALE_MINUTES", "30"))
     publish_scheduler_max_retry_count: int = int(_env("PUBLISH_SCHEDULER_MAX_RETRY_COUNT", "3"))
+    publish_enable_opencli_fallback: bool = _env_bool("PUBLISH_ENABLE_OPENCLI_FALLBACK", False)
+    publish_worker_url: str = _env(
+        "PUBLISH_WORKER_URL",
+        "http://127.0.0.1:8765" if os.name == "nt" else "http://host.docker.internal:8765",
+    )
+    publish_worker_token: str = _env("PUBLISH_WORKER_TOKEN", "")
+    publish_worker_timeout_seconds: int = int(_env("PUBLISH_WORKER_TIMEOUT_SECONDS", "1800"))
+    publish_browser_channel: str = _env("PUBLISH_BROWSER_CHANNEL", "chrome")
+    publish_browser_headless: bool = _env_bool("PUBLISH_BROWSER_HEADLESS", False)
+    publish_browser_navigation_timeout_ms: int = int(
+        _env("PUBLISH_BROWSER_NAVIGATION_TIMEOUT_MS", "60000")
+    )
+    publish_browser_failure_hold_seconds: int = int(
+        _env("PUBLISH_BROWSER_FAILURE_HOLD_SECONDS", "600")
+    )
+    publish_browser_profile_dir: Path = _env_path(
+        "PUBLISH_BROWSER_PROFILE_DIR",
+        _env_path("DATA_DIR", PROJECT_ROOT / "data") / "browser_profiles",
+    )
+    publish_browser_artifact_dir: Path = _env_path(
+        "PUBLISH_BROWSER_ARTIFACT_DIR",
+        _env_path("DATA_DIR", PROJECT_ROOT / "data") / "publish_artifacts",
+    )
+    publish_worker_state_dir: Path = _env_path(
+        "PUBLISH_WORKER_STATE_DIR",
+        _env_path("DATA_DIR", PROJECT_ROOT / "data") / "publish_worker",
+    )
+    publish_host_project_root: Path = _env_path("PUBLISH_HOST_PROJECT_ROOT", PROJECT_ROOT)
+    publish_worker_allowed_roots: str = _env("PUBLISH_WORKER_ALLOWED_ROOTS", "")
     publish_scheduler_export_dir: Path = _env_path(
         "PUBLISH_SCHEDULER_EXPORT_DIR",
-        PROJECT_ROOT / "outputs" / "publish_packages",
+        _env_path("STORAGE_ROOT", EXTERNAL_STORAGE_ROOT) / "_发布包",
     )
     publish_scheduler_allow_publish_without_review: bool = _env_bool(
         "PUBLISH_SCHEDULER_ALLOW_PUBLISH_WITHOUT_REVIEW",
