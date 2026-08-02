@@ -92,14 +92,26 @@ def _next_allowed_schedule_time(cursor: datetime, window_start: time, window_end
     return datetime.combine(cursor.date(), window_start, tzinfo=cursor.tzinfo)
 
 
+def next_allowed_schedule_time(
+    cursor: datetime,
+    *,
+    daily_start_time: str = "07:00",
+    daily_end_time: str = "00:00",
+) -> datetime:
+    """把一个候选时间顺延到每日允许发布时段。"""
+    window_start = parse_clock(daily_start_time, "每日开始时间")
+    window_end = parse_clock(daily_end_time, "每日结束时间")
+    return _next_allowed_schedule_time(cursor, window_start, window_end)
+
+
 def build_schedule_times(
     count: int,
     *,
     start_at_local: str,
     timezone_name: str | None = None,
     interval_minutes: int = 180,
-    daily_start_time: str = "09:00",
-    daily_end_time: str = "21:00",
+    daily_start_time: str = "07:00",
+    daily_end_time: str = "00:00",
     reject_past: bool = True,
 ) -> list[str]:
     if count <= 0:

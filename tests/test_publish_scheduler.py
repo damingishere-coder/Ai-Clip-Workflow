@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from app.core.config import settings
 from app.db.database import get_connection, init_db
 from app.main import app
-from app.models.task import PublishJobCreate
+from app.models.task import PublishBatchScheduleUpdate, PublishJobCreate, PublishScheduleNextStartRequest
 from app.services.auto_publish_service import create_auto_publish_jobs
 from app.services.publish_domain import TARGET_PLATFORMS
 from app.services.publish_readiness import SendReadinessBlocked
@@ -57,6 +57,11 @@ def _cleanup():
 
 def _utc(delta_seconds: int = 0) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=delta_seconds)).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _future_beijing_time(hour: int, *, minute: int = 0, days: int = 2) -> datetime:
+    future_date = (datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(days=days)).date()
+    return datetime(future_date.year, future_date.month, future_date.day, hour, minute, tzinfo=ZoneInfo("Asia/Shanghai"))
 
 
 def _insert_job(
@@ -169,6 +174,115 @@ def test_daily_window_overflow_moves_to_next_local_day():
         interval_minutes=180, daily_start_time="09:00", daily_end_time="21:00", reject_past=False,
     )
     assert result == ["2026-07-12T12:00:00+00:00", "2026-07-13T01:00:00+00:00", "2026-07-13T04:00:00+00:00"]
+
+
+def test_schedule_request_defaults_use_seven_to_midnight():
+    batch = PublishBatchScheduleUpdate(job_ids=["job-1"])
+    next_start = PublishScheduleNextStartRequest(job_ids=["job-1"], platform="douyin")
+    assert (batch.daily_start_time, batch.daily_end_time) == ("07:00", "00:00")
+    assert (next_start.daily_start_time, next_start.daily_end_time) == ("07:00", "00:00")
+
+
+def test_next_schedule_start_uses_current_platform_and_excludes_selected_jobs(tmp_path):
+    selected_time = _future_beijing_time(23)
+    selected = _insert_job(tmp_path, status="WAITING", scheduled_at=selected_time.astimezone(timezone.utc).isoformat(timespec="seconds"))
+    latest_time = _future_beijing_time(19)
+    latest = _insert_job(tmp_path, status="WAITING", scheduled_at=latest_time.astimezone(timezone.utc).isoformat(timespec="seconds"))
+    _insert_job(
+        tmp_path,
+        status="SCHEDULED",
+        platform="bilibili",
+        scheduled_at=_future_beijing_time(23).astimezone(timezone.utc).isoformat(timespec="seconds"),
+    )
+    _insert_job(
+        tmp_path,
+        status="PUBLISHED",
+        scheduled_at=_future_beijing_time(23).astimezone(timezone.utc).isoformat(timespec="seconds"),
+    )
+
+    result = PublishScheduler().next_batch_schedule_start(
+        [selected],
+        platform="douyin",
+        timezone_name="Asia/Shanghai",
+        interval_minutes=180,
+        daily_start_time="07:00",
+        daily_end_time="00:00",
+    )
+
+    assert result["status"] == "ok"
+    assert result["latest_job_id"] == latest
+    assert result["latest_scheduled_at_local_display"].endswith(" 19:00")
+    assert result["next_start_at_local_display"].endswith(" 22:00")
+
+
+@pytest.mark.parametrize(
+    ("latest_hour", "expected_day_offset", "expected_hour"),
+    [(21, 1, 0), (22, 1, 7)],
+)
+def test_next_schedule_start_respects_cross_midnight_window(
+    tmp_path,
+    latest_hour,
+    expected_day_offset,
+    expected_hour,
+):
+    selected = _insert_job(tmp_path, status="WAITING", scheduled_at="")
+    latest_time = _future_beijing_time(latest_hour)
+    _insert_job(
+        tmp_path,
+        status="SCHEDULED",
+        scheduled_at=latest_time.astimezone(timezone.utc).isoformat(timespec="seconds"),
+    )
+    result = PublishScheduler().next_batch_schedule_start(
+        [selected],
+        platform="douyin",
+        interval_minutes=180,
+        daily_start_time="07:00",
+        daily_end_time="00:00",
+    )
+    expected = latest_time.date() + timedelta(days=expected_day_offset)
+    assert result["next_start_at_local_display"] == f"{expected:%Y-%m-%d} {expected_hour:02d}:00"
+
+
+def test_next_schedule_start_returns_empty_without_other_future_schedule(tmp_path):
+    selected = _insert_job(tmp_path, status="WAITING", scheduled_at="")
+    result = PublishScheduler().next_batch_schedule_start([selected], platform="douyin")
+    assert result["status"] == "empty"
+    assert result["next_start_at_local"] == ""
+    assert "手动选择" in result["message"]
+
+
+def test_next_schedule_start_api_and_platform_isolation(tmp_path):
+    selected = _insert_job(tmp_path, status="WAITING", scheduled_at="")
+    latest_time = _future_beijing_time(19)
+    _insert_job(
+        tmp_path,
+        status="SCHEDULED",
+        scheduled_at=latest_time.astimezone(timezone.utc).isoformat(timespec="seconds"),
+    )
+    headers = {"Authorization": f"Bearer {settings.local_admin_token}"} if settings.local_admin_token else {}
+    payload = {
+        "job_ids": [selected],
+        "platform": "douyin",
+        "timezone": "Asia/Shanghai",
+        "interval_minutes": 180,
+        "daily_start_time": "07:00",
+        "daily_end_time": "00:00",
+    }
+    client = TestClient(app)
+    response = client.post("/api/publish/schedules/next-start", json=payload, headers=headers)
+    assert response.status_code == 200
+    assert response.json()["next_start_at_local_display"].endswith(" 22:00")
+    assert response.json()["next_start_at_local"].endswith("T22:00")
+    assert "+" not in response.json()["next_start_at_local"]
+
+    bilibili = _insert_job(tmp_path, status="WAITING", platform="bilibili", scheduled_at="")
+    response = client.post(
+        "/api/publish/schedules/next-start",
+        json={**payload, "job_ids": [bilibili]},
+        headers=headers,
+    )
+    assert response.status_code == 409
+    assert "当前平台与所选任务不一致" in response.json()["detail"]
 
 
 def test_scheduled_manual_export_job_can_run_now(tmp_path):
@@ -390,9 +504,11 @@ def test_frontend_uses_one_selection_semantic_and_no_schedule_reload():
     assert "data-send-job-checkbox" not in template
     assert "window.location.reload" not in script
     assert "/api/publish/schedules/preview" in script
+    assert "/api/publish/schedules/next-start" in script
     assert "data-schedule-feedback" in template
+    assert "data-use-latest-schedule" in template
     assert "正在生成预览…" in script
-    assert 'addEventListener("input", invalidatePreview)' in script
+    assert 'scheduleForm?.addEventListener("input", () =>' in script
 
 
 def test_run_once_module_command(tmp_path):

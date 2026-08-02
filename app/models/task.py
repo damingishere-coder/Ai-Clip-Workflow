@@ -55,8 +55,8 @@ class TaskCreate(BaseModel):
     auto_schedule_mode: Literal["default", "immediate", "interval", "daily_window"] = "default"
     auto_schedule_start_at: Optional[str] = Field(default="", max_length=80)
     auto_schedule_interval_hours: int = Field(default=3, ge=1, le=168)
-    auto_schedule_daily_start_time: str = Field(default="09:00", max_length=5)
-    auto_schedule_daily_end_time: str = Field(default="21:00", max_length=5)
+    auto_schedule_daily_start_time: str = Field(default="07:00", max_length=5)
+    auto_schedule_daily_end_time: str = Field(default="00:00", max_length=5)
     auto_metadata_use_ai: bool = False
 
     @validator("auto_clip_count")
@@ -194,12 +194,28 @@ class PublishBatchScheduleUpdate(BaseModel):
     start_at_local: Optional[str] = Field(default="", max_length=80)
     timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=80)
     interval_minutes: int = Field(default=180, ge=1, le=10080)
-    daily_start_time: str = Field(default="09:00", min_length=5, max_length=5)
-    daily_end_time: str = Field(default="21:00", min_length=5, max_length=5)
+    daily_start_time: str = Field(default="07:00", min_length=5, max_length=5)
+    daily_end_time: str = Field(default="00:00", min_length=5, max_length=5)
     confirmed_schedule: list[dict[str, str]] = Field(default_factory=list)
 
     @validator("job_ids")
     def validate_schedule_job_ids(cls, value: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
+        if not normalized:
+            raise ValueError("至少选择一条发布任务")
+        return normalized
+
+
+class PublishScheduleNextStartRequest(BaseModel):
+    job_ids: list[str] = Field(default_factory=list)
+    platform: Literal["douyin", "bilibili"]
+    timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=80)
+    interval_minutes: int = Field(default=180, ge=1, le=10080)
+    daily_start_time: str = Field(default="07:00", min_length=5, max_length=5)
+    daily_end_time: str = Field(default="00:00", min_length=5, max_length=5)
+
+    @validator("job_ids")
+    def validate_next_start_job_ids(cls, value: list[str]) -> list[str]:
         normalized = list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
         if not normalized:
             raise ValueError("至少选择一条发布任务")

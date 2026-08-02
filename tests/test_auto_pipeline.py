@@ -221,6 +221,27 @@ def test_schedule_generation_defaults_to_ten_minutes_then_three_hours():
     assert scheduled[1].startswith("2026-06-23T11:10:00")
 
 
+def test_daily_window_schedule_supports_seven_to_midnight_without_looping():
+    local_zone = datetime.now().astimezone().tzinfo
+    start = datetime(2026, 6, 23, 21, 0, tzinfo=local_zone)
+    scheduled = build_schedule_times(
+        3,
+        {
+            "auto_schedule_mode": "daily_window",
+            "auto_schedule_start_at": start.isoformat(timespec="minutes"),
+            "auto_schedule_interval_hours": 3,
+            "auto_schedule_daily_start_time": "07:00",
+            "auto_schedule_daily_end_time": "00:00",
+        },
+        now=start,
+    )
+    assert [datetime.fromisoformat(item).strftime("%Y-%m-%d %H:%M") for item in scheduled] == [
+        "2026-06-23 21:00",
+        "2026-06-24 00:00",
+        "2026-06-24 07:00",
+    ]
+
+
 def test_create_auto_publish_job_records_scheduled_at():
     task = _create_auto_task("test-auto-publish-job")
     clip_path = _fake_video("publish_clip.mp4")

@@ -66,8 +66,8 @@ async def create_upload_task(
     auto_schedule_mode: str = Form("default"),
     auto_schedule_start_at: str | None = Form(""),
     auto_schedule_interval_hours: int = Form(3),
-    auto_schedule_daily_start_time: str = Form("09:00"),
-    auto_schedule_daily_end_time: str = Form("21:00"),
+    auto_schedule_daily_start_time: str = Form("07:00"),
+    auto_schedule_daily_end_time: str = Form("00:00"),
     auto_metadata_use_ai: bool = Form(False),
     video_file: UploadFile = File(...),
 ) -> dict:

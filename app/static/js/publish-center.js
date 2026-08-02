@@ -13,6 +13,8 @@ if (publishCenterRoot) {
   const drawerCount = document.querySelector("[data-drawer-count]");
   const scheduleForm = document.querySelector("[data-schedule-form]");
   const previewList = document.querySelector("[data-schedule-preview]");
+  const latestScheduleButton = document.querySelector("[data-use-latest-schedule]");
+  const latestScheduleNote = document.querySelector("[data-latest-schedule-note]");
   const previewScheduleButton = document.querySelector("[data-preview-schedule]");
   const scheduleFeedbackNode = document.querySelector("[data-schedule-feedback]");
   const confirmScheduleButton = document.querySelector("[data-confirm-schedule]");
@@ -1028,8 +1030,8 @@ if (publishCenterRoot) {
       start_at_local: String(scheduleForm?.elements.start_at_local?.value || ""),
       timezone: APP_TIMEZONE,
       interval_minutes: preset === "custom" ? Number(scheduleForm?.elements.interval_minutes?.value || 180) : Number(preset),
-      daily_start_time: String(scheduleForm?.elements.daily_start_time?.value || "09:00"),
-      daily_end_time: String(scheduleForm?.elements.daily_end_time?.value || "21:00"),
+      daily_start_time: String(scheduleForm?.elements.daily_start_time?.value || "07:00"),
+      daily_end_time: String(scheduleForm?.elements.daily_end_time?.value || "00:00"),
     };
   }
 
@@ -1043,6 +1045,14 @@ if (publishCenterRoot) {
     scheduleFeedbackNode.textContent = message;
     scheduleFeedbackNode.classList.toggle("tone-red", tone === "error");
     scheduleFeedbackNode.classList.toggle("tone-blue", tone !== "error");
+  }
+
+  function showLatestScheduleNote(message = "", tone = "info") {
+    if (!latestScheduleNote) return;
+    latestScheduleNote.hidden = !message;
+    latestScheduleNote.textContent = message;
+    latestScheduleNote.classList.toggle("tone-red", tone === "error");
+    latestScheduleNote.classList.toggle("tone-blue", tone !== "error");
   }
 
   function invalidatePreview() {
@@ -1061,6 +1071,7 @@ if (publishCenterRoot) {
     drawer.hidden = false;
     drawerBackdrop.hidden = false;
     document.body.classList.add("has-schedule-drawer");
+    showLatestScheduleNote();
     updateSelectionUi();
   }
 
@@ -1805,10 +1816,49 @@ if (publishCenterRoot) {
     }
   });
 
-  scheduleForm?.addEventListener("input", invalidatePreview);
+  scheduleForm?.addEventListener("input", () => {
+    invalidatePreview();
+    showLatestScheduleNote();
+  });
 
   scheduleForm?.elements.interval_preset?.addEventListener("change", () => {
     document.querySelector("[data-custom-interval]").hidden = scheduleForm.elements.interval_preset.value !== "custom";
+  });
+
+  latestScheduleButton?.addEventListener("click", async () => {
+    const payload = schedulePayload("apply");
+    const request = {
+      job_ids: payload.job_ids,
+      platform: payload.platform,
+      timezone: payload.timezone,
+      interval_minutes: payload.interval_minutes,
+      daily_start_time: payload.daily_start_time,
+      daily_end_time: payload.daily_end_time,
+    };
+    latestScheduleButton.disabled = true;
+    latestScheduleButton.textContent = "正在查询当前最晚排期…";
+    showLatestScheduleNote();
+    showScheduleFeedback("正在读取当前平台的最新排期，请稍候。");
+    try {
+      const data = await window.apiFetch("/api/publish/schedules/next-start", {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
+      invalidatePreview();
+      if (data.status === "empty") {
+        showLatestScheduleNote(data.message || "当前平台暂无其他未来排期，请手动选择时间。");
+        return;
+      }
+      scheduleForm.elements.start_at_local.value = data.next_start_at_local;
+      showLatestScheduleNote(
+        `当前最晚：${data.latest_scheduled_at_local_display}；本次第 1 条：${data.next_start_at_local_display}`,
+      );
+    } catch (error) {
+      showScheduleFeedback(`读取最晚排期失败：${error.message}`, "error");
+    } finally {
+      latestScheduleButton.disabled = false;
+      latestScheduleButton.textContent = "接在当前平台最晚排期后";
+    }
   });
 
   previewScheduleButton?.addEventListener("click", async () => {
