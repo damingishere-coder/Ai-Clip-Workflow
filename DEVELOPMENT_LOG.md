@@ -964,3 +964,11 @@
 - 完成或失败后停止轮询，并原地显示发送中心、片段检查、重试或继续入口；重试/继续全自动流程也不再触发整页刷新。
 - 网络短暂异常时保留当前页面数据并继续重试，不会清空用户正在编辑的 AI Prompt 或改变滚动位置。
 - 新增处理中、失败、完成、404 和前端无整页刷新测试；专项测试 `21 passed`、完整测试 `407 passed`，JavaScript 与 Python 语法检查通过。浏览器实测从 AI 分析中切换到失败状态时，状态卡、日志和重试按钮在 3 秒内更新，未保存输入保持不变。
+
+## 2026-08-03 Docker 发布 Worker 运行状态恢复
+
+- 排查确认 `niuma-studio` Docker 容器和应用调度器正常，但 Windows 发布 Worker 未启动，发送中心显示 `worker_available=false`。
+- 根因是 Windows 计划任务 `NiuMa Studio Docker Watcher` 被禁用；Worker 本身、Token 配置和 Docker 连接代码均未发现故障。
+- 重新运行 `scripts/install_docker_publish_worker_watcher.ps1`，恢复并启动 Docker 守护任务。该守护任务继续只在本项目容器运行时启动 Windows Chrome Worker，容器停止后按宽限时间关闭 Worker。
+- 恢复后已验证：计划任务为 `Running` 且已启用，`http://127.0.0.1:8765/health` 返回 `windows_chrome`，Docker 调度器返回 `running=true`、`worker_available=true`、连续失败数为 0。
+- 本次未修改业务代码、数据库、视频文件或本地 `.env` 内容；真实平台登录、验证码和风控边界保持不变。
