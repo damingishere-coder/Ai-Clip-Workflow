@@ -309,13 +309,17 @@
 <aside class="schedule-drawer" data-schedule-drawer hidden aria-label="设置排期">
   <div class="schedule-drawer-header"><div><p class="eyebrow">Schedule</p><h2>设置排期</h2><p>已选 <strong data-drawer-count>0</strong> 条</p></div><button type="button" class="icon-button" data-close-schedule-drawer aria-label="关闭">×</button></div>
   <form data-schedule-form>
-    <label><span>第 1 条发布时间（北京时间）</span><input type="datetime-local" name="start_at_local" required></label>
+    <div class="schedule-start-field">
+      <label><span>第 1 条发布时间（北京时间）</span><input type="datetime-local" name="start_at_local" required></label>
+      <button type="button" class="secondary-button schedule-after-latest-button" data-use-latest-schedule>接在当前平台最晚排期后</button>
+      <p class="form-hint schedule-latest-note" data-latest-schedule-note hidden aria-live="polite"></p>
+    </div>
     <label><span>发布间隔</span><select name="interval_preset"><option value="60">1 小时</option><option value="120">2 小时</option><option value="180" selected>3 小时</option><option value="360">6 小时</option><option value="custom">自定义</option></select></label>
     <label data-custom-interval hidden><span>自定义分钟</span><input type="number" name="interval_minutes" min="1" max="10080" value="180"></label>
     <div>
       <strong>后续每日可发布时间段</strong>
-      <div class="schedule-window-grid"><label><span>每日开始</span><input type="time" name="daily_start_time" value="09:00" required></label><label><span>每日结束</span><input type="time" name="daily_end_time" value="21:00" required></label></div>
-      <p class="form-hint schedule-window-help">第 1 条严格使用上方时间；例如 06:00 → 00:00 表示可发布到次日午夜，开始和结束相同表示全天。</p>
+      <div class="schedule-window-grid"><label><span>每日开始</span><input type="time" name="daily_start_time" value="07:00" required></label><label><span>每日结束</span><input type="time" name="daily_end_time" value="00:00" required></label></div>
+      <p class="form-hint schedule-window-help">默认 07:00 → 00:00，可按本次需要修改；00:00 表示可发布到次日午夜，开始和结束相同表示全天。</p>
     </div>
     <p class="timezone-note">当前时区：<strong data-current-timezone>Asia/Shanghai（北京时间）</strong></p>
     <button type="button" class="secondary-button" data-preview-schedule>预览排期</button>
@@ -335,4 +339,4 @@
 </aside>
 {% endblock %}
 
-{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260728-history-calendar"></script>{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260802-schedule-after-latest"></script>{% endblock %}

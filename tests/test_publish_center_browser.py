@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import socket
 import threading
 import time
@@ -142,6 +143,23 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             browser = runtime.chromium.launch(headless=True, executable_path=str(chrome_path))
             context = browser.new_context(timezone_id="Asia/Shanghai")
             page = context.new_page()
+            page.route(
+                "**/api/publish/schedules/next-start",
+                lambda route: route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(
+                        {
+                            "status": "ok",
+                            "timezone": "Asia/Shanghai",
+                            "latest_scheduled_at_local_display": f"{future_day} 19:00",
+                            "next_start_at_local": f"{future_day}T22:00",
+                            "next_start_at_local_display": f"{future_day} 22:00",
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
             page.goto(f"http://127.0.0.1:{port}/publish", wait_until="networkidle")
 
             assert page.locator(
@@ -202,6 +220,13 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
                     f'[data-publish-row][data-section="schedule"][data-job-id="{job_id}"] [data-publish-select]'
                 ).check()
             page.locator("[data-open-schedule-drawer]").click()
+            assert page.locator('[name="daily_start_time"]').input_value() == "07:00"
+            assert page.locator('[name="daily_end_time"]').input_value() == "00:00"
+            page.locator("[data-use-latest-schedule]").click()
+            assert page.locator('[name="start_at_local"]').input_value() == f"{future_day}T22:00"
+            assert page.locator("[data-latest-schedule-note]").inner_text() == (
+                f"当前最晚：{future_day} 19:00；本次第 1 条：{future_day} 22:00"
+            )
             page.locator('[name="start_at_local"]').fill("2020-01-01T06:00")
             page.locator("[data-preview-schedule]").click()
             assert page.locator("[data-schedule-feedback].tone-red").filter(

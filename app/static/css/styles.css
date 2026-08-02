@@ -5078,6 +5078,11 @@ td a,
 .schedule-drawer-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 22px; }
 .schedule-drawer form { display: grid; gap: 16px; }
 .schedule-drawer form > label, .schedule-window-grid label { display: grid; gap: 7px; }
+.schedule-start-field, .schedule-start-field > label { display: grid; gap: 7px; }
+.schedule-after-latest-button { justify-self: start; margin-top: 2px; }
+.schedule-latest-note { margin: 2px 0 0; line-height: 1.55; }
+.schedule-latest-note.tone-red { color: var(--red); }
+.schedule-latest-note.tone-blue { color: var(--blue); }
 .schedule-window-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .schedule-window-help { margin: 8px 0 0; line-height: 1.55; }
 .schedule-feedback { margin: 0; }

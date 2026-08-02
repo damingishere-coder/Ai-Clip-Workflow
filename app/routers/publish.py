@@ -18,6 +18,7 @@ from app.models.task import (
     PublishMarkPublishedRequest,
     PublishPlatformConfigUpdate,
     PublishRetryRequest,
+    PublishScheduleNextStartRequest,
     PublishSendJobUpdate,
 )
 from app.services import publish_service
@@ -415,6 +416,23 @@ async def preview_publish_jobs_schedule(payload: PublishBatchScheduleUpdate) -> 
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SendReadinessBlocked as exc:
         raise HTTPException(status_code=409, detail=exc.readiness) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/schedules/next-start")
+async def get_publish_jobs_next_schedule_start(payload: PublishScheduleNextStartRequest) -> dict:
+    try:
+        return PublishScheduler().next_batch_schedule_start(
+            payload.job_ids,
+            platform=payload.platform,
+            timezone_name=payload.timezone,
+            interval_minutes=payload.interval_minutes,
+            daily_start_time=payload.daily_start_time,
+            daily_end_time=payload.daily_end_time,
+        )
+    except PublishPlatformIsolationBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

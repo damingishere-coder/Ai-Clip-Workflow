@@ -13,6 +13,7 @@ from app.services import task_service
 from app.services.auto_publish_service import create_auto_publish_jobs, platforms_for_task
 from app.services.metadata_generator import MetadataGenerator
 from app.services.publish_service import generate_publish_cover_for_item
+from app.services.publish_time import next_allowed_schedule_time
 from app.services.storage_service import (
     create_task_directory,
     get_artifact_paths,
@@ -63,8 +64,8 @@ DEFAULT_AUTO_CONFIG = {
     "auto_schedule_mode": "default",
     "auto_schedule_start_at": "",
     "auto_schedule_interval_hours": 3,
-    "auto_schedule_daily_start_time": "09:00",
-    "auto_schedule_daily_end_time": "21:00",
+    "auto_schedule_daily_start_time": "07:00",
+    "auto_schedule_daily_end_time": "00:00",
     "auto_metadata_use_ai": False,
 }
 
@@ -555,20 +556,27 @@ def build_schedule_times(count: int, config: dict, now: datetime | None = None) 
         return [(start + index * interval).isoformat(timespec="seconds") for index in range(count)]
 
     if mode == "daily_window":
-        window_start = _parse_clock(str(config.get("auto_schedule_daily_start_time") or "09:00"), time(9, 0))
-        window_end = _parse_clock(str(config.get("auto_schedule_daily_end_time") or "21:00"), time(21, 0))
+        window_start = _parse_clock(
+            str(config.get("auto_schedule_daily_start_time") or "07:00"),
+            time(7, 0),
+        ).isoformat(timespec="minutes")
+        window_end = _parse_clock(
+            str(config.get("auto_schedule_daily_end_time") or "00:00"),
+            time(0, 0),
+        ).isoformat(timespec="minutes")
         scheduled = []
-        cursor = start
+        cursor = next_allowed_schedule_time(
+            start,
+            daily_start_time=window_start,
+            daily_end_time=window_end,
+        )
         while len(scheduled) < count:
-            day_start = datetime.combine(cursor.date(), window_start).replace(tzinfo=cursor.tzinfo)
-            day_end = datetime.combine(cursor.date(), window_end).replace(tzinfo=cursor.tzinfo)
-            if cursor < day_start:
-                cursor = day_start
-            if cursor > day_end:
-                cursor = datetime.combine(cursor.date() + timedelta(days=1), window_start).replace(tzinfo=cursor.tzinfo)
-                continue
             scheduled.append(cursor.isoformat(timespec="seconds"))
-            cursor = cursor + timedelta(hours=interval_hours)
+            cursor = next_allowed_schedule_time(
+                cursor + timedelta(hours=interval_hours),
+                daily_start_time=window_start,
+                daily_end_time=window_end,
+            )
         return scheduled
 
     return [(start + index * timedelta(hours=3)).isoformat(timespec="seconds") for index in range(count)]

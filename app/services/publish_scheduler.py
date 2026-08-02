@@ -29,6 +29,7 @@ from app.services.publish_time import (
     build_schedule_times,
     ensure_future,
     local_display,
+    next_allowed_schedule_time,
     parse_datetime,
     to_utc_iso,
     utc_now,
@@ -735,6 +736,74 @@ class PublishScheduler:
         )
         return {"status": "ok", "timezone": timezone_name, "schedule": schedule}
 
+    def next_batch_schedule_start(
+        self,
+        job_ids: list[str],
+        *,
+        platform: str,
+        timezone_name: str = "Asia/Shanghai",
+        interval_minutes: int = 180,
+        daily_start_time: str = "07:00",
+        daily_end_time: str = "00:00",
+    ) -> dict[str, Any]:
+        ids = self._validate_batch_jobs(job_ids, platform)
+        placeholders = ",".join("?" for _ in ids)
+        with get_connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT id, status, scheduled_at
+                FROM publish_jobs
+                WHERE platform = ?
+                  AND status IN ('WAITING', 'SCHEDULED', 'PUBLISHING')
+                  AND TRIM(COALESCE(scheduled_at, '')) <> ''
+                  AND id NOT IN ({placeholders})
+                """,
+                [platform, *ids],
+            ).fetchall()
+
+        now = utc_now()
+        candidates: list[tuple[datetime, str]] = []
+        for row in rows:
+            try:
+                scheduled = parse_datetime(row["scheduled_at"]).astimezone(timezone.utc)
+            except ValueError:
+                continue
+            if scheduled > now:
+                candidates.append((scheduled, str(row["id"])))
+
+        if not candidates:
+            return {
+                "status": "empty",
+                "timezone": timezone_name,
+                "message": "当前平台暂无其他未来排期，请手动选择第 1 条发布时间。",
+                "latest_job_id": "",
+                "latest_scheduled_at_utc": "",
+                "latest_scheduled_at_local_display": "",
+                "next_start_at_utc": "",
+                "next_start_at_local": "",
+                "next_start_at_local_display": "",
+            }
+
+        latest, latest_job_id = max(candidates, key=lambda item: item[0])
+        zone = app_zone(timezone_name)
+        candidate = latest.astimezone(zone) + timedelta(minutes=interval_minutes)
+        next_start = next_allowed_schedule_time(
+            candidate,
+            daily_start_time=daily_start_time,
+            daily_end_time=daily_end_time,
+        )
+        return {
+            "status": "ok",
+            "timezone": timezone_name,
+            "message": "已接在当前平台最晚排期后。",
+            "latest_job_id": latest_job_id,
+            "latest_scheduled_at_utc": to_utc_iso(latest),
+            "latest_scheduled_at_local_display": local_display(latest, timezone_name),
+            "next_start_at_utc": to_utc_iso(next_start),
+            "next_start_at_local": next_start.strftime("%Y-%m-%dT%H:%M"),
+            "next_start_at_local_display": local_display(next_start, timezone_name),
+        }
+
     def update_batch_schedule(
         self,
         job_ids: list[str],
@@ -744,8 +813,8 @@ class PublishScheduler:
         start_at_local: str = "",
         timezone_name: str = "Asia/Shanghai",
         interval_minutes: int = 180,
-        daily_start_time: str = "09:00",
-        daily_end_time: str = "21:00",
+        daily_start_time: str = "07:00",
+        daily_end_time: str = "00:00",
         confirmed_schedule: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         ids = self._validate_batch_jobs(job_ids, platform)
