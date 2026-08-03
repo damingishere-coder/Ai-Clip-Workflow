@@ -13,10 +13,18 @@ $BackupDir = Join-Path $TempRoot 'backups'
 $ArtifactDir = Join-Path $ProjectRoot 'acceptance-results\windows-ci'
 $ServerStdout = Join-Path $ArtifactDir 'uvicorn.stdout.log'
 $ServerStderr = Join-Path $ArtifactDir 'uvicorn.stderr.log'
+$RunLog = Join-Path $ArtifactDir 'run.log'
 $ServerProcess = $null
 
 New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $ArtifactDir -Force | Out-Null
+Set-Content -LiteralPath $RunLog -Value "Windows host smoke started at $([DateTimeOffset]::Now.ToString('o'))" -Encoding UTF8
+
+function Write-StepLog {
+    param([string]$Message)
+
+    Add-Content -LiteralPath $RunLog -Value "$([DateTimeOffset]::Now.ToString('o')) $Message" -Encoding UTF8
+}
 
 function Assert-Page {
     param(
@@ -28,6 +36,7 @@ function Assert-Page {
     if ($response.StatusCode -ne 200) {
         throw "$Name 返回异常状态码：$($response.StatusCode)"
     }
+    Write-StepLog "$Name HTTP 200"
     Write-Host "[OK] $Name：HTTP 200"
 }
 
@@ -35,16 +44,19 @@ try {
     Write-Host '=== Windows host smoke test ==='
     Write-Host '该测试不提供 Docker Desktop 实机证据，只验证 Windows 主机行为。'
 
-    $setupFirst = @(& (Join-Path $PSScriptRoot 'setup.ps1') 2>&1)
-    $setupFirst | Set-Content -LiteralPath (Join-Path $ArtifactDir 'setup-first.log') -Encoding UTF8
+    $global:LASTEXITCODE = 0
+    $setupFirst = @(& (Join-Path $PSScriptRoot 'setup.ps1') *>&1)
+    Set-Content -LiteralPath (Join-Path $ArtifactDir 'setup-first.log') -Value ($setupFirst -join [Environment]::NewLine) -Encoding UTF8
     if ($LASTEXITCODE -ne 0) {
         throw '首次 setup.ps1 失败。'
     }
     $envPath = Join-Path $ProjectRoot '.env'
     $firstHash = (Get-FileHash -LiteralPath $envPath -Algorithm SHA256).Hash
+    Write-StepLog 'First setup completed.'
 
-    $setupSecond = @(& (Join-Path $PSScriptRoot 'setup.ps1') 2>&1)
-    $setupSecond | Set-Content -LiteralPath (Join-Path $ArtifactDir 'setup-second.log') -Encoding UTF8
+    $global:LASTEXITCODE = 0
+    $setupSecond = @(& (Join-Path $PSScriptRoot 'setup.ps1') *>&1)
+    Set-Content -LiteralPath (Join-Path $ArtifactDir 'setup-second.log') -Value ($setupSecond -join [Environment]::NewLine) -Encoding UTF8
     if ($LASTEXITCODE -ne 0) {
         throw '重复 setup.ps1 失败。'
     }
@@ -52,13 +64,16 @@ try {
     if ($firstHash -ne $secondHash) {
         throw 'setup.ps1 重复执行修改了 .env。'
     }
+    Write-StepLog 'Second setup preserved the exact .env hash.'
     Write-Host '[OK] setup.ps1 幂等且保留 .env。'
 
-    $doctorOutput = @(& (Join-Path $PSScriptRoot 'doctor.ps1') -SkipDocker 2>&1)
-    $doctorOutput | Set-Content -LiteralPath (Join-Path $ArtifactDir 'doctor.log') -Encoding UTF8
+    $global:LASTEXITCODE = 0
+    $doctorOutput = @(& (Join-Path $PSScriptRoot 'doctor.ps1') -SkipDocker *>&1)
+    Set-Content -LiteralPath (Join-Path $ArtifactDir 'doctor.log') -Value ($doctorOutput -join [Environment]::NewLine) -Encoding UTF8
     if ($LASTEXITCODE -ne 0) {
         throw 'Windows 主机 doctor.ps1 检查失败。'
     }
+    Write-StepLog 'doctor.ps1 host checks passed.'
     Write-Host '[OK] doctor.ps1 Windows 主机检查通过。'
 
     $env:DEMO_MODE = 'true'
@@ -75,6 +90,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw 'Windows 原生 Demo 建库失败。'
     }
+    Write-StepLog 'Native Windows demo database seeded.'
 
     $ServerProcess = Start-Process `
         -FilePath $Python `
@@ -103,6 +119,7 @@ try {
     if (-not $ready) {
         throw 'Windows 原生应用未在 120 秒内通过健康检查。'
     }
+    Write-StepLog 'Native Windows Uvicorn health check passed.'
 
     Assert-Page '工作台' 'http://127.0.0.1:8001/'
     Assert-Page '任务列表' 'http://127.0.0.1:8001/tasks'
@@ -130,9 +147,12 @@ print(json.dumps(counts))
         throw 'Windows 原生 Demo 数据数量验证失败。'
     }
     $counts = $countsJson | ConvertFrom-Json
+    Write-StepLog 'Demo counts are 3 tasks, 6 clips, 6 publish jobs.'
     Write-Host '[OK] Demo 数据数量正确。'
 
-    & (Join-Path $PSScriptRoot 'backup.ps1') -OutputDirectory $BackupDir -Label windows-ci -ExcludeEnv
+    $global:LASTEXITCODE = 0
+    $backupOutput = @(& (Join-Path $PSScriptRoot 'backup.ps1') -OutputDirectory $BackupDir -Label windows-ci -ExcludeEnv *>&1)
+    Set-Content -LiteralPath (Join-Path $ArtifactDir 'backup.log') -Value ($backupOutput -join [Environment]::NewLine) -Encoding UTF8
     if ($LASTEXITCODE -ne 0) {
         throw 'Windows 主机备份命令失败。'
     }
@@ -144,6 +164,7 @@ print(json.dumps(counts))
     if ($LASTEXITCODE -ne 0) {
         throw 'Windows 主机备份验证失败。'
     }
+    Write-StepLog 'Backup bundle created and verified on Windows.'
     Write-Host '[OK] Windows 主机备份与校验通过。'
 
     $result = [ordered]@{
@@ -158,7 +179,18 @@ print(json.dumps(counts))
         note = 'Windows hosted runner smoke test; not a Windows 10/11 + Docker Desktop acceptance report.'
     }
     $result | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ArtifactDir 'result.json') -Encoding UTF8
+    Write-StepLog 'Windows host smoke passed.'
     Write-Host '=== Windows host smoke test passed ==='
+} catch {
+    $failure = [ordered]@{
+        result = 'failed'
+        occurred_at = [DateTimeOffset]::Now.ToString('o')
+        error = $_.Exception.Message
+        docker_desktop_validated = $false
+    }
+    $failure | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ArtifactDir 'failure.json') -Encoding UTF8
+    Write-StepLog "FAILED: $($_.Exception.Message)"
+    throw
 } finally {
     if ($ServerProcess -and -not $ServerProcess.HasExited) {
         Stop-Process -Id $ServerProcess.Id -Force -ErrorAction SilentlyContinue
