@@ -71,7 +71,7 @@ def test_backup_bundle_contains_verified_database_env_and_media(tmp_path: Path) 
     database = tmp_path / "data" / "workflow.sqlite3"
     expected_counts = _create_database(database)
     env_file = tmp_path / ".env"
-    env_file.write_text("LOCAL_ADMIN_TOKEN=test-secret\n", encoding="utf-8")
+    env_file.write_bytes(b"LOCAL_ADMIN_TOKEN=test-secret\n")
     media_root = tmp_path / "tasks"
     (media_root / "task-a").mkdir(parents=True)
     (media_root / "task-a" / "clip.mp4").write_bytes(b"demo-video")

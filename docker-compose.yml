@@ -2,7 +2,12 @@ name: niuma-studio
 
 services:
   workflow:
-    build: .
+    build:
+      context: .
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12-slim-bookworm}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-http://deb.debian.org/debian}
+        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
     image: niuma-studio:latest
     container_name: niuma-studio
     command: uvicorn app.main:app --host 0.0.0.0 --port 8001
@@ -31,7 +36,7 @@ services:
       TRANSCRIPTION_COMPUTE_TYPE: int8
     volumes:
       - ./data:/app/data
-      - "${NIUMA_STORAGE_PATH:-./workspace/tasks}:/workspace/tasks"
+      - "${NIUMA_STORAGE_PATH:-E:/直播间切片工作流存储}:/workspace/tasks"
     restart: unless-stopped
     healthcheck:
       test:

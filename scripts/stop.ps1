@@ -14,8 +14,17 @@ if ($Demo) {
 }
 $arguments += 'down'
 
-& docker @arguments
-if ($LASTEXITCODE -ne 0) {
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    # Windows PowerShell 5.1 会把 Docker Compose 的正常进度 stderr 当作 ErrorRecord。
+    # 只使用 Docker 的真实退出码判断停止是否成功。
+    $ErrorActionPreference = 'Continue'
+    & docker @arguments
+    $dockerExitCode = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+if ($dockerExitCode -ne 0) {
     throw '停止 Docker 服务失败。'
 }
 

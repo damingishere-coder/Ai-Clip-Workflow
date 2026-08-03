@@ -1,5 +1,14 @@
 # Development Log
 
+## 2026-08-03 Windows 实机验收安全与 PowerShell 5.1 兼容修复
+
+- 修复 `pre_upgrade.ps1` 把命名参数当成位置参数的问题；升级前备份现在稳定进入被 Git 忽略的 `backups/`，不会在项目根目录生成 `-Label/`。
+- `setup.ps1` 对已有 `.env` 改为字节级保留；仅首次创建或显式 `-Force` 时生成 Token 和路径字段。旧配置未声明存储位置时继续使用 `E:\直播间切片工作流存储`，`doctor.ps1`、正式数据指纹与 Compose 挂载保持一致。
+- 修复 Windows PowerShell 5.1 对 Docker Compose 正常 stderr 进度的误判，并使用 PowerShell 哈希表传递脚本开关；启动、停止、失败清理和 Demo 计数均以真实退出码为准。
+- 验收新增 8001 端口隔离、Docker Desktop 版本回退读取、容器 `healthy` 最多 90 秒等待，以及通过标准输入执行 3 / 6 / 6 只读 SQL 断言；失败报告的泛型列表也能在 PowerShell 5.1 正常序列化。
+- Docker 构建保留官方 Python 与 Debian 源为默认值，同时支持进程级 `PYTHON_BASE_IMAGE`、`DEBIAN_MIRROR`、`DEBIAN_SECURITY_MIRROR` 参数；网络受限环境可以切换等价镜像而不改 `.env` 或跳过完整构建。
+- Windows 11 + Docker Desktop 4.40.0 实机验收已通过：5 个页面 HTTP 200、容器 `healthy`、Demo 数据为 3 / 6 / 6，Demo 正常停止，正式 `.env`、SQLite 逻辑内容和 E 盘 217 个文件保持不变。验收报告只保存在本机 `acceptance-results/`。
+
 ## 2026-08-03 v2.0.0 主分支收拢与文档定版
 
 - 将当前工作分支相对 `master` 的素材存储、自动流水线、审核切片、发送中心、排期和真实发布成果统一作为 v2.0 本地生产闭环，不改变 FastAPI + SQLite + Windows Worker 的现有架构。

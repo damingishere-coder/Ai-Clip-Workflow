@@ -1,5 +1,13 @@
 # Next Steps
 
+## 2026-08-03 v2.0.0 发布前最终门禁
+
+1. 先合并 Windows 实机验收兼容修复 PR，再把本地 `master` 快进到云端最新提交；PR 未合并前不要创建 `v2.0.0` Tag 或 Release。
+2. 验收前临时停止 `NiuMa Studio Docker Watcher` 和正式容器，确认 8001 空闲；验收与门禁完成后恢复原有监控任务，不删除计划任务、Cookie 或浏览器 Profile。
+3. 在 Windows 10/11 + Docker Desktop Linux Containers 上依次运行 `pre_upgrade.ps1`、`acceptance.ps1`、`release_gate.ps1`；三步全部通过后才进入人工发布确认。
+4. `acceptance-results/`、`backups/`、`.env`、SQLite、视频、Cookie、浏览器 Profile 和本地日志只保留在本机，不提交或上传到 GitHub。
+5. 如果 Docker Hub 或 Debian 官方 CDN 在本机不可达，只通过当前 PowerShell 会话的构建参数切换镜像；仍需运行不带 `-NoBuild` 的完整验收，不允许伪造报告或跳过正式数据指纹。
+
 ## v2.0.0 发布后优先验收
 
 1. 打开 Docker Desktop 并运行 `niuma-studio`，浏览器访问 `http://127.0.0.1:8001`；确认左侧显示“v2.0 本地高光生产版”，系统状态与发送中心显示 Windows Worker 正常。

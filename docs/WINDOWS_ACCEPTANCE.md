@@ -42,6 +42,20 @@ git pull --ff-only
 
 如果正式服务本来没有启动，`stop.ps1` 可能提示没有容器；只要端口 `8001` 没有被其他程序占用即可。
 
+如果本机安装了 `NiuMa Studio Docker Watcher` 计划任务，它会自动重新启动正式容器。验收期间可临时停止并禁用，完成后必须恢复：
+
+```powershell
+Stop-ScheduledTask -TaskName "NiuMa Studio Docker Watcher"
+Disable-ScheduledTask -TaskName "NiuMa Studio Docker Watcher"
+.\scripts\stop.ps1
+
+# 验收和发布门禁完成后恢复
+Enable-ScheduledTask -TaskName "NiuMa Studio Docker Watcher"
+Start-ScheduledTask -TaskName "NiuMa Studio Docker Watcher"
+```
+
+这里只是暂停自动拉起，不要删除计划任务，也不要删除 Cookie 或浏览器 Profile。
+
 ## 二、运行完整验收
 
 推荐执行：
@@ -97,6 +111,19 @@ acceptance-results/
 ```
 
 正式 Release 前建议至少有一次不带 `-NoBuild` 的完整验收，以证明当前提交可以从头构建。
+
+### Docker Hub 或 Debian 软件源不可达
+
+默认构建仍使用 Docker Hub 和 Debian 官方源。如果当前网络无法访问它们，可只在本次 PowerShell 会话中指定可达的等价镜像，然后继续运行完整构建：
+
+```powershell
+$env:PYTHON_BASE_IMAGE = "m.daocloud.io/docker.io/library/python:3.12-slim-bookworm"
+$env:DEBIAN_MIRROR = "https://mirrors.aliyun.com/debian"
+$env:DEBIAN_SECURITY_MIRROR = "https://mirrors.aliyun.com/debian-security"
+.\scripts\acceptance.ps1
+```
+
+这些变量不会写入 `.env`。关闭当前 PowerShell 窗口后会自动失效；这不是 `-NoBuild`，脚本仍会完整构建镜像并执行全部验收项。
 
 ### 自定义报告目录
 
