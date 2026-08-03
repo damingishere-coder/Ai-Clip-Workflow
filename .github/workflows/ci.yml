@@ -31,7 +31,7 @@ jobs:
           pip install ruff pytest
 
       - name: Python 编译检查
-        run: python -m compileall app scripts/seed_demo_data.py
+        run: python -m compileall app scripts
 
       - name: Ruff 代码检查
         run: ruff check app tests scripts/seed_demo_data.py
@@ -84,7 +84,7 @@ jobs:
           UPLOAD_TEMP_DIR: /tmp/niuma-demo-storage/_temp
           PUBLISH_SCHEDULER_ENABLED: "false"
         run: |
-          python scripts/seed_demo_data.py --reset
+          python -m scripts.seed_demo_data --reset
           python - <<'PY'
           import sqlite3
           db = sqlite3.connect('/tmp/niuma-demo-data/workflow.sqlite3')
