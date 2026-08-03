@@ -13,18 +13,11 @@ Write-Host '=== 牛马片场升级前保护 ==='
 Write-Host '此脚本只创建备份，不会自动执行 git pull 或修改代码。'
 Write-Host ''
 
-$arguments = @('-Label', 'pre-upgrade')
-if ($OutputDirectory) {
-    $arguments += @('-OutputDirectory', $OutputDirectory)
-}
-if ($IncludeMedia) {
-    $arguments += '-IncludeMedia'
-}
-if ($ExcludeEnv) {
-    $arguments += '-ExcludeEnv'
-}
-
-& (Join-Path $PSScriptRoot 'backup.ps1') @arguments
+& (Join-Path $PSScriptRoot 'backup.ps1') `
+    -OutputDirectory $OutputDirectory `
+    -Label 'pre-upgrade' `
+    -IncludeMedia:$IncludeMedia `
+    -ExcludeEnv:$ExcludeEnv
 if ($LASTEXITCODE -ne 0) {
     throw '升级前备份失败，已中止。'
 }

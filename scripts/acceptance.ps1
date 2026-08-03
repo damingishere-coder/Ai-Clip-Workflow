@@ -181,7 +181,7 @@ function Get-ConfiguredPaths {
     $tasksValue = Get-EnvValue $envText 'TASKS_DIR'
     if (-not $tasksValue) { $tasksValue = Get-EnvValue $envText 'STORAGE_ROOT' }
     if (-not $tasksValue) { $tasksValue = Get-EnvValue $envText 'NIUMA_STORAGE_PATH' }
-    $tasksPath = Resolve-ConfiguredPath -Value $tasksValue -DefaultPath 'workspace\tasks'
+    $tasksPath = Resolve-ConfiguredPath -Value $tasksValue -DefaultPath 'E:\直播间切片工作流存储'
 
     return [pscustomobject]@{
         env = $envPath
@@ -288,6 +288,9 @@ function Get-EnvironmentInfo {
     if (Test-Path $dockerDesktopPath) {
         $dockerDesktopVersion = (Get-Item $dockerDesktopPath).VersionInfo.ProductVersion
     }
+    if ([string]::IsNullOrWhiteSpace([string]$dockerDesktopVersion)) {
+        $dockerDesktopVersion = Get-VersionValue { docker version --format '{{.Server.Platform.Name}}' }
+    }
 
     $chromeVersion = ''
     foreach ($basePath in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA)) {
@@ -323,7 +326,7 @@ function Write-Reports {
         demo_counts = $script:DemoCounts
         production_before = $script:ProductionBefore
         production_after = $script:ProductionAfter
-        checks = @($script:Checks)
+        checks = $script:Checks.ToArray()
         error = Protect-Text $script:FailureMessage
     }
 
@@ -390,6 +393,12 @@ try {
 
     $script:EnvironmentInfo = Get-EnvironmentInfo
 
+    $portListener = Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue
+    if ($portListener) {
+        throw '端口 8001 已被占用。请先停止正式服务或其他占用程序，再执行隔离验收。'
+    }
+    Add-Check PASS '验收端口隔离' '端口 8001 空闲，未复用正式服务。'
+
     $envFile = Join-Path $ProjectRoot '.env'
     $envExistedBeforeSetup = Test-Path -LiteralPath $envFile -PathType Leaf
     $envStateBeforeSetup = Get-FileState $envFile
@@ -426,11 +435,13 @@ try {
     }
     Add-Check PASS '环境体检' 'Docker、存储、端口与 Compose 无阻塞项。'
 
-    $startArguments = @('-Demo', '-ResetDemo', '-NoBrowser')
-    if ($NoBuild) {
-        $startArguments += '-NoBuild'
+    $startParameters = @{
+        Demo = $true
+        ResetDemo = $true
+        NoBrowser = $true
+        NoBuild = $NoBuild
     }
-    $startOutput = @(& (Join-Path $PSScriptRoot 'start.ps1') @startArguments 2>&1)
+    $startOutput = @(& (Join-Path $PSScriptRoot 'start.ps1') @startParameters 2>&1)
     $startOutput | Set-Content -LiteralPath (Join-Path $RunDirectory 'start-demo.log') -Encoding UTF8
     if ($LASTEXITCODE -ne 0) {
         throw '隔离 Demo 启动失败。'
@@ -444,8 +455,22 @@ try {
     Assert-Page -Name '片段总览' -Url 'http://127.0.0.1:8001/clips'
     Assert-Page -Name '发送中心' -Url 'http://127.0.0.1:8001/publish'
 
-    $containerHealth = docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' niuma-studio-demo
-    if ($LASTEXITCODE -ne 0 -or $containerHealth.Trim() -ne 'healthy') {
+    $containerHealth = ''
+    foreach ($attempt in 1..45) {
+        $containerHealth = docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' niuma-studio-demo
+        if ($LASTEXITCODE -ne 0) {
+            break
+        }
+        $containerHealth = $containerHealth.Trim()
+        if ($containerHealth -eq 'healthy') {
+            break
+        }
+        if ($containerHealth -in @('exited', 'dead', 'unhealthy')) {
+            break
+        }
+        Start-Sleep -Seconds 2
+    }
+    if ($LASTEXITCODE -ne 0 -or $containerHealth -ne 'healthy') {
         throw "Demo 容器未达到 healthy 状态：$containerHealth"
     }
     Add-Check PASS 'Docker 容器健康状态' 'healthy'
@@ -463,7 +488,7 @@ counts = {
 assert counts == {'tasks': 3, 'clips': 6, 'publish_jobs': 6}, counts
 print(json.dumps(counts))
 '@
-    $demoCountsJson = docker exec niuma-studio-demo python -c $verifyCommand
+    $demoCountsJson = $verifyCommand | docker exec -i niuma-studio-demo python -
     if ($LASTEXITCODE -ne 0) {
         throw 'Demo 数据数量验证失败。'
     }
@@ -514,7 +539,7 @@ print(json.dumps(counts))
         }
     }
 } finally {
-    if ($script:Result -ne 'passed' -and $script:StartedDemo) {
+    if ($script:Result -ne 'passed') {
         try {
             & (Join-Path $PSScriptRoot 'stop.ps1') -Demo | Out-Null
             $script:StartedDemo = $false

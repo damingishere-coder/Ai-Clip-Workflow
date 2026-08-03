@@ -28,10 +28,11 @@ if (-not (Test-Path (Join-Path $ProjectRoot '.env'))) {
 }
 
 if ($WithPublisher) {
-    $arguments = @()
-    if ($NoBuild) { $arguments += '-NoBuild' }
-    if ($NoBrowser) { $arguments += '-NoBrowser' }
-    & (Join-Path $PSScriptRoot 'start_niuma_studio.ps1') @arguments
+    $publisherParameters = @{
+        NoBuild = $NoBuild
+        NoBrowser = $NoBrowser
+    }
+    & (Join-Path $PSScriptRoot 'start_niuma_studio.ps1') @publisherParameters
     exit $LASTEXITCODE
 }
 
@@ -52,8 +53,17 @@ if (-not $NoBuild) {
 }
 
 Write-Host '正在启动牛马片场……'
-& docker @composeArguments
-if ($LASTEXITCODE -ne 0) {
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    # Windows PowerShell 5.1 会把 Docker Compose 的正常进度 stderr 当作 ErrorRecord。
+    # 这里继续显示原始输出，但只使用 Docker 的真实退出码判断成功或失败。
+    $ErrorActionPreference = 'Continue'
+    & docker @composeArguments
+    $composeExitCode = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+if ($composeExitCode -ne 0) {
     throw 'Docker 启动失败。现有数据库与视频文件没有被删除。'
 }
 
@@ -83,8 +93,14 @@ if ($Demo) {
     if ($ResetDemo) {
         $seedArguments += '--reset'
     }
-    & docker @seedArguments
-    if ($LASTEXITCODE -ne 0) {
+    try {
+        $ErrorActionPreference = 'Continue'
+        & docker @seedArguments
+        $seedExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($seedExitCode -ne 0) {
         throw 'Demo 数据初始化失败，请查看容器日志。'
     }
 }

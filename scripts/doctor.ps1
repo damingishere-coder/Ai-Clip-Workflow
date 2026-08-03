@@ -58,10 +58,10 @@ if (Test-Path $envFile) {
     Write-Check FAIL '.env' '尚未初始化，请先运行 .\scripts\setup.ps1。'
 }
 
-$storageValue = Get-EnvValue 'NIUMA_STORAGE_PATH'
-if (-not $storageValue) {
-    $storageValue = './workspace/tasks'
-}
+$storageValue = Get-EnvValue 'TASKS_DIR'
+if (-not $storageValue) { $storageValue = Get-EnvValue 'STORAGE_ROOT' }
+if (-not $storageValue) { $storageValue = Get-EnvValue 'NIUMA_STORAGE_PATH' }
+if (-not $storageValue) { $storageValue = 'E:\直播间切片工作流存储' }
 if ([System.IO.Path]::IsPathRooted($storageValue)) {
     $storagePath = [System.IO.Path]::GetFullPath($storageValue)
 } else {

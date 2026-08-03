@@ -9,6 +9,7 @@ Set-Location $ProjectRoot
 
 $EnvExample = Join-Path $ProjectRoot '.env.example'
 $EnvFile = Join-Path $ProjectRoot '.env'
+$LegacyStorageRoot = 'E:\直播间切片工作流存储'
 
 function New-RandomHexToken {
     param([int]$ByteCount = 32)
@@ -54,35 +55,46 @@ if (-not (Test-Path $EnvExample)) {
     throw '缺少 .env.example，无法初始化项目配置。'
 }
 
+$ShouldInitializeEnv = $false
 if (-not (Test-Path $EnvFile)) {
     Copy-Item -LiteralPath $EnvExample -Destination $EnvFile
+    $ShouldInitializeEnv = $true
     Write-Host '[OK] 已创建本地 .env。'
 } elseif ($Force) {
     $backup = "$EnvFile.$([DateTime]::Now.ToString('yyyyMMdd-HHmmss')).bak"
     Copy-Item -LiteralPath $EnvFile -Destination $backup
     Copy-Item -LiteralPath $EnvExample -Destination $EnvFile -Force
+    $ShouldInitializeEnv = $true
     Write-Host "[OK] 已重置 .env，原文件备份为：$backup"
 } else {
     Write-Host '[OK] 已保留现有 .env。'
 }
 
 $envText = Get-Content -LiteralPath $EnvFile -Raw -Encoding UTF8
-$adminToken = Get-EnvValue -Text $envText -Name 'LOCAL_ADMIN_TOKEN'
-if (-not $adminToken -or $adminToken -eq 'change-me-to-a-random-string') {
-    $envText = Set-EnvValue -Text $envText -Name 'LOCAL_ADMIN_TOKEN' -Value (New-RandomHexToken)
-    Write-Host '[OK] 已生成 LOCAL_ADMIN_TOKEN。'
-}
+$storageValue = ''
+if ($ShouldInitializeEnv) {
+    $adminToken = Get-EnvValue -Text $envText -Name 'LOCAL_ADMIN_TOKEN'
+    if (-not $adminToken -or $adminToken -eq 'change-me-to-a-random-string') {
+        $envText = Set-EnvValue -Text $envText -Name 'LOCAL_ADMIN_TOKEN' -Value (New-RandomHexToken)
+        Write-Host '[OK] 已生成 LOCAL_ADMIN_TOKEN。'
+    }
 
-$workerToken = Get-EnvValue -Text $envText -Name 'PUBLISH_WORKER_TOKEN'
-if (-not $workerToken) {
-    $envText = Set-EnvValue -Text $envText -Name 'PUBLISH_WORKER_TOKEN' -Value (New-RandomHexToken)
-    Write-Host '[OK] 已生成 PUBLISH_WORKER_TOKEN。'
-}
+    $workerToken = Get-EnvValue -Text $envText -Name 'PUBLISH_WORKER_TOKEN'
+    if (-not $workerToken) {
+        $envText = Set-EnvValue -Text $envText -Name 'PUBLISH_WORKER_TOKEN' -Value (New-RandomHexToken)
+        Write-Host '[OK] 已生成 PUBLISH_WORKER_TOKEN。'
+    }
 
-$storageValue = Get-EnvValue -Text $envText -Name 'NIUMA_STORAGE_PATH'
-if (-not $storageValue) {
-    $storageValue = './workspace/tasks'
-    $envText = Set-EnvValue -Text $envText -Name 'NIUMA_STORAGE_PATH' -Value $storageValue
+    $storageValue = Get-EnvValue -Text $envText -Name 'NIUMA_STORAGE_PATH'
+    if (-not $storageValue) {
+        $storageValue = './workspace/tasks'
+        $envText = Set-EnvValue -Text $envText -Name 'NIUMA_STORAGE_PATH' -Value $storageValue
+    }
+} else {
+    $storageValue = Get-EnvValue -Text $envText -Name 'TASKS_DIR'
+    if (-not $storageValue) { $storageValue = Get-EnvValue -Text $envText -Name 'STORAGE_ROOT' }
+    if (-not $storageValue) { $storageValue = Get-EnvValue -Text $envText -Name 'NIUMA_STORAGE_PATH' }
+    if (-not $storageValue) { $storageValue = $LegacyStorageRoot }
 }
 
 if ([System.IO.Path]::IsPathRooted($storageValue)) {
@@ -91,20 +103,22 @@ if ([System.IO.Path]::IsPathRooted($storageValue)) {
     $storagePath = [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot $storageValue))
 }
 
-$pathDefaults = @{
-    STORAGE_ROOT = $storagePath
-    TASKS_DIR = $storagePath
-    UPLOAD_TEMP_DIR = (Join-Path $storagePath '_临时上传')
-    PUBLISH_SCHEDULER_EXPORT_DIR = (Join-Path $storagePath '_发布包')
-    PUBLISH_HOST_PROJECT_ROOT = [string]$ProjectRoot
-}
-foreach ($name in $pathDefaults.Keys) {
-    if (-not (Get-EnvValue -Text $envText -Name $name)) {
-        $envText = Set-EnvValue -Text $envText -Name $name -Value $pathDefaults[$name]
+if ($ShouldInitializeEnv) {
+    $pathDefaults = @{
+        STORAGE_ROOT = $storagePath
+        TASKS_DIR = $storagePath
+        UPLOAD_TEMP_DIR = (Join-Path $storagePath '_临时上传')
+        PUBLISH_SCHEDULER_EXPORT_DIR = (Join-Path $storagePath '_发布包')
+        PUBLISH_HOST_PROJECT_ROOT = [string]$ProjectRoot
     }
-}
+    foreach ($name in $pathDefaults.Keys) {
+        if (-not (Get-EnvValue -Text $envText -Name $name)) {
+            $envText = Set-EnvValue -Text $envText -Name $name -Value $pathDefaults[$name]
+        }
+    }
 
-Set-Content -LiteralPath $EnvFile -Value $envText -Encoding UTF8 -NoNewline
+    Set-Content -LiteralPath $EnvFile -Value $envText -Encoding UTF8 -NoNewline
+}
 
 $directories = @(
     (Join-Path $ProjectRoot 'data'),
