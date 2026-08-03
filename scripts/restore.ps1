@@ -57,7 +57,7 @@ if ($MediaDestination) {
 
 $python = Resolve-PythonCommand
 Write-Host '正在验证备份包……'
-$verifyOutput = & $python -m scripts.backup_restore verify $BackupPath 2>&1
+$verifyOutput = & $python -m scripts.backup_restore_runtime verify $BackupPath 2>&1
 if ($LASTEXITCODE -ne 0) {
     throw ($verifyOutput -join [Environment]::NewLine)
 }
@@ -92,7 +92,7 @@ if (Test-AppRunning) {
 }
 
 $arguments = @(
-    '-m', 'scripts.backup_restore', 'restore',
+    '-m', 'scripts.backup_restore_runtime', 'restore',
     $BackupPath,
     '--backup-dir', (Join-Path $ProjectRoot 'backups')
 )
