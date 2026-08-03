@@ -12,7 +12,7 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 安装 Python 3.12
         uses: actions/setup-python@v5
@@ -108,7 +108,7 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 安装 Python 3.12
         uses: actions/setup-python@v5
@@ -142,7 +142,7 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 构建正式镜像
         run: docker build --tag niuma-studio:ci .
