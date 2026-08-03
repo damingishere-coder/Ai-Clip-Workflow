@@ -6,8 +6,9 @@
 
 Windows 本地运行的 AI 视频高光生产工作台，面向直播录像、访谈、综艺和其他长视频素材。
 
-[中文](README.md) · [English](README.en.md) · [快速开始](docs/PROJECT_GUIDE.md) · [技术说明](docs/TECHNICAL_REFERENCE.md) · [路线图](ROADMAP.md)
+[中文](README.md) · [English](README.en.md) · [快速开始](docs/PROJECT_GUIDE.md) · [通用启动](docs/PORTABLE_SETUP.md) · [技术说明](docs/TECHNICAL_REFERENCE.md) · [路线图](ROADMAP.md)
 
+![CI](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml/badge.svg)
 ![Version](https://img.shields.io/badge/version-2.0.0-0969da)
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4)
@@ -35,6 +36,22 @@ Windows 本地运行的 AI 视频高光生产工作台，面向直播录像、�
 ### 发送中心
 
 ![牛马片场发送中心占位预览](docs/images/publish-center-placeholder.svg)
+
+## 零配置体验 Demo
+
+还没有视频、API Key 或平台账号时，可以先启动隔离 Demo：
+
+```powershell
+.\scripts\start.ps1 -Demo
+```
+
+Demo 会使用独立的 `demo-data/` 和 `workspace/demo/`，生成虚构任务、AI 候选片段、切片与安全的 `manual_export` 发布草稿。它不会连接真实平台、不会使用正式数据库，也不会启动发布调度器。
+
+恢复初始 Demo：
+
+```powershell
+.\scripts\start.ps1 -Demo -ResetDemo
+```
 
 ## 为什么做这个项目
 
@@ -78,65 +95,82 @@ flowchart LR
 
 ## 快速开始
 
-### 方式一：Docker Desktop（推荐）
-
-1. 安装并启动 Docker Desktop。
-2. 克隆项目并进入仓库目录。
-3. 复制环境变量模板：
+### Windows + Docker Desktop（推荐）
 
 ```powershell
-Copy-Item .env.example .env
+git clone https://github.com/damingishere-coder/Ai-Clip-Workflow.git
+cd Ai-Clip-Workflow
+.\scripts\setup.ps1
+.\scripts\doctor.ps1
+.\scripts\start.ps1
 ```
 
-4. 根据自己的电脑填写 `.env` 中的存储路径和 AI 配置。
-5. 启动项目：
+脚本会自动：
 
-```powershell
-docker compose up -d
-```
+- 创建并保留本地 `.env`
+- 生成随机管理 Token 与 Worker Token
+- 创建通用视频存储目录
+- 检查 Docker、Compose、端口与写权限
+- 启动正式工作台并等待健康检查
 
-6. 浏览器打开：
+浏览器地址：
 
 ```text
 http://127.0.0.1:8001
 ```
 
-健康检查：
+停止服务：
 
-```text
-http://127.0.0.1:8001/health
+```powershell
+.\scripts\stop.ps1
 ```
 
-### 方式二：本地 Python
+### 开发热重载
+
+```powershell
+.\scripts\start.ps1 -Development
+```
+
+正式 `docker-compose.yml` 不再启用热重载；开发模式通过 `docker-compose.dev.yml` 单独挂载代码目录。
+
+### 真实抖音 / B站发布
+
+```powershell
+.\scripts\start.ps1 -WithPublisher
+```
+
+此模式需要 Windows、Google Chrome、平台账号人工登录，以及二维码、短信、验证码和风控处理。第一次真实发布必须使用一条低风险测试视频。
+
+### 本地 Python
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-Copy-Item .env.example .env
+.\scripts\setup.ps1
 uvicorn app.main:app --reload --port 8001
 ```
 
-第一次使用建议完整阅读 [新手启动指南](docs/PROJECT_GUIDE.md)。
+完整启动模式、自定义存储路径和 Demo 说明见 [通用启动指南](docs/PORTABLE_SETUP.md)。
 
 ## 首次成功标准
 
 完成安装后，建议先验证生产链路，不要直接测试真实投稿：
 
 1. 首页和 `/health` 可以正常打开。
-2. 上传一条短测试视频并创建任务。
-3. 转写与 AI 分析完成后出现候选片段。
-4. 在审核页选择片段并生成短视频。
+2. 上传一条 1～3 分钟测试视频并创建任务。
+3. 转写与 AI 分析完成后出现至少一条候选片段。
+4. 在审核页选择片段并生成一个本地短视频。
 5. 生成的内容可以进入发送中心。
-6. 排期预览能够正确显示北京时间。
 
-只有在 Windows Worker 正常、平台账号已登录并完成低风险测试后，再验证真实投稿。
+排期和真实投稿属于第二阶段验证，不应成为第一次安装的阻塞条件。
 
 ## 运行边界
 
 - 目前面向 **Windows 本地单用户**，使用 FastAPI、SQLite 和本地文件系统。
-- 默认发布方式为 `local_browser`；`manual_export` 只生成本地发布包。
+- 正式模式默认发布方式为 `local_browser`；`manual_export` 只生成本地发布包。
+- Demo 模式固定关闭调度器并使用 `manual_export`，不连接真实账号。
 - 登录失效、验证码、风控或结果不确定时，任务进入 `NEED_REVIEW`，不会自动重复上传。
 - 平台页面可能变化，抖音和 B站真实投稿能力需要逐账号、逐版本验证。
 - 项目不会保存平台账号密码，也不会尝试绕过平台安全机制。
@@ -147,7 +181,8 @@ uvicorn app.main:app --reload --port 8001
 
 | 文档 | 内容 |
 | --- | --- |
-| [新手启动指南](docs/PROJECT_GUIDE.md) | 环境准备、配置、启动、首次测试和常见问题 |
+| [通用启动指南](docs/PORTABLE_SETUP.md) | setup、doctor、正式模式、Demo、开发模式和真实发布 |
+| [新手启动指南](docs/PROJECT_GUIDE.md) | 环境准备、配置、首次测试和常见问题 |
 | [技术参考](docs/TECHNICAL_REFERENCE.md) | 架构、存储、排期、发布状态和测试命令 |
 | [路线图](ROADMAP.md) | 后续版本计划和暂不支持范围 |
 | [贡献指南](CONTRIBUTING.md) | Issue、开发环境、测试和 Pull Request 规则 |
@@ -161,14 +196,15 @@ uvicorn app.main:app --reload --port 8001
 pytest -v
 ```
 
-常用基础检查：
+CI 目前检查：
 
-```powershell
-python -m compileall app
-python scripts/test_ai_json_validation.py
-python scripts/test_mock_transcript_analysis.py
-python scripts/test_transcript_markdown_format.py
-```
+- Python 编译与 Ruff
+- pytest
+- JavaScript 语法
+- PowerShell 语法
+- 正式、开发和 Demo Compose 配置
+- 敏感运行时文件
+- 隔离 Demo 建库与数据数量
 
 自动化测试使用独立数据，不应连接真实平台账号或触发真实投稿。完整开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
