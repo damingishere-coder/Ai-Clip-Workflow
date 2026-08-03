@@ -104,7 +104,7 @@ foreach ($name in $pathDefaults.Keys) {
     }
 }
 
-Set-Content -LiteralPath $EnvFile -Value $envText -Encoding UTF8
+Set-Content -LiteralPath $EnvFile -Value $envText -Encoding UTF8 -NoNewline
 
 $directories = @(
     (Join-Path $ProjectRoot 'data'),
