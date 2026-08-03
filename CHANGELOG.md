@@ -4,7 +4,7 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本的基本原则。
 
-## [Unreleased]
+## Unreleased
 
 ### Added
 
@@ -12,7 +12,7 @@
 - 增加 MIT License、贡献指南、安全策略、路线图和 GitHub 社区模板。
 - 把 Scheduler、Worker、发布状态和排期 API 等细节迁移到独立技术文档。
 
-## [2.0.0] - 2026-08-03
+## 2.0.0 - 2026-08-03
 
 ### Added
 
@@ -36,6 +36,3 @@
 
 - `.env`、数据库、视频、日志、浏览器 Profile、Cookie 和 storage state 不进入 Git。
 - 自动化不会绕过二维码、短信、验证码、滑块、登录失效或平台风控。
-
-[Unreleased]: https://github.com/damingishere-coder/Ai-Clip-Workflow/compare/v2.0.0...HEAD
-[2.0.0]: https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.0.0
