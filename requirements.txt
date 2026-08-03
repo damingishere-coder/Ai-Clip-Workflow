@@ -3,7 +3,7 @@
 
 # Web 框架
 fastapi>=0.136.0
-uvicorn[standard]>=0.47.0
+uvicorn[standard]>=0.52.0
 
 # 模板引擎
 jinja2>=3.1.0
