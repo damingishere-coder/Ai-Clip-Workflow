@@ -1,27 +1,15 @@
-# NiuMa Studio 依赖
-# Python 版本要求：>=3.12
+# NiuMa Studio runtime dependencies
+# Python: 3.12+
+#
+# Direct dependencies are pinned to versions verified by GitHub Actions.
+# Update them intentionally and validate with CI before merging.
 
-# Web 框架
-fastapi>=0.136.0
-uvicorn[standard]>=0.47.0
-
-# 模板引擎
-jinja2>=3.1.0
-
-# 表单与文件上传
-python-multipart>=0.0.28
-
-# 数据校验
-pydantic>=2.13.0
-
-# Windows 的 zoneinfo IANA 时区数据库（排期需要 Asia/Shanghai 等名称）
-tzdata
-
-# Windows 发布 Worker 使用系统 Chrome；单元测试会 Mock，不会打开真实浏览器。
-playwright>=1.58.0
-
-# 异步文件操作
-aiofiles>=25.1.0
-
-# 本地语音转写（可选，远程转写不需要此包）
-faster-whisper>=1.2.0
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+jinja2==3.1.6
+python-multipart==0.0.32
+pydantic==2.13.4
+tzdata==2026.3
+playwright==1.62.0
+aiofiles==25.1.0
+faster-whisper==1.2.1
