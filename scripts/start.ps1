@@ -80,7 +80,7 @@ if ($Demo) {
         Write-Host '正在写入隔离的演示任务与候选片段……'
         $seedArguments = @(
             'compose', '-f', 'docker-compose.yml', '-f', 'docker-compose.demo.yml',
-            'exec', '-T', 'workflow', 'python', '/app/scripts/seed_demo_data.py', '--reset'
+            'exec', '-T', 'workflow', 'python', '-m', 'scripts.seed_demo_data', '--reset'
         )
         & docker @seedArguments
         if ($LASTEXITCODE -ne 0) {
