@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用与排错讨论
+    url: https://github.com/damingishere-coder/Ai-Clip-Workflow/discussions
+    about: 不确定是不是 Bug 时，请先在 Discussions 中描述使用场景。
+  - name: 安全问题
+    url: https://github.com/damingishere-coder/Ai-Clip-Workflow/security
+    about: 不要在公开 Issue 中提交漏洞细节、密钥、Cookie 或账号信息。
