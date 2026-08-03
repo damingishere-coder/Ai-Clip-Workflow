@@ -19,6 +19,23 @@ A Windows-first, local AI video highlight workspace for livestream recordings, i
 > [!IMPORTANT]
 > NiuMa Studio is a local, single-user application rather than a cloud SaaS. Real publishing relies on your own platform accounts and local Chrome sessions. It does not bypass QR codes, SMS verification, CAPTCHAs, sliders, login checks, or platform risk controls.
 
+## Product preview
+
+> [!NOTE]
+> The images below are code-based placeholders generated from the current templates and fields. They do not represent real user data and can later be replaced with sanitized screenshots from a running installation.
+
+### Dashboard
+
+![NiuMa Studio dashboard placeholder](docs/images/dashboard-placeholder.svg)
+
+### Clip review
+
+![NiuMa Studio clip review placeholder](docs/images/clip-review-placeholder.svg)
+
+### Publishing center
+
+![NiuMa Studio publishing center placeholder](docs/images/publish-center-placeholder.svg)
+
 ## Why NiuMa Studio
 
 Producing short clips from long-form video involves much more than cutting a file. The costly parts are transcription, highlight discovery, review, versioned exports, platform copy, scheduling, and reliable result tracking.
