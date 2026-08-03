@@ -9,7 +9,7 @@ uvicorn[standard]>=0.47.0
 jinja2>=3.1.0
 
 # 表单与文件上传
-python-multipart>=0.0.28
+python-multipart>=0.0.32
 
 # 数据校验
 pydantic>=2.13.0
