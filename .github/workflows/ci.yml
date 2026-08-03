@@ -67,7 +67,7 @@ jobs:
 
       - name: 敏感文件检查
         run: |
-          blocked="$(git ls-files | grep -Ei '(^|/)(\.env|cookies.*\.json|.*storage-state.*\.json|.*\.sqlite3|.*\.db|publish_worker_.*\.log|niuma-studio-.*\.zip)$' || true)"
+          blocked="$(git ls-files | grep -Ei '(^|/)(\.env|cookies.*\.json|.*storage-state.*\.json|.*\.sqlite3|.*\.db|publish_worker_.*\.log|niuma-studio-.*\.zip|acceptance-results/.*)$' || true)"
           if [ -n "$blocked" ]; then
             echo "检测到不应提交的敏感或运行时文件："
             echo "$blocked"
@@ -99,6 +99,41 @@ jobs:
 
       - name: 运行测试
         run: pytest -v
+
+  windows-host-smoke:
+    name: Windows host smoke test
+    needs: lint-and-test
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip check
+
+      - name: Windows 主机冒烟
+        shell: pwsh
+        run: .\scripts\windows_ci_smoke.ps1
+
+      - name: 上传 Windows 冒烟证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-host-smoke-${{ github.run_id }}
+          path: acceptance-results/windows-ci
+          if-no-files-found: warn
+          retention-days: 14
 
   docker-image-smoke:
     name: Docker image smoke test
