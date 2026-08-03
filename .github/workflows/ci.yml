@@ -34,7 +34,7 @@ jobs:
         run: python -m compileall app scripts
 
       - name: Ruff 代码检查
-        run: ruff check app tests scripts/seed_demo_data.py scripts/backup_restore.py
+        run: ruff check app tests scripts/seed_demo_data.py scripts/backup_restore.py scripts/backup_restore_runtime.py
 
       - name: JavaScript 语法检查
         run: find app/static/js -name '*.js' -print0 | xargs -0 -r -n1 node --check
@@ -94,8 +94,8 @@ jobs:
           print('demo database verified')
           PY
 
-      - name: 备份恢复往返检查
-        run: pytest tests/test_backup_restore.py -v
+      - name: 备份恢复与 WAL 快照检查
+        run: pytest tests/test_backup_restore.py tests/test_backup_restore_wal.py -v
 
       - name: 运行测试
         run: pytest -v
