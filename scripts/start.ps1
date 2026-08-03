@@ -75,19 +75,17 @@ if (-not $appReady) {
 }
 
 if ($Demo) {
-    $demoDb = Join-Path $ProjectRoot 'demo-data\workflow.sqlite3'
-    if ($ResetDemo -or -not (Test-Path $demoDb)) {
-        Write-Host '正在写入隔离的演示任务与候选片段……'
-        $seedArguments = @(
-            'compose', '-f', 'docker-compose.yml', '-f', 'docker-compose.demo.yml',
-            'exec', '-T', 'workflow', 'python', '-m', 'scripts.seed_demo_data', '--reset'
-        )
-        & docker @seedArguments
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Demo 数据初始化失败，请查看容器日志。'
-        }
-    } else {
-        Write-Host '[OK] 已复用现有 Demo 数据；使用 -ResetDemo 可恢复初始演示内容。'
+    Write-Host '正在检查隔离 Demo 数据……'
+    $seedArguments = @(
+        'compose', '-f', 'docker-compose.yml', '-f', 'docker-compose.demo.yml',
+        'exec', '-T', 'workflow', 'python', '-m', 'scripts.seed_demo_data'
+    )
+    if ($ResetDemo) {
+        $seedArguments += '--reset'
+    }
+    & docker @seedArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Demo 数据初始化失败，请查看容器日志。'
     }
 }
 
