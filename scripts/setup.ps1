@@ -129,3 +129,4 @@ Write-Host '  .\scripts\start.ps1'
 Write-Host ''
 Write-Host '查看演示数据：'
 Write-Host '  .\scripts\start.ps1 -Demo'
+exit 0
