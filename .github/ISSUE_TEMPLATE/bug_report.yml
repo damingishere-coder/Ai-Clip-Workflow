@@ -1,0 +1,81 @@
+name: Bug report
+description: 报告可复现的问题或回归
+title: "[Bug] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请先删除 API Key、Cookie、账号、手机号、私人路径和视频内容等敏感信息。
+
+  - type: input
+    id: version
+    attributes:
+      label: 项目版本
+      description: 填写版本号或 commit SHA。
+      placeholder: 例如 2.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: startup
+    attributes:
+      label: 启动方式
+      options:
+        - Docker Desktop
+        - 本地 Python
+        - 其他
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 运行环境
+      description: Windows、Python、Docker、浏览器等版本。
+      placeholder: Windows 11 / Python 3.12 / Docker Desktop ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述
+      description: 说明实际发生了什么。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请给出最小、可重复的操作步骤。
+      placeholder: |
+        1. 打开...
+        2. 创建...
+        3. 点击...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 已脱敏日志或截图
+      description: 不要粘贴 API Key、Cookie、账号、私人路径或私人视频内容。
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: 安全确认
+      options:
+        - label: 我已删除所有密钥、Cookie、账号信息和私人数据。
+          required: true
+        - label: 这个问题不要求绕过验证码、登录验证或平台风控。
+          required: true
