@@ -6,7 +6,7 @@
 
 Windows 本地运行的 AI 视频高光生产工作台，面向直播录像、访谈、综艺和其他长视频素材。
 
-[中文](README.md) · [English](README.en.md) · [快速开始](docs/PROJECT_GUIDE.md) · [通用启动](docs/PORTABLE_SETUP.md) · [技术说明](docs/TECHNICAL_REFERENCE.md) · [路线图](ROADMAP.md)
+[中文](README.md) · [English](README.en.md) · [快速开始](docs/PROJECT_GUIDE.md) · [通用启动](docs/PORTABLE_SETUP.md) · [备份恢复](docs/BACKUP_AND_RESTORE.md) · [技术说明](docs/TECHNICAL_REFERENCE.md) · [路线图](ROADMAP.md)
 
 ![CI](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml/badge.svg)
 ![Version](https://img.shields.io/badge/version-2.0.0-0969da)
@@ -89,6 +89,7 @@ flowchart LR
 | 审核切片 | 编辑候选、保存选择、按需生成新切片版本 | ✅ 可用 |
 | 内容准备 | 标题、简介、话题、封面帧、账号和可见范围 | ✅ 可用 |
 | 排期计划 | 批量预览、跨午夜窗口、月历、续接最晚排期 | ✅ 可用 |
+| 数据保护 | SQLite 一致性备份、清单校验、恢复前回滚与升级保护 | ✅ 可用 |
 | 抖音 / B站发布 | Windows Chrome Worker + 独立浏览器账号目录 | 🟡 需逐账号灰度 |
 | 字幕工作台 | ASS / FFmpeg 字幕成片 | 🟡 独立使用，未强绑全自动流程 |
 | 多用户与云端部署 | 权限系统、多人协作、公网服务 | ❌ 暂不支持 |
@@ -124,6 +125,33 @@ http://127.0.0.1:8001
 ```powershell
 .\scripts\stop.ps1
 ```
+
+### 备份、恢复与升级保护
+
+创建经过 SQLite 完整性和 SHA-256 校验的备份：
+
+```powershell
+.\scripts\backup.ps1
+```
+
+升级代码前先创建回滚点：
+
+```powershell
+.\scripts\pre_upgrade.ps1
+git pull --ff-only
+.\scripts\acceptance.ps1
+```
+
+安全恢复备份：
+
+```powershell
+.\scripts\restore.ps1 `
+  -BackupPath .\backups\niuma-studio-manual-YYYYMMDD-HHMMSS.zip `
+  -ConfirmRestore `
+  -StopServices
+```
+
+备份默认包含数据库和 `.env`，不包含原视频；包含 `.env` 的 ZIP 可能含 API Key 与 Token，不能上传到公开位置。完整说明见 [备份恢复指南](docs/BACKUP_AND_RESTORE.md)。
 
 ### 开发热重载
 
@@ -183,7 +211,10 @@ uvicorn app.main:app --reload --port 8001
 | --- | --- |
 | [通用启动指南](docs/PORTABLE_SETUP.md) | setup、doctor、正式模式、Demo、开发模式和真实发布 |
 | [新手启动指南](docs/PROJECT_GUIDE.md) | 环境准备、配置、首次测试和常见问题 |
+| [备份恢复指南](docs/BACKUP_AND_RESTORE.md) | 数据库、`.env`、媒体文件、恢复回滚和升级保护 |
 | [技术参考](docs/TECHNICAL_REFERENCE.md) | 架构、存储、排期、发布状态和测试命令 |
+| [依赖维护策略](docs/DEPENDENCY_POLICY.md) | 固定版本、升级流程与 CI 验证 |
+| [Release 检查清单](docs/RELEASE_CHECKLIST.md) | 自动化、Windows 实机、隐私与正式发布检查 |
 | [路线图](ROADMAP.md) | 后续版本计划和暂不支持范围 |
 | [贡献指南](CONTRIBUTING.md) | Issue、开发环境、测试和 Pull Request 规则 |
 | [安全策略](SECURITY.md) | API Key、Cookie、本地数据与漏洞报告方式 |
@@ -203,8 +234,10 @@ CI 目前检查：
 - JavaScript 语法
 - PowerShell 语法
 - 正式、开发和 Demo Compose 配置
-- 敏感运行时文件
+- 敏感运行时文件与备份 ZIP
 - 隔离 Demo 建库与数据数量
+- 备份、恢复和回滚往返测试
+- 最终 Docker 镜像构建、健康检查与主要页面
 
 自动化测试使用独立数据，不应连接真实平台账号或触发真实投稿。完整开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
