@@ -11,6 +11,7 @@
 
 ## 维护与发布
 
+- [Windows 实机验收与发布证据](WINDOWS_ACCEPTANCE.md)：验收脚本、数据隔离指纹、脱敏报告、Issue #23 证据和发布门禁。
 - [依赖维护策略](DEPENDENCY_POLICY.md)：版本固定、升级流程、CI 验证和重点依赖风险。
 - [v2.0.0 Release 检查清单](RELEASE_CHECKLIST.md)：自动化、Windows 实机、隐私和发布后检查。
 - [路线图](../ROADMAP.md)：已完成基础建设、公开 Issue 和后续优先级。
