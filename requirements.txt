@@ -24,4 +24,4 @@ playwright>=1.58.0
 aiofiles>=25.1.0
 
 # 本地语音转写（可选，远程转写不需要此包）
-faster-whisper>=1.2.0
+faster-whisper>=1.2.1
