@@ -16,6 +16,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 COPY app ./app
 COPY prompts ./prompts
 COPY docs/design ./docs/design
+COPY scripts/__init__.py ./scripts/__init__.py
 COPY scripts/seed_demo_data.py ./scripts/seed_demo_data.py
 
 EXPOSE 8001
