@@ -14,8 +14,9 @@ data/*
 workspace/
 demo-data/
 
-# 本地备份与恢复临时文件（可能包含数据库、API Key 和 Token）
+# 本地备份、验收报告与恢复临时文件（可能包含设备信息或密钥）
 backups/
+acceptance-results/
 *.partial-*
 *.restore-new-*
 *.restore-old-*
