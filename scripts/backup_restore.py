@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -13,7 +14,6 @@ import tempfile
 from typing import BinaryIO, Iterable
 from uuid import uuid4
 import zipfile
-from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.core.config import settings
@@ -84,14 +84,13 @@ def _git_commit(project_root: Path | None) -> str:
         )
     except (OSError, subprocess.SubprocessError):
         return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout.strip()
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def _table_counts(database_path: Path) -> dict[str, int]:
+    database_path = database_path.resolve()
     connection = sqlite3.connect(
-        f"{database_path.resolve().as_uri()}?mode=ro",
+        f"{database_path.as_uri()}?mode=ro",
         uri=True,
         timeout=10,
     )
@@ -108,7 +107,9 @@ def _table_counts(database_path: Path) -> dict[str, int]:
                 "数据库缺少必要表：" + ", ".join(missing)
             )
         return {
-            table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            table: int(
+                connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            )
             for table in COUNT_TABLES
         }
     except sqlite3.Error as exc:
@@ -173,7 +174,9 @@ def _iter_media_files(media_root: Path) -> Iterable[tuple[Path, PurePosixPath]]:
         if not path.is_file():
             continue
         relative = path.relative_to(media_root)
-        archive_name = PurePosixPath(MEDIA_PREFIX) / PurePosixPath(relative.as_posix())
+        archive_name = PurePosixPath(MEDIA_PREFIX) / PurePosixPath(
+            relative.as_posix()
+        )
         yield path, archive_name
 
 
@@ -238,7 +241,10 @@ def create_backup_bundle(
         f"{archive_path.name}.partial-{uuid4().hex}"
     )
 
-    with tempfile.TemporaryDirectory(prefix="niuma-backup-", dir=backup_dir) as temp_dir:
+    with tempfile.TemporaryDirectory(
+        prefix="niuma-backup-",
+        dir=backup_dir,
+    ) as temp_dir:
         stage_root = Path(temp_dir)
         snapshot_path = stage_root.joinpath(*PurePosixPath(DATABASE_ENTRY).parts)
         _create_sqlite_snapshot(database_path, snapshot_path)
@@ -256,7 +262,6 @@ def create_backup_bundle(
                 media_file_count += 1
                 media_bytes += staged.stat().st_size
 
-        files = _build_file_manifest(stage_root)
         manifest = {
             "archive_format_version": ARCHIVE_FORMAT_VERSION,
             "app_version": APP_VERSION,
@@ -271,7 +276,7 @@ def create_backup_bundle(
             "database_entry": DATABASE_ENTRY,
             "environment_entry": ENV_ENTRY if env_included else "",
             "table_counts": counts,
-            "files": files,
+            "files": _build_file_manifest(stage_root),
         }
         (stage_root / MANIFEST_ENTRY).write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
@@ -286,10 +291,8 @@ def create_backup_bundle(
                 compresslevel=6,
             ) as archive:
                 for path in sorted(stage_root.rglob("*")):
-                    if not path.is_file():
-                        continue
-                    archive_name = path.relative_to(stage_root).as_posix()
-                    archive.write(path, archive_name)
+                    if path.is_file():
+                        archive.write(path, path.relative_to(stage_root).as_posix())
             os.replace(partial_path, archive_path)
         finally:
             if partial_path.exists():
@@ -315,7 +318,9 @@ def verify_backup_bundle(archive_path: Path) -> dict[str, object]:
                 raise BackupRestoreError("备份包缺少 manifest.json")
 
             try:
-                manifest = json.loads(archive.read(MANIFEST_ENTRY).decode("utf-8"))
+                manifest = json.loads(
+                    archive.read(MANIFEST_ENTRY).decode("utf-8")
+                )
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise BackupRestoreError(f"备份清单无法读取：{exc}") from exc
 
@@ -356,7 +361,10 @@ def verify_backup_bundle(archive_path: Path) -> dict[str, object]:
 
             with tempfile.TemporaryDirectory(prefix="niuma-verify-") as temp_dir:
                 database_path = Path(temp_dir) / "workflow.sqlite3"
-                with archive.open(DATABASE_ENTRY, "r") as source, database_path.open("wb") as target:
+                with (
+                    archive.open(DATABASE_ENTRY, "r") as source,
+                    database_path.open("wb") as target,
+                ):
                     shutil.copyfileobj(source, target)
                 integrity = sqlite_quick_check(database_path)
                 if integrity != "ok":
@@ -382,7 +390,10 @@ def _extract_archive_entry(
 ) -> None:
     _safe_archive_name(entry_name)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with archive.open(entry_name, "r") as source, destination.open("wb") as target:
+    with (
+        archive.open(entry_name, "r") as source,
+        destination.open("wb") as target,
+    ):
         shutil.copyfileobj(source, target)
 
 
@@ -460,16 +471,28 @@ def _atomic_restore_files(
         previous_env.unlink()
 
 
-def _restore_media_to_empty_destination(
+def _preflight_media_destination(destination: Path) -> tuple[Path, bool]:
+    destination = destination.resolve()
+    existed_empty = False
+    if destination.exists():
+        if not destination.is_dir():
+            raise BackupRestoreError(
+                f"媒体恢复目标不是目录：{destination}"
+            )
+        if any(destination.iterdir()):
+            raise BackupRestoreError(
+                f"媒体恢复目录必须为空，避免覆盖现有文件：{destination}"
+            )
+        existed_empty = True
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return destination, existed_empty
+
+
+def _restore_media_before_database(
     archive: zipfile.ZipFile,
     destination: Path,
-) -> int:
-    destination = destination.resolve()
-    if destination.exists() and any(destination.iterdir()):
-        raise BackupRestoreError(
-            f"媒体恢复目录必须为空，避免覆盖现有文件：{destination}"
-        )
-    destination.parent.mkdir(parents=True, exist_ok=True)
+) -> tuple[int, bool]:
+    destination, existed_empty = _preflight_media_destination(destination)
     temporary = destination.with_name(
         f"{destination.name}.restore-new-{uuid4().hex}"
     )
@@ -487,10 +510,20 @@ def _restore_media_to_empty_destination(
         if destination.exists():
             destination.rmdir()
         os.replace(temporary, destination)
+        return restored, existed_empty
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
+        if existed_empty and not destination.exists():
+            destination.mkdir(parents=True, exist_ok=True)
         raise
-    return restored
+
+
+def _rollback_media_destination(destination: Path, existed_empty: bool) -> None:
+    destination = destination.resolve()
+    if destination.exists():
+        shutil.rmtree(destination)
+    if existed_empty:
+        destination.mkdir(parents=True, exist_ok=True)
 
 
 def restore_backup_bundle(
@@ -514,6 +547,9 @@ def restore_backup_bundle(
     backup_dir = backup_dir.resolve()
     backup_dir.mkdir(parents=True, exist_ok=True)
 
+    if media_destination is not None:
+        _preflight_media_destination(media_destination)
+
     rollback_path: Path | None = None
     if database_path.exists():
         rollback_path = create_backup_bundle(
@@ -526,7 +562,14 @@ def restore_backup_bundle(
             project_root=project_root,
         )
 
-    with tempfile.TemporaryDirectory(prefix="niuma-restore-", dir=backup_dir) as temp_dir:
+    restored_media_files = 0
+    media_destination_existed_empty = False
+    media_committed = False
+
+    with tempfile.TemporaryDirectory(
+        prefix="niuma-restore-",
+        dir=backup_dir,
+    ) as temp_dir:
         stage_root = Path(temp_dir)
         new_database = stage_root / "workflow.sqlite3"
         new_env = stage_root / ".env" if restore_env else None
@@ -549,19 +592,27 @@ def restore_backup_bundle(
                     f"actual={actual_counts}, expected={expected_counts}"
                 )
 
-            _atomic_restore_files(
-                new_database=new_database,
-                database_path=database_path,
-                new_env=new_env,
-                env_path=env_path,
-            )
-
-            restored_media_files = 0
             if media_destination is not None:
-                restored_media_files = _restore_media_to_empty_destination(
-                    archive,
-                    media_destination,
+                (
+                    restored_media_files,
+                    media_destination_existed_empty,
+                ) = _restore_media_before_database(archive, media_destination)
+                media_committed = True
+
+            try:
+                _atomic_restore_files(
+                    new_database=new_database,
+                    database_path=database_path,
+                    new_env=new_env,
+                    env_path=env_path,
                 )
+            except Exception:
+                if media_committed and media_destination is not None:
+                    _rollback_media_destination(
+                        media_destination,
+                        media_destination_existed_empty,
+                    )
+                raise
 
     restored_counts = _table_counts(database_path)
     if restored_counts != manifest.get("table_counts"):
@@ -574,7 +625,9 @@ def restore_backup_bundle(
         "archive": str(archive_path.resolve()),
         "database": str(database_path),
         "environment_restored": restore_env,
-        "media_destination": str(media_destination.resolve()) if media_destination else "",
+        "media_destination": (
+            str(media_destination.resolve()) if media_destination else ""
+        ),
         "media_files_restored": restored_media_files,
         "table_counts": restored_counts,
         "rollback_archive": str(rollback_path) if rollback_path else "",
@@ -593,8 +646,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     backup_parser = subparsers.add_parser("backup", help="创建经过校验的备份包")
     backup_parser.add_argument("--database", type=Path, default=settings.database_path)
-    backup_parser.add_argument("--env-file", type=Path, default=settings.project_root / ".env")
-    backup_parser.add_argument("--output-dir", type=Path, default=_default_backup_dir())
+    backup_parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=settings.project_root / ".env",
+    )
+    backup_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=_default_backup_dir(),
+    )
     backup_parser.add_argument("--label", default="manual")
     backup_parser.add_argument("--exclude-env", action="store_true")
     backup_parser.add_argument("--include-media", action="store_true")
@@ -606,8 +667,16 @@ def _build_parser() -> argparse.ArgumentParser:
     restore_parser = subparsers.add_parser("restore", help="安全恢复备份包")
     restore_parser.add_argument("archive", type=Path)
     restore_parser.add_argument("--database", type=Path, default=settings.database_path)
-    restore_parser.add_argument("--env-file", type=Path, default=settings.project_root / ".env")
-    restore_parser.add_argument("--backup-dir", type=Path, default=_default_backup_dir())
+    restore_parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=settings.project_root / ".env",
+    )
+    restore_parser.add_argument(
+        "--backup-dir",
+        type=Path,
+        default=_default_backup_dir(),
+    )
     restore_parser.add_argument("--restore-env", action="store_true")
     restore_parser.add_argument("--media-destination", type=Path)
 
