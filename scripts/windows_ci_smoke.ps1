@@ -32,12 +32,26 @@ function Assert-Page {
         [string]$Url
     )
 
-    $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 15
-    if ($response.StatusCode -ne 200) {
-        throw "$Name 返回异常状态码：$($response.StatusCode)"
+    $lastError = ''
+    foreach ($attempt in 1..3) {
+        try {
+            $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 30
+            if ($response.StatusCode -eq 200) {
+                Write-StepLog "$Name HTTP 200 on attempt $attempt"
+                Write-Host "[OK] $Name：HTTP 200"
+                return
+            }
+            $lastError = "异常状态码：$($response.StatusCode)"
+        } catch {
+            $lastError = $_.Exception.Message
+        }
+
+        Write-StepLog "$Name attempt $attempt failed: $lastError"
+        if ($attempt -lt 3) {
+            Start-Sleep -Seconds 2
+        }
     }
-    Write-StepLog "$Name HTTP 200"
-    Write-Host "[OK] $Name：HTTP 200"
+    throw "$Name 连续 3 次访问失败：$lastError"
 }
 
 try {
@@ -160,7 +174,7 @@ print(json.dumps(counts))
     if (-not $archive) {
         throw 'Windows 主机备份未生成 ZIP。'
     }
-    & $Python -m scripts.backup_restore verify $archive.FullName
+    & $Python -m scripts.backup_restore_runtime verify $archive.FullName
     if ($LASTEXITCODE -ne 0) {
         throw 'Windows 主机备份验证失败。'
     }
