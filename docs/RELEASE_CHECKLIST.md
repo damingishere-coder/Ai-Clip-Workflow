@@ -9,38 +9,87 @@
 - [ ] 三套 Docker Compose 配置通过
 - [ ] Demo 建库检查通过
 - [ ] 备份、恢复、回滚和损坏包保护测试通过
+- [ ] Windows host smoke test 通过并生成日志 Artifact
 - [ ] 最终 Docker 镜像能启动并通过 `/health`
 - [ ] Docker 镜像中的工作台、任务列表、片段总览和发送中心返回 200
 - [ ] `pip check` 无依赖冲突
-- [ ] 敏感文件和备份 ZIP 检查无异常
+- [ ] 敏感文件、备份 ZIP 和本地验收报告检查无异常
 
-## 2. Windows 实机验收
+> [!IMPORTANT]
+> GitHub 的 `windows-latest` 是云端 Windows 主机冒烟，只验证 PowerShell、路径、原生 Demo、页面和备份。它不是普通用户的 Windows 10/11 + Docker Desktop，不能替代第 2 节的实机报告。
 
-在干净或可回滚的 Windows 10/11 环境中执行：
+## 2. Windows 10/11 + Docker Desktop 实机验收
+
+先同步并创建升级回滚点：
+
+```powershell
+git switch master
+git pull --ff-only
+.\scripts\pre_upgrade.ps1
+```
+
+执行完整验收：
+
+```powershell
+.\scripts\acceptance.ps1
+```
+
+确认：
+
+- [ ] `acceptance-results/latest.json` 的 `result` 为 `passed`
+- [ ] 报告记录 Windows 10/11 版本、Build 和验收时间
+- [ ] 报告记录 Docker Desktop、Docker Engine 和 Docker Compose 版本
+- [ ] `setup.ps1` 保留已有 `.env`
+- [ ] 连续运行两次 `setup.ps1` 不会重置配置
+- [ ] `doctor.ps1` 输出无阻塞项
+- [ ] Demo 容器状态为 `healthy`
+- [ ] 工作台、任务列表、片段总览和发送中心均返回 200
+- [ ] Demo 出现 3 条任务、6 条候选片段、6 条 `manual_export` 草稿
+- [ ] Demo 能正常停止
+- [ ] `.env` 在验收前后哈希一致
+- [ ] 正式 SQLite 在验收前后状态一致
+- [ ] 正式任务目录在验收前后文件数量、总大小和元数据指纹一致
+- [ ] 报告对应当前 `master` Git commit
+
+正式验收不能使用 `-SkipStorageSnapshot`。
+
+如需验收后继续查看 Demo：
 
 ```powershell
 .\scripts\acceptance.ps1 -KeepRunning
 ```
 
-确认：
+该模式仍会先停止 Demo 并完成数据保护验证，然后再重新启动。
 
-- [ ] Docker Desktop 正常
-- [ ] `setup.ps1` 不覆盖已有 `.env`
-- [ ] `doctor.ps1` 输出无阻塞项
-- [ ] Demo 容器状态为 `healthy`
-- [ ] 工作台出现 3 条 Demo 任务
-- [ ] 片段总览出现 6 条候选片段
-- [ ] 发送中心出现 6 条 `manual_export` 草稿
-- [ ] 页面中文、按钮、空状态和布局正常
-- [ ] 停止 Demo 后正式数据库与视频目录不受影响
+## 3. 发布证据门禁
 
-验收完成后执行：
+执行：
 
 ```powershell
-.\scripts\stop.ps1 -Demo -RemoveDemoData
+.\scripts\release_gate.ps1
 ```
 
-## 3. 备份与恢复验收
+确认输出：
+
+```text
+=== v2.0.0 发布门禁通过 ===
+```
+
+门禁会阻止以下情况发布：
+
+- 验收报告不是 `passed`
+- 报告来自非 Windows 10/11 系统
+- Docker Desktop、Engine 或 Compose 版本缺失
+- Demo 数量不正确
+- 正式 `.env`、SQLite 或任务目录保护缺少 PASS 证据
+- 当前分支不是 `master`
+- 验收报告对应旧 commit
+- Git 工作区不干净
+- 应用、README 或 Changelog 版本不是 `2.0.0`
+
+将经过人工检查的 `acceptance-results/latest.md` 正文粘贴到 Issue #23。不要上传整个目录、完整日志、`.env`、SQLite 或视频。
+
+## 4. 备份与恢复验收
 
 发布前至少在 Windows 实机执行一次：
 
@@ -65,7 +114,7 @@
 .\scripts\pre_upgrade.ps1
 ```
 
-## 4. 真实工作流验收
+## 5. 真实工作流验收
 
 - [ ] 导入一条低风险短测试视频
 - [ ] FFmpeg 音频提取成功
@@ -75,9 +124,9 @@
 - [ ] 生成至少一个本地短视频文件
 - [ ] 发送中心能创建 `manual_export` 草稿
 
-真实平台发布不作为基础安装通过条件。抖音与 B站验证单独跟踪在 Issue #25。
+真实平台发布不作为基础安装通过条件。抖音与 B站验证单独跟踪在 Issue #25，并且 Release 中必须明确“逐账号灰度验证”。
 
-## 5. 文档和版本一致性
+## 6. 文档和版本一致性
 
 - [ ] `app/main.py` 版本为 `2.0.0`
 - [ ] README 中英文版本徽章为 `2.0.0`
@@ -87,22 +136,24 @@
 - [ ] `ROADMAP.md` 链接到公开 Issue
 - [ ] `LICENSE`、`SECURITY.md` 和 `CONTRIBUTING.md` 存在
 - [ ] `docs/BACKUP_AND_RESTORE.md` 与实际脚本参数一致
+- [ ] `docs/WINDOWS_ACCEPTANCE.md` 与验收和门禁脚本一致
 - [ ] 占位图说明真实，不冒充实机截图
 
-## 6. 隐私与安全检查
+## 7. 隐私与安全检查
 
 确认仓库没有提交：
 
 - [ ] `.env` 或 API Key
 - [ ] SQLite / DB 文件
 - [ ] 备份 ZIP 或恢复临时文件
+- [ ] `acceptance-results/` 本地报告和日志
 - [ ] Cookie、storage state、浏览器 Profile
 - [ ] 真实平台账号信息
 - [ ] 原始视频、切片、音频
 - [ ] 发布日志和失败截图
 - [ ] 作者电脑用户名或个人绝对路径
 
-## 7. 创建 GitHub Release
+## 8. 创建 GitHub Release
 
 建议填写：
 
@@ -121,16 +172,18 @@ Pre-release: No
 - 抖音与 B站发布需要逐账号灰度验证
 - 不绕过登录、验证码或平台风控
 - 升级前应使用 `pre_upgrade.ps1` 创建本地回滚包
+- v2.0.0 的 Windows 10/11 + Docker Desktop 验收日期和对应 commit
 
 GitHub 会自动提供源码 ZIP 和 tar.gz。当前没有经过签名和实机验证的 Windows 安装包时，不要上传名为“安装包”的临时压缩文件。
 
-## 8. 发布后检查
+## 9. 发布后检查
 
 - [ ] Release 页面显示为 Latest
-- [ ] Tag 指向预期的 `master` 提交
+- [ ] Tag 指向验收报告对应的 `master` 提交
 - [ ] 源码压缩包可下载
 - [ ] README 中的链接和图片可打开
 - [ ] 新用户按 README 能进入 Demo
-- [ ] 新用户能找到备份恢复文档
+- [ ] 新用户能找到备份恢复和 Windows 验收文档
 - [ ] 创建下一版本的 `Unreleased` 记录
-- [ ] 公开记录 Windows 实机验收结果
+- [ ] Issue #23 有脱敏验收报告并已关闭
+- [ ] Issue #25 继续跟踪真实平台灰度，不因基础 Release 被错误关闭
