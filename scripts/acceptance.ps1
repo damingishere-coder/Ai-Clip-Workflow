@@ -337,7 +337,7 @@ function Write-Reports {
     $lines.Add("- 结果：**$($script:Result.ToUpperInvariant())**") | Out-Null
     $lines.Add("- 开始时间：$($RunStartedAt.ToString('o'))") | Out-Null
     $lines.Add("- 结束时间：$($finishedAt.ToString('o'))") | Out-Null
-    $lines.Add("- Git commit：`$($script:EnvironmentInfo.git_commit)`") | Out-Null
+    $lines.Add(('- Git commit：`{0}`' -f $script:EnvironmentInfo.git_commit)) | Out-Null
     $lines.Add("- Windows：$($script:EnvironmentInfo.os_caption) $($script:EnvironmentInfo.os_version) (Build $($script:EnvironmentInfo.os_build))") | Out-Null
     $lines.Add("- PowerShell：$($script:EnvironmentInfo.powershell)") | Out-Null
     $lines.Add("- Docker Desktop：$($script:EnvironmentInfo.docker_desktop)") | Out-Null
