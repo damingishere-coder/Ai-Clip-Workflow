@@ -14,6 +14,12 @@ data/*
 workspace/
 demo-data/
 
+# 本地备份与恢复临时文件（可能包含数据库、API Key 和 Token）
+backups/
+*.partial-*
+*.restore-new-*
+*.restore-old-*
+
 # 发布浏览器登录态、执行日志和失败截图（只允许保存在本机）
 data/browser_profiles/
 data/publish_worker/
