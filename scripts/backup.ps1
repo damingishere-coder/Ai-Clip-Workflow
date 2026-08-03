@@ -31,7 +31,7 @@ $OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 
 $python = Resolve-PythonCommand
 $arguments = @(
-    '-m', 'scripts.backup_restore', 'backup',
+    '-m', 'scripts.backup_restore_runtime', 'backup',
     '--output-dir', $OutputDirectory,
     '--label', $Label
 )
@@ -72,4 +72,4 @@ if ($result.contains_secrets) {
 
 Write-Host ''
 Write-Host '验证命令：'
-Write-Host "  $python -m scripts.backup_restore verify `"$($result.archive)`""
+Write-Host "  $python -m scripts.backup_restore_runtime verify `"$($result.archive)`""

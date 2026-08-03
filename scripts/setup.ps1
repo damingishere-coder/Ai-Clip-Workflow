@@ -104,7 +104,7 @@ foreach ($name in $pathDefaults.Keys) {
     }
 }
 
-Set-Content -LiteralPath $EnvFile -Value $envText -Encoding UTF8
+Set-Content -LiteralPath $EnvFile -Value $envText -Encoding UTF8 -NoNewline
 
 $directories = @(
     (Join-Path $ProjectRoot 'data'),
@@ -129,3 +129,4 @@ Write-Host '  .\scripts\start.ps1'
 Write-Host ''
 Write-Host '查看演示数据：'
 Write-Host '  .\scripts\start.ps1 -Demo'
+exit 0
