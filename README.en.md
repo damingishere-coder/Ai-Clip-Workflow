@@ -6,7 +6,7 @@
 
 A Windows-first, local AI video highlight workspace for livestream recordings, interviews, variety shows, and other long-form media.
 
-[中文](README.md) · [English](README.en.md) · [Quick Start](docs/PROJECT_GUIDE.md) · [Portable Setup](docs/PORTABLE_SETUP.md) · [Technical Reference](docs/TECHNICAL_REFERENCE.md) · [Roadmap](ROADMAP.md)
+[中文](README.md) · [English](README.en.md) · [Quick Start](docs/PROJECT_GUIDE.md) · [Portable Setup](docs/PORTABLE_SETUP.md) · [Backup & Restore](docs/BACKUP_AND_RESTORE.md) · [Technical Reference](docs/TECHNICAL_REFERENCE.md) · [Roadmap](ROADMAP.md)
 
 ![CI](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml/badge.svg)
 ![Version](https://img.shields.io/badge/version-2.0.0-0969da)
@@ -89,6 +89,7 @@ flowchart LR
 | Review and clipping | Edit candidates, save selections, generate versioned clips | ✅ Available |
 | Content preparation | Titles, descriptions, tags, cover frames, accounts, visibility | ✅ Available |
 | Scheduling | Batch preview, overnight windows, calendar view, timeline continuation | ✅ Available |
+| Data protection | Verified SQLite snapshots, manifests, restore rollback, upgrade protection | ✅ Available |
 | Douyin / Bilibili publishing | Windows Chrome Worker with isolated account profiles | 🟡 Per-account validation required |
 | Subtitle workspace | ASS / FFmpeg subtitle rendering | 🟡 Separate workflow |
 | Multi-user cloud deployment | Accounts, permissions, collaboration, public hosting | ❌ Not supported |
@@ -118,6 +119,33 @@ Stop:
 ```powershell
 .\scripts\stop.ps1
 ```
+
+### Backup, restore, and upgrade protection
+
+Create a verified backup of SQLite and `.env`:
+
+```powershell
+.\scripts\backup.ps1
+```
+
+Create a rollback point before pulling new code:
+
+```powershell
+.\scripts\pre_upgrade.ps1
+git pull --ff-only
+.\scripts\acceptance.ps1
+```
+
+Restore a backup safely:
+
+```powershell
+.\scripts\restore.ps1 `
+  -BackupPath .\backups\niuma-studio-manual-YYYYMMDD-HHMMSS.zip `
+  -ConfirmRestore `
+  -StopServices
+```
+
+Backups include the database and `.env` by default, but exclude media files. A bundle containing `.env` may contain API keys and tokens and must not be uploaded publicly. See the [Backup and Restore Guide](docs/BACKUP_AND_RESTORE.md); the detailed guide is currently maintained in Chinese.
 
 ### Development hot reload
 
@@ -177,7 +205,10 @@ See [Technical Reference](docs/TECHNICAL_REFERENCE.md) for architecture, job sta
 | --- | --- |
 | [Portable Setup](docs/PORTABLE_SETUP.md) | Setup, doctor, production, demo, development, and publishing modes |
 | [Beginner Guide](docs/PROJECT_GUIDE.md) | Configuration, startup, first test, troubleshooting |
+| [Backup and Restore](docs/BACKUP_AND_RESTORE.md) | SQLite, `.env`, media, rollback, and pre-upgrade protection |
 | [Technical Reference](docs/TECHNICAL_REFERENCE.md) | Architecture, storage, scheduling, publishing states, tests |
+| [Dependency Policy](docs/DEPENDENCY_POLICY.md) | Version pinning, upgrades, and CI verification |
+| [Release Checklist](docs/RELEASE_CHECKLIST.md) | Automated checks, Windows validation, privacy, release steps |
 | [Roadmap](ROADMAP.md) | Planned work and explicit non-goals |
 | [Contributing](CONTRIBUTING.md) | Issues, development setup, tests, pull requests |
 | [Security](SECURITY.md) | API keys, cookies, local data, vulnerability reporting |
@@ -190,7 +221,7 @@ See [Technical Reference](docs/TECHNICAL_REFERENCE.md) for architecture, job sta
 pytest -v
 ```
 
-CI checks Python compilation, Ruff, pytest, JavaScript syntax, PowerShell syntax, Compose configurations, sensitive runtime files, and an isolated demo database build.
+CI checks Python compilation, Ruff, pytest, JavaScript syntax, PowerShell syntax, Compose configurations, sensitive runtime files and backup bundles, isolated demo data, backup-and-restore roundtrips, and a real Docker image smoke test.
 
 Automated tests must use isolated data and must not publish to real platform accounts.
 

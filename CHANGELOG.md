@@ -8,7 +8,7 @@
 
 ### Planned
 
-- 完成 Windows 实机验收、备份恢复和抖音 / B站灰度验证矩阵。
+- 完成 Windows 实机验收和抖音 / B站灰度验证矩阵。
 
 ## 2.0.0 - 2026-08-03
 
@@ -28,6 +28,10 @@
 - 增加不连接真实账号的 Demo 数据，包含任务、候选片段、演示切片和发布草稿。
 - 增加 Dependabot、依赖维护策略和 v2.0.0 Release 检查清单。
 - 建立公开 Roadmap Issues，持续跟踪实机验收、备份恢复和平台兼容性。
+- 增加 `backup.ps1`、`restore.ps1` 和 `pre_upgrade.ps1`。
+- 增加带文件哈希、数据库数量和版本信息的可校验备份清单。
+- 支持默认备份 SQLite 与 `.env`，并可显式选择媒体文件。
+- 恢复前自动创建 `pre-restore` 回滚包，并提供数据库与配置原子切换保护。
 
 ### Changed
 
@@ -46,12 +50,14 @@
 
 - CI 检查 Python 编译、Ruff、pytest、JavaScript 和 PowerShell 语法。
 - CI 校验正式、开发和 Demo 三套 Compose。
-- CI 检查敏感运行时文件与隔离 Demo 数据库。
+- CI 检查敏感运行时文件、备份 ZIP 与隔离 Demo 数据库。
 - CI 构建最终 Docker 镜像，启动应用并验证主要页面。
 - CI 使用 `pip check` 检查依赖冲突。
+- CI 验证数据库、`.env`、媒体冲突保护和损坏备份的恢复往返行为。
 
 ### Security
 
-- `.env`、数据库、视频、日志、浏览器 Profile、Cookie 和 storage state 不进入 Git。
+- `.env`、数据库、视频、备份 ZIP、日志、浏览器 Profile、Cookie 和 storage state 不进入 Git。
 - Demo 模式使用独立数据库、关闭 Scheduler，并固定使用 `manual_export`。
+- 备份包遇到重复路径、越界路径、哈希不一致或 SQLite 损坏时会拒绝恢复。
 - 自动化不会绕过二维码、短信、验证码、滑块、登录失效或平台风控。
