@@ -85,12 +85,26 @@ if (-not $storageValue) {
     $envText = Set-EnvValue -Text $envText -Name 'NIUMA_STORAGE_PATH' -Value $storageValue
 }
 
-Set-Content -LiteralPath $EnvFile -Value $envText -Encoding UTF8
-
-$storagePath = [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot $storageValue))
 if ([System.IO.Path]::IsPathRooted($storageValue)) {
     $storagePath = [System.IO.Path]::GetFullPath($storageValue)
+} else {
+    $storagePath = [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot $storageValue))
 }
+
+$pathDefaults = @{
+    STORAGE_ROOT = $storagePath
+    TASKS_DIR = $storagePath
+    UPLOAD_TEMP_DIR = (Join-Path $storagePath '_临时上传')
+    PUBLISH_SCHEDULER_EXPORT_DIR = (Join-Path $storagePath '_发布包')
+    PUBLISH_HOST_PROJECT_ROOT = [string]$ProjectRoot
+}
+foreach ($name in $pathDefaults.Keys) {
+    if (-not (Get-EnvValue -Text $envText -Name $name)) {
+        $envText = Set-EnvValue -Text $envText -Name $name -Value $pathDefaults[$name]
+    }
+}
+
+Set-Content -LiteralPath $EnvFile -Value $envText -Encoding UTF8
 
 $directories = @(
     (Join-Path $ProjectRoot 'data'),
