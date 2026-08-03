@@ -1,86 +1,89 @@
-# 项目总览与新手启动说明
+# 牛马片场新手启动指南
 
-这份文档给不熟悉代码和终端的新手使用。你只需要按顺序做，不需要理解每一行命令背后的原理。
+这份文档面向第一次使用牛马片场、对代码和终端不熟悉的用户。请按顺序操作，不需要先理解全部技术细节。
 
-适用版本：牛马片场 `2.0.0`。
+适用版本：`2.0.0`
 
-## 1. 项目是做什么的
+## 1. 项目能做什么
 
-项目中文名：牛马片场。
-
-它的目标是把一条本地直播录像、综艺访谈或长视频素材，变成一组可审核、可切割、可准备文案和封面、可排期并发送到抖音或 B站的短视频内容。
-
-当前 v2.0 完整流程：
+牛马片场运行在 Windows 本地，用来把直播录像、综艺访谈和其他长视频整理成可审核、可切片、可准备平台内容、可排期并发送到抖音或 B站的短视频。
 
 ```text
-上传本地视频 / 选择 NAS 或本地已有视频
--> 创建独立任务目录
--> 提取音频
--> 火山引擎或 faster-whisper 转写
--> DeepSeek / OpenAI-compatible 或 Ollama 分析候选片段
--> 人工审核片段
--> 自动切割并准备标题、简介、话题和封面
--> 发送中心核对账号与内容
--> 立即发送或按北京时间排期
--> Windows Chrome Worker 投稿抖音 / B站
--> 保存成功、失败或人工复核记录
+导入长视频
+→ 提取音频并转写
+→ AI 分析高光
+→ 人工审核片段
+→ 生成短视频
+→ 准备标题、简介、话题和封面
+→ 排期或立即发送
+→ 保存成功、失败或人工复核记录
 ```
 
-针对《康熙来了》类综艺，可以在新建任务或任务详情里选择“综艺笑点优先”。该模式先按重叠窗口找笑点，再补齐前后文，最后全局去重和评分；候选池默认 12 条，但只会默认启用最多 5 条 A 级内容，质量不足时不会凑数。现有直播和通用长视频继续使用“通用内容价值”模式。
+项目不会绕过二维码、短信、验证码、滑块、登录失效或平台风控。真实发送前必须人工核对内容与账号。
 
-### 1.1 现在已经能做什么
+## 2. 准备环境
 
-- 素材、音频、转写、AI 结果、切片和封面按任务保存到 E 盘存储目录。
-- 全自动任务详情会每 3 秒更新进度与日志，失败后可以重试或继续。
-- 片段审核保存后，可一键生成最新切片并同步到发送中心。
-- 发送中心按任务分组管理抖音 / B站内容，支持内容补齐、封面、排期月历、跨午夜时间窗和续接最晚排期。
-- 立即发送与定时发送共用同一套 Scheduler 和 Windows Worker，执行记录不会因为重新切片而被覆盖。
+推荐准备：
 
-### 1.2 现在仍需要人工做什么
+- Windows 10 或 Windows 11。
+- Docker Desktop。
+- 系统 Chrome。
+- 足够的视频存储空间。
+- 需要本地开发时，再安装 Python 3.12+ 和 FFmpeg。
 
-- 首次使用抖音或 B站账号时，在系统 Chrome 独立窗口完成登录、二维码、短信或平台要求的验证。
-- 真实发送前逐条核对视频、标题、简介、话题、封面、账号、可见范围和北京时间。
-- 遇到验证码、滑块、登录失效、平台风控或发布结果不确定时，到平台创作者中心人工确认。
-- 项目不会绕过平台限制，也不会在结果不确定时自动重复上传。
+先把项目克隆到你自己的目录，例如：
 
-## 2. 当前项目目录
-
-```text
-C:\Users\10578\Documents\New project 2
+```powershell
+git clone https://github.com/damingishere-coder/Ai-Clip-Workflow.git
+cd Ai-Clip-Workflow
 ```
 
-以后所有命令都默认在这个目录里执行。
+后续命令都在你实际的仓库目录中执行，不要照抄其他用户电脑的绝对路径。
 
-## 3. 推荐方式：Docker 一键启动
+## 3. 准备配置
 
-Docker 的好处是：不用每次手动激活 `.venv`，端口映射清楚，关闭也方便。
+复制环境变量模板：
 
-第一次启动前，先确认 Docker Desktop 已经打开。
+```powershell
+Copy-Item .env.example .env
+```
 
-日常不需要打开 PowerShell，也不需要输入命令：
+打开 `.env`，重点检查：
 
-1. 打开 Docker Desktop。
-2. 在 Containers 中找到并运行 `niuma-studio`。
-3. 等待发送中心的“Windows Worker”显示“正常”。
+- 视频和任务存储目录是否存在。
+- 临时上传目录是否有足够空间。
+- 需要使用的转写服务配置。
+- 远程 AI 或本地 Ollama 配置。
+- Windows Worker 地址和 Token。
 
-项目已经安装 `NiuMa Studio Docker Watcher` 后台观察器。它只等待当前项目的 Docker 容器；容器运行后自动启动 Windows Chrome Worker，项目停止 15 秒后自动关闭 Worker。旧启动脚本继续保留给开发助手诊断，不作为日常操作。
+真实 API Key 只能写入本机 `.env`，不要写进代码、README、Issue、截图或提交记录。
 
-看到服务启动后，在浏览器打开：
+仓库中的 E 盘路径是历史默认值。你的电脑没有对应目录时，必须改为自己的路径。
+
+## 4. 推荐方式：Docker Desktop
+
+确保 Docker Desktop 已启动，然后在项目目录执行：
+
+```powershell
+docker compose up -d
+```
+
+查看容器状态：
+
+```powershell
+docker compose ps
+```
+
+浏览器打开：
 
 ```text
 http://127.0.0.1:8001
 ```
 
-健康检查地址：
+健康检查：
 
 ```text
 http://127.0.0.1:8001/health
-```
-
-查看端口和容器状态：
-
-```powershell
-docker compose ps
 ```
 
 停止项目：
@@ -89,27 +92,17 @@ docker compose ps
 docker compose down
 ```
 
-Docker 版会继续使用：
+如果你的电脑已经安装项目配套的 Docker Watcher，它会在容器运行后准备 Windows Chrome Worker。外部用户没有安装 Watcher 时，可以使用仓库中的 Worker 启动脚本进行开发或诊断。
 
-- 项目里的 `data/workflow.sqlite3` 保存数据库。
-- E 盘 `E:\直播间切片工作流存储` 保存上传视频、音频、转写、AI 分析和切片结果。这个名字是历史存储目录，本次品牌更新先不改它，避免影响已有任务和视频。
-- 项目根目录 `.env` 保存真实 API Key，Docker 启动时会自动读取。
+## 5. 备用方式：本地 Python
 
-## 4. 备用方式：本地虚拟环境启动
-
-打开 PowerShell 后，先进入项目目录：
+创建虚拟环境：
 
 ```powershell
-cd "C:\Users\10578\Documents\New project 2"
+python -m venv .venv
 ```
 
-如果还没有虚拟环境，执行：
-
-```powershell
-py -3.12 -m venv .venv
-```
-
-激活虚拟环境：
+激活：
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
@@ -119,70 +112,75 @@ py -3.12 -m venv .venv
 
 ```powershell
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+pip install -r requirements.txt
 ```
 
-如果 PowerShell 提示不允许运行脚本，先执行一次：
+如果 PowerShell 不允许运行激活脚本，可以为当前用户调整脚本策略：
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 
-然后重新执行激活命令。
-
-## 5. 配置 API Key
-
-真实 API Key 不要写进代码，也不要写进文档。
-
-第一次使用时，把 `.env.example` 复制成 `.env`，然后只在 `.env` 里填写真实密钥。
+启动 Web 服务：
 
 ```powershell
-Copy-Item .env.example .env
-```
-
-`.env` 已经被 Git 忽略，不会上传。
-
-也可以启动项目后，在系统状态页里的“三类 AI 接口配置”直接填写。页面保存时会写入 `.env`，并保留 `.env` 里其他无关配置。
-
-## 6. 本地虚拟环境启动项目
-
-每次启动项目，一般执行这两行：
-
-```powershell
-.\.venv\Scripts\Activate.ps1
 uvicorn app.main:app --reload --port 8001
 ```
 
-看到服务启动后，在浏览器打开：
+浏览器打开 `http://127.0.0.1:8001`。
+
+## 6. 第一次测试：只测生产链路
+
+第一次使用不要直接点击真实发送。建议准备一条时间较短、无隐私、可重复测试的视频，然后按以下顺序检查：
+
+1. 打开首页，确认页面正常加载。
+2. 打开“新建任务”，上传测试视频。
+3. 选择合适的转写和 AI 配置。
+4. 等待音频提取、转写和 AI 分析完成。
+5. 打开片段审核页，启用或修改至少一个候选。
+6. 保存选择并生成短视频。
+7. 确认生成内容进入发送中心。
+8. 预览排期，确认时间按北京时间显示。
+
+完成以上步骤，说明本地生产链路基本可用。
+
+## 7. AI 与转写配置
+
+### 远程 AI
+
+支持 OpenAI-compatible 接口和 DeepSeek。请在 `.env` 或系统设置页填写自己的地址、模型和 API Key。
+
+### 本地 Ollama
+
+使用本地 Ollama 时，先确认 Ollama 已在 Windows 中启动。Docker 容器通常通过：
 
 ```text
-http://127.0.0.1:8001
+http://host.docker.internal:11434
 ```
 
-健康检查地址：
+访问 Windows 本机服务。
 
-```text
-http://127.0.0.1:8001/health
-```
+### 转写
 
-## 7. 页面怎么测试
+支持火山引擎远程转写和本地 faster-whisper。没有 NVIDIA 显卡时，本地转写可能明显变慢。
 
-启动项目后，按这个顺序检查：
+## 8. 真实发布前检查
 
-1. 打开首页，确认左侧显示 `v2.0 本地高光生产版`。
-2. 打开“新建任务”，上传一个短测试视频，保持“全自动流程”开启。
-3. 进入任务详情页，确认状态概览和运行日志每 3 秒局部更新，页面不会自动跳回顶部。
-4. 转写与 AI 分析完成后，打开片段审核页，勾选或修改候选片段。
-5. 点击“保存并同步发送中心”，确认需要时会生成最新切片，并自动进入当前任务的内容准备区。
-6. 在发送中心核对抖音 / B站的视频、标题、简介、话题和封面。
-7. 只使用测试任务预览排期，确认月历日期详情和任务清单按北京时间从早到晚排列。
-8. 如果要测试真实发布，必须先确认 Windows Worker 正常、平台账号已登录，并只发送一条低风险测试内容。
+只有完成本地生产链路后，才开始真实平台灰度：
 
-> 只检查生产链路时，不要点击“立即发送”。排期预览不会触发真实投稿，确认排期后任务会等待调度器到点执行。
+1. 确认 Scheduler 健康。
+2. 确认 Windows Worker 正常。
+3. 在账号管理中新增目标平台账号。
+4. 在系统 Chrome 独立窗口中人工完成登录。
+5. 只选择一条低风险测试视频。
+6. 核对视频、标题、简介、话题、封面、账号、可见范围和北京时间。
+7. 执行一次投稿并等待明确成功证据。
 
-## 8. 命令行测试
+遇到验证码、登录失效、风控或结果不确定时，任务会进入 `NEED_REVIEW`。先到平台创作者中心人工核对，不要直接重复发送。
 
-不需要真实 API Key 的基础测试：
+## 9. 常用测试命令
+
+基础测试：
 
 ```powershell
 python -m compileall app
@@ -191,44 +189,64 @@ python scripts/test_mock_transcript_analysis.py
 python scripts/test_transcript_markdown_format.py
 ```
 
-需要真实远程 API Key 的测试：
+完整测试：
 
 ```powershell
-python scripts/test_remote_ai_connection.py
+pytest -v
 ```
 
-需要本地 Ollama 服务的测试：
+自动化测试应使用独立数据库和 Mock，不连接真实平台账号，不触发真实投稿。
 
-```powershell
-python scripts/test_local_ai_connection.py
-```
+## 10. 哪些文件不能上传
 
-## 9. 哪些文件不要上传
+不要提交：
 
-不要上传这些内容：
+- `.env`
+- 真实 API Key、Token、Cookie
+- SQLite 数据库
+- 原视频、音频、转写和切片
+- 发布包、日志和失败截图
+- Chrome Profile 和 storage state
+- 用户名、手机号、平台账号和私人路径
 
-- `.env`：真实 API Key 和本地配置。
-- `data/` 里的真实数据库。
-- `tasks/` 里的原视频、音频、转写、切片结果。
-- `.venv/` 虚拟环境。
-- 大视频、大音频和本地生成日志。
+详细说明见 [SECURITY.md](../SECURITY.md)。
 
-Git 当前只保留代码、文档、模板和必要的 `.gitkeep` 占位文件。
+## 11. 常见问题
 
-## 10. 常见问题
+### 页面打不开
 
-如果打开 `http://127.0.0.1:8000` 页面不对，优先使用：
+确认服务已启动，并优先使用：
 
 ```text
 http://127.0.0.1:8001
 ```
 
-如果 AI 提示缺少 Key，先到系统状态页检查对应的三类接口：音频转写看火山引擎 Key，文字稿分析看 `AI_ANALYSIS_REMOTE_API_KEY`，发送中心文案看 `AI_PUBLISH_REMOTE_API_KEY`。
+检查：
 
-如果发送中心提示“Windows Worker 未连接”，先不要点击“立即发送”。刚运行 Docker 项目时先等待十几秒，再点击“重新检测”。如果持续未连接，在 Docker Desktop 中停止 `niuma-studio`，等待 15 秒后重新运行；不需要输入命令。仍未恢复时，把发送中心提示交给开发助手检查 `data/logs/docker_publish_worker_watcher.log` 和 `publish_worker_8765.err.log`。
+```powershell
+docker compose ps
+```
 
-如果转写速度很慢，可能是没有使用 NVIDIA 显卡。可以在 `.env` 中把转写配置改成 CPU 模式，但速度会慢一些。
+### AI 提示缺少 Key
 
-如果 Docker 启动后本地 Ollama 不通，确认 Ollama 已经在 Windows 里启动。Docker 容器内会通过 `host.docker.internal:11434` 访问 Windows 本机的 Ollama。
+检查 `.env` 或系统设置页中对应的转写、分析和文案服务配置。不要把真实 Key 发到公开 Issue。
 
-如果 Docker Desktop 里看到端口 `8001:8001`，说明浏览器应该打开 `http://127.0.0.1:8001`。
+### Windows Worker 未连接
+
+先不要点击“立即发送”。检查 Worker 地址、Token、系统 Chrome、Docker 与本机网络桥接。开发和诊断方式见 [TECHNICAL_REFERENCE.md](TECHNICAL_REFERENCE.md)。
+
+### 本地 Ollama 无法连接
+
+确认 Windows 中 Ollama 已启动，并检查容器是否可以访问 `host.docker.internal:11434`。
+
+### 转写很慢
+
+本地 faster-whisper 在 CPU 模式下可能需要较长时间。可以改用远程转写，或降低测试视频时长。
+
+## 12. 下一步阅读
+
+- [项目首页](../README.md)
+- [技术参考](TECHNICAL_REFERENCE.md)
+- [路线图](../ROADMAP.md)
+- [贡献指南](../CONTRIBUTING.md)
+- [安全策略](../SECURITY.md)

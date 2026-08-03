@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 安全问题
+    url: https://github.com/damingishere-coder/Ai-Clip-Workflow/security
+    about: 不要在公开 Issue 中提交漏洞细节、密钥、Cookie 或账号信息。
