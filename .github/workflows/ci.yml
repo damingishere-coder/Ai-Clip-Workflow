@@ -27,8 +27,8 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install ruff pytest
+          pip install -r requirements-dev.txt
+          pip check
 
       - name: Python 编译检查
         run: python -m compileall app scripts
@@ -96,3 +96,60 @@ jobs:
 
       - name: 运行测试
         run: pytest -v
+
+  docker-image-smoke:
+    name: Docker image smoke test
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 构建正式镜像
+        run: docker build --tag niuma-studio:ci .
+
+      - name: 启动隔离 Demo 容器
+        run: |
+          docker run --detach \
+            --name niuma-studio-ci \
+            --publish 8001:8001 \
+            --env DEMO_MODE=true \
+            --env DATA_DIR=/app/ci-data \
+            --env DATABASE_PATH=/app/ci-data/workflow.sqlite3 \
+            --env STORAGE_ROOT=/app/ci-tasks \
+            --env TASKS_DIR=/app/ci-tasks \
+            --env UPLOAD_TEMP_DIR=/app/ci-tasks/_temp \
+            --env PUBLISH_SCHEDULER_ENABLED=false \
+            niuma-studio:ci
+
+      - name: 等待健康检查
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8001/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs niuma-studio-ci
+          exit 1
+
+      - name: 写入并验证 Demo 数据
+        run: |
+          docker exec niuma-studio-ci python -m scripts.seed_demo_data --reset
+          docker exec niuma-studio-ci python -c "import sqlite3; db=sqlite3.connect('/app/ci-data/workflow.sqlite3'); assert db.execute(\"select count(*) from tasks where id like 'demo_%'\").fetchone()[0] == 3; assert db.execute(\"select count(*) from clip_candidates where id like 'demo_%'\").fetchone()[0] == 6; assert db.execute(\"select count(*) from publish_jobs where id like 'demo_%'\").fetchone()[0] == 6"
+
+      - name: 验证主要页面
+        run: |
+          curl --fail --silent --show-error http://127.0.0.1:8001/ >/dev/null
+          curl --fail --silent --show-error http://127.0.0.1:8001/tasks >/dev/null
+          curl --fail --silent --show-error http://127.0.0.1:8001/clips >/dev/null
+          curl --fail --silent --show-error http://127.0.0.1:8001/publish >/dev/null
+
+      - name: 输出失败日志
+        if: failure()
+        run: docker logs niuma-studio-ci || true
+
+      - name: 清理容器
+        if: always()
+        run: docker rm --force niuma-studio-ci || true

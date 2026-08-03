@@ -1,6 +1,6 @@
 # 通用启动、环境检查与 Demo 指南
 
-这份文档说明 P0 工程化后的四种运行方式。所有命令都在仓库根目录的 PowerShell 中执行。
+这份文档说明 P0 工程化后的运行方式。所有命令都在仓库根目录的 PowerShell 中执行。
 
 ## 1. 首次初始化
 
@@ -151,3 +151,53 @@ NIUMA_STORAGE_PATH=./workspace/tasks
 ```
 
 正式 Compose 会将该目录挂载到容器内的 `/workspace/tasks`。
+
+## 8. Windows 一键验收
+
+在发布版本或更换电脑后，建议执行完整的隔离验收：
+
+```powershell
+.\scripts\acceptance.ps1
+```
+
+脚本会：
+
+1. 保留现有 `.env` 并完成目录初始化。
+2. 运行环境体检。
+3. 构建并启动隔离 Demo。
+4. 检查容器是否为 `healthy`。
+5. 检查工作台、任务列表、片段总览和发送中心。
+6. 验证 Demo 数据数量。
+7. 验收结束后自动停止 Demo。
+
+需要保留页面继续人工检查：
+
+```powershell
+.\scripts\acceptance.ps1 -KeepRunning
+```
+
+已经构建过镜像时可以跳过重新构建：
+
+```powershell
+.\scripts\acceptance.ps1 -NoBuild -KeepRunning
+```
+
+验收脚本不连接真实平台账号，也不会测试真实投稿。
+
+## 9. 依赖安装
+
+普通本地 Python 环境：
+
+```powershell
+pip install -r requirements.txt
+pip check
+```
+
+开发环境：
+
+```powershell
+pip install -r requirements-dev.txt
+pip check
+```
+
+依赖文件的职责、升级流程和重点风险见 [依赖维护策略](DEPENDENCY_POLICY.md)。正式发布前使用 [Release 检查清单](RELEASE_CHECKLIST.md)。

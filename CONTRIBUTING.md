@@ -48,7 +48,8 @@
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
+pip check
 Copy-Item .env.example .env
 uvicorn app.main:app --reload --port 8001
 ```
@@ -59,21 +60,25 @@ uvicorn app.main:app --reload --port 8001
 http://127.0.0.1:8001
 ```
 
+依赖升级规则见 [docs/DEPENDENCY_POLICY.md](docs/DEPENDENCY_POLICY.md)。
+
 ## 测试
 
-提交前至少运行与你改动相关的测试。能够运行完整测试时，请执行：
+提交前至少运行与你改动相关的测试。能够运行完整检查时，请执行：
 
 ```powershell
+python -m compileall app scripts
+ruff check app tests scripts/seed_demo_data.py
 pytest -v
 ```
 
-常用基础检查：
+涉及启动与 Docker 的改动，还应执行：
 
 ```powershell
-python -m compileall app
-python scripts/test_ai_json_validation.py
-python scripts/test_mock_transcript_analysis.py
-python scripts/test_transcript_markdown_format.py
+docker compose config --quiet
+docker compose -f docker-compose.yml -f docker-compose.dev.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.demo.yml config --quiet
+.\scripts\acceptance.ps1
 ```
 
 涉及前端 JavaScript、发布 Worker、Scheduler 或存储安全的改动，请补充相应回归测试。
@@ -88,6 +93,7 @@ python scripts/test_transcript_markdown_format.py
 4. 对新增配置同步更新 `.env.example` 和相关文档。
 5. 对用户可见变化补充截图或录屏；截图必须脱敏。
 6. 不提交生成文件、缓存、数据库、日志、视频和浏览器登录状态。
+7. 依赖升级说明版本变化、原因和验证结果，不直接自动合并 Dependabot PR。
 
 建议的提交信息：
 
