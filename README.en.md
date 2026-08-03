@@ -23,19 +23,23 @@ A Windows-first, local AI video highlight workspace for livestream recordings, i
 ## Product preview
 
 > [!NOTE]
-> The images below are code-based placeholders generated from the current templates and fields. They do not represent real user data and can later be replaced with sanitized screenshots from a running installation.
+> These are sanitized screenshots from a Windows local installation. They demonstrate the interface and workflow without exposing real task content, account credentials, or personal information.
 
 ### Dashboard
 
-![NiuMa Studio dashboard placeholder](docs/images/dashboard-placeholder.svg)
+![NiuMa Studio dashboard](docs/images/dashboard.webp)
+
+### Task detail
+
+![NiuMa Studio task detail](docs/images/task-detail.webp)
 
 ### Clip review
 
-![NiuMa Studio clip review placeholder](docs/images/clip-review-placeholder.svg)
+![NiuMa Studio clip review](docs/images/clip-review.webp)
 
 ### Publishing center
 
-![NiuMa Studio publishing center placeholder](docs/images/publish-center-placeholder.svg)
+![NiuMa Studio publishing center](docs/images/publish-center.webp)
 
 ## Zero-configuration demo
 
