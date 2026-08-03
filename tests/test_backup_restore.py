@@ -13,6 +13,14 @@ from scripts.backup_restore import (
 )
 
 
+COUNT_TABLES = (
+    "tasks",
+    "clip_candidates",
+    "output_clip",
+    "publish_jobs",
+)
+
+
 def _create_database(path: Path, *, multiplier: int = 1) -> dict[str, int]:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
@@ -46,6 +54,17 @@ def _replace_database(path: Path, *, multiplier: int) -> dict[str, int]:
     if path.exists():
         path.unlink()
     return _create_database(path, multiplier=multiplier)
+
+
+def _read_counts(path: Path) -> dict[str, int]:
+    connection = sqlite3.connect(path)
+    try:
+        return {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in COUNT_TABLES
+        }
+    finally:
+        connection.close()
 
 
 def test_backup_bundle_contains_verified_database_env_and_media(tmp_path: Path) -> None:
@@ -118,7 +137,9 @@ def test_restore_roundtrip_creates_rollback_and_restores_counts(tmp_path: Path) 
     assert rollback_manifest["label"] == "pre-restore"
 
 
-def test_restore_media_requires_empty_destination(tmp_path: Path) -> None:
+def test_restore_media_conflict_keeps_database_and_destination_unchanged(
+    tmp_path: Path,
+) -> None:
     database = tmp_path / "data" / "workflow.sqlite3"
     _create_database(database)
     env_file = tmp_path / ".env"
@@ -138,6 +159,7 @@ def test_restore_media_requires_empty_destination(tmp_path: Path) -> None:
         project_root=tmp_path,
     )
 
+    current_counts = _replace_database(database, multiplier=2)
     destination = tmp_path / "media-restore"
     destination.mkdir()
     (destination / "existing.txt").write_text("keep", encoding="utf-8")
@@ -152,7 +174,9 @@ def test_restore_media_requires_empty_destination(tmp_path: Path) -> None:
             project_root=tmp_path,
         )
 
+    assert _read_counts(database) == current_counts
     assert (destination / "existing.txt").read_text(encoding="utf-8") == "keep"
+    assert env_file.read_text(encoding="utf-8") == "VALUE=original\n"
 
 
 def test_invalid_archive_never_replaces_current_database(tmp_path: Path) -> None:
@@ -184,13 +208,5 @@ def test_invalid_archive_never_replaces_current_database(tmp_path: Path) -> None
             project_root=tmp_path,
         )
 
-    connection = sqlite3.connect(database)
-    try:
-        actual_counts = {
-            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in current_counts
-        }
-    finally:
-        connection.close()
-    assert actual_counts == current_counts
+    assert _read_counts(database) == current_counts
     assert env_file.read_text(encoding="utf-8") == "VALUE=current\n"
