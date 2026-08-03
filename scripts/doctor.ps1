@@ -1,6 +1,7 @@
 ﻿[CmdletBinding()]
 param(
-    [switch]$RequirePublisher
+    [switch]$RequirePublisher,
+    [switch]$SkipDocker
 )
 
 $ErrorActionPreference = 'Stop'
@@ -76,42 +77,46 @@ try {
     Write-Check FAIL '视频存储目录' $_.Exception.Message
 }
 
-$docker = Get-Command docker -ErrorAction SilentlyContinue
-if (-not $docker) {
-    Write-Check FAIL 'Docker CLI' '未找到 docker，请安装并启动 Docker Desktop。'
+if ($SkipDocker) {
+    Write-Check WARN 'Docker 主机检查' '已按 -SkipDocker 跳过；仅允许用于 Windows 云端主机冒烟，不能替代 Docker Desktop 实机验收。'
 } else {
-    Write-Check OK 'Docker CLI' $docker.Source
-    try {
-        $dockerVersion = (& docker version --format '{{.Server.Version}}' 2>$null)
-        if ($LASTEXITCODE -eq 0 -and $dockerVersion) {
-            Write-Check OK 'Docker Engine' $dockerVersion
-        } else {
-            Write-Check FAIL 'Docker Engine' 'Docker Desktop 可能尚未启动。'
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if (-not $docker) {
+        Write-Check FAIL 'Docker CLI' '未找到 docker，请安装并启动 Docker Desktop。'
+    } else {
+        Write-Check OK 'Docker CLI' $docker.Source
+        try {
+            $dockerVersion = (& docker version --format '{{.Server.Version}}' 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $dockerVersion) {
+                Write-Check OK 'Docker Engine' $dockerVersion
+            } else {
+                Write-Check FAIL 'Docker Engine' 'Docker Desktop 可能尚未启动。'
+            }
+        } catch {
+            Write-Check FAIL 'Docker Engine' '无法连接 Docker Desktop。'
         }
-    } catch {
-        Write-Check FAIL 'Docker Engine' '无法连接 Docker Desktop。'
-    }
 
-    try {
-        $composeVersion = (& docker compose version --short 2>$null)
-        if ($LASTEXITCODE -eq 0 -and $composeVersion) {
-            Write-Check OK 'Docker Compose' $composeVersion
-        } else {
-            Write-Check FAIL 'Docker Compose' '当前 Docker 未提供 compose 子命令。'
+        try {
+            $composeVersion = (& docker compose version --short 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $composeVersion) {
+                Write-Check OK 'Docker Compose' $composeVersion
+            } else {
+                Write-Check FAIL 'Docker Compose' '当前 Docker 未提供 compose 子命令。'
+            }
+        } catch {
+            Write-Check FAIL 'Docker Compose' '无法执行 docker compose。'
         }
-    } catch {
-        Write-Check FAIL 'Docker Compose' '无法执行 docker compose。'
-    }
 
-    try {
-        & docker compose config --quiet 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Check OK 'Compose 配置' 'docker-compose.yml 校验通过。'
-        } else {
-            Write-Check FAIL 'Compose 配置' '配置校验失败，请运行 docker compose config 查看详情。'
+        try {
+            & docker compose config --quiet 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Check OK 'Compose 配置' 'docker-compose.yml 校验通过。'
+            } else {
+                Write-Check FAIL 'Compose 配置' '配置校验失败，请运行 docker compose config 查看详情。'
+            }
+        } catch {
+            Write-Check FAIL 'Compose 配置' $_.Exception.Message
         }
-    } catch {
-        Write-Check FAIL 'Compose 配置' $_.Exception.Message
     }
 }
 
