@@ -6,8 +6,9 @@
 
 A Windows-first, local AI video highlight workspace for livestream recordings, interviews, variety shows, and other long-form media.
 
-[中文](README.md) · [English](README.en.md) · [Quick Start](docs/PROJECT_GUIDE.md) · [Technical Reference](docs/TECHNICAL_REFERENCE.md) · [Roadmap](ROADMAP.md)
+[中文](README.md) · [English](README.en.md) · [Quick Start](docs/PROJECT_GUIDE.md) · [Portable Setup](docs/PORTABLE_SETUP.md) · [Technical Reference](docs/TECHNICAL_REFERENCE.md) · [Roadmap](ROADMAP.md)
 
+![CI](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml/badge.svg)
 ![Version](https://img.shields.io/badge/version-2.0.0-0969da)
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4)
@@ -35,6 +36,22 @@ A Windows-first, local AI video highlight workspace for livestream recordings, i
 ### Publishing center
 
 ![NiuMa Studio publishing center placeholder](docs/images/publish-center-placeholder.svg)
+
+## Zero-configuration demo
+
+You can inspect the complete interface without a video, API key, or platform account:
+
+```powershell
+.\scripts\start.ps1 -Demo
+```
+
+The demo uses isolated `demo-data/` and `workspace/demo/` directories. It creates fictional tasks, AI candidates, rendered demo clips, and safe `manual_export` drafts. It does not use the production database, connect real accounts, or run the publishing scheduler.
+
+Reset the demo:
+
+```powershell
+.\scripts\start.ps1 -Demo -ResetDemo
+```
 
 ## Why NiuMa Studio
 
@@ -78,14 +95,17 @@ flowchart LR
 
 ## Quick start
 
-### Docker Desktop (recommended)
+### Windows + Docker Desktop
 
 ```powershell
 git clone https://github.com/damingishere-coder/Ai-Clip-Workflow.git
 cd Ai-Clip-Workflow
-Copy-Item .env.example .env
-docker compose up -d
+.\scripts\setup.ps1
+.\scripts\doctor.ps1
+.\scripts\start.ps1
 ```
+
+The scripts create and preserve `.env`, generate local tokens, create a portable media directory, validate Docker and storage permissions, start the service, and wait for `/health`.
 
 Open:
 
@@ -93,13 +113,27 @@ Open:
 http://127.0.0.1:8001
 ```
 
-Health check:
+Stop:
 
-```text
-http://127.0.0.1:8001/health
+```powershell
+.\scripts\stop.ps1
 ```
 
-Update `.env` with storage paths and AI settings that match your own Windows machine before processing media.
+### Development hot reload
+
+```powershell
+.\scripts\start.ps1 -Development
+```
+
+The production Compose file no longer runs Uvicorn with hot reload. Development mounts and reload behavior live in `docker-compose.dev.yml`.
+
+### Real Douyin / Bilibili publishing
+
+```powershell
+.\scripts\start.ps1 -WithPublisher
+```
+
+This mode requires Windows, Google Chrome, manual account login, and user handling of QR codes, SMS verification, CAPTCHAs, and risk controls.
 
 ### Local Python
 
@@ -108,29 +142,29 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-Copy-Item .env.example .env
+.\scripts\setup.ps1
 uvicorn app.main:app --reload --port 8001
 ```
 
-The detailed beginner guide is currently maintained in Chinese: [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md).
+The detailed portable setup guide is currently maintained in Chinese: [docs/PORTABLE_SETUP.md](docs/PORTABLE_SETUP.md).
 
 ## First-success checklist
 
-Before testing real publishing:
+Before testing scheduling or real publishing:
 
 1. Open the home page and `/health` successfully.
-2. Upload a short, low-risk test video.
+2. Upload a one-to-three-minute test video.
 3. Complete transcription and AI analysis.
-4. Review at least one candidate and generate a clip.
+4. Review at least one candidate and generate one local clip.
 5. Confirm the clip appears in the publishing workspace.
-6. Preview a schedule in China Standard Time.
 
-Only test real publishing after the Windows Worker is healthy and the target account is logged in.
+Real publishing is a second-stage validation and should not block the first installation.
 
 ## Operational boundaries
 
 - Windows-first, local, single-user deployment with FastAPI, SQLite, and local files.
-- `local_browser` is the default publishing mode; `manual_export` only exports a local package.
+- `local_browser` is the default production publishing mode; `manual_export` only exports a local package.
+- Demo mode disables the scheduler and uses `manual_export` without real accounts.
 - Login failures, CAPTCHAs, risk controls, and uncertain outcomes become `NEED_REVIEW` instead of automatic retries.
 - Platform pages change frequently, so real publishing must be validated per account and per release.
 - The project does not store platform passwords or bypass platform security mechanisms.
@@ -141,7 +175,8 @@ See [Technical Reference](docs/TECHNICAL_REFERENCE.md) for architecture, job sta
 
 | Document | Purpose |
 | --- | --- |
-| [Beginner Guide](docs/PROJECT_GUIDE.md) | Setup, configuration, startup, first test, troubleshooting |
+| [Portable Setup](docs/PORTABLE_SETUP.md) | Setup, doctor, production, demo, development, and publishing modes |
+| [Beginner Guide](docs/PROJECT_GUIDE.md) | Configuration, startup, first test, troubleshooting |
 | [Technical Reference](docs/TECHNICAL_REFERENCE.md) | Architecture, storage, scheduling, publishing states, tests |
 | [Roadmap](ROADMAP.md) | Planned work and explicit non-goals |
 | [Contributing](CONTRIBUTING.md) | Issues, development setup, tests, pull requests |
@@ -155,7 +190,9 @@ See [Technical Reference](docs/TECHNICAL_REFERENCE.md) for architecture, job sta
 pytest -v
 ```
 
-Automated tests should use isolated data and must not publish to real platform accounts.
+CI checks Python compilation, Ruff, pytest, JavaScript syntax, PowerShell syntax, Compose configurations, sensitive runtime files, and an isolated demo database build.
+
+Automated tests must use isolated data and must not publish to real platform accounts.
 
 ## Contributing
 

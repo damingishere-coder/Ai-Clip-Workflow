@@ -30,8 +30,69 @@ jobs:
           pip install -r requirements.txt
           pip install ruff pytest
 
+      - name: Python 编译检查
+        run: python -m compileall app scripts
+
       - name: Ruff 代码检查
-        run: ruff check app tests
+        run: ruff check app tests scripts/seed_demo_data.py
+
+      - name: JavaScript 语法检查
+        run: find app/static/js -name '*.js' -print0 | xargs -0 -r -n1 node --check
+
+      - name: PowerShell 脚本语法检查
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem scripts -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              Write-Error ("{0}: {1}" -f $_.Name, ($errors.Message -join '; '))
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Docker Compose 配置检查
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.demo.yml config --quiet
+
+      - name: 敏感文件检查
+        run: |
+          blocked="$(git ls-files | grep -Ei '(^|/)(\.env|cookies.*\.json|.*storage-state.*\.json|.*\.sqlite3|.*\.db|publish_worker_.*\.log)$' || true)"
+          if [ -n "$blocked" ]; then
+            echo "检测到不应提交的敏感或运行时文件："
+            echo "$blocked"
+            exit 1
+          fi
+
+      - name: 隔离 Demo 建库检查
+        env:
+          DEMO_MODE: "true"
+          DATA_DIR: /tmp/niuma-demo-data
+          DATABASE_PATH: /tmp/niuma-demo-data/workflow.sqlite3
+          STORAGE_ROOT: /tmp/niuma-demo-storage
+          TASKS_DIR: /tmp/niuma-demo-storage
+          UPLOAD_TEMP_DIR: /tmp/niuma-demo-storage/_temp
+          PUBLISH_SCHEDULER_ENABLED: "false"
+        run: |
+          python -m scripts.seed_demo_data --reset
+          python - <<'PY'
+          import sqlite3
+          db = sqlite3.connect('/tmp/niuma-demo-data/workflow.sqlite3')
+          assert db.execute("select count(*) from tasks where id like 'demo_%'").fetchone()[0] == 3
+          assert db.execute("select count(*) from clip_candidates where id like 'demo_%'").fetchone()[0] == 6
+          assert db.execute("select count(*) from publish_jobs where id like 'demo_%'").fetchone()[0] == 6
+          print('demo database verified')
+          PY
 
       - name: 运行测试
         run: pytest -v

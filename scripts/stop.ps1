@@ -1,0 +1,34 @@
+﻿[CmdletBinding()]
+param(
+    [switch]$Demo,
+    [switch]$RemoveDemoData
+)
+
+$ErrorActionPreference = 'Stop'
+$ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
+Set-Location $ProjectRoot
+
+$arguments = @('compose')
+if ($Demo) {
+    $arguments += @('-f', 'docker-compose.yml', '-f', 'docker-compose.demo.yml')
+}
+$arguments += 'down'
+
+& docker @arguments
+if ($LASTEXITCODE -ne 0) {
+    throw '停止 Docker 服务失败。'
+}
+
+if ($Demo -and $RemoveDemoData) {
+    foreach ($path in @(
+        (Join-Path $ProjectRoot 'demo-data'),
+        (Join-Path $ProjectRoot 'workspace\demo')
+    )) {
+        if (Test-Path $path) {
+            Remove-Item -LiteralPath $path -Recurse -Force
+            Write-Host "已删除 Demo 数据：$path"
+        }
+    }
+}
+
+Write-Host '牛马片场服务已停止。正式数据库与视频目录未被删除。'

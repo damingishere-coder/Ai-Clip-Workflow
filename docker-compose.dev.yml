@@ -1,0 +1,6 @@
+services:
+  workflow:
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir /app/app --reload-dir /app/prompts
+    volumes:
+      - ./app:/app/app
+      - ./prompts:/app/prompts

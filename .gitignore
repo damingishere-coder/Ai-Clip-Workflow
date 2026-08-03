@@ -10,6 +10,10 @@ __pycache__/
 data/*
 !data/.gitkeep
 
+# 通用视频目录与隔离 Demo 数据
+workspace/
+demo-data/
+
 # 发布浏览器登录态、执行日志和失败截图（只允许保存在本机）
 data/browser_profiles/
 data/publish_worker/

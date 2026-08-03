@@ -1,13 +1,11 @@
-FROM mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
+FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-RUN rm -f /etc/apt/sources.list.d/yarn.list \
-    && rm -f /etc/apt/sources.list.d/yarn.sources \
-    && apt-get update \
+RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
@@ -18,6 +16,8 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 COPY app ./app
 COPY prompts ./prompts
 COPY docs/design ./docs/design
+COPY scripts/__init__.py ./scripts/__init__.py
+COPY scripts/seed_demo_data.py ./scripts/seed_demo_data.py
 
 EXPOSE 8001
 

@@ -1,0 +1,19 @@
+name: niuma-studio-demo
+
+services:
+  workflow:
+    container_name: niuma-studio-demo
+    environment:
+      DATA_DIR: /app/data
+      DATABASE_PATH: /app/data/workflow.sqlite3
+      STORAGE_ROOT: /workspace/tasks
+      TASKS_DIR: /workspace/tasks
+      UPLOAD_TEMP_DIR: /workspace/tasks/_临时上传
+      DEMO_MODE: "true"
+      LOCAL_ADMIN_TOKEN: demo-local-only
+      PUBLISH_SCHEDULER_ENABLED: "false"
+      PUBLISH_DEFAULT_MODE: manual_export
+      PUBLISH_WORKER_TOKEN: ""
+    volumes:
+      - ./demo-data:/app/data
+      - ./workspace/demo:/workspace/tasks
