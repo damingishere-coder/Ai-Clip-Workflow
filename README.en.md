@@ -31,7 +31,7 @@ A Windows-first, local AI video highlight workspace for livestream recordings, i
 
 ### Task detail
 
-![NiuMa Studio task detail](docs/images/task-detail.webp)
+![NiuMa Studio task detail](docs/images/task-detail.png)
 
 ### Clip review
 
@@ -39,7 +39,7 @@ A Windows-first, local AI video highlight workspace for livestream recordings, i
 
 ### Publishing center
 
-![NiuMa Studio publishing center](docs/images/publish-center.webp)
+![NiuMa Studio publishing center](docs/images/publish-center.png)
 
 ## Zero-configuration demo
 

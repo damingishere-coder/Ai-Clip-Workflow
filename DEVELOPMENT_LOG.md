@@ -1,5 +1,11 @@
 # Development Log
 
+## 2026-08-13 GitHub 主页任务详情与发送中心图片更新
+
+- 中文、英文 GitHub 主页的“任务详情 / Task detail”和“发送中心 / Publishing center”预览已分别改为用户提供的对应实机 PNG 图片。
+- 两张图片均以原始 `2560 × 1271` 分辨率直接复制到 `docs/images/task-detail.png` 和 `docs/images/publish-center.png`，未缩放、未压缩、未转码，保留原始清晰度。
+- 仅调整项目主页图片资源与引用，不修改应用页面、业务逻辑、数据库或发布流程。
+
 ## 2026-08-03 Windows 实机验收安全与 PowerShell 5.1 兼容修复
 
 - 修复 `pre_upgrade.ps1` 把命名参数当成位置参数的问题；升级前备份现在稳定进入被 Git 忽略的 `backups/`，不会在项目根目录生成 `-Label/`。
