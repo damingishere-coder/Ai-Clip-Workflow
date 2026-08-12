@@ -31,7 +31,7 @@ Windows 本地运行的 AI 视频高光生产工作台，面向直播录像、�
 
 ### 任务详情
 
-![牛马片场任务详情](docs/images/task-detail.webp)
+![牛马片场任务详情](docs/images/task-detail.png)
 
 ### 片段审核
 
@@ -39,7 +39,7 @@ Windows 本地运行的 AI 视频高光生产工作台，面向直播录像、�
 
 ### 发送中心
 
-![牛马片场发送中心](docs/images/publish-center.webp)
+![牛马片场发送中心](docs/images/publish-center.png)
 
 ## 零配置体验 Demo
 
