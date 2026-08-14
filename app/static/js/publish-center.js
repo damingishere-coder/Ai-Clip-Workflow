@@ -297,6 +297,7 @@ if (publishCenterRoot) {
       group.hidden = visibleCount === 0;
       if (visibleCount > 0) visibleGroups.push(group);
       if (visibleCount === 0) setTaskGroupExpanded(group, false);
+      syncTaskGroupSelectionUi(group);
     });
     if (visibleGroups.length && !visibleGroups.some((group) => group.dataset.expanded === "true")) {
       setTaskGroupExpanded(visibleGroups[0], true);
@@ -1020,6 +1021,26 @@ if (publishCenterRoot) {
     queueHistoryRefresh(true);
   }
 
+  function visibleTaskGroupRows(group) {
+    if (!group) return [];
+    return Array.from(group.querySelectorAll('[data-publish-row][data-section="content"]')).filter(
+      (row) => !row.hidden && row.dataset.platform === activePlatform,
+    );
+  }
+
+  function syncTaskGroupSelectionUi(group) {
+    const checkbox = group?.querySelector("[data-task-group-select]");
+    if (!checkbox) return;
+    const rows = visibleTaskGroupRows(group);
+    const selectedCount = rows.filter((row) => selectedJobIds.has(row.dataset.jobId)).length;
+    const allSelected = rows.length > 0 && selectedCount === rows.length;
+    checkbox.disabled = rows.length === 0;
+    checkbox.checked = allSelected;
+    checkbox.indeterminate = selectedCount > 0 && !allSelected;
+    const label = group.querySelector("[data-task-group-select-label]");
+    if (label) label.textContent = allSelected ? "取消全选" : "全选本任务";
+  }
+
   function updateSelectionUi() {
     Array.from(selectedJobIds).forEach((jobId) => {
       const row = document.querySelector(`[data-publish-row][data-job-id="${CSS.escape(jobId)}"]`);
@@ -1032,6 +1053,7 @@ if (publishCenterRoot) {
     if (selectedCountNode) selectedCountNode.textContent = String(count);
     if (drawerCount) drawerCount.textContent = String(count);
     if (selectionBar) selectionBar.hidden = count === 0;
+    document.querySelectorAll("[data-publish-task-group]").forEach(syncTaskGroupSelectionUi);
   }
 
   function setActivePlatform(nextPlatform) {
@@ -1505,6 +1527,16 @@ if (publishCenterRoot) {
       if (historyCheckbox.checked) selectedHistoryJobIds.add(historyCheckbox.value);
       else selectedHistoryJobIds.delete(historyCheckbox.value);
       updateHistorySelectionUi();
+      return;
+    }
+    const taskGroupCheckbox = event.target.closest("[data-task-group-select]");
+    if (taskGroupCheckbox) {
+      const group = taskGroupCheckbox.closest("[data-publish-task-group]");
+      visibleTaskGroupRows(group).forEach((row) => {
+        if (taskGroupCheckbox.checked) selectedJobIds.add(row.dataset.jobId);
+        else selectedJobIds.delete(row.dataset.jobId);
+      });
+      updateSelectionUi();
       return;
     }
     const checkbox = event.target.closest("[data-publish-select]");

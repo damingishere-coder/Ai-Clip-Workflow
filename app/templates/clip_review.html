@@ -29,6 +29,13 @@
 <section class="review-layout">
   <form class="clip-list" id="clip-review-form" data-task-id="{{ task.id }}" data-max-clip-seconds="{{ task.max_clip_duration * 60 }}">
     {% if clips %}
+    <div class="clip-bulk-select" data-clip-bulk-select>
+      <label class="toggle-line clip-bulk-select-control">
+        <input type="checkbox" data-clip-select-all aria-label="全选当前显示的候选片段">
+        <span data-clip-select-all-label>全选当前列表</span>
+      </label>
+      <span class="clip-bulk-select-count" data-clip-select-count>已启用 {{ clips|selectattr('enabled')|list|length }} / {{ clips|length }} 条</span>
+    </div>
     {% for clip in clips %}
     <article
       class="panel clip-card"

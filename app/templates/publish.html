@@ -203,6 +203,10 @@
           <small>创建于 {{ group.task_created_at_display }} · <span data-task-group-count>0 条待准备</span></small>
         </div>
         <div class="publish-task-group-actions">
+          <label class="publish-task-group-select">
+            <input type="checkbox" data-task-group-select aria-label="全选任务“{{ group.task_name }}”当前可见内容">
+            <span data-task-group-select-label>全选本任务</span>
+          </label>
           <a class="text-button" href="/tasks/{{ group.task_id }}">查看任务详情</a>
           <button type="button" class="secondary-button" data-task-group-toggle aria-expanded="{{ 'true' if loop.first else 'false' }}">
             <span data-task-group-action>{{ '收起' if loop.first else '展开' }}</span>

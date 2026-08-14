@@ -206,6 +206,16 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             first_group.locator("[data-task-group-toggle]").click()
             assert first_content.is_visible()
 
+            first_group_select = first_group.locator("[data-task-group-select]")
+            first_group_select.check()
+            assert first_content.locator("[data-publish-select]").is_checked()
+            assert not newest_content.locator("[data-publish-select]").is_checked()
+            assert page.locator("[data-selected-count]").inner_text() == "1"
+            assert first_group.locator("[data-task-group-select-label]").inner_text() == "取消全选"
+            first_content.locator("[data-publish-select]").uncheck()
+            assert not first_group_select.is_checked()
+            assert first_group.locator("[data-task-group-select-label]").inner_text() == "全选本任务"
+
             page.locator('[data-center-tab="schedule"]').click()
             assert page.locator('[data-schedule-calendar] .publish-calendar-day').count() == 42
             assert "抖音" in page.locator("[data-calendar-title]").inner_text()
