@@ -747,6 +747,9 @@ const clipReviewForm = document.querySelector("#clip-review-form");
 const saveClipsButton = document.querySelector("#save-clips-button");
 const generateClipsButton = document.querySelector("#generate-clips-button");
 const clipReviewMessage = document.querySelector("#clip-review-message");
+const clipSelectAll = document.querySelector("[data-clip-select-all]");
+const clipSelectAllLabel = document.querySelector("[data-clip-select-all-label]");
+const clipSelectCount = document.querySelector("[data-clip-select-count]");
 const clipPreviewVideo = document.querySelector("#clip-preview-video");
 const clipPreviewDock = document.querySelector("#clip-preview-dock");
 const clipPreviewCaption = document.querySelector("#clip-preview-caption");
@@ -786,10 +789,30 @@ function getClipReviewCards() {
   return Array.from(document.querySelectorAll("[data-clip-card]"));
 }
 
+function getClipEnableCheckboxes() {
+  return getClipReviewCards()
+    .map((card) => card.querySelector("[name='enabled']"))
+    .filter(Boolean);
+}
+
+function updateClipSelectAllUi() {
+  const checkboxes = getClipEnableCheckboxes();
+  const enabledCount = checkboxes.filter((checkbox) => checkbox.checked).length;
+  const allEnabled = checkboxes.length > 0 && enabledCount === checkboxes.length;
+  if (clipSelectAll) {
+    clipSelectAll.disabled = checkboxes.length === 0;
+    clipSelectAll.checked = allEnabled;
+    clipSelectAll.indeterminate = enabledCount > 0 && !allEnabled;
+  }
+  if (clipSelectAllLabel) clipSelectAllLabel.textContent = allEnabled ? "取消全选" : "全选当前列表";
+  if (clipSelectCount) clipSelectCount.textContent = `已启用 ${enabledCount} / ${checkboxes.length} 条`;
+}
+
 function updateClipReviewActionState() {
   const hasCards = getClipReviewCards().length > 0;
   if (saveClipsButton) saveClipsButton.disabled = !hasCards;
   if (generateClipsButton) generateClipsButton.disabled = !hasCards;
+  updateClipSelectAllUi();
 }
 
 function collectClipReviewPayload() {
@@ -1172,6 +1195,26 @@ function applySourceMonitorToCard() {
 document.querySelectorAll("[data-clip-card] input[name='start_time'], [data-clip-card] input[name='end_time']").forEach((input) => {
   input.addEventListener("change", () => updateCardTimeDataset(input.closest("[data-clip-card]")));
 });
+
+if (clipSelectAll) {
+  clipSelectAll.addEventListener("change", () => {
+    const shouldEnable = clipSelectAll.checked;
+    getClipEnableCheckboxes().forEach((checkbox) => { checkbox.checked = shouldEnable; });
+    updateClipSelectAllUi();
+    showClipReviewMessage(
+      shouldEnable
+        ? "已全选当前列表。确认无误后，请点击“保存修改”写入数据库。"
+        : "已取消当前列表的全部选择。确认无误后，请点击“保存修改”写入数据库。",
+      "info",
+    );
+  });
+}
+
+clipReviewForm?.addEventListener("change", (event) => {
+  if (event.target.matches("[data-clip-card] input[name='enabled']")) updateClipSelectAllUi();
+});
+
+updateClipSelectAllUi();
 
 if (saveClipsButton && clipReviewForm) {
   saveClipsButton.addEventListener("click", async () => {

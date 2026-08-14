@@ -153,6 +153,18 @@ def test_publish_page_renders_task_identity_without_full_source_path(tmp_path: P
     assert source_path.name in html
     assert str(source_path) not in html
     assert "移出内容准备" in html
+    assert 'data-task-group-select' in html
+    assert "全选本任务" in html
+
+
+def test_task_group_select_reuses_existing_batch_selection_state() -> None:
+    script = (settings.project_root / "app" / "static" / "js" / "publish-center.js").read_text(encoding="utf-8")
+
+    assert "function visibleTaskGroupRows(group)" in script
+    assert "function syncTaskGroupSelectionUi(group)" in script
+    assert 'event.target.closest("[data-task-group-select]")' in script
+    assert "selectedJobIds.add(row.dataset.jobId)" in script
+    assert "selectedJobIds.delete(row.dataset.jobId)" in script
 
 
 def test_scheduled_content_card_has_clear_schedule_marker(tmp_path: Path) -> None:
