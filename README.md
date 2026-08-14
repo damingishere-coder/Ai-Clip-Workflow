@@ -23,19 +23,23 @@ Windows 本地运行的 AI 视频高光生产工作台，面向直播录像、�
 ## 产品预览
 
 > [!NOTE]
-> 以下图片根据当前页面代码与字段生成，用于项目主页占位，不代表真实运行数据。后续可直接替换为相同页面的脱敏实机截图。
+> 以下为经过脱敏处理的 Windows 本地运行截图，仅用于展示页面布局和工作流程，不包含真实任务内容、账号凭据或个人信息。
 
 ### 工作台
 
-![牛马片场工作台占位预览](docs/images/dashboard-placeholder.svg)
+![牛马片场工作台](docs/images/dashboard.webp)
+
+### 任务详情
+
+![牛马片场任务详情](docs/images/task-detail.png)
 
 ### 片段审核
 
-![牛马片场片段审核占位预览](docs/images/clip-review-placeholder.svg)
+![牛马片场片段审核](docs/images/clip-review.webp)
 
 ### 发送中心
 
-![牛马片场发送中心占位预览](docs/images/publish-center-placeholder.svg)
+![牛马片场发送中心](docs/images/publish-center.png)
 
 ## 零配置体验 Demo
 
@@ -200,7 +204,7 @@ uvicorn app.main:app --reload --port 8001
 - 正式模式默认发布方式为 `local_browser`；`manual_export` 只生成本地发布包。
 - Demo 模式固定关闭调度器并使用 `manual_export`，不连接真实账号。
 - 登录失效、验证码、风控或结果不确定时，任务进入 `NEED_REVIEW`，不会自动重复上传。
-- 平台页面可能变化，抖音和 B站真实投稿能力需要逐账号、逐版本验证。
+- 平台页面可能变化，抖音和B站真实投稿能力需要逐账号、逐版本验证。
 - 项目不会保存平台账号密码，也不会尝试绕过平台安全机制。
 
 详细状态、Scheduler、Worker、API 和发布终态说明见 [技术参考](docs/TECHNICAL_REFERENCE.md)。
