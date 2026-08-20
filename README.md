@@ -116,6 +116,7 @@ cd Ai-Clip-Workflow
 - 生成随机管理 Token 与 Worker Token
 - 创建通用视频存储目录
 - 检查 Docker、Compose、端口与写权限
+- 正式模式检测到 Google Chrome 时自动启动 Windows 发布 Worker
 - 启动正式工作台并等待健康检查
 
 浏览器地址：
@@ -129,6 +130,8 @@ http://127.0.0.1:8001
 ```powershell
 .\scripts\stop.ps1
 ```
+
+停止脚本默认会同时停止 Docker 服务和本项目的 Windows 发布 Worker。
 
 ### 备份、恢复与升级保护
 
@@ -164,14 +167,15 @@ git pull --ff-only
 ```
 
 正式 `docker-compose.yml` 不再启用热重载；开发模式通过 `docker-compose.dev.yml` 单独挂载代码目录。
+开发模式会自动跳过 Windows 发布 Worker；如果只需要工作台，也可以在正式模式使用 `-SkipWorker`。
 
 ### 真实抖音 / B站发布
 
 ```powershell
-.\scripts\start.ps1 -WithPublisher
+.\scripts\start.ps1
 ```
 
-此模式需要 Windows、Google Chrome、平台账号人工登录，以及二维码、短信、验证码和风控处理。第一次真实发布必须使用一条低风险测试视频。
+正式模式在检测到 Google Chrome 时默认启动 Windows 发布 Worker；`-WithPublisher` 仅为兼容旧命令，不再是必需参数。Demo 和 Development 模式会自动跳过 Worker。此模式需要 Windows、Google Chrome、平台账号人工登录，以及二维码、短信、验证码和风控处理。第一次真实发布必须使用一条低风险测试视频。
 
 ### 本地 Python
 
