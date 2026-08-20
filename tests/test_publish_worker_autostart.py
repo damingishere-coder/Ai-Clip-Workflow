@@ -8,6 +8,22 @@ def _read(relative_path: str) -> str:
     return (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
 
 
+def test_windows_powershell_entrypoints_keep_utf8_bom():
+    utf8_bom = b"\xef\xbb\xbf"
+
+    for relative_path in ("scripts/start.ps1", "scripts/stop.ps1"):
+        assert (PROJECT_ROOT / relative_path).read_bytes().startswith(utf8_bom)
+
+
+def test_start_script_documents_distinct_worker_skip_modes_and_fallbacks():
+    script = _read("scripts/start.ps1")
+
+    assert "已按 -SkipWorker 跳过 Windows Worker，只启动工作台。" in script
+    assert "当前为开发模式：已跳过 Windows Worker，只启动工作台。" in script
+    assert "没有检测到 Google Chrome" in script
+    assert "当前只启动了工作台：未检测到 Google Chrome，真实发布需要安装 Chrome 后重新运行。" in script
+
+
 def test_docker_watcher_targets_only_current_compose_project():
     watcher = _read("scripts/watch_docker_publish_worker.ps1")
 
