@@ -56,7 +56,7 @@ async def create_upload_task(
     platform: str = Form("general"),
     max_clip_duration: int = Form(10),
     candidate_clip_count: int = Form(12),
-    selection_profile: str = Form("general"),
+    selection_profile: str = Form("variety_comedy"),
     final_clip_target: int = Form(5),
     ai_preference: str | None = Form(None),
     auto_mode: bool = Form(False),

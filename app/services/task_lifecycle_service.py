@@ -230,7 +230,7 @@ def update_task_selection_settings(
     if not task:
         raise ValueError("任务不存在")
     if selection_profile not in {"general", "variety_comedy"}:
-        raise ValueError("选片模式只能是通用模式或综艺笑点优先")
+        raise ValueError("选片模式只能是康熙笑点选片模式或通用模式（历史任务）")
     if final_clip_target < 1 or final_clip_target > 12:
         raise ValueError("最终启用目标必须在 1 到 12 条之间")
 
@@ -246,7 +246,7 @@ def update_task_selection_settings(
         )
         connection.commit()
 
-    profile_label = "综艺笑点优先" if selection_profile == "variety_comedy" else "通用模式"
+    profile_label = "康熙笑点选片模式" if selection_profile == "variety_comedy" else "通用模式（历史任务）"
     append_task_log(task_id, f"已更新选片模式：{profile_label}，最终启用目标：{final_clip_target} 条")
     return {
         "status": "ok",

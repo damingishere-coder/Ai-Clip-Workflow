@@ -407,6 +407,7 @@ def test_auto_selection_uses_candidate_count_and_task_max_duration():
         task_name=task_id,
         source_type="upload",
         platform="general",
+        selection_profile="general",
         original_video_path=str(video),
         max_clip_duration=3,
         candidate_clip_count=2,

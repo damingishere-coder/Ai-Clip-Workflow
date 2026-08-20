@@ -20,7 +20,12 @@
     </div>
     <label>
       <span>任务名称</span>
-      <input name="task_name" type="text" placeholder="例如：5 月新品直播切片" required>
+      <input name="task_name" type="text" list="task-name-history" autocomplete="off" placeholder="例如：5 月新品直播切片" required>
+      <datalist id="task-name-history">
+        {% for name in task_name_history %}
+        <option value="{{ name }}"></option>
+        {% endfor %}
+      </datalist>
     </label>
 
     <fieldset>
@@ -51,11 +56,8 @@
 
     <label>
       <span>选片模式</span>
-      <select name="selection_profile">
-        <option value="general">通用内容价值</option>
-        <option value="variety_comedy">综艺笑点优先（康熙推荐）</option>
-      </select>
-      <span class="form-hint">康熙类内容会使用重叠召回、完整段落扩展、音频反应复核和 A/B 质量分级。</span>
+      <input type="hidden" name="selection_profile" value="variety_comedy">
+      <span class="form-hint"><strong>康熙笑点选片模式</strong>：使用重叠召回、完整段落扩展、音频反应复核和 A/B 质量分级。</span>
     </label>
 
     <div class="form-row">
@@ -92,7 +94,7 @@
         <input name="auto_mode" type="checkbox" value="true">
         <span>新建后自动跑完整流水线</span>
       </label>
-      <p class="form-hint">开启后，系统按“最终启用目标”生成切片；综艺笑点优先模式只自动处理达到 A 级质量门槛的片段。</p>
+      <p class="form-hint">开启后，系统按“最终启用目标”生成切片；康熙笑点选片模式只自动处理达到 A 级质量门槛的片段。</p>
     </fieldset>
 
     <div class="button-row align-end">
@@ -121,7 +123,7 @@
   </section>
   <section class="panel soft-tip">
     <p class="eyebrow">小贴士</p>
-    <p>康熙类素材请选择“综艺笑点优先”。候选池默认最多 12 条，真正进入切片队列的 A 级片段默认不超过 5 条。</p>
+    <p>本任务固定使用康熙笑点选片模式。候选池默认最多 12 条，真正进入切片队列的 A 级片段默认不超过 5 条。</p>
   </section>
   </aside>
 </section>

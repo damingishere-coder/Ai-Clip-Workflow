@@ -66,7 +66,7 @@ if (newTaskForm) {
       uploadData.append("platform", payload.platform || "general");
       uploadData.append("max_clip_duration", payload.max_clip_duration || "10");
       uploadData.append("candidate_clip_count", payload.candidate_clip_count || "12");
-      uploadData.append("selection_profile", payload.selection_profile || "general");
+      uploadData.append("selection_profile", payload.selection_profile || "variety_comedy");
       uploadData.append("final_clip_target", payload.final_clip_target || "5");
       uploadData.append("ai_preference", "");
       uploadData.append("auto_mode", payload.auto_mode === "true" ? "true" : "false");
@@ -332,7 +332,9 @@ const aiProcessResult = document.querySelector("#ai-process-result");
 const aiAnalysisSummary = document.querySelector("#ai-analysis-summary");
 const aiCandidateCountPill = document.querySelector("#ai-candidate-count-pill");
 const aiCandidateCountInput = document.querySelector("#ai-candidate-count-input");
-const aiSelectionProfile = document.querySelector("#ai-selection-profile");
+const aiSelectionProfile = aiAnalysisForm
+  ? aiAnalysisForm.dataset.selectionProfile || "variety_comedy"
+  : "variety_comedy";
 const aiFinalClipTarget = document.querySelector("#ai-final-clip-target");
 const showAiHistoryButton = document.querySelector("#show-ai-history-button");
 const refreshAiHistoryButton = document.querySelector("#refresh-ai-history-button");
@@ -1445,7 +1447,7 @@ async function saveTaskSelectionSettings() {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      selection_profile: aiSelectionProfile.value || "general",
+      selection_profile: aiSelectionProfile || "variety_comedy",
       final_clip_target: finalTarget,
     }),
   });
