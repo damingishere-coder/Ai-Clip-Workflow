@@ -13,7 +13,7 @@
 - 本地转写：faster-whisper。
 - AI 分析：OpenAI-compatible / DeepSeek 或本地 Ollama。
 - 真实发布：Windows Chrome Worker。
-- 支持平台：抖音、B站。
+- 后端支持平台：抖音、B站；当前发送中心前台、任务同步和全自动流水线只启用抖音，B站 API、Publisher 与历史数据保留。
 
 项目不面向公网，也不是多用户 SaaS。
 
@@ -85,6 +85,12 @@ AI 结果只提供候选，不应跳过人工审核直接投稿。
 1. **内容准备**：视频、标题、简介、话题、候选封面、账号和可见范围。
 2. **排期计划**：批量预览、每日时间窗口、跨午夜、月历详情和续接最晚排期。
 3. **执行记录**：等待、执行、成功、失败、导出和人工复核证据。
+
+当前页面和自动创建范围固定为 `douyin`。页面会忽略 `platform=bilibili`，任务同步和全自动流水线也只新建抖音记录；已有 B站任务不会被删除、重写或降级，B站 API、Publisher 和 80 字标题能力继续作为后端兼容能力保留。
+
+抖音内容统一使用规则版本写入 `provider_response.metadata_policy_version`：标题不超过 30 字，AI 目标 18～26 字；标签 4～6 个且每个 2～3 字；简介 15～35 字。保存、AI 生成、排期预检和最终 Publisher 共用同一校验，`description/caption` 与 `tags/hashtags` 始终成对同步。
+
+升级后首次打开页面会调用幂等接口 `POST /api/publish/jobs/metadata/upgrade-pending-douyin`。接口在首次写入前创建 SQLite 备份，只处理有效输出、未排期的抖音 `DRAFT / WAITING` 草稿；失败项记录版本和失败原因但保留原文，避免自动重复调用，用户仍可手动重试。
 
 `platform` 只表示目标平台：
 

@@ -344,7 +344,7 @@ def test_create_auto_publish_job_without_schedule_waits_for_send_center():
     assert row["status"] == "WAITING"
 
 
-def test_auto_metadata_generates_one_cover_for_both_platforms(monkeypatch):
+def test_auto_metadata_generates_only_douyin_and_reuses_one_cover(monkeypatch):
     task = _create_auto_task("test-auto-cover-once")
     clip_path = _fake_video("auto_cover_once.mp4")
     cover_path = _fake_cover("auto_cover_once.jpg")
@@ -387,8 +387,8 @@ def test_auto_metadata_generates_one_cover_for_both_platforms(monkeypatch):
     )
 
     assert cover_calls == [("out-cover-once", 17.5, "original")]
-    assert len(result["metadata_items"]) == 2
-    assert {item["metadata"]["platform"] for item in result["metadata_items"]} == {"douyin", "bilibili"}
+    assert len(result["metadata_items"]) == 1
+    assert {item["metadata"]["platform"] for item in result["metadata_items"]} == {"douyin"}
     assert {item["cover"]["cover_file_path"] for item in result["metadata_items"]} == {str(cover_path)}
 
 

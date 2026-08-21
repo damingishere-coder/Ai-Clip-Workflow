@@ -31,12 +31,24 @@ from app.models.task import (
 )
 from app.services.ai.ai_clip_analyzer import build_remote_provider
 from app.services.ai.base import AIProviderError
+from app.services.database_backup_service import create_publish_migration_backup
+from app.services.publish_copy_rules import (
+    BILIBILI_TITLE_MAX,
+    DOUYIN_FALLBACK_TAGS,
+    DOUYIN_TITLE_MAX,
+    PUBLISH_COPY_RULE_VERSION,
+    format_douyin_tags,
+    normalize_douyin_description,
+    normalize_douyin_title,
+    split_publish_tags,
+    validate_douyin_publish_copy,
+)
 from app.services.publish_providers import (
     BilibiliPublishProvider,
     DouyinPublishProvider,
     PublishProviderError,
 )
-from app.services.publish_domain import PUBLISH_MODES, TARGET_PLATFORMS
+from app.services.publish_domain import AUTO_PUBLISH_PLATFORMS, PUBLISH_MODES, TARGET_PLATFORMS
 from app.services.publish_readiness import PublishPlatformIsolationBlocked
 from app.services.publish_time import app_zone, local_display, parse_datetime
 from app.services.storage_service import get_artifact_paths, resolve_video_file_path
@@ -187,8 +199,9 @@ COVER_HEIGHT = 720
 OPENCLI_TIMEOUT_SECONDS = 900
 DEFAULT_BILIBILI_TID = "娱乐"
 _SEND_LOCK = Lock()
+_METADATA_UPGRADE_LOCK = Lock()
 
-SAFE_TOPIC_FALLBACKS = ("精彩片段", "高光片段", "直播切片")
+SAFE_TOPIC_FALLBACKS = DOUYIN_FALLBACK_TAGS
 CONTENT_SAFETY_REPLACEMENTS = (
     ("笑死我了", "笑到停不下"),
     ("笑死", "笑到停不下"),
@@ -479,15 +492,36 @@ def _apply_content_safety(value: str | None) -> str:
     return text.strip(" \t\r\n,，。.!！?？、；;:-_#＃")
 
 
-def _sanitize_publish_title(value: str | None, fallback: str = "精彩片段") -> str:
+def _sanitize_publish_title(
+    value: str | None,
+    fallback: str = "精彩片段",
+    *,
+    platform: str = "bilibili",
+    generated: bool = False,
+) -> str:
     title = _apply_content_safety(value)
     title = re.sub(r"[#＃]+", "", title)
-    title = _truncate(title, 80)
+    if platform == "douyin":
+        return normalize_douyin_title(title, generated=generated, fallback=fallback)
+    title = _truncate(title, BILIBILI_TITLE_MAX)
     return title or fallback
 
 
-def _sanitize_publish_description(value: str | None, fallback: str = "") -> str:
+def _sanitize_publish_description(
+    value: str | None,
+    fallback: str = "",
+    *,
+    platform: str = "bilibili",
+    generated: bool = False,
+    title: str = "",
+) -> str:
     description = _apply_content_safety(value)
+    if platform == "douyin":
+        return normalize_douyin_description(
+            description or fallback,
+            title=title,
+            generated=generated,
+        )
     return _truncate(description or fallback, 700)
 
 
@@ -497,10 +531,32 @@ def _sanitize_publish_content(
     description: str | None,
     title_fallback: str = "精彩片段",
     description_fallback: str = "",
+    *,
+    platform: str = "douyin",
+    generated: bool = False,
+    validate: bool = False,
 ) -> dict:
-    safe_title = _sanitize_publish_title(title, title_fallback)
-    safe_tags = _format_tags(tags) or _format_tags(SAFE_TOPIC_FALLBACKS)
-    safe_description = _sanitize_publish_description(description, description_fallback)
+    safe_title = _sanitize_publish_title(
+        title,
+        title_fallback,
+        platform=platform,
+        generated=generated,
+    )
+    if platform == "douyin":
+        safe_tag_values = [_apply_content_safety(tag) for tag in split_publish_tags(tags)]
+        safe_tags = format_douyin_tags(safe_tag_values, generated=generated)
+        safe_description = _sanitize_publish_description(
+            description,
+            description_fallback,
+            platform=platform,
+            generated=generated,
+            title=safe_title,
+        )
+        if validate:
+            validate_douyin_publish_copy(safe_title, safe_description, safe_tags)
+    else:
+        safe_tags = _format_tags(tags) or _format_tags(SAFE_TOPIC_FALLBACKS)
+        safe_description = _sanitize_publish_description(description, description_fallback, platform=platform)
     return {"title": safe_title, "tags": safe_tags, "description": safe_description}
 
 
@@ -630,8 +686,6 @@ def _normalize_job(
         missing_fields.append("话题/标签")
     if not str(job.get("cover_file_path") or "").strip():
         missing_fields.append("封面")
-    if str(job.get("publish_mode") or "") == "local_browser" and not str(job.get("account_id") or "").strip():
-        missing_fields.append("发布账号")
     if str(job.get("platform") or "") == "bilibili":
         if not str(job.get("bilibili_tid") or "").strip():
             missing_fields.append("B站分区")
@@ -704,11 +758,48 @@ def _normalize_job(
     )
     from app.services.publish_readiness import build_send_readiness
 
-    job["send_readiness"] = build_send_readiness(
+    readiness = build_send_readiness(
         job,
         accounts=accounts,
         worker_available=(worker_state or {}).get("worker_available"),
         worker_message=str((worker_state or {}).get("worker_message") or ""),
+    )
+    job["send_readiness"] = readiness
+    account_issue_codes = {
+        "account_missing",
+        "account_not_found",
+        "account_selection_required",
+        "account_platform_mismatch",
+    }
+    issue_codes = {str(issue.get("code") or "") for issue in readiness.get("issues") or []}
+    if issue_codes & account_issue_codes and "发布账号" not in missing_fields:
+        missing_fields.append("发布账号")
+    content_invalid = "content_invalid" in issue_codes
+    account_login_required = "account_login_required" in issue_codes
+    if missing_fields:
+        content_status_message = f"缺少：{'、'.join(missing_fields)}"
+        content_status_tone = "amber"
+    elif account_login_required:
+        content_status_message = "账号需登录"
+        content_status_tone = "amber"
+    elif content_invalid:
+        content_status_message = "文案不符合抖音规则"
+        content_status_tone = "amber"
+    else:
+        content_status_message = "内容完整"
+        content_status_tone = "green"
+    resolved_account_id = str(readiness.get("resolved_account_id") or "")
+    resolved_account_name = str(readiness.get("resolved_account_name") or "")
+    job.update(
+        {
+            "effective_account_id": resolved_account_id or str(job.get("account_id") or ""),
+            "account_name": resolved_account_name or job.get("account_name") or "未选择账号",
+            "content_complete": not missing_fields and not content_invalid and not account_login_required,
+            "missing_fields": missing_fields,
+            "content_status_message": content_status_message,
+            "content_status_tone": content_status_tone,
+            "metadata_policy_version": int(provider_payload.get("metadata_policy_version") or 0),
+        }
     )
     return job
 
@@ -844,6 +935,16 @@ def list_accounts(platform: str | None = None) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(sql, params).fetchall()
     return [_normalize_account(row) for row in rows]
+
+
+def _unique_normal_account_id(connection, platform: str) -> str:
+    rows = connection.execute(
+        "SELECT id, login_status FROM publish_accounts WHERE platform = ? ORDER BY created_at, id",
+        (platform,),
+    ).fetchall()
+    if len(rows) != 1 or str(rows[0]["login_status"] or "") != "normal":
+        return ""
+    return str(rows[0]["id"] or "")
 
 
 def get_account(account_id: str) -> dict | None:
@@ -1129,9 +1230,13 @@ def _resolve_publish_video_path(output_clip: dict, video_source: str) -> tuple[s
     return raw_path, resolved_path
 
 
-def _default_title_for_clip(item: dict) -> str:
+def _default_title_for_clip(item: dict, *, platform: str = "douyin") -> str:
     output_name = item.get("output_file_name") or "直播切片"
-    return _truncate(item.get("clip_title") or Path(output_name).stem or item.get("task_name") or "直播切片", 80)
+    max_length = DOUYIN_TITLE_MAX if platform == "douyin" else BILIBILI_TITLE_MAX
+    return _truncate(
+        item.get("clip_title") or Path(output_name).stem or item.get("task_name") or "直播切片",
+        max_length,
+    )
 
 
 def _keyword_candidates(text: str) -> list[str]:
@@ -1157,8 +1262,10 @@ def _fallback_tags(item: dict) -> list[str]:
         str(item.get(key) or "")
         for key in ("clip_title", "clip_summary", "highlight_reason", "spread_value", "suggested_editing", "task_name")
     )
-    tags = _keyword_candidates(text)
-    for default_tag in ("直播切片", "高光片段"):
+    tags = [tag for tag in _keyword_candidates(text) if 2 <= len(tag) <= 3]
+    if "康熙" in text and "康熙" not in tags:
+        tags.append("康熙")
+    for default_tag in DOUYIN_FALLBACK_TAGS:
         if default_tag not in tags:
             tags.append(default_tag)
     return tags[:6]
@@ -1185,22 +1292,48 @@ def _format_tags(tags: list[str] | str | None) -> str:
     return ", ".join(cleaned[:8])
 
 
-def _compose_description(item: dict, title: str, tags: str) -> str:
+def _compose_description(item: dict, title: str, tags: str, *, platform: str = "douyin") -> str:
     summary = (item.get("clip_summary") or item.get("highlight_reason") or "").strip()
     if summary:
-        return _sanitize_publish_description(summary)
+        return _sanitize_publish_description(
+            summary,
+            platform=platform,
+            generated=platform == "douyin",
+            title=title,
+        )
     tag_text = " ".join(f"#{tag.strip()}" for tag in tags.split(",") if tag.strip())
-    return _sanitize_publish_description(f"{title}\n{tag_text}".strip())
+    return _sanitize_publish_description(
+        f"{title}\n{tag_text}".strip(),
+        platform=platform,
+        generated=platform == "douyin",
+        title=title,
+    )
 
 
-def _metadata_prompt(item: dict) -> str:
+def _metadata_prompt(item: dict, platform: str = "douyin") -> str:
+    if platform == "douyin":
+        instructions = (
+            "请只为抖音生成文案。标题目标 18～26 字、绝不能超过 30 字；"
+            "tags 必须为 4～6 个互不重复的话题词，每个严格 2～3 字，人物名可以与标题重合；"
+            "简介必须为 15～35 字，只保留一个最强冲突、笑点或悬念，"
+            "不要使用‘现场爆笑’‘引发热议’‘不容错过’等模板化结尾。"
+        )
+        json_example = (
+            '{"title":"18到26字的中文标题","tags":["话题","人物","笑点","反转"],'
+            '"description":"15到35字、只有一个核心钩子的简介"}。'
+        )
+    else:
+        instructions = "请为 B站生成文案。标题不超过 80 字，简介不超过 180 字，话题简洁准确。"
+        json_example = (
+            '{"title":"不超过80字的中文标题","tags":["话题1","话题2","话题3"],'
+            '"description":"不超过180字的简介"}。'
+        )
     return (
-        "请根据下面的直播切片信息，为抖音和B站发布生成标题和话题。"
+        f"请根据下面的直播切片信息生成发布文案。{instructions}"
         "只输出 JSON，不要 Markdown。"
-        "tags 必须是真正的平台 #话题关键词，不是标题解释，每个话题 2 到 10 个字，返回时不要带 #。"
+        "tags 必须是真正的平台 #话题关键词，不是标题解释，返回时不要带 #。"
         "标题、话题、简介都要主动规避低俗脏话、排泄词、死亡血腥、暴力恐怖、色情、赌博博彩、诈骗引流、绝对化夸张等平台高风险表达；"
-        "遇到类似表达请换成温和说法。JSON 格式："
-        '{"title":"不超过30字的中文标题","tags":["话题1","话题2","话题3","话题4","话题5"],"description":"不超过180字的简介"}。'
+        f"遇到类似表达请换成温和说法。JSON 格式：{json_example}"
         "\n\n"
         f"任务：{item.get('task_name') or ''}\n"
         f"原标题：{item.get('clip_title') or ''}\n"
@@ -1211,16 +1344,25 @@ def _metadata_prompt(item: dict) -> str:
     )
 
 
-def generate_publish_metadata(item: dict, use_ai: bool = False) -> dict:
-    fallback_title = _sanitize_publish_title(_default_title_for_clip(item))
-    fallback_tags = _format_tags(_fallback_tags(item)) or _format_tags(SAFE_TOPIC_FALLBACKS)
-    fallback_description = _compose_description(item, fallback_title, fallback_tags)
+def generate_publish_metadata(item: dict, use_ai: bool = False, *, platform: str = "douyin") -> dict:
+    fallback_title = _sanitize_publish_title(
+        _default_title_for_clip(item, platform=platform),
+        platform=platform,
+        generated=platform == "douyin",
+    )
+    fallback_tags = (
+        format_douyin_tags(_fallback_tags(item), generated=True)
+        if platform == "douyin"
+        else (_format_tags(_fallback_tags(item)) or _format_tags(SAFE_TOPIC_FALLBACKS))
+    )
+    fallback_description = _compose_description(item, fallback_title, fallback_tags, platform=platform)
     metadata = {
         "title": fallback_title,
         "tags": fallback_tags,
         "description": fallback_description,
         "source": "rule",
         "error": "",
+        "policy_version": PUBLISH_COPY_RULE_VERSION if platform == "douyin" else 0,
     }
     if not use_ai:
         return metadata
@@ -1228,13 +1370,16 @@ def generate_publish_metadata(item: dict, use_ai: bool = False) -> dict:
     try:
         publish_model = settings.ai_publish_remote_model or "deepseek-v4-flash"
         provider = build_remote_provider(publish_model, purpose="publish")
-        parsed = json.loads(provider.generate_json(_metadata_prompt(item)))
+        parsed = json.loads(provider.generate_json(_metadata_prompt(item, platform)))
         safe_content = _sanitize_publish_content(
             parsed.get("title") or fallback_title,
             parsed.get("tags") or fallback_tags,
             parsed.get("description") or fallback_description,
             title_fallback=fallback_title,
             description_fallback=fallback_description,
+            platform=platform,
+            generated=True,
+            validate=platform == "douyin",
         )
         return {
             "title": safe_content["title"],
@@ -1242,6 +1387,7 @@ def generate_publish_metadata(item: dict, use_ai: bool = False) -> dict:
             "description": safe_content["description"],
             "source": f"ai:remote-publish:{publish_model}",
             "error": "",
+            "policy_version": PUBLISH_COPY_RULE_VERSION if platform == "douyin" else 0,
         }
     except (AIProviderError, json.JSONDecodeError, TypeError, ValueError) as exc:
         metadata["error"] = str(exc)
@@ -1415,17 +1561,31 @@ def _batch_find_publish_jobs(output_clip_ids: list[str]) -> dict[str, dict[str, 
     return result
 
 
-def _publish_provider_payload(metadata: dict, cover: dict | None = None) -> str:
+def _publish_provider_payload(
+    metadata: dict,
+    cover: dict | None = None,
+    *,
+    existing: dict | None = None,
+    upgrade_status: str = "generated",
+) -> str:
     cover = cover or {}
-    return json.dumps(
+    payload = dict(existing or {})
+    if metadata:
+        payload.update(
+            {
+                "metadata_source": metadata.get("source", ""),
+                "metadata_error": metadata.get("error", ""),
+                "metadata_policy_version": int(metadata.get("policy_version") or PUBLISH_COPY_RULE_VERSION),
+                "metadata_upgrade_status": upgrade_status,
+            }
+        )
+    payload.update(
         {
-            "metadata_source": metadata.get("source", ""),
-            "metadata_error": metadata.get("error", ""),
-            "cover_source": "auto_frame" if cover.get("cover_file_path") else "",
-            "cover_error": cover.get("cover_error", ""),
-        },
-        ensure_ascii=False,
+            "cover_source": payload.get("cover_source") or ("auto_frame" if cover.get("cover_file_path") else ""),
+            "cover_error": cover.get("cover_error", payload.get("cover_error", "")),
+        }
     )
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _insert_opencli_job(
@@ -1472,16 +1632,9 @@ def _insert_opencli_job(
                 "SELECT id FROM publish_accounts WHERE id = ? AND platform = ?",
                 (inherited_account_id, platform),
             ).fetchone()
-        if not account:
-            account = connection.execute(
-                """
-                SELECT id FROM publish_accounts
-                WHERE platform = ? AND login_status = 'normal'
-                ORDER BY COALESCE(last_login_at, updated_at) DESC LIMIT 1
-                """,
-                (platform,),
-            ).fetchone()
-        account_id = account["id"] if account else None
+        account_id = str(account["id"] or "") if account else ""
+        if not account_id:
+            account_id = _unique_normal_account_id(connection, platform)
         title = str(inherited.get("title") or metadata["title"])
         description = str(inherited.get("description") or inherited.get("caption") or metadata["description"])
         tags = str(inherited.get("tags") or inherited.get("hashtags") or metadata["tags"])
@@ -1503,7 +1656,7 @@ def _insert_opencli_job(
                 item["task_id"],
                 item["output_clip_id"],
                 item["output_clip_id"],
-                account_id,
+                account_id or None,
                 platform,
                 publish_mode,
                 video_source,
@@ -1537,7 +1690,7 @@ def _insert_opencli_job(
 def refresh_send_queue(use_ai: bool = False, platform: str | None = None) -> dict:
     if platform and platform not in PLATFORM_LABELS:
         raise ValueError("只支持补充抖音或 B站发送任务")
-    target_platforms = [platform] if platform else list(PLATFORM_LABELS)
+    target_platforms = [platform] if platform else list(AUTO_PUBLISH_PLATFORMS)
     created: list[dict] = []
     updated_covers = 0
     skipped = 0
@@ -1572,7 +1725,7 @@ def refresh_send_queue(use_ai: bool = False, platform: str | None = None) -> dic
                 continue
             try:
                 if item_metadata is None:
-                    item_metadata = generate_publish_metadata(item, use_ai=use_ai)
+                    item_metadata = generate_publish_metadata(item, use_ai=use_ai, platform=target_platform)
                 created.append(_insert_opencli_job(item, target_platform, item_metadata, ensure_cover_for_item()))
             except Exception as exc:
                 errors.append(
@@ -1595,10 +1748,8 @@ def refresh_send_queue(use_ai: bool = False, platform: str | None = None) -> dic
 
 
 def _task_target_platforms(task_platform: str | None) -> list[str]:
-    normalized = str(task_platform or "general").strip().lower()
-    if normalized in PLATFORM_LABELS:
-        return [normalized]
-    return list(PLATFORM_LABELS)
+    del task_platform
+    return list(AUTO_PUBLISH_PLATFORMS)
 
 
 def get_publish_link_states(task_ids: list[str]) -> dict[str, dict]:
@@ -1780,7 +1931,7 @@ def _update_preparation_video_source(job: dict, item: dict, video_source: str) -
                 cover_mode,
                 cover_time_seconds,
                 cover_file_path,
-                _publish_provider_payload({}, cover),
+                _publish_provider_payload({}, cover, existing=job.get("provider_payload") or {}),
                 now,
                 job["id"],
             ),
@@ -1818,6 +1969,7 @@ def _supersede_stale_publish_jobs(task_id: str) -> int:
             FROM publish_jobs
             JOIN output_clip ON output_clip.id = publish_jobs.output_clip_id
             WHERE publish_jobs.task_id = ? AND output_clip.is_active = 0
+              AND publish_jobs.platform = 'douyin'
               AND publish_jobs.status IN ('DRAFT', 'WAITING', 'SCHEDULED')
             """,
             (task_id,),
@@ -1917,7 +2069,7 @@ def sync_task_publish_jobs(
             try:
                 video_source = _preferred_video_source(item, prefer_subtitled)
                 if item_metadata is None:
-                    item_metadata = generate_publish_metadata(item, use_ai=False)
+                    item_metadata = generate_publish_metadata(item, use_ai=False, platform=platform)
                 if video_source not in item_covers:
                     try:
                         item_covers[video_source] = _generate_default_publish_cover(item, video_source)
@@ -2447,7 +2599,14 @@ def create_publish_job(payload: PublishJobCreate) -> dict:
     if not output_clip:
         raise ValueError("切片记录不存在。")
     raw_video_path, resolved_video_path = _resolve_publish_video_path(output_clip, payload.video_source)
-    safe_content = _sanitize_publish_content(payload.title, payload.tags, payload.description, title_fallback="精彩片段")
+    safe_content = _sanitize_publish_content(
+        payload.title,
+        payload.tags,
+        payload.description,
+        title_fallback="精彩片段",
+        platform=payload.platform,
+        validate=payload.platform == "douyin" and payload.publish_mode == "local_browser",
+    )
     cover_file_path = (payload.cover_file_path or "").strip()
     cover_time_seconds = float(payload.cover_time_seconds or 0)
     cover_mode = payload.cover_mode
@@ -3031,15 +3190,33 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
         payload.description,
         title_fallback=job.get("title") or "精彩片段",
         description_fallback=job.get("description") or "",
+        platform=str(job.get("platform") or "douyin"),
+        validate=str(job.get("platform") or "") == "douyin",
     )
     with get_connection() as connection:
+        account_id = str(job.get("account_id") or "")
+        if not account_id and str(job.get("publish_mode") or "") == "local_browser":
+            account_id = _unique_normal_account_id(connection, str(job.get("platform") or ""))
+        provider_response = _publish_provider_payload(
+            {
+                "source": "manual",
+                "error": "",
+                "policy_version": PUBLISH_COPY_RULE_VERSION,
+            },
+            {
+                "cover_file_path": (payload.cover_file_path or "").strip(),
+                "cover_error": (job.get("provider_payload") or {}).get("cover_error", ""),
+            },
+            existing=job.get("provider_payload") or {},
+            upgrade_status="manual_saved",
+        )
         connection.execute(
             """
             UPDATE publish_jobs
             SET title = ?, description = ?, caption = ?, tags = ?, hashtags = ?, visibility = ?,
                 cover_file_path = ?, cover_time_seconds = ?, allow_download = ?,
                 bilibili_tid = ?, bilibili_copyright = ?, bilibili_source = ?,
-                updated_at = ?
+                account_id = ?, provider_response = ?, updated_at = ?
             WHERE id = ?
             """,
             (
@@ -3055,6 +3232,8 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
                 (payload.bilibili_tid or DEFAULT_BILIBILI_TID).strip(),
                 payload.bilibili_copyright,
                 (payload.bilibili_source or "").strip(),
+                account_id or None,
+                provider_response,
                 _now_iso(),
                 job_id,
             ),
@@ -3128,6 +3307,15 @@ def update_publish_job_content(job_id: str, payload: PublishJobContentUpdate) ->
     if job.get("status") not in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_SCHEDULED}:
         raise ValueError("当前状态不能直接编辑；失败任务请先创建重试任务，需复核任务请先人工确认。")
 
+    safe_content = _sanitize_publish_content(
+        payload.title,
+        payload.hashtags,
+        payload.caption,
+        title_fallback=job.get("title") or "精彩片段",
+        description_fallback=job.get("description") or "",
+        platform=str(job.get("platform") or "douyin"),
+        validate=str(job.get("platform") or "") == "douyin",
+    )
     scheduled_at = (job.get("scheduled_at") or "").strip()
     if (payload.scheduled_at or "").strip():
         from app.services.publish_time import ensure_future, to_utc_iso
@@ -3137,23 +3325,34 @@ def update_publish_job_content(job_id: str, payload: PublishJobContentUpdate) ->
     status = PUBLISH_STATUS_SCHEDULED if scheduled_at else PUBLISH_STATUS_WAITING
     now = _now_iso()
     with get_connection() as connection:
+        account_id = str(job.get("account_id") or "")
+        if not account_id and str(job.get("publish_mode") or "") == "local_browser":
+            account_id = _unique_normal_account_id(connection, str(job.get("platform") or ""))
+        provider_response = _publish_provider_payload(
+            {"source": "manual", "error": "", "policy_version": PUBLISH_COPY_RULE_VERSION},
+            existing=job.get("provider_payload") or {},
+            upgrade_status="manual_saved",
+        )
         connection.execute(
             """
             UPDATE publish_jobs
             SET title = ?, description = ?, caption = ?, tags = ?, hashtags = ?,
                 cover_text = ?, scheduled_at = ?, status = ?, risk_flags = '',
+                account_id = ?, provider_response = ?,
                 error_code = '', error_message = '', last_error = '', updated_at = ?
             WHERE id = ?
             """,
             (
-                payload.title.strip(),
-                payload.caption.strip(),
-                payload.caption.strip(),
-                (payload.hashtags or "").strip(),
-                (payload.hashtags or "").strip(),
+                safe_content["title"],
+                safe_content["description"],
+                safe_content["description"],
+                safe_content["tags"],
+                safe_content["tags"],
                 (payload.cover_text or "").strip(),
                 scheduled_at,
                 status,
+                account_id or None,
+                provider_response,
                 now,
                 job_id,
             ),
@@ -3169,24 +3368,39 @@ def regenerate_send_job_metadata(job_id: str, use_ai: bool = True) -> dict:
     item = _get_completed_publish_clip_by_output(job["output_clip_id"])
     if not item:
         raise ValueError("找不到这条发送任务对应的切片。")
-    metadata = generate_publish_metadata(item, use_ai=use_ai)
+    metadata = generate_publish_metadata(
+        item,
+        use_ai=use_ai,
+        platform=str(job.get("platform") or "douyin"),
+    )
+    if use_ai and (metadata.get("error") or not str(metadata.get("source") or "").startswith("ai:")):
+        raise ValueError(f"AI 文案生成失败，已保留原文：{metadata.get('error') or '没有返回有效文案'}")
     with get_connection() as connection:
+        account_id = str(job.get("account_id") or "")
+        if not account_id and str(job.get("publish_mode") or "") == "local_browser":
+            account_id = _unique_normal_account_id(connection, str(job.get("platform") or ""))
         connection.execute(
             """
             UPDATE publish_jobs
-            SET title = ?, description = ?, tags = ?, provider_response = ?, updated_at = ?
+            SET title = ?, description = ?, caption = ?, tags = ?, hashtags = ?,
+                account_id = ?, provider_response = ?, updated_at = ?
             WHERE id = ?
             """,
             (
                 metadata["title"],
                 metadata["description"],
+                metadata["description"],
                 metadata["tags"],
+                metadata["tags"],
+                account_id or None,
                 _publish_provider_payload(
                     metadata,
                     {
                         "cover_file_path": job.get("cover_file_path") or "",
                         "cover_error": (job.get("provider_payload") or {}).get("cover_error", ""),
                     },
+                    existing=job.get("provider_payload") or {},
+                    upgrade_status="manual_retry" if use_ai else "rule_regenerated",
                 ),
                 _now_iso(),
                 job_id,
@@ -3198,6 +3412,192 @@ def regenerate_send_job_metadata(job_id: str, use_ai: bool = True) -> dict:
         "message": "AI 元数据已刷新。" if metadata["source"].startswith("ai:") else "已使用本地规则刷新标题和话题。",
         "metadata": metadata,
         "job": get_publish_job(job_id),
+    }
+
+
+def upgrade_pending_douyin_metadata() -> dict:
+    if not _METADATA_UPGRADE_LOCK.acquire(blocking=False):
+        return {
+            "status": "running",
+            "message": "抖音旧草稿文案正在升级，本次不重复执行。",
+            "upgraded_count": 0,
+            "failed_count": 0,
+            "skipped_count": 0,
+            "jobs": [],
+            "errors": [],
+            "backup_created": False,
+        }
+    try:
+        return _upgrade_pending_douyin_metadata()
+    finally:
+        _METADATA_UPGRADE_LOCK.release()
+
+
+def _upgrade_pending_douyin_metadata() -> dict:
+    """幂等升级未排期抖音草稿；生成失败只记状态，不覆盖原文。"""
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT publish_jobs.id, publish_jobs.provider_response, publish_jobs.updated_at
+            FROM publish_jobs
+            INNER JOIN output_clip ON output_clip.id = publish_jobs.output_clip_id
+            INNER JOIN tasks ON tasks.id = publish_jobs.task_id
+            WHERE publish_jobs.platform = 'douyin'
+              AND UPPER(publish_jobs.status) IN ('DRAFT', 'WAITING')
+              AND TRIM(COALESCE(publish_jobs.scheduled_at, '')) = ''
+              AND COALESCE(output_clip.is_active, 1) = 1
+              AND output_clip.status = 'completed'
+              AND COALESCE(tasks.is_deleted, 0) = 0
+            ORDER BY publish_jobs.created_at, publish_jobs.id
+            """
+        ).fetchall()
+
+    candidate_rows = {
+        str(row["id"]): str(row["updated_at"] or "")
+        for row in rows
+        if int(_parse_json_text(row["provider_response"]).get("metadata_policy_version") or 0)
+        < PUBLISH_COPY_RULE_VERSION
+    }
+    candidate_ids = list(candidate_rows)
+    if not candidate_ids:
+        return {
+            "status": "ok",
+            "message": "未排期抖音草稿已是最新文案规则。",
+            "upgraded_count": 0,
+            "failed_count": 0,
+            "skipped_count": len(rows),
+            "jobs": [],
+            "errors": [],
+            "backup_created": False,
+        }
+
+    backup_path = create_publish_migration_backup(
+        settings.database_path,
+        settings.data_dir / "backups",
+        cooldown=timedelta(0),
+    )
+    upgraded_ids: list[str] = []
+    failed_ids: list[str] = []
+    errors: list[dict[str, str]] = []
+    runtime_skipped = 0
+    for job_id in candidate_ids:
+        job = get_publish_job(job_id)
+        if not job:
+            runtime_skipped += 1
+            continue
+        item = _get_completed_publish_clip_by_output(str(job.get("output_clip_id") or ""))
+        metadata: dict = {}
+        failure_message = ""
+        if not item:
+            runtime_skipped += 1
+            continue
+        else:
+            try:
+                metadata = generate_publish_metadata(item, use_ai=True, platform="douyin")
+                if metadata.get("error") or not str(metadata.get("source") or "").startswith("ai:"):
+                    failure_message = str(metadata.get("error") or "AI 没有返回有效文案")
+            except Exception as exc:
+                failure_message = str(exc)
+
+        with get_connection() as connection:
+            account_id = str(job.get("account_id") or "") or _unique_normal_account_id(connection, "douyin")
+            if failure_message:
+                failure_payload = dict(job.get("provider_payload") or {})
+                failure_payload.update(
+                    {
+                        "metadata_policy_version": PUBLISH_COPY_RULE_VERSION,
+                        "metadata_upgrade_status": "failed",
+                        "metadata_error": failure_message[:500],
+                    }
+                )
+                cursor = connection.execute(
+                    """
+                    UPDATE publish_jobs
+                    SET account_id = ?, provider_response = ?, updated_at = ?
+                    WHERE id = ? AND platform = 'douyin'
+                      AND UPPER(status) IN ('DRAFT', 'WAITING')
+                      AND TRIM(COALESCE(scheduled_at, '')) = ''
+                      AND COALESCE(updated_at, '') = ?
+                      AND EXISTS (
+                          SELECT 1 FROM output_clip
+                          WHERE output_clip.id = publish_jobs.output_clip_id
+                            AND COALESCE(output_clip.is_active, 1) = 1
+                            AND output_clip.status = 'completed'
+                      )
+                    """,
+                    (
+                        account_id or None,
+                        json.dumps(failure_payload, ensure_ascii=False),
+                        _now_iso(),
+                        job_id,
+                        candidate_rows[job_id],
+                    ),
+                )
+                connection.commit()
+                if not cursor.rowcount:
+                    runtime_skipped += 1
+                    continue
+                failed_ids.append(job_id)
+                errors.append({"job_id": job_id, "message": failure_message[:500]})
+                continue
+
+            provider_response = _publish_provider_payload(
+                metadata,
+                {
+                    "cover_file_path": job.get("cover_file_path") or "",
+                    "cover_error": (job.get("provider_payload") or {}).get("cover_error", ""),
+                },
+                existing=job.get("provider_payload") or {},
+                upgrade_status="upgraded",
+            )
+            cursor = connection.execute(
+                """
+                UPDATE publish_jobs
+                SET title = ?, description = ?, caption = ?, tags = ?, hashtags = ?,
+                    account_id = ?, provider_response = ?, updated_at = ?
+                WHERE id = ? AND platform = 'douyin'
+                  AND UPPER(status) IN ('DRAFT', 'WAITING')
+                  AND TRIM(COALESCE(scheduled_at, '')) = ''
+                  AND COALESCE(updated_at, '') = ?
+                  AND EXISTS (
+                      SELECT 1 FROM output_clip
+                      WHERE output_clip.id = publish_jobs.output_clip_id
+                        AND COALESCE(output_clip.is_active, 1) = 1
+                        AND output_clip.status = 'completed'
+                  )
+                """,
+                (
+                    metadata["title"],
+                    metadata["description"],
+                    metadata["description"],
+                    metadata["tags"],
+                    metadata["tags"],
+                    account_id or None,
+                    provider_response,
+                    _now_iso(),
+                    job_id,
+                    candidate_rows[job_id],
+                ),
+            )
+            connection.commit()
+            if cursor.rowcount:
+                upgraded_ids.append(job_id)
+            else:
+                runtime_skipped += 1
+
+    return {
+        "status": "ok" if not failed_ids else "partial",
+        "message": (
+            f"抖音旧草稿升级完成：成功 {len(upgraded_ids)} 条，失败 {len(failed_ids)} 条；"
+            "失败项已保留原文，可稍后手动重试。"
+        ),
+        "upgraded_count": len(upgraded_ids),
+        "failed_count": len(failed_ids),
+        "skipped_count": len(rows) - len(candidate_ids) + runtime_skipped,
+        "jobs": [job for job_id in upgraded_ids if (job := get_publish_job(job_id))],
+        "errors": errors,
+        "backup_created": backup_path is not None,
     }
 
 
@@ -3224,8 +3624,8 @@ def _should_retry_opencli_detached(command: list[str], result: subprocess.Comple
     return "douyin_cover_retryable:true" in script
 
 
-def _hashtags(tags: str) -> str:
-    normalized_tags = _format_tags(tags)
+def _hashtags(tags: str, *, platform: str = "bilibili") -> str:
+    normalized_tags = format_douyin_tags(tags) if platform == "douyin" else _format_tags(tags)
     return " ".join(f"#{tag.strip().lstrip('#')}" for tag in re.split(r"[,，]+", normalized_tags or "") if tag.strip())
 
 
@@ -3233,8 +3633,10 @@ def _douyin_description_for_job(job: dict, fallback_title: str) -> str:
     description = _sanitize_publish_description(
         job.get("description") or job.get("caption") or fallback_title,
         fallback_title,
+        platform="douyin",
+        title=fallback_title,
     )
-    tag_text = _hashtags(job.get("tags") or job.get("hashtags") or "")
+    tag_text = _hashtags(job.get("tags") or job.get("hashtags") or "", platform="douyin")
     parts = [description] if description else []
     if tag_text:
         parts.append(tag_text)
@@ -3835,8 +4237,15 @@ def _browser_wait_bilibili_publish_result_command(session: str, title: str) -> l
 
 def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path | None) -> list[list[str]]:
     session = f"send-douyin-{job['id']}"
-    title = _truncate(_sanitize_publish_title(job.get("title") or "直播切片"), 30)
-    description = _douyin_description_for_job(job, title)
+    safe_content = _sanitize_publish_content(
+        job.get("title"),
+        job.get("tags") or job.get("hashtags"),
+        job.get("description") or job.get("caption"),
+        platform="douyin",
+        validate=True,
+    )
+    title = safe_content["title"]
+    description = _douyin_description_for_job({**job, **safe_content}, title)
     commands = [
         _browser_open_command(session, "https://creator.douyin.com/creator-micro/content/upload"),
         _browser_wait_command(session, 5),
@@ -3864,7 +4273,7 @@ def _build_douyin_browser_commands(job: dict, video_path: Path, cover_path: Path
 
 def _build_bilibili_browser_commands(job: dict, video_path: Path, cover_path: Path | None) -> list[list[str]]:
     session = f"send-bilibili-{job['id']}"
-    title = _truncate(_sanitize_publish_title(job.get("title") or "直播切片"), 80)
+    title = _truncate(_sanitize_publish_title(job.get("title") or "直播切片"), BILIBILI_TITLE_MAX)
     description = _sanitize_publish_description(job.get("description") or title)
     category = (job.get("bilibili_tid") or DEFAULT_BILIBILI_TID).strip() or DEFAULT_BILIBILI_TID
     commands = [
@@ -4091,13 +4500,17 @@ def get_publish_center_context(*, focus_task_id: str = "") -> dict:
     for item in raw_items:
         original_path = resolve_video_file_path(item.get("output_file_path") or "")
         subtitled_path = resolve_video_file_path(item.get("subtitled_output_file_path") or "")
-        default_title = _sanitize_publish_title(_default_title_for_clip(item))
+        default_title = _sanitize_publish_title(
+            _default_title_for_clip(item, platform="douyin"),
+            platform="douyin",
+            generated=True,
+        )
         original_available = bool(original_path and original_path.exists() and original_path.is_file())
         subtitled_available = bool(subtitled_path and subtitled_path.exists() and subtitled_path.is_file())
         normalized_item = {
             **item,
             "default_title": default_title,
-            "default_tags": _format_tags(_fallback_tags(item)) or _format_tags(SAFE_TOPIC_FALLBACKS),
+            "default_tags": format_douyin_tags(_fallback_tags(item), generated=True),
             "original_available": original_available,
             "subtitled_available": subtitled_available,
             "subtitle_status_label": "已加字幕" if item.get("subtitle_status") == "completed" else "未加字幕",
@@ -4105,7 +4518,7 @@ def get_publish_center_context(*, focus_task_id: str = "") -> dict:
         }
         publish_items.append(normalized_item)
         jobs_for_oc = publish_jobs_map.get(item["output_clip_id"], {})
-        for platform in PLATFORM_LABELS:
+        for platform in AUTO_PUBLISH_PLATFORMS:
             job = jobs_for_oc.get(platform)
             if job:
                 queue_items.append(
@@ -4115,9 +4528,19 @@ def get_publish_center_context(*, focus_task_id: str = "") -> dict:
                         "job_id": job["id"],
                         "platform": platform,
                         "platform_label": PLATFORM_LABELS[platform],
-                        "title": _sanitize_publish_title(job.get("title") or default_title, default_title),
-                        "description": _sanitize_publish_description(job.get("description") or ""),
-                        "tags": _hashtags(job.get("tags") or normalized_item["default_tags"]),
+                        "title": _sanitize_publish_title(
+                            job.get("title") or default_title,
+                            default_title,
+                            platform="douyin",
+                        ),
+                        "description": _sanitize_publish_description(
+                            job.get("description") or "",
+                            platform="douyin",
+                        ),
+                        "tags": _hashtags(
+                            job.get("tags") or normalized_item["default_tags"],
+                            platform="douyin",
+                        ),
                         "status": job.get("status"),
                         "status_label": job.get("status_label"),
                         "status_tone": job.get("status_tone"),
@@ -4135,9 +4558,14 @@ def get_publish_center_context(*, focus_task_id: str = "") -> dict:
                         "job_id": "",
                         "platform": platform,
                         "platform_label": PLATFORM_LABELS[platform],
-                        "title": _sanitize_publish_title(default_title),
-                        "description": _compose_description(item, default_title, normalized_item["default_tags"]),
-                        "tags": _hashtags(normalized_item["default_tags"]),
+                        "title": _sanitize_publish_title(default_title, platform="douyin", generated=True),
+                        "description": _compose_description(
+                            item,
+                            default_title,
+                            normalized_item["default_tags"],
+                            platform="douyin",
+                        ),
+                        "tags": _hashtags(normalized_item["default_tags"], platform="douyin"),
                         "status": "not_queued",
                         "status_label": "待入队",
                         "status_tone": "amber",
@@ -4155,6 +4583,7 @@ def get_publish_center_context(*, focus_task_id: str = "") -> dict:
         limit=None if focus_task_id else 200,
         worker_state=current_scheduler_health,
     )
+    jobs = [job for job in jobs if job.get("platform") == "douyin"]
     pending_jobs = [
         job for job in jobs
         if job.get("status") in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_FAILED, PUBLISH_STATUS_NEED_REVIEW}
@@ -4169,7 +4598,7 @@ def get_publish_center_context(*, focus_task_id: str = "") -> dict:
     ]
     jobs_by_platform = {
         platform: [job for job in jobs if job["platform"] == platform]
-        for platform in PLATFORM_LABELS
+        for platform in AUTO_PUBLISH_PLATFORMS
     }
     ready_count = sum(1 for job in jobs if job.get("status") in {PUBLISH_STATUS_SCHEDULED, PUBLISH_STATUS_WAITING})
     sending_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_PUBLISHING)
@@ -4189,7 +4618,7 @@ def get_publish_center_context(*, focus_task_id: str = "") -> dict:
             and job.get("output_is_active") is not False
             and not str(job.get("cover_file_path") or "").strip()
         )
-        for platform in PLATFORM_LABELS
+        for platform in AUTO_PUBLISH_PLATFORMS
     }
     missing_cover_count = sum(missing_cover_counts.values())
     opencli_status = _opencli_status()
@@ -4204,7 +4633,7 @@ def get_publish_center_context(*, focus_task_id: str = "") -> dict:
         "missing_cover_count": missing_cover_count,
         "missing_cover_counts": missing_cover_counts,
         "jobs_by_platform": jobs_by_platform,
-        "platforms": [{"id": platform, "label": label} for platform, label in PLATFORM_LABELS.items()],
+        "platforms": [{"id": platform, "label": PLATFORM_LABELS[platform]} for platform in AUTO_PUBLISH_PLATFORMS],
         "accounts": list_accounts(),
         "app_timezone": settings.app_timezone,
         "opencli_available": opencli_status["available"],

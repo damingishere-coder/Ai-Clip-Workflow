@@ -188,7 +188,7 @@ def _job(job_id: str) -> dict:
     return dict(row)
 
 
-def test_first_sync_creates_both_platforms_and_is_idempotent(
+def test_first_sync_creates_only_douyin_and_is_idempotent(
     tmp_path: Path,
     fake_cover: Path,
 ) -> None:
@@ -208,11 +208,11 @@ def test_first_sync_creates_both_platforms_and_is_idempotent(
         restore_removed=False,
     )
 
-    assert first["created_count"] == 4
-    assert first["link_state"]["linked_count"] == 4
+    assert first["created_count"] == 2
+    assert first["link_state"]["linked_count"] == 2
     assert first["link_state"]["missing_count"] == 0
     assert second["created_count"] == 0
-    assert second["skipped_count"] == 4
+    assert second["skipped_count"] == 2
     with get_connection() as connection:
         rows = connection.execute(
             """
@@ -221,8 +221,8 @@ def test_first_sync_creates_both_platforms_and_is_idempotent(
             """,
             (task_id,),
         ).fetchall()
-    assert len(rows) == 4
-    assert {row["platform"] for row in rows} == {"douyin", "bilibili"}
+    assert len(rows) == 2
+    assert {row["platform"] for row in rows} == {"douyin"}
     assert {row["status"] for row in rows} == {"WAITING"}
     assert all(not row["scheduled_at"] for row in rows)
     assert {row["video_source"] for row in rows} == {"original"}
@@ -275,12 +275,12 @@ def test_recut_cancels_only_old_preparation_and_preserves_execution_evidence(
         restore_removed=False,
     )
 
-    assert result["created_count"] == 2
-    assert result["superseded_count"] == 2
+    assert result["created_count"] == 1
+    assert result["superseded_count"] == 1
     assert _job(waiting_id)["status"] == "CANCELLED"
     assert _job(waiting_id)["error_code"] == publish_service.SUPERSEDED_BY_RECUT_ERROR_CODE
-    assert _job(scheduled_id)["status"] == "CANCELLED"
-    assert _job(scheduled_id)["scheduled_at"] == ""
+    assert _job(scheduled_id)["status"] == "SCHEDULED"
+    assert _job(scheduled_id)["scheduled_at"]
     assert _job(published_id)["status"] == "PUBLISHED"
     assert _job(review_id)["status"] == "NEED_REVIEW"
     assert _job(failed_id)["status"] == "FAILED"
@@ -296,13 +296,11 @@ def test_recut_cancels_only_old_preparation_and_preserves_execution_evidence(
             """,
             (waiting_id, scheduled_id),
         ).fetchall()
-    assert len(new_jobs) == 2
+    assert len(new_jobs) == 1
+    assert {row["platform"] for row in new_jobs} == {"douyin"}
     assert {row["status"] for row in new_jobs} == {"WAITING"}
     assert all(not row["scheduled_at"] for row in new_jobs)
-    assert [row["event_type"] for row in events] == [
-        "superseded_by_recut",
-        "superseded_by_recut",
-    ]
+    assert [row["event_type"] for row in events] == ["superseded_by_recut"]
 
 
 def test_explicit_sync_restores_user_removed_content(
@@ -376,6 +374,14 @@ def test_subtitle_sync_updates_only_unscheduled_video_sources(
         )
         connection.commit()
 
+    _insert_job(
+        task_id,
+        output_id,
+        "bilibili",
+        "SCHEDULED",
+        scheduled_at=_time(60),
+    )
+
     publish_service.sync_task_publish_jobs(
         task_id,
         prefer_subtitled=False,
@@ -407,7 +413,7 @@ def test_subtitle_sync_updates_only_unscheduled_video_sources(
     jobs = {row["platform"]: dict(row) for row in rows}
 
     assert result["updated_count"] == 1
-    assert len(result["warnings"]) == 1
+    assert len(result["warnings"]) == 0
     assert jobs["douyin"]["video_source"] == "subtitled"
     assert jobs["douyin"]["video_file_path"] == str(subtitled_path)
     assert jobs["bilibili"]["status"] == "SCHEDULED"
