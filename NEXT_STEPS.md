@@ -932,3 +932,10 @@
 4. 流程完成后，进度应显示 100%，顶部自动出现“前往发送中心”，有候选片段时同时出现“检查候选片段”。
 5. 可以在 AI Prompt 文本框临时输入几个字后继续等待，确认状态更新时文字没有消失、页面也没有跳回顶部。
 6. 如果网络短暂中断，状态卡会显示“自动更新暂时中断，正在重试”；恢复后不需要手动刷新。
+
+## 2026-08-03 Docker 发布 Worker 恢复后检查
+
+1. 当前 `NiuMa Studio Docker Watcher` 计划任务已重新启用并运行，发送中心已恢复识别 Windows Worker；日常使用不需要单独打开 Worker 窗口。
+2. 下次重新登录 Windows 或重启 Docker Desktop 后，打开 `http://127.0.0.1:8001/publish`，确认发送中心仍显示 Worker 正常；守护任务通常会在容器运行后的几十秒内完成连接。
+3. 如果再次持续显示 Worker 未连接，先不要重复点击真实发送。检查 Windows“任务计划程序”中的 `NiuMa Studio Docker Watcher` 是否为“正在运行”，再查看项目 `data/logs/docker_publish_worker_watcher.log` 的最后一条记录。
+4. 需要手动恢复时，在项目根目录运行 `powershell -ExecutionPolicy Bypass -File .\scripts\install_docker_publish_worker_watcher.ps1`；成功后应看到 `Docker watcher installed successfully.`，且发送中心重新显示 Worker 可用。
