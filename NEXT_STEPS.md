@@ -1,12 +1,13 @@
 # Next Steps
 
-## 2026-08-21 安全重启与推送前检查方法
+## 2026-08-21 原生日常运行与 Docker 回退
 
-1. 正式重启运行 `./scripts/start.ps1`；检测到 Google Chrome 时会自动启动 Windows 发布 Worker，然后启动 Docker 工作台。
-2. 只需要工作台时运行 `./scripts/start.ps1 -SkipWorker`；`-Development` 和 `-Demo` 会自动跳过 Worker。`-WithPublisher` 只兼容旧命令，不需要再额外添加。
-3. 停止时运行 `./scripts/stop.ps1`，默认同时停止 Docker 服务和本项目 Worker；不要使用真实账号绕过登录、验证码或平台风控。
-4. 新建任务页的任务名候选只展示非空、未隐藏的唯一名称，最多 100 条，最新创建的名称排在前面。
-5. 本次相关测试 `36 passed`、完整测试 `424 passed`，Python 编译、JavaScript 检查和 Compose 配置检查均已通过；后续修改后仍需重新运行相同门禁。
+1. 当前工作台由 Alter 中的 `Niuma-Studio` 运行；访问 `http://127.0.0.1:8001/`。发送中心应显示 Windows Worker 正常。
+2. 不使用 Alter 时，可在项目目录运行 `.\scripts\start_native.ps1`；只查看工作台可加 `-SkipWorker`。对应停止命令为 `.\scripts\stop_native.ps1`。
+3. `NiuMa Studio Docker Watcher` 计划任务当前只是禁用，没有删除。日常原生模式不要启用它，否则登录时可能重新拉起旧 Docker 流程。
+4. 回滚前先停止 Alter 中的 `Niuma-Studio` 和本项目 Worker，再运行 `docker compose up -d`；确认容器健康后才重新启用 watcher。禁止使用 `docker compose down --volumes`、`docker volume prune` 或删除 `data`、E 盘任务目录。
+5. 切换前数据库备份是 `data/backups/workflow-pre-native-cutover-20260821-150620.sqlite3`，完整性为 `ok`。只有原生与 Docker 都无法读取正式库时才考虑恢复，不要覆盖当前数据库。
+6. 本批原生启动脚本专项测试 `11 passed`，PowerShell 5.1/7 解析均为 0；隔离与正式环境核心页面均为 HTTP 200，未触发真实投稿。
 
 ## 2026-08-16 任务名称历史候选检查方法
 

@@ -100,24 +100,22 @@ flowchart LR
 
 ## 快速开始
 
-### Windows + Docker Desktop（推荐）
+### Windows 原生模式（日常推荐）
 
 ```powershell
 git clone https://github.com/damingishere-coder/Ai-Clip-Workflow.git
 cd Ai-Clip-Workflow
 .\scripts\setup.ps1
-.\scripts\doctor.ps1
-.\scripts\start.ps1
+.\scripts\start_native.ps1
 ```
 
-脚本会自动：
+首次安装完成后，原生启动脚本会：
 
-- 创建并保留本地 `.env`
-- 生成随机管理 Token 与 Worker Token
-- 创建通用视频存储目录
-- 检查 Docker、Compose、端口与写权限
-- 正式模式检测到 Google Chrome 时自动启动 Windows 发布 Worker
-- 启动正式工作台并等待健康检查
+- 使用项目 `.venv` 直接启动 FastAPI，不要求 Docker Desktop 常驻
+- 继续读取本机 `.env`，不会把 Token 写进启动参数
+- 将 SQLite、任务目录、上传临时目录和发布包映射到 Windows 路径
+- 检测到 Google Chrome 时启动或复用 Windows 发布 Worker
+- 等待 `/health` 通过后再报告启动成功
 
 浏览器地址：
 
@@ -128,10 +126,21 @@ http://127.0.0.1:8001
 停止服务：
 
 ```powershell
-.\scripts\stop.ps1
+.\scripts\stop_native.ps1
 ```
 
-停止脚本默认会同时停止 Docker 服务和本项目的 Windows 发布 Worker。
+它只会停止经过 PID、项目目录、端口、启动时间和命令行共同校验的本项目进程。若工作台已交给 Alter 托管，请在 Alter 中停止 `Niuma-Studio`；`stop_native.ps1` 仍可单独停止本项目发布 Worker。
+
+### Docker 完整模式（集成、验收与回退）
+
+Docker 配置仍完整保留。需要 Compose 验收、镜像测试或原生模式回滚时运行：
+
+```powershell
+.\scripts\doctor.ps1
+.\scripts\start.ps1
+```
+
+停止 Docker 完整模式仍使用 `scripts\stop.ps1`。不要添加 `--volumes`，宿主 SQLite 与 E 盘任务目录也不要删除。
 
 ### 备份、恢复与升级保护
 
@@ -172,10 +181,10 @@ git pull --ff-only
 ### 真实抖音 / B站发布
 
 ```powershell
-.\scripts\start.ps1
+.\scripts\start_native.ps1
 ```
 
-正式模式在检测到 Google Chrome 时默认启动 Windows 发布 Worker；`-WithPublisher` 仅为兼容旧命令，不再是必需参数。Demo 和 Development 模式会自动跳过 Worker。此模式需要 Windows、Google Chrome、平台账号人工登录，以及二维码、短信、验证码和风控处理。第一次真实发布必须使用一条低风险测试视频。
+原生模式默认启动或复用 Windows 发布 Worker；只查看工作台时可加 `-SkipWorker`。Docker 完整模式仍可使用 `scripts\start.ps1`，其中 `-WithPublisher` 仅为兼容旧命令。真实发布需要 Windows、Google Chrome、平台账号人工登录，以及二维码、短信、验证码和风控处理。第一次真实发布必须使用一条低风险测试视频。
 
 ### 本地 Python
 

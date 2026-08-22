@@ -1020,3 +1020,13 @@
 - 增加入口脚本 BOM 回归测试，弥补 PowerShell 7 语法检查无法发现 Windows PowerShell 5.1 编码误读的问题。
 - 项目正式访问地址仍为 `http://127.0.0.1:8001/`；旧地址 `http://localhost:6866/` 不再提供服务。
 - Windows PowerShell 5.1 解析检查为 0 个错误，专项测试 `5 passed`；修复后的停止脚本正常退出且未删除正式数据。默认联网构建因 Docker Hub 认证地址暂时不可达而失败，随后使用本地 `niuma-studio:latest` 镜像执行 `start.ps1 -NoBuild` 成功，容器为 `healthy`、首页 HTTP 200、Worker 连接正常。
+## 2026-08-21 Windows 原生日常模式与 Docker 回退
+
+- 新增 `scripts/run_native.ps1`、`scripts/start_native.ps1` 和 `scripts/stop_native.ps1`：FastAPI 默认使用 `127.0.0.1:8001`，Windows 发布 Worker 默认使用 `127.0.0.1:8765`，SQLite 与 E 盘任务目录继续复用原数据。
+- 原生启动器支持自定义端口、存储目录、数据目录和数据库路径；状态文件记录 PID、启动时间、项目根和端口，停止前做多重身份校验，避免误关其他进程。
+- 修复 PowerShell 5.1/7 的目录创建参数、ISO UTC 时间 roundtrip 解析、Worker 子脚本 `$LASTEXITCODE` 遗留值等实机问题，并增加静态回归测试。
+- 切换前停止 Docker 写入并生成 `data/backups/workflow-pre-native-cutover-20260821-150620.sqlite3`，备份 `PRAGMA integrity_check=ok`，包含 16 张表；未备份或输出 `.env`。
+- 已禁用但未删除计划任务 `NiuMa Studio Docker Watcher`，避免登录时自动重启 Docker Worker；Docker Compose 配置和镜像保留为回退入口，未执行 volume/prune。
+- 隔离端口 `18001` 使用在线 SQLite 快照完成 `/health`、首页、任务、片段和发送中心冒烟，均为 HTTP 200；正式原生 `8001` 的相同页面和调度器健康检查通过，Windows Worker 状态正常。
+- 当前 Web 进程由 Alter 以 `Niuma-Studio` 托管并启用崩溃自动重启；发布 Worker 仍是本项目的 Windows 原生进程。
+- 专项测试 `11 passed`，Windows PowerShell 5.1 与 PowerShell 7 三个脚本均为 0 个解析错误；未触发任何真实投稿。
