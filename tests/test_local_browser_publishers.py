@@ -56,8 +56,8 @@ def make_job(video: Path, platform: str = "douyin") -> dict:
         "account_id": "account-1",
         "video_path": str(video),
         "title": "测试标题",
-        "caption": "测试正文",
-        "hashtags": "测试,视频",
+        "caption": "这段对话的反转让所有人都没想到",
+        "hashtags": "综艺,高光,笑点,反转",
         "cover_file_path": str(cover),
         "visibility": "private",
     }

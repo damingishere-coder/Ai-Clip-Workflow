@@ -268,7 +268,7 @@ async def publish_center_page(request: Request):
             "settings": settings,
             "publish_message": request.query_params.get("publish_message", ""),
             "focus_task_id": focus_task_id,
-            "focus_platform": request.query_params.get("platform", ""),
+            "focus_platform": "douyin",
             "focus_tab": request.query_params.get("tab", ""),
             **get_publish_center_context(focus_task_id=focus_task_id),
         },

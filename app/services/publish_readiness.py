@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.database import get_connection
+from app.services.publish_copy_rules import validate_douyin_publish_copy
 from app.services.publishers.base import PublishError, PublishValidationError
 
 
@@ -76,6 +77,20 @@ def _content_issues(job: dict[str, Any], platform: str, publish_mode: str) -> li
                 missing_fields=missing,
             )
         )
+    if platform == "douyin" and publish_mode == "local_browser":
+        title = str(job.get("title") or "").strip()
+        if title and caption and hashtags:
+            try:
+                validate_douyin_publish_copy(title, caption, hashtags)
+            except ValueError as exc:
+                issues.append(
+                    _issue(
+                        "content_invalid",
+                        str(exc),
+                        "complete_content",
+                        invalid_fields=["标题", "正文/简介", "话题/标签"],
+                    )
+                )
     return issues
 
 

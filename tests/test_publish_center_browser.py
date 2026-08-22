@@ -25,16 +25,16 @@ from app.services.publish_scheduler import PublishScheduler  # noqa: E402
 PREFIX = "test-browser-publish-"
 
 
-def _seed_job(tmp_path: Path, index: int, platform: str = "douyin") -> str:
+def _seed_job(tmp_path: Path, index: int, platform: str = "douyin", task_key: str = "") -> str:
     now = (datetime.now(timezone.utc) + timedelta(seconds=index)).isoformat(timespec="seconds").replace("+00:00", "Z")
-    task_id = f"{PREFIX}{uuid4().hex[:8]}"
+    task_id = f"{PREFIX}task-{task_key}" if task_key else f"{PREFIX}{uuid4().hex[:8]}"
     clip_id = f"{PREFIX}clip-{uuid4().hex[:8]}"
     job_id = f"{PREFIX}job-{uuid4().hex[:8]}"
     video = tmp_path / f"browser-{index}.mp4"
     video.write_bytes(b"fake-video")
     with get_connection() as connection:
         connection.execute(
-            "INSERT INTO tasks (id, task_name, task_dir_name, platform, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?)",
+            "INSERT OR IGNORE INTO tasks (id, task_name, task_dir_name, platform, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?)",
             (task_id, f"浏览器排期任务 {index}", task_id, platform, now, now),
         )
         connection.execute(
@@ -46,11 +46,23 @@ def _seed_job(tmp_path: Path, index: int, platform: str = "douyin") -> str:
             INSERT INTO publish_jobs (
                 id, task_id, output_clip_id, clip_id, platform, publish_mode,
                 video_source, video_file_path, video_path, title, description, caption,
-                tags, hashtags, scheduled_at, schedule_timezone, status, created_at, updated_at
+                tags, hashtags, scheduled_at, schedule_timezone, status, provider_response, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, 'manual_export', 'original', ?, ?, ?, '测试正文',
-                '测试正文', '测试', '测试', '', 'Asia/Shanghai', 'WAITING', ?, ?)
+                '测试正文', '测试', '测试', '', 'Asia/Shanghai', 'WAITING', ?, ?, ?)
             """,
-            (job_id, task_id, clip_id, clip_id, platform, str(video), str(video), f"浏览器测试片段 {index}", now, now),
+            (
+                job_id,
+                task_id,
+                clip_id,
+                clip_id,
+                platform,
+                str(video),
+                str(video),
+                f"浏览器测试片段 {index}",
+                json.dumps({"metadata_policy_version": 2}),
+                now,
+                now,
+            ),
         )
         connection.commit()
     return job_id
@@ -73,7 +85,10 @@ def _free_port() -> int:
 def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_path):
     init_db()
     _cleanup()
-    douyin_jobs = [_seed_job(tmp_path, index) for index in range(1, 11)]
+    douyin_jobs = [
+        _seed_job(tmp_path, index, task_key="shared" if index in {1, 2} else "")
+        for index in range(1, 11)
+    ]
     unscheduled = _seed_job(tmp_path, 0)
     first = douyin_jobs[0]
     newest = douyin_jobs[-1]
@@ -175,11 +190,37 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
                     ),
                 ),
             )
-            page.goto(f"http://127.0.0.1:{port}/publish", wait_until="networkidle")
+            def fulfill_metadata(route):
+                job_id = route.request.url.split("/jobs/", 1)[1].split("/", 1)[0]
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(
+                        {
+                            "status": "ok",
+                            "job": {
+                                "id": job_id,
+                                "platform": "douyin",
+                                "status": "WAITING",
+                                "title": "小S追问陈汉典到底在模仿谁",
+                                "description": "陈汉典刚说自己像潘玮柏，小S立刻给出另一答案",
+                                "tags": "综艺,高光,小S,反转",
+                                "content_complete": True,
+                                "content_status_message": "内容完整",
+                                "content_status_tone": "green",
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
 
+            page.route("**/api/publish/jobs/*/metadata?use_ai=true", fulfill_metadata)
+            page.goto(f"http://127.0.0.1:{port}/publish?platform=bilibili", wait_until="networkidle")
+
+            assert page.locator('[data-publish-platform="bilibili"]').count() == 0
             assert page.locator(
                 f'[data-publish-row][data-section="content"][data-job-id="{bilibili}"]'
-            ).is_hidden()
+            ).count() == 0
             first_content = page.locator(
                 f'[data-publish-row][data-section="content"][data-job-id="{first}"]'
             )
@@ -205,31 +246,37 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             assert newest_group.locator("[data-task-group-toggle]").inner_text() == "收起"
             first_group.locator("[data-task-group-toggle]").click()
             assert first_content.is_visible()
+            second_content = page.locator(
+                f'[data-publish-row][data-section="content"][data-job-id="{douyin_jobs[1]}"]'
+            )
+            group_select = first_group.locator("[data-task-group-select]")
+            group_select.check()
+            assert first_content.locator("[data-publish-select]").is_checked()
+            assert second_content.locator("[data-publish-select]").is_checked()
+            page.locator("[data-batch-ai]").click()
+            page.locator("#send-center-message").filter(has_text="批量 AI 重写完成：成功 2 条").wait_for()
+            assert first_content.locator('[name="description"]').input_value() == "陈汉典刚说自己像潘玮柏，小S立刻给出另一答案"
+            assert second_content.locator('[name="tags"]').input_value() == "综艺,高光,小S,反转"
+            first_content.locator("[data-publish-select]").uncheck()
+            assert group_select.evaluate("element => element.indeterminate") is True
+            group_select.check()
+            assert first_group.locator("[data-task-group-select-label]").inner_text() == "取消全选"
+            group_select.uncheck()
+            assert not first_content.locator("[data-publish-select]").is_checked()
+            assert not second_content.locator("[data-publish-select]").is_checked()
+            first_group.locator("[data-task-group-toggle]").click()
+            assert first_content.is_hidden()
+            group_select.check()
+            assert first_content.locator("[data-publish-select]").is_checked()
+            assert second_content.locator("[data-publish-select]").is_checked()
+            group_select.uncheck()
 
             page.locator('[data-center-tab="schedule"]').click()
             assert page.locator('[data-schedule-calendar] .publish-calendar-day').count() == 42
             assert "抖音" in page.locator("[data-calendar-title]").inner_text()
             assert page.locator(
                 f'[data-publish-row][data-section="schedule"][data-job-id="{bilibili}"]'
-            ).is_hidden()
-
-            page.locator('[data-publish-platform="bilibili"]').click()
-            assert "B站" in page.locator("[data-calendar-title]").inner_text()
-            assert "B站" in cover_button.inner_text()
-            assert "1" in cover_button.inner_text()
-            assert page.locator(
-                f'[data-publish-row][data-section="schedule"][data-job-id="{bilibili}"]'
-            ).is_visible()
-            assert page.locator(
-                f'[data-publish-row][data-section="schedule"][data-job-id="{first}"]'
-            ).is_hidden()
-
-            page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{bilibili}"] [data-publish-select]').check()
-            assert page.locator("[data-selection-bar]").is_visible()
-
-            page.locator('[data-publish-platform="douyin"]').click()
-            assert page.locator("[data-selection-bar]").is_hidden()
-            assert not page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{bilibili}"] [data-publish-select]').is_checked()
+            ).count() == 0
             for job_id in douyin_jobs:
                 page.locator(
                     f'[data-publish-row][data-section="schedule"][data-job-id="{job_id}"] [data-publish-select]'

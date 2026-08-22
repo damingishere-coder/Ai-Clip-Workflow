@@ -22,6 +22,7 @@ from app.models.task import (
     PublishSendJobUpdate,
 )
 from app.services import publish_service
+from app.services.database_backup_service import BackupSafetyError
 from app.services.publish_readiness import PublishPlatformIsolationBlocked, SendReadinessBlocked
 from app.services.publish_scheduler import PublishScheduler, queue_snapshot, scheduler_health
 from app.services.publishers.base import PublishError
@@ -287,6 +288,14 @@ async def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
         return publish_service.update_send_job(job_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/metadata/upgrade-pending-douyin")
+def upgrade_pending_douyin_metadata() -> dict:
+    try:
+        return publish_service.upgrade_pending_douyin_metadata()
+    except BackupSafetyError as exc:
+        raise HTTPException(status_code=500, detail=f"数据库备份失败，已中止草稿升级：{exc}") from exc
 
 
 @router.post("/jobs/{job_id}/metadata")

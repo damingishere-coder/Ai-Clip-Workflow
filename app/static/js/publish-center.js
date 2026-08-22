@@ -286,6 +286,28 @@ if (publishCenterRoot) {
     if (action) action.textContent = expanded ? "收起" : "展开";
   }
 
+  function visibleTaskGroupRows(group) {
+    return Array.from(group?.querySelectorAll('[data-publish-row][data-section="content"]') || []).filter((row) => (
+      !row.hidden
+      && row.dataset.platform === activePlatform
+      && row.dataset.outputActive !== "false"
+      && sectionAllows("content", String(row.dataset.status || "").toUpperCase())
+    ));
+  }
+
+  function syncTaskGroupSelectionUi(group) {
+    const checkbox = group?.querySelector("[data-task-group-select]");
+    const label = group?.querySelector("[data-task-group-select-label]");
+    if (!checkbox) return;
+    const rows = visibleTaskGroupRows(group);
+    const selectedCount = rows.filter((row) => selectedJobIds.has(row.dataset.jobId || "")).length;
+    const allSelected = rows.length > 0 && selectedCount === rows.length;
+    checkbox.disabled = rows.length === 0;
+    checkbox.checked = allSelected;
+    checkbox.indeterminate = selectedCount > 0 && !allSelected;
+    if (label) label.textContent = allSelected ? "取消全选" : "全选本任务";
+  }
+
   function syncContentTaskGroups() {
     const groups = Array.from(document.querySelectorAll("[data-publish-task-group]"));
     const visibleGroups = [];
@@ -297,6 +319,7 @@ if (publishCenterRoot) {
       group.hidden = visibleCount === 0;
       if (visibleCount > 0) visibleGroups.push(group);
       if (visibleCount === 0) setTaskGroupExpanded(group, false);
+      syncTaskGroupSelectionUi(group);
     });
     if (visibleGroups.length && !visibleGroups.some((group) => group.dataset.expanded === "true")) {
       setTaskGroupExpanded(visibleGroups[0], true);
@@ -306,7 +329,8 @@ if (publishCenterRoot) {
   }
 
   function platformLabel(platform = activePlatform) {
-    return platform === "bilibili" ? "B站" : "抖音";
+    void platform;
+    return "抖音";
   }
 
   function visibilityLabel(value) {
@@ -324,7 +348,7 @@ if (publishCenterRoot) {
 
   function renderPlatformSchedule() {
     const rows = scheduleRows();
-    ["douyin", "bilibili"].forEach((platform) => {
+    ["douyin"].forEach((platform) => {
       const available = rows.filter((row) => (
         row.dataset.outputActive !== "false"
         && sectionAllows("schedule", row.dataset.status || "")
@@ -542,7 +566,7 @@ if (publishCenterRoot) {
     row.dataset.publishRow = "";
     row.dataset.historyRecord = "";
     row.dataset.jobId = job.id;
-    row.dataset.accountId = job.account_id || "";
+    row.dataset.accountId = job.effective_account_id || job.account_id || job.send_readiness?.resolved_account_id || "";
     row.dataset.platform = job.platform;
     row.dataset.visibility = job.visibility || "public";
     row.dataset.status = job.status;
@@ -1020,6 +1044,46 @@ if (publishCenterRoot) {
     queueHistoryRefresh(true);
   }
 
+  function splitCopyTags(value) {
+    return String(value || "").split(/[,，#＃\s]+/).map((item) => item.trim()).filter(Boolean);
+  }
+
+  function syncCopyCounters(form) {
+    if (!form) return;
+    const title = String(form.elements.title?.value || "");
+    const description = String(form.elements.description?.value || "");
+    const tags = splitCopyTags(form.elements.tags?.value || "");
+    const titleCount = form.querySelector('[data-copy-count="title"]');
+    const descriptionCount = form.querySelector('[data-copy-count="description"]');
+    const tagsCount = form.querySelector('[data-copy-count="tags"]');
+    if (titleCount) titleCount.textContent = `${title.length}/30`;
+    if (descriptionCount) descriptionCount.textContent = `${description.length}/35`;
+    if (tagsCount) tagsCount.textContent = `${tags.length}/4～6 个`;
+  }
+
+  function validateCopyForm(form) {
+    const title = String(form.elements.title?.value || "").trim();
+    const description = String(form.elements.description?.value || "").trim();
+    const tags = splitCopyTags(form.elements.tags?.value || "");
+    if (!title) return "抖音标题不能为空";
+    if (title.length > 30) return `抖音标题不能超过 30 字，当前为 ${title.length} 字`;
+    if (description.length < 15 || description.length > 35) return `抖音简介需为 15～35 字，当前为 ${description.length} 字`;
+    if (tags.length < 4 || tags.length > 6) return "抖音标签需填写 4～6 个";
+    if (new Set(tags).size !== tags.length || tags.some((tag) => tag.length < 2 || tag.length > 3)) {
+      return "抖音标签必须去重，且每个标签严格为 2～3 字";
+    }
+    return "";
+  }
+
+  function applyGeneratedMetadataToForm(row, job) {
+    const form = row?.querySelector("[data-publish-editor]");
+    if (!form || !job) return;
+    if (job.title !== undefined) form.elements.title.value = job.title || "";
+    if (job.description !== undefined) form.elements.description.value = job.description || job.caption || "";
+    if (job.tags !== undefined) form.elements.tags.value = job.tags || job.hashtags || "";
+    syncCopyCounters(form);
+  }
+
   function updateSelectionUi() {
     Array.from(selectedJobIds).forEach((jobId) => {
       const row = document.querySelector(`[data-publish-row][data-job-id="${CSS.escape(jobId)}"]`);
@@ -1032,10 +1096,12 @@ if (publishCenterRoot) {
     if (selectedCountNode) selectedCountNode.textContent = String(count);
     if (drawerCount) drawerCount.textContent = String(count);
     if (selectionBar) selectionBar.hidden = count === 0;
+    document.querySelectorAll("[data-publish-task-group]").forEach(syncTaskGroupSelectionUi);
   }
 
   function setActivePlatform(nextPlatform) {
-    const next = nextPlatform === "bilibili" ? "bilibili" : "douyin";
+    void nextPlatform;
+    const next = "douyin";
     const changed = next !== activePlatform;
     activePlatform = next;
     if (changed) {
@@ -1047,7 +1113,6 @@ if (publishCenterRoot) {
       invalidatePreview();
       closeDrawer();
       document.querySelectorAll("[data-publish-task-group]").forEach((group) => setTaskGroupExpanded(group, false));
-      showMessage(`已切换到${platformLabel()}；之前勾选的任务已清空，不会跨平台发送。`, "success");
     }
     updateSelectionUi();
     refreshScheduleViews();
@@ -1072,7 +1137,9 @@ if (publishCenterRoot) {
       const status = String(job.status || row.dataset.status || "").toUpperCase();
       row.dataset.status = status;
       if (job.platform) row.dataset.platform = job.platform;
-      if (job.account_id !== undefined) row.dataset.accountId = job.account_id || "";
+      if (job.account_id !== undefined || job.effective_account_id !== undefined) {
+        row.dataset.accountId = job.effective_account_id || job.account_id || job.send_readiness?.resolved_account_id || "";
+      }
       if (job.visibility) row.dataset.visibility = job.visibility;
       if (job.send_readiness) row.dataset.sendReadiness = JSON.stringify(job.send_readiness);
       if (job.output_is_active !== undefined) row.dataset.outputActive = job.output_is_active ? "true" : "false";
@@ -1094,8 +1161,10 @@ if (publishCenterRoot) {
       const editor = row.querySelector("[data-publish-editor]");
       if (editor) {
         if (job.platform && editor.elements.platform) editor.elements.platform.value = job.platform;
-        const resolvedAccountId = job.account_id || job.send_readiness?.resolved_account_id || "";
-        if (job.account_id !== undefined && editor.elements.account_id) editor.elements.account_id.value = resolvedAccountId;
+        const resolvedAccountId = job.effective_account_id || job.account_id || job.send_readiness?.resolved_account_id || "";
+        if ((job.account_id !== undefined || job.effective_account_id !== undefined) && editor.elements.account_id) {
+          editor.elements.account_id.value = resolvedAccountId;
+        }
         const resolvedMode = job.send_readiness?.resolved_publish_mode || job.publish_mode || "";
         if (resolvedMode && editor.elements.publish_mode?.querySelector(`option[value="${CSS.escape(resolvedMode)}"]`)) {
           editor.elements.publish_mode.value = resolvedMode;
@@ -1115,9 +1184,9 @@ if (publishCenterRoot) {
       }
       const readyNode = row.querySelector("[data-content-ready]");
       if (readyNode && job.content_complete !== undefined) {
-        readyNode.textContent = job.content_complete ? "内容完整" : `缺少：${(job.missing_fields || []).join("、")}`;
-        readyNode.classList.toggle("tone-green", Boolean(job.content_complete));
-        readyNode.classList.toggle("tone-amber", !job.content_complete);
+        readyNode.textContent = job.content_status_message || (job.content_complete ? "内容完整" : `缺少：${(job.missing_fields || []).join("、")}`);
+        readyNode.classList.toggle("tone-green", (job.content_status_tone || "") === "green");
+        readyNode.classList.toggle("tone-amber", (job.content_status_tone || "amber") === "amber");
       }
       const contentScheduleBadge = row.querySelector("[data-content-schedule]");
       if (contentScheduleBadge) {
@@ -1331,6 +1400,24 @@ if (publishCenterRoot) {
     }
   }
 
+  async function upgradePendingDouyinMetadata() {
+    try {
+      const data = await window.apiFetch("/api/publish/jobs/metadata/upgrade-pending-douyin", { method: "POST" });
+      (data.jobs || []).forEach((job) => {
+        const row = document.querySelector(
+          `[data-publish-row][data-section="content"][data-job-id="${CSS.escape(job.id || "")}"]`,
+        );
+        applyGeneratedMetadataToForm(row, job);
+        updateRowFromJob(job);
+      });
+      if (Number(data.upgraded_count || 0) > 0 || Number(data.failed_count || 0) > 0) {
+        showMessage(data.message || "抖音旧草稿文案升级完成。", data.failed_count ? "error" : "success");
+      }
+    } catch (error) {
+      showMessage(`旧草稿文案升级已中止：${error.message}`, "error");
+    }
+  }
+
   async function refreshAccounts() {
     try {
       const data = await window.apiFetch("/api/publish/accounts");
@@ -1507,6 +1594,18 @@ if (publishCenterRoot) {
       updateHistorySelectionUi();
       return;
     }
+    const taskGroupSelect = event.target.closest("[data-task-group-select]");
+    if (taskGroupSelect) {
+      const group = taskGroupSelect.closest("[data-publish-task-group]");
+      visibleTaskGroupRows(group).forEach((row) => {
+        const jobId = row.dataset.jobId || "";
+        if (!jobId) return;
+        if (taskGroupSelect.checked) selectedJobIds.add(jobId);
+        else selectedJobIds.delete(jobId);
+      });
+      updateSelectionUi();
+      return;
+    }
     const checkbox = event.target.closest("[data-publish-select]");
     if (checkbox) {
       const row = checkbox.closest("[data-publish-row]");
@@ -1521,6 +1620,11 @@ if (publishCenterRoot) {
     if (event.target.closest("[data-schedule-form]")) invalidatePreview();
   });
 
+  document.addEventListener("input", (event) => {
+    const form = event.target.closest("[data-publish-editor]");
+    if (form && event.target.matches("[data-copy-field]")) syncCopyCounters(form);
+  });
+
   document.addEventListener("submit", async (event) => {
     const form = event.target.closest("[data-publish-editor]");
     if (form) {
@@ -1531,6 +1635,12 @@ if (publishCenterRoot) {
       const platform = String(row?.dataset.platform || form.elements.platform.value || "douyin");
       const publishMode = String(form.elements.publish_mode.value || "local_browser");
       const target = { platform, account_id: String(form.elements.account_id.value || ""), publish_mode: publishMode };
+      const copyError = validateCopyForm(form);
+      if (copyError) {
+        if (resultNode) resultNode.textContent = `保存失败：${copyError}`;
+        showMessage(copyError, "error");
+        return;
+      }
       const content = {
         title: String(form.elements.title.value || "").trim(),
         description: String(form.elements.description.value || "").trim(),
@@ -1539,9 +1649,9 @@ if (publishCenterRoot) {
         cover_file_path: String(form.elements.cover_file_path.value || ""),
         cover_time_seconds: Number(form.elements.cover_time_seconds.value || 0),
         allow_download: Boolean(form.elements.allow_download.checked),
-        bilibili_tid: String(form.elements.bilibili_tid.value || "娱乐"),
-        bilibili_copyright: String(form.elements.bilibili_copyright.value || "original"),
-        bilibili_source: String(form.elements.bilibili_source.value || ""),
+        bilibili_tid: String(form.elements.bilibili_tid?.value || "娱乐"),
+        bilibili_copyright: String(form.elements.bilibili_copyright?.value || "original"),
+        bilibili_source: String(form.elements.bilibili_source?.value || ""),
       };
       try {
         await window.apiFetch(`/api/publish/jobs/${jobId}/target`, { method: "PATCH", body: JSON.stringify(target) });
@@ -1754,12 +1864,10 @@ if (publishCenterRoot) {
       metadataButton.disabled = true;
       try {
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/metadata?use_ai=true`, { method: "POST" });
-        const form = row.querySelector("[data-publish-editor]");
-        form.elements.title.value = data.job.title || "";
-        form.elements.description.value = data.job.description || "";
-        form.elements.tags.value = data.job.tags || "";
+        applyGeneratedMetadataToForm(row, data.job);
         updateRowFromJob(data.job);
-      } catch (error) { showMessage(`AI 补齐失败：${error.message}`, "error"); }
+        showMessage("AI 文案已重写并同步到最终发送字段。", "success");
+      } catch (error) { showMessage(`AI 重写失败：${error.message}`, "error"); }
       finally { metadataButton.disabled = false; }
       return;
     }
@@ -1928,13 +2036,25 @@ if (publishCenterRoot) {
   });
 
   document.querySelector("[data-batch-ai]")?.addEventListener("click", async () => {
+    let succeeded = 0;
+    let failed = 0;
     for (const jobId of Array.from(selectedJobIds)) {
       try {
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/metadata?use_ai=true`, { method: "POST" });
+        const row = document.querySelector(
+          `[data-publish-row][data-section="content"][data-job-id="${CSS.escape(jobId)}"]`,
+        );
+        applyGeneratedMetadataToForm(row, data.job);
         updateRowFromJob(data.job);
-      } catch (error) { showMessage(`AI 补齐任务 ${jobId} 失败：${error.message}`, "error"); return; }
+        succeeded += 1;
+      } catch (_error) {
+        failed += 1;
+      }
     }
-    showMessage("所选任务的 AI 标题和简介已补齐。", "success");
+    showMessage(
+      `批量 AI 重写完成：成功 ${succeeded} 条，失败 ${failed} 条；失败项已保留原文。`,
+      failed ? "error" : "success",
+    );
   });
 
   backfillCoversButton?.addEventListener("click", async () => {
@@ -2081,7 +2201,10 @@ if (publishCenterRoot) {
     finally { button.disabled = false; }
   });
 
-  document.querySelectorAll("[data-publish-editor]").forEach(syncPlatformFields);
+  document.querySelectorAll("[data-publish-editor]").forEach((form) => {
+    syncPlatformFields(form);
+    syncCopyCounters(form);
+  });
   const focus = document.querySelector("[data-publish-focus]");
   if (focus?.dataset.platform) setActivePlatform(focus.dataset.platform);
   if (focus?.dataset.tab) switchTab(focus.dataset.tab);
@@ -2089,6 +2212,7 @@ if (publishCenterRoot) {
   if (scheduleForm?.elements.start_at_local) scheduleForm.elements.start_at_local.value = beijingDatetimeValue(Date.now() + 10 * 60 * 1000);
   document.querySelectorAll('[data-publish-row][data-section="schedule"], [data-publish-row][data-section="history"]').forEach((row) => applyRowReadiness(row));
   updateSelectionUi(); applyHistoryFilter(); refreshScheduleViews(); updateBackfillCoversButton();
+  void upgradePendingDouyinMetadata();
   if (focus?.dataset.taskId) {
     const group = document.querySelector(
       `[data-publish-task-group][data-task-id="${CSS.escape(focus.dataset.taskId)}"]`,
@@ -2097,7 +2221,7 @@ if (publishCenterRoot) {
       setTaskGroupExpanded(group, true);
       group.scrollIntoView({ behavior: "smooth", block: "start" });
     } else {
-      showMessage("已定位到该处理任务，但当前平台没有可准备的新版本内容。可切换平台或返回任务页重新同步。");
+      showMessage("已定位到该处理任务，但当前没有可准备的抖音新版本内容。可返回任务页重新同步。");
     }
   }
   window.setInterval(() => { refreshJobs(); refreshAccounts(); refreshSchedulerHealth(); }, 5000);
