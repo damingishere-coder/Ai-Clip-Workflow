@@ -5,6 +5,9 @@ TARGET_PLATFORMS = {
     "bilibili": "B站",
 }
 
+# 前台和自动同步当前只创建抖音任务；B 站后端能力与历史数据继续保留。
+AUTO_PUBLISH_PLATFORMS = ("douyin",)
+
 PUBLISH_MODES = {
     "opencli_publish": "opencli 兼容发送（需显式开启）",
     "manual_export": "本地发布包导出",

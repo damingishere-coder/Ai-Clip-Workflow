@@ -7,16 +7,15 @@ from uuid import uuid4
 
 from app.core.config import settings
 from app.db.database import get_connection
+from app.services.publish_copy_rules import PUBLISH_COPY_RULE_VERSION
 from app.services.publish_service import DEFAULT_BILIBILI_TID, USER_REMOVED_ERROR_CODE, get_publish_job
-from app.services.publish_domain import validate_publish_mode, validate_target_platform
+from app.services.publish_domain import AUTO_PUBLISH_PLATFORMS, validate_publish_mode, validate_target_platform
 from app.services.task_service import _now_iso
 
 
 def platforms_for_task(task: dict) -> list[str]:
-    platform = (task.get("platform") or "general").strip().lower()
-    if platform in {"douyin", "bilibili"}:
-        return [platform]
-    return ["douyin", "bilibili"]
+    del task
+    return list(AUTO_PUBLISH_PLATFORMS)
 
 
 def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
@@ -71,15 +70,19 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
             if not cover_file_path:
                 raise ValueError(f"{output_clip.get('id') or '未知切片'} 没有生成封面，已停止创建不完整的发布任务")
             cover_time_seconds = float(cover.get("cover_time_seconds") or 0)
-            account = connection.execute(
+            account_rows = connection.execute(
                 """
-                SELECT id FROM publish_accounts
-                WHERE platform = ? AND login_status = 'normal'
-                ORDER BY COALESCE(last_login_at, updated_at) DESC LIMIT 1
+                SELECT id, login_status FROM publish_accounts
+                WHERE platform = ?
+                ORDER BY created_at, id
                 """,
                 (platform,),
-            ).fetchone()
-            account_id = account["id"] if account else None
+            ).fetchall()
+            account_id = (
+                account_rows[0]["id"]
+                if len(account_rows) == 1 and str(account_rows[0]["login_status"] or "") == "normal"
+                else None
+            )
             scheduled_at = str(item.get("scheduled_at") or "").strip()
             if scheduled_at:
                 from app.services.publish_time import to_utc_iso
@@ -94,6 +97,8 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                 "target_platform": platform,
                 "metadata_source": metadata.get("source") or "",
                 "metadata_error": metadata.get("error") or "",
+                "metadata_policy_version": PUBLISH_COPY_RULE_VERSION,
+                "metadata_upgrade_status": "generated",
                 "cover_text": metadata.get("cover_text") or "",
                 "cover_source": cover.get("cover_source") or "midpoint_fallback",
                 "cover_time_seconds": cover_time_seconds,

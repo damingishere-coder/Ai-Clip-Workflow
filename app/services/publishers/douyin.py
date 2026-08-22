@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from app.services.publish_copy_rules import validate_douyin_publish_copy
 from app.services.publish_time import utc_now_iso
 from app.services.publishers.base import (
     BasePlatformPublisher,
@@ -41,6 +42,10 @@ class DouyinPublisher(BasePlatformPublisher):
             raise PublishValidationError("抖音正文不能为空", "missing_caption")
         if not job_hashtags(job):
             raise PublishValidationError("抖音话题不能为空", "missing_hashtags")
+        try:
+            validate_douyin_publish_copy(title, caption, job_hashtags(job))
+        except ValueError as exc:
+            raise PublishValidationError(str(exc), "douyin_copy_invalid") from exc
         if not str(job.get("cover_file_path") or "").strip():
             raise PublishValidationError("请选择或生成抖音封面", "missing_cover")
 

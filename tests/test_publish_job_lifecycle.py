@@ -7,9 +7,10 @@
 - TestFormatTags: 平台话题格式化
 """
 
+from dataclasses import replace
 from uuid import uuid4
 
-
+from app.core.config import settings
 from app.services.publish_service import (
     STATUS_LABELS,
     _format_tags,
@@ -108,18 +109,18 @@ class TestPublishJobDbLifecycle:
         data_dir = tmp_path / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
         db_path = data_dir / "test_pub.sqlite3"
-        monkeypatch.setenv("TASKS_DIR", str(tmp_path))
-        monkeypatch.setenv("STORAGE_ROOT", str(tmp_path))
-        monkeypatch.setenv("DATA_DIR", str(data_dir))
-        monkeypatch.setenv("DATABASE_PATH", str(db_path))
-
-        import importlib
-        import app.core.config
         import app.db.database
         import app.services.publish_service
-        importlib.reload(app.core.config)
-        importlib.reload(app.db.database)
-        importlib.reload(app.services.publish_service)
+
+        test_settings = replace(
+            settings,
+            tasks_dir=tmp_path,
+            storage_root=tmp_path,
+            data_dir=data_dir,
+            database_path=db_path,
+        )
+        monkeypatch.setattr(app.db.database, "settings", test_settings)
+        monkeypatch.setattr(app.services.publish_service, "settings", test_settings)
 
         from app.db.database import init_db
         init_db()

@@ -5,6 +5,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from app.services.publish_copy_rules import (
+    BILIBILI_TITLE_MAX,
+    build_generated_douyin_publish_copy,
+    normalize_douyin_tags,
+)
 from app.services.publish_service import generate_publish_metadata
 
 
@@ -24,10 +29,15 @@ class MetadataGenerator:
     use_ai: bool = False
 
     def generate(self, item: dict, platform: str) -> dict:
-        metadata = generate_publish_metadata(item, use_ai=self.use_ai)
-        title = self._polish_title(metadata.get("title") or "", item)
-        caption = self._polish_caption(metadata.get("description") or "", title)
-        hashtags = self._hashtags(metadata.get("tags") or "", item)
+        metadata = generate_publish_metadata(item, use_ai=self.use_ai, platform=platform)
+        title = self._polish_title(metadata.get("title") or "", item, platform)
+        caption = self._polish_caption(metadata.get("description") or "", title, platform)
+        hashtags = self._hashtags(metadata.get("tags") or "", item, platform)
+        if platform == "douyin":
+            normalized = build_generated_douyin_publish_copy(title, caption, hashtags)
+            title = normalized["title"]
+            caption = normalized["description"]
+            hashtags = normalize_douyin_tags(normalized["tags"])
         cover_text = self._cover_text(title)
         risk_flags = self._risk_flags(item, title, caption, hashtags)
         return {
@@ -45,7 +55,7 @@ class MetadataGenerator:
             "recommend_reason": item.get("highlight_reason") or item.get("clip_summary") or "",
         }
 
-    def _polish_title(self, title: str, item: dict) -> str:
+    def _polish_title(self, title: str, item: dict, platform: str) -> str:
         text = re.sub(r"\s+", " ", title or "").strip(" #＃")
         context = " ".join(
             str(item.get(key) or "")
@@ -55,20 +65,23 @@ class MetadataGenerator:
             text = f"康熙名场面：{text}" if text else "康熙来了经典名场面"
         text = re.sub(r"(震惊|不看后悔|全网第一|必看)", "", text)
         text = re.sub(r"\s+", " ", text).strip(" ：:，,。.!！?？")
-        return (text or "经典综艺高光片段")[:40]
+        max_length = 30 if platform == "douyin" else BILIBILI_TITLE_MAX
+        return (text or "经典综艺高光片段")[:max_length]
 
-    def _polish_caption(self, caption: str, title: str) -> str:
+    def _polish_caption(self, caption: str, title: str, platform: str) -> str:
         text = re.sub(r"\s+", " ", caption or "").strip()
         if not text:
             text = title
-        return text[:180]
+        return text[:35] if platform == "douyin" else text[:180]
 
-    def _hashtags(self, tags: str, item: dict) -> list[str]:
+    def _hashtags(self, tags: str, item: dict, platform: str) -> list[str]:
         raw_tags = re.split(r"[,，#＃\s]+", tags or "")
         context = " ".join(str(item.get(key) or "") for key in ("task_name", "clip_title", "clip_summary"))
         if "康熙" in context:
-            raw_tags = [*raw_tags, "康熙来了", "经典综艺", "综艺名场面"]
-        raw_tags = [*raw_tags, "高光片段"]
+            raw_tags = [*raw_tags, "康熙", "综艺"]
+        raw_tags = [*raw_tags, "高光", "看点"]
+        if platform == "douyin":
+            return normalize_douyin_tags(raw_tags, generated=True)
         cleaned: list[str] = []
         for tag in raw_tags:
             value = re.sub(r"[^\w\u4e00-\u9fff]+", "", str(tag or "").strip().lstrip("#"))

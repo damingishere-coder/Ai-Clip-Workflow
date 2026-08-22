@@ -5182,6 +5182,26 @@ td a,
 }
 .publish-task-group-identity small { color: var(--muted); }
 .publish-task-group-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.publish-task-group-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid rgba(31, 111, 255, 0.18);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--blue);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.publish-task-group-select input { width: auto; min-height: 0; margin: 0; }
+.publish-task-group-select:has(input:checked) {
+  border-color: rgba(31, 111, 255, 0.34);
+  background: var(--blue-soft);
+}
 .publish-task-group-body { display: grid; gap: 12px; }
 .publish-task-group-body[hidden] { display: none; }
 
@@ -5274,6 +5294,13 @@ td a,
 .publish-bilibili-fields.span-2,
 .publish-bilibili-fields .span-2 { grid-column: 1 / -1; }
 .publish-content-grid textarea { min-height: 88px; resize: vertical; }
+.publish-copy-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.publish-copy-label small { color: var(--muted); font-variant-numeric: tabular-nums; }
 .publish-content-form .button-row { margin-top: 14px; }
 
 .publish-plan-header,
@@ -5633,7 +5660,14 @@ td a,
   .publish-content-grid .span-2, .publish-bilibili-fields.span-2, .publish-bilibili-fields .span-2 { grid-column: 1; }
   .publish-card-heading { display: grid; }
   .publish-task-group-header { align-items: flex-start; flex-direction: column; }
-  .publish-task-group-actions { width: 100%; justify-content: space-between; }
+  .publish-task-group-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    width: 100%;
+    gap: 8px;
+  }
+  .publish-task-group-select { justify-self: start; }
+  .publish-task-group-actions [data-task-group-toggle] { grid-column: 1 / -1; width: 100%; }
   .publish-task-group-identity p strong { max-width: 70vw; }
   .publish-card-heading .publish-card-heading-actions { justify-content: flex-start; }
   .publish-plan-row, .publish-execution-row { grid-template-columns: 28px minmax(0, 1fr); }
