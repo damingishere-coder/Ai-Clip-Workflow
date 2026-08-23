@@ -441,7 +441,14 @@ async def resume_auto_pipeline(task_id: str, background_tasks: BackgroundTasks) 
 @router.post("/{task_id}/output-clips/{output_clip_id}/subtitles")
 async def render_output_clip_subtitles(task_id: str, output_clip_id: str) -> dict:
     try:
-        return task_service.render_subtitles_for_output_clip(task_id, output_clip_id)
+        from app.services.subtitle_auto_workflow_service import enqueue_task_subtitle_render
+
+        return enqueue_task_subtitle_render(
+            task_id,
+            output_clip_ids=[output_clip_id],
+            approve_active_revisions=False,
+            continue_pipeline=False,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

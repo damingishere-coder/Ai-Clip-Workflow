@@ -6,12 +6,23 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Response, Uploa
 
 from app.models.subtitle import (
     SubtitleApproveRequest,
+    SubtitleAISuggestionAcceptRequest,
+    SubtitleAIRevisionRequest,
     SubtitleOperationsRequest,
     SubtitleRevisionCreate,
+    SubtitleTaskRenderRequest,
     SubtitleSyncRequest,
+)
+from app.services import job_service
+from app.services.subtitle_ai_service import generate_subtitle_suggestions
+from app.services.subtitle_auto_workflow_service import (
+    enqueue_task_subtitle_render,
+    prepare_task_subtitle_review,
+    skip_task_subtitles_and_resume,
 )
 from app.services.subtitle_data_service import (
     SubtitleRevisionConflict,
+    accept_suggestion_revision,
     apply_revision_operations,
     approve_revision,
     create_manual_revision,
@@ -38,6 +49,37 @@ def list_tracks(task_id: str, ensure: bool = Query(default=True)) -> dict:
 @router.post("/tasks/{task_id}/source-track")
 def generate_source_track(task_id: str, payload: SubtitleSyncRequest) -> dict:
     return _call(lambda: {"track": ensure_source_track(task_id, force=payload.force)})
+
+
+@router.post("/tasks/{task_id}/prepare-review")
+def prepare_review(task_id: str) -> dict:
+    return _call(lambda: prepare_task_subtitle_review(task_id))
+
+
+@router.post("/tasks/{task_id}/approve-and-render")
+def approve_and_render(task_id: str, payload: SubtitleTaskRenderRequest) -> dict:
+    return _call(
+        lambda: enqueue_task_subtitle_render(
+            task_id,
+            approve_active_revisions=payload.approve_active_revisions,
+            continue_pipeline=True,
+        )
+    )
+
+
+@router.post("/tasks/{task_id}/skip-and-resume")
+def skip_and_resume(task_id: str) -> dict:
+    return _call(lambda: skip_task_subtitles_and_resume(task_id))
+
+
+@router.get("/tasks/{task_id}/jobs")
+def list_subtitle_jobs(task_id: str) -> dict:
+    jobs = [
+        job
+        for job in job_service.list_jobs(task_id=task_id)
+        if job.get("job_type") == job_service.JOB_TYPE_SUBTITLE
+    ]
+    return {"task_id": task_id, "jobs": jobs, "count": len(jobs)}
 
 
 @router.get("/tracks/{track_id}")
@@ -107,6 +149,36 @@ def approve(track_id: str, payload: SubtitleApproveRequest) -> dict:
 @router.post("/tracks/{track_id}/sync-source")
 def sync_source(track_id: str, payload: SubtitleSyncRequest) -> dict:
     return _call(lambda: {"track": sync_clip_track(track_id, force=payload.force)})
+
+
+@router.post("/tracks/{track_id}/ai-suggestions")
+def ai_suggestions(track_id: str, payload: SubtitleAIRevisionRequest) -> dict:
+    return _call(
+        lambda: generate_subtitle_suggestions(
+            track_id,
+            revision_id=payload.revision_id,
+            cue_ids=payload.cue_ids,
+            instructions=payload.instructions,
+        )
+    )
+
+
+@router.post("/tracks/{track_id}/ai-suggestions/{suggestion_revision_id}/accept")
+def accept_ai_suggestions(
+    track_id: str,
+    suggestion_revision_id: str,
+    payload: SubtitleAISuggestionAcceptRequest,
+) -> dict:
+    return _call(
+        lambda: {
+            "revision": accept_suggestion_revision(
+                track_id,
+                suggestion_revision_id=suggestion_revision_id,
+                base_revision_id=payload.base_revision_id,
+                cue_ids=payload.cue_ids,
+            )
+        }
+    )
 
 
 @router.post("/tracks/{track_id}/import")

@@ -1,5 +1,23 @@
 # 系统架构
 
+## 2026-08-24：字幕审核与交付证据链
+
+```text
+切片完成
+→ source/clip 字幕草稿
+→ pending_subtitle_review（自动流水线暂停）
+   ├─ 明确跳过 → delivery_mode=original → 恢复元数据/发送任务
+   └─ 审核 revision → workflow_jobs:subtitle → 临时渲染
+      → FFprobe 验证 → 原子激活 → delivery_mode=subtitled
+      → 恢复元数据/发送任务
+```
+
+- `subtitle_auto_workflow_service.py` 负责暂停点、交付决定、批量 checkpoint、恢复流水线及父进程异常清理。
+- `job_worker.py` 仍采用单重型 Job 子进程；字幕 Job 与转写/切片共享 lease、heartbeat、取消和人工重试接口。
+- 渲染尝试顺序为可用 `h264_nvenc`、`libx264`，音频可安全复制时优先复制，否则转 AAC；最终统一验证 H.264、`yuv420p`、音轨、时长和文件大小。
+- 发布任务保存 `subtitle_delivery_mode` 及 revision/验证证据。自动字幕来源只有在审核、验证和文件三项同时成立时可进入发送中心。
+- AI 纠错独立于自动流水线：Provider 返回的内容只能映射既有 cue 的文本，不允许改变时间、说话人或未知 cue；建议 revision 必须人工接受。
+
 ## 2026-08-23：统一字幕架构
 
 ```text
@@ -14,7 +32,7 @@ clip subtitle_track   → immutable subtitle_revision → SRT/VTT/ASS/编辑器
 - 原片轨只保存一条 active track；内容变化产生新 revision。切片轨记录来源 track/revision，未人工编辑时可同步，人工编辑后只进入 `pending_sync`。
 - revision 内容不可原地更新；审核只改变 revision 状态，渲染必须固定引用 revision id，避免编辑过程中改变已排队输出。
 - `pysubs2` 负责字幕格式与 ASS，不再手写固定分辨率 ASS。`wavesurfer.js` 仅消费服务端 peaks 与媒体流，不读取六小时完整音频到浏览器内存。
-- 当前同步 FFmpeg 烧录仅作为旧 API 兼容；持久化渲染队列、取消、重试、NVENC 回退与发送中心门禁在 PR 4 接入。
+- 单条兼容入口和批量入口都只负责创建持久化字幕 Job；HTTP 请求不再同步等待 FFmpeg。批量入口额外负责全自动流水线恢复。
 
 ## 2026-08-23：长直播选片层
 

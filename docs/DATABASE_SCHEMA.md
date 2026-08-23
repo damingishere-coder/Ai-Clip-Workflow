@@ -1,5 +1,21 @@
 # 数据库结构说明
 
+## 2026-08-24：字幕自动流水线字段
+
+`subtitle_jobs` 在原有不可变 revision 引用上增加：
+
+| 字段 | 说明 |
+| --- | --- |
+| `workflow_job_id` | 所属持久化字幕 Job，用于取消、恢复和精确清理临时文件 |
+| `validation_status` | `pending / verified`；旧记录默认为未验证，不能自动发布 |
+| `validation_json` | FFprobe 的编码、像素格式、音轨、时长和音频处理证据 |
+| `encoder` | 实际成功的 `h264_nvenc` 或 `libx264` |
+| `verified_at` | 输出验证通过时间 |
+
+- 全自动字幕交付决定保存在 `tasks.auto_config_json.subtitle_delivery_mode`，值仅允许 `original / subtitled`，并记录 `subtitle_decided_at`。
+- `workflow_jobs.payload_json` 固定保存每个 output clip 与 revision 的组合；`checkpoint_json.completed` 只复用对应字幕 job 仍为 `completed + verified` 且文件存在的条目。
+- 缺少新字段的已有数据库先创建 `subtitle-auto-workflow` SQLite 在线备份，再执行幂等列/索引迁移；旧字幕文件和 job 不删除，但未验证旧记录不会获得自动发布资格。
+
 ## 2026-08-23：字幕 revision 数据结构
 
 - `output_clip` 新增 `source_start_ms / source_end_ms / source_duration_ms / source_fingerprint / snapshot_source`。新切片使用 `cut_commit`，旧切片第一次使用时可从候选边界生成 `legacy_inferred`；之后候选修改不会漂移已保存边界。

@@ -44,6 +44,12 @@ def init_db() -> None:
             settings.data_dir / "backups",
             "subtitle-editor-rebuild",
         )
+    if _requires_subtitle_auto_schema_migration(settings.database_path):
+        create_schema_migration_backup(
+            settings.database_path,
+            settings.data_dir / "backups",
+            "subtitle-auto-workflow",
+        )
 
     with get_connection() as connection:
         connection.executescript(
@@ -181,17 +187,23 @@ def init_db() -> None:
                 task_id TEXT NOT NULL,
                 output_clip_id TEXT NOT NULL,
                 revision_id TEXT,
+                workflow_job_id TEXT,
                 style_preset_id TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 subtitle_file_path TEXT,
                 output_file_path TEXT,
                 error_message TEXT,
+                validation_status TEXT NOT NULL DEFAULT 'legacy_unverified',
+                validation_json TEXT NOT NULL DEFAULT '{}',
+                encoder TEXT NOT NULL DEFAULT '',
+                verified_at TEXT,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(task_id) REFERENCES tasks(id),
                 FOREIGN KEY(output_clip_id) REFERENCES output_clip(id),
                 FOREIGN KEY(revision_id) REFERENCES subtitle_revisions(id),
+                FOREIGN KEY(workflow_job_id) REFERENCES workflow_jobs(id),
                 FOREIGN KEY(style_preset_id) REFERENCES subtitle_style_presets(id)
             );
 
@@ -561,6 +573,26 @@ def _requires_subtitle_editor_schema_migration(database_path) -> bool:
     )
 
 
+def _requires_subtitle_auto_schema_migration(database_path) -> bool:
+    """已有字幕任务缺少异步渲染验证字段时，迁移前先备份。"""
+    if not database_path.exists() or database_path.stat().st_size == 0:
+        return False
+    connection = None
+    try:
+        connection = sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(subtitle_jobs)").fetchall()}
+    finally:
+        if connection:
+            connection.close()
+    return bool(columns) and not {
+        "workflow_job_id",
+        "validation_status",
+        "validation_json",
+        "encoder",
+        "verified_at",
+    } <= columns
+
+
 def _get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
     rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row["name"] for row in rows}
@@ -584,6 +616,7 @@ def _create_indexes(connection: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_clip_feedback_task_clip ON clip_feedback(task_id, clip_candidate_id)",
         # 字幕任务（按任务、输出切片、状态）
         "CREATE INDEX IF NOT EXISTS idx_subtitle_jobs_task_output_status ON subtitle_jobs(task_id, output_clip_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_subtitle_jobs_workflow_job ON subtitle_jobs(workflow_job_id)",
         "CREATE INDEX IF NOT EXISTS idx_subtitle_tracks_task_type ON subtitle_tracks(task_id, track_type, is_active)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_subtitle_tracks_active_source ON subtitle_tracks(task_id) WHERE track_type = 'source' AND is_active = 1",
         "CREATE INDEX IF NOT EXISTS idx_subtitle_revisions_track_created ON subtitle_revisions(track_id, created_at)",
@@ -724,10 +757,12 @@ def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
         UPDATE tasks SET status = 'failed' WHERE status IN ('失败', 'failed');
         UPDATE tasks SET status = 'pending_video' WHERE status NOT IN (
             'CREATED', 'PREPARING_SOURCE', 'TRANSCRIBING', 'AI_ANALYZING',
-            'CLIP_SELECTING', 'VIDEO_CUTTING', 'METADATA_GENERATING',
+            'CLIP_SELECTING', 'VIDEO_CUTTING', 'SUBTITLE_DRAFTING',
+            'PENDING_SUBTITLE_REVIEW', 'METADATA_GENERATING',
             'SCHEDULE_CREATING', 'PUBLISH_JOB_CREATING', 'READY_TO_PUBLISH',
             'COMPLETED', 'FAILED_PREPARING_SOURCE', 'FAILED_TRANSCRIBING',
             'FAILED_AI_ANALYZING', 'FAILED_CLIP_SELECTING', 'FAILED_VIDEO_CUTTING',
+            'FAILED_SUBTITLE_DRAFTING',
             'FAILED_METADATA_GENERATING', 'FAILED_SCHEDULE_CREATING',
             'FAILED_PUBLISH_JOB_CREATING',
             'pending_video', 'pending_processing', 'audio_extracting', 'transcribing',
@@ -901,11 +936,16 @@ def _migrate_subtitle_jobs_table(connection: sqlite3.Connection) -> None:
         "task_id": "ALTER TABLE subtitle_jobs ADD COLUMN task_id TEXT",
         "output_clip_id": "ALTER TABLE subtitle_jobs ADD COLUMN output_clip_id TEXT",
         "revision_id": "ALTER TABLE subtitle_jobs ADD COLUMN revision_id TEXT",
+        "workflow_job_id": "ALTER TABLE subtitle_jobs ADD COLUMN workflow_job_id TEXT",
         "style_preset_id": "ALTER TABLE subtitle_jobs ADD COLUMN style_preset_id TEXT",
         "status": "ALTER TABLE subtitle_jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'",
         "subtitle_file_path": "ALTER TABLE subtitle_jobs ADD COLUMN subtitle_file_path TEXT",
         "output_file_path": "ALTER TABLE subtitle_jobs ADD COLUMN output_file_path TEXT",
         "error_message": "ALTER TABLE subtitle_jobs ADD COLUMN error_message TEXT",
+        "validation_status": "ALTER TABLE subtitle_jobs ADD COLUMN validation_status TEXT NOT NULL DEFAULT 'legacy_unverified'",
+        "validation_json": "ALTER TABLE subtitle_jobs ADD COLUMN validation_json TEXT NOT NULL DEFAULT '{}'",
+        "encoder": "ALTER TABLE subtitle_jobs ADD COLUMN encoder TEXT NOT NULL DEFAULT ''",
+        "verified_at": "ALTER TABLE subtitle_jobs ADD COLUMN verified_at TEXT",
         "created_at": "ALTER TABLE subtitle_jobs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         "updated_at": "ALTER TABLE subtitle_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
         "is_active": "ALTER TABLE subtitle_jobs ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",

@@ -478,9 +478,11 @@ def get_revision_cues(
 
 def approve_revision(track_id: str, revision_id: str) -> dict[str, Any]:
     get_track(track_id)
-    revision = get_revision(revision_id)
+    revision = get_revision(revision_id, include_cues=True)
     if revision["track_id"] != track_id:
         raise ValueError("revision 不属于当前字幕轨")
+    if int((revision.get("quality") or {}).get("error_count") or 0) > 0:
+        raise ValueError("当前字幕仍有时间重叠错误，请修正后再审核")
     now = _now_iso()
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -494,6 +496,129 @@ def approve_revision(track_id: str, revision_id: str) -> dict[str, Any]:
         )
         connection.commit()
     return get_revision(revision_id, include_cues=True)
+
+
+def create_suggestion_revision(
+    track_id: str,
+    *,
+    base_revision_id: str,
+    suggested_text_by_cue_id: dict[str, str],
+    note: str = "AI 字幕纠错建议",
+) -> dict[str, Any]:
+    """保存非 active 建议版本；服务端只接受文字变化。"""
+    track = get_track(track_id)
+    if track.get("active_revision_id") != base_revision_id:
+        raise SubtitleRevisionConflict("字幕已产生新版本，请刷新后重新生成 AI 建议")
+    base_revision = get_revision(base_revision_id)
+    if base_revision["track_id"] != track_id:
+        raise ValueError("基础 revision 不属于当前字幕轨")
+    base_cues = _fetch_all_revision_cues(base_revision_id)
+    known_ids = {str(cue["id"]) for cue in base_cues}
+    unknown = set(suggested_text_by_cue_id) - known_ids
+    if unknown:
+        raise ValueError("AI 建议包含不属于当前 revision 的 cue")
+    suggestion_cues = []
+    for cue in base_cues:
+        cue_id = str(cue["id"])
+        text = str(suggested_text_by_cue_id.get(cue_id, cue["text"]) or "").strip()
+        if not text:
+            raise ValueError("AI 建议不能把字幕文字清空")
+        suggestion_cues.append(
+            {
+                "start_ms": int(cue["start_ms"]),
+                "end_ms": int(cue["end_ms"]),
+                "text": text,
+                "confidence": cue.get("confidence"),
+                "speaker": cue.get("speaker") or "",
+                "source_cue_id": cue_id,
+            }
+        )
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        revision = _insert_revision_with_connection(
+            connection,
+            track_id,
+            suggestion_cues,
+            origin="ai_suggestion",
+            parent_revision_id=base_revision_id,
+            status="suggested",
+            note=note,
+            activate=False,
+        )
+        connection.commit()
+    return get_revision(revision["id"], include_cues=True)
+
+
+def get_suggestion_diff(track_id: str, suggestion_revision_id: str) -> list[dict[str, Any]]:
+    suggestion = get_revision(suggestion_revision_id, include_cues=True)
+    if suggestion["track_id"] != track_id or suggestion.get("origin") != "ai_suggestion":
+        raise ValueError("AI 建议 revision 不属于当前字幕轨")
+    base_revision_id = str(suggestion.get("parent_revision_id") or "")
+    if not base_revision_id:
+        raise ValueError("AI 建议缺少基础 revision")
+    base_cues = {str(cue["id"]): cue for cue in _fetch_all_revision_cues(base_revision_id)}
+    changes = []
+    for cue in suggestion["cues"]:
+        source_id = str(cue.get("source_cue_id") or "")
+        base = base_cues.get(source_id)
+        if not base or str(base.get("text") or "") == str(cue.get("text") or ""):
+            continue
+        changes.append(
+            {
+                "cue_id": source_id,
+                "start_ms": int(base["start_ms"]),
+                "end_ms": int(base["end_ms"]),
+                "original_text": str(base.get("text") or ""),
+                "suggested_text": str(cue.get("text") or ""),
+            }
+        )
+    return changes
+
+
+def accept_suggestion_revision(
+    track_id: str,
+    *,
+    suggestion_revision_id: str,
+    base_revision_id: str,
+    cue_ids: Iterable[str],
+) -> dict[str, Any]:
+    """选择接受 AI 文字建议，并生成新的人工草稿 revision。"""
+    track = get_track(track_id)
+    if track.get("active_revision_id") != base_revision_id:
+        raise SubtitleRevisionConflict("字幕已产生新版本，请刷新后再接受 AI 建议")
+    suggestion = get_revision(suggestion_revision_id, include_cues=True)
+    if (
+        suggestion["track_id"] != track_id
+        or suggestion.get("origin") != "ai_suggestion"
+        or suggestion.get("parent_revision_id") != base_revision_id
+    ):
+        raise ValueError("AI 建议与当前字幕版本不匹配")
+    selected = {str(value) for value in cue_ids if str(value)}
+    if not selected:
+        raise ValueError("请至少选择一条 AI 建议")
+    suggested_text = {
+        str(cue.get("source_cue_id") or ""): str(cue.get("text") or "")
+        for cue in suggestion["cues"]
+    }
+    base_cues = _fetch_all_revision_cues(base_revision_id)
+    known_ids = {str(cue["id"]) for cue in base_cues}
+    if not selected <= known_ids:
+        raise ValueError("选中的 AI 建议不属于当前字幕版本")
+    merged = []
+    for cue in base_cues:
+        cue_id = str(cue["id"])
+        merged.append(
+            {
+                **cue,
+                "text": suggested_text.get(cue_id, cue["text"]) if cue_id in selected else cue["text"],
+            }
+        )
+    return create_manual_revision(
+        track_id,
+        base_revision_id=base_revision_id,
+        cues=merged,
+        note=f"接受 {len(selected)} 条 AI 字幕建议",
+    )
 
 
 def import_subtitle_text(

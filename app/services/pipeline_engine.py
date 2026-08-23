@@ -30,6 +30,7 @@ STEP_STATUSES = [
     TaskStatus.AI_ANALYZING,
     TaskStatus.CLIP_SELECTING,
     TaskStatus.VIDEO_CUTTING,
+    TaskStatus.SUBTITLE_DRAFTING,
     TaskStatus.METADATA_GENERATING,
     TaskStatus.SCHEDULE_CREATING,
     TaskStatus.PUBLISH_JOB_CREATING,
@@ -41,6 +42,7 @@ FAILED_BY_STEP = {
     TaskStatus.AI_ANALYZING: TaskStatus.FAILED_AI_ANALYZING,
     TaskStatus.CLIP_SELECTING: TaskStatus.FAILED_CLIP_SELECTING,
     TaskStatus.VIDEO_CUTTING: TaskStatus.FAILED_VIDEO_CUTTING,
+    TaskStatus.SUBTITLE_DRAFTING: TaskStatus.FAILED_SUBTITLE_DRAFTING,
     TaskStatus.METADATA_GENERATING: TaskStatus.FAILED_METADATA_GENERATING,
     TaskStatus.SCHEDULE_CREATING: TaskStatus.FAILED_SCHEDULE_CREATING,
     TaskStatus.PUBLISH_JOB_CREATING: TaskStatus.FAILED_PUBLISH_JOB_CREATING,
@@ -52,6 +54,7 @@ RETRY_START_BY_FAILED_STATUS = {
     TaskStatus.FAILED_AI_ANALYZING.value: TaskStatus.AI_ANALYZING,
     TaskStatus.FAILED_CLIP_SELECTING.value: TaskStatus.CLIP_SELECTING,
     TaskStatus.FAILED_VIDEO_CUTTING.value: TaskStatus.VIDEO_CUTTING,
+    TaskStatus.FAILED_SUBTITLE_DRAFTING.value: TaskStatus.SUBTITLE_DRAFTING,
     TaskStatus.FAILED_METADATA_GENERATING.value: TaskStatus.METADATA_GENERATING,
     TaskStatus.FAILED_SCHEDULE_CREATING.value: TaskStatus.SCHEDULE_CREATING,
     TaskStatus.FAILED_PUBLISH_JOB_CREATING.value: TaskStatus.PUBLISH_JOB_CREATING,
@@ -106,6 +109,7 @@ class PipelineEngine:
             TaskStatus.AI_ANALYZING: self._run_ai_analysis,
             TaskStatus.CLIP_SELECTING: self._select_clips,
             TaskStatus.VIDEO_CUTTING: self._cut_video,
+            TaskStatus.SUBTITLE_DRAFTING: self._prepare_subtitle_drafts,
             TaskStatus.METADATA_GENERATING: self._generate_metadata,
             TaskStatus.SCHEDULE_CREATING: self._create_schedule,
             TaskStatus.PUBLISH_JOB_CREATING: self._create_publish_jobs,
@@ -128,6 +132,14 @@ class PipelineEngine:
                         job_service.heartbeat_job(job_id, str(job["lease_owner"]))
                 task_service.update_task_status(task_id, step)
                 context[step.value] = handlers[step](task_id, context)
+                if step == TaskStatus.SUBTITLE_DRAFTING:
+                    summary = self._write_task_summary(task_id, TaskStatus.PENDING_SUBTITLE_REVIEW.value, "")
+                    return {
+                        "status": "pending_subtitle_review",
+                        "message": "字幕草稿已生成，等待人工审核后再继续。",
+                        "summary_path": summary["summary_path"],
+                        "task": task_service.get_task(task_id, include_video_probe=False),
+                    }
             except Exception as exc:
                 failed_status = FAILED_BY_STEP[step]
                 error = str(exc) or f"{step.value} 失败"
@@ -147,7 +159,7 @@ class PipelineEngine:
         append_task_log(task_id, "发布任务已创建，进入待人工确认发布状态")
         summary = self._write_task_summary(task_id, "ready_to_publish", "")
         task_service.update_task_status(task_id, TaskStatus.COMPLETED)
-        append_task_log(task_id, "全自动流水线完成。本轮已跳过字幕烧录，只保留原视频裁切片段。")
+        append_task_log(task_id, "全自动流水线完成，发布内容已按用户确认的字幕交付方式创建。")
         return {
             "status": "completed",
             "summary_path": summary["summary_path"],
@@ -310,7 +322,7 @@ class PipelineEngine:
         return payload
 
     def _cut_video(self, task_id: str, context: dict) -> dict:
-        append_task_log(task_id, "全自动模式：开始原视频裁切，本轮明确跳过字幕烧录")
+        append_task_log(task_id, "全自动模式：开始原视频裁切，完成后生成字幕草稿")
         result = task_service.process_task_video_cuts(task_id, sync_publish_jobs=False)
         output_clips = task_service.list_output_clips(task_id)
         success = [clip for clip in output_clips if clip.get("status") == "completed" and clip.get("file_exists")]
@@ -320,6 +332,12 @@ class PipelineEngine:
         self._write_clip_metadata(task_id, output_clips, metadata_items=[])
         append_task_log(task_id, f"全自动原片切割完成：成功 {len(success)} 条，失败 {len(failed)} 条")
         return {"success_count": len(success), "failed_count": len(failed), "failed": failed}
+
+    def _prepare_subtitle_drafts(self, task_id: str, context: dict) -> dict:
+        from app.services.subtitle_auto_workflow_service import prepare_task_subtitle_review
+
+        del context
+        return prepare_task_subtitle_review(task_id)
 
     def _generate_metadata(self, task_id: str, context: dict) -> dict:
         task = self._get_task(task_id)
@@ -376,7 +394,14 @@ class PipelineEngine:
         scheduled_items = schedule_result.get("scheduled_items") or []
         if not scheduled_items:
             raise ValueError("没有可创建发布任务的排期记录")
-        result = create_auto_publish_jobs(task, scheduled_items)
+        delivery_mode = str(context["config"].get("subtitle_delivery_mode") or "")
+        if delivery_mode not in {"subtitled", "original"}:
+            raise ValueError("尚未确认字幕交付方式，不能创建发布任务")
+        result = create_auto_publish_jobs(
+            task,
+            scheduled_items,
+            subtitle_delivery_mode=delivery_mode,
+        )
         append_task_log(
             task_id,
             f"全自动发布任务创建完成：新增 {result['created_count']} 条，跳过已有 {result['skipped_count']} 条",
@@ -484,6 +509,11 @@ class PipelineEngine:
         if error:
             failures.append(error)
         failures.extend(output_counts["errors"])
+        next_step = (
+            "打开字幕工作台审核草稿；确认后批量烧录，或明确跳过字幕继续使用原片。"
+            if status == TaskStatus.PENDING_SUBTITLE_REVIEW.value
+            else "打开发送中心核对内容、账号与北京时间；确认后可立即发送或设置排期。"
+        )
         summary = {
             "task_id": task_id,
             "task_name": task.get("task_name") or "",
@@ -501,10 +531,11 @@ class PipelineEngine:
             "publish_job_count": publish_job_count,
             "need_review_clips": need_review,
             "failures": failures,
-            "next_step": "打开发送中心核对内容、账号与北京时间；确认后可立即发送或设置排期。",
-            "subtitle_note": "v2.1 全自动模式继续跳过加字幕、字幕样式渲染和字幕烧录。",
+            "next_step": next_step,
+            "subtitle_note": "切片后必须人工确认字幕交付方式；只有已审核并验证的字幕成片才会自动进入发送中心。",
         }
         summary_path = paths["analysis_path"].parent / "task_summary.json"
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         summary["summary_path"] = str(summary_path)
         return summary

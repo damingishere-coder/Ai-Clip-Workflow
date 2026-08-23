@@ -6,10 +6,13 @@
 import json
 import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from app.core.config import settings
+from app.services.managed_process_service import popen_process_group, terminate_process_tree
 from app.services.storage_service import get_artifact_paths, resolve_video_file_path
 
 # ---------- 字幕字体常量 ----------
@@ -27,9 +30,11 @@ SUBTITLE_CJK_FONT_FALLBACKS = ("Microsoft YaHei", "SimHei", "Noto Sans SC", "Sou
 
 SUBTITLE_STATUS_LABELS = {
     "pending": "待加字幕",
+    "queued": "字幕排队中",
     "processing": "字幕生成中",
     "completed": "已加字幕",
     "failed": "字幕失败",
+    "cancelled": "字幕已取消",
 }
 DEFAULT_SPEAKER_STYLES = {
     "主播": {"font_color": "#ffffff"},
@@ -186,6 +191,7 @@ def _create_subtitle_job(
     error_message: str = "",
     is_active: int = 0,
     revision_id: str | None = None,
+    workflow_job_id: str | None = None,
 ) -> dict:
     """创建新的字幕任务记录（不再 upsert，每次生成都创建新记录）"""
     from app.db.database import get_connection
@@ -197,17 +203,18 @@ def _create_subtitle_job(
         connection.execute(
             """
             INSERT INTO subtitle_jobs (
-                id, task_id, output_clip_id, revision_id, style_preset_id, status,
+                id, task_id, output_clip_id, revision_id, workflow_job_id, style_preset_id, status,
                 subtitle_file_path, output_file_path, error_message,
                 is_active, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
                 task_id,
                 output_clip_id,
                 revision_id,
+                workflow_job_id,
                 "default",
                 status,
                 subtitle_file_path,
@@ -220,7 +227,7 @@ def _create_subtitle_job(
         )
         connection.commit()
     return {"id": job_id, "task_id": task_id, "output_clip_id": output_clip_id,
-            "revision_id": revision_id, "status": status,
+            "revision_id": revision_id, "workflow_job_id": workflow_job_id, "status": status,
             "subtitle_file_path": subtitle_file_path, "output_file_path": output_file_path,
             "error_message": error_message, "is_active": is_active}
 
@@ -331,11 +338,14 @@ def _write_ass_file(
 
     paths = get_artifact_paths(task_id)
     paths["subtitled_dir"].mkdir(parents=True, exist_ok=True)
-    subtitle_path = paths["subtitled_dir"] / f"{Path(output_clip.get('output_file_name') or output_clip['id']).stem}.ass"
     track = ensure_clip_track(task_id, output_clip["id"])
     selected_revision_id = revision_id or track.get("active_revision_id")
     if not selected_revision_id:
         raise ValueError("切片字幕轨没有可渲染的 revision")
+    subtitle_path = paths["subtitled_dir"] / (
+        f"{Path(output_clip.get('output_file_name') or output_clip['id']).stem}"
+        f"_{selected_revision_id[:10]}.ass"
+    )
     content = serialize_revision_to_ass(track["id"], selected_revision_id)
     subtitle_path.write_text(content, encoding="utf-8")
     return subtitle_path
@@ -355,7 +365,20 @@ def _ffmpeg_subtitles_filter(subtitle_path: Path) -> str:
 
 # ---------- 字幕烧录入口 ----------
 
-def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
+
+class SubtitleRenderCancelled(RuntimeError):
+    pass
+
+
+def render_subtitles_for_output_clip(
+    task_id: str,
+    output_clip_id: str,
+    *,
+    revision_id: str | None = None,
+    workflow_job_id: str | None = None,
+    progress_start: int = 5,
+    progress_end: int = 95,
+) -> dict:
     from app.services.task_log_service import append_task_log
     from app.services.task_service import get_output_clip, get_task  # noqa: F811
 
@@ -371,16 +394,24 @@ def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
     if not shutil.which("ffmpeg"):
         raise RuntimeError("FFmpeg 不可用，无法生成字幕视频")
 
-    from app.services.subtitle_data_service import ensure_clip_track
+    from app.services.subtitle_data_service import ensure_clip_track, get_revision
 
     style = get_default_subtitle_style()
     track = ensure_clip_track(task_id, output_clip_id)
-    revision_id = track.get("active_revision_id")
-    if not revision_id:
+    selected_revision_id = revision_id or track.get("active_revision_id")
+    if not selected_revision_id:
         raise ValueError("切片字幕轨没有可渲染的 revision")
+    revision = get_revision(selected_revision_id)
+    if revision["track_id"] != track["id"]:
+        raise ValueError("待渲染 revision 不属于当前切片字幕轨")
+    if revision.get("status") != "approved":
+        raise ValueError("只有已审核的字幕 revision 才能烧录")
     paths = get_artifact_paths(task_id)
     paths["subtitled_dir"].mkdir(parents=True, exist_ok=True)
-    output_path = paths["subtitled_dir"] / f"{input_path.stem}_subtitled.mp4"
+    render_token = uuid4().hex[:10]
+    output_path = paths["subtitled_dir"] / f"{input_path.stem}_subtitled_{render_token}.mp4"
+    temp_owner = workflow_job_id or render_token
+    temporary_path = output_path.with_name(f".{output_path.stem}.{temp_owner}.part.mp4")
 
     # === 版本化：创建新的字幕 job，不覆盖旧的 ===
     job = _create_subtitle_job(
@@ -388,7 +419,8 @@ def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
         output_clip_id,
         "processing",
         is_active=0,
-        revision_id=revision_id,
+        revision_id=selected_revision_id,
+        workflow_job_id=workflow_job_id,
     )
     append_task_log(task_id, f"开始自动加字幕：{input_path.name}")
 
@@ -397,23 +429,33 @@ def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
             task_id,
             output_clip,
             style,
-            revision_id=revision_id,
+            revision_id=selected_revision_id,
         )
-        command = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(input_path),
-            "-vf",
-            _ffmpeg_subtitles_filter(subtitle_path),
-            "-c:a",
-            "copy",
-            str(output_path),
-        ]
-        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or "FFmpeg 字幕生成失败")
+        source_probe = _probe_media(input_path)
+        encoder, audio_mode = _render_with_fallback(
+            input_path,
+            subtitle_path,
+            temporary_path,
+            workflow_job_id=workflow_job_id,
+            duration_seconds=float(source_probe.get("duration") or 0),
+            has_audio=bool(source_probe.get("has_audio")),
+            source_audio_codec=str(source_probe.get("audio_codec") or ""),
+            progress_start=progress_start,
+            progress_end=progress_end,
+        )
+        validation = _validate_rendered_media(
+            temporary_path,
+            source_duration=float(source_probe.get("duration") or 0),
+            source_has_audio=bool(source_probe.get("has_audio")),
+        )
+        temporary_path.replace(output_path)
+    except SubtitleRenderCancelled as exc:
+        temporary_path.unlink(missing_ok=True)
+        _update_subtitle_job_status(job["id"], "cancelled", error_message=str(exc))
+        append_task_log(task_id, f"字幕烧录已取消：{input_path.name}")
+        raise
     except Exception as exc:
+        temporary_path.unlink(missing_ok=True)
         error = str(exc)
         # 失败时：标记当前 job 为 failed，不激活，旧字幕保持 active
         _update_subtitle_job_status(job["id"], "failed", error_message=error)
@@ -421,16 +463,29 @@ def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
         raise
 
     # 成功：更新 job 信息并切换为 active
-    _update_subtitle_job_status(job["id"], "completed")
-    # 用 subtitle_file_path 和 output_file_path 更新记录
+    # 验证成功后才写入最终路径并激活，失败时旧 active 字幕成片保持不变。
     from app.db.database import get_connection
     from app.services.task_service import _now_iso
 
     now = _now_iso()
     with get_connection() as connection:
         connection.execute(
-            "UPDATE subtitle_jobs SET subtitle_file_path = ?, output_file_path = ?, updated_at = ? WHERE id = ?",
-            (str(subtitle_path), str(output_path), now, job["id"]),
+            """
+            UPDATE subtitle_jobs
+            SET status = 'completed', subtitle_file_path = ?, output_file_path = ?,
+                error_message = '', validation_status = 'verified', validation_json = ?,
+                encoder = ?, verified_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                str(subtitle_path),
+                str(output_path),
+                json.dumps({**validation, "audio_mode": audio_mode}, ensure_ascii=False),
+                encoder,
+                now,
+                now,
+                job["id"],
+            ),
         )
         connection.commit()
 
@@ -445,4 +500,210 @@ def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
         "job": job,
         "output_clip": get_output_clip(task_id, output_clip_id),
         "media_url": f"/media/tasks/{task_id}/subtitled-clips/{output_clip_id}",
+    }
+
+
+def _probe_media(path: Path) -> dict[str, Any]:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise RuntimeError("FFprobe 不可用，无法验证字幕成片")
+    try:
+        result = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_streams",
+                "-show_format",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=settings.ffprobe_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("FFprobe 验证字幕视频超时") from exc
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "FFprobe 无法读取字幕视频")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("FFprobe 返回了无效 JSON") from exc
+    streams = payload.get("streams") or []
+    video = next((item for item in streams if item.get("codec_type") == "video"), {})
+    audio = next((item for item in streams if item.get("codec_type") == "audio"), {})
+    duration = (payload.get("format") or {}).get("duration") or video.get("duration") or 0
+    return {
+        "duration": float(duration or 0),
+        "video_codec": str(video.get("codec_name") or ""),
+        "pixel_format": str(video.get("pix_fmt") or ""),
+        "has_audio": bool(audio),
+        "audio_codec": str(audio.get("codec_name") or ""),
+    }
+
+
+@lru_cache(maxsize=8)
+def _ffmpeg_has_encoder(name: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and name in result.stdout
+
+
+def _render_with_fallback(
+    input_path: Path,
+    subtitle_path: Path,
+    temporary_path: Path,
+    *,
+    workflow_job_id: str | None,
+    duration_seconds: float,
+    has_audio: bool,
+    source_audio_codec: str,
+    progress_start: int,
+    progress_end: int,
+) -> tuple[str, str]:
+    copy_safe_codecs = {"aac", "mp3", "ac3", "eac3", "alac"}
+    preferred_audio = "copy" if not has_audio or source_audio_codec in copy_safe_codecs else "aac"
+    attempts: list[tuple[str, str]] = []
+    if _ffmpeg_has_encoder("h264_nvenc"):
+        attempts.append(("h264_nvenc", preferred_audio))
+    attempts.append(("libx264", preferred_audio))
+    if preferred_audio == "copy" and has_audio:
+        attempts.append(("libx264", "aac"))
+    errors = []
+    for encoder, audio_mode in attempts:
+        temporary_path.unlink(missing_ok=True)
+        command = _build_ffmpeg_render_command(
+            input_path,
+            subtitle_path,
+            temporary_path,
+            encoder=encoder,
+            audio_mode=audio_mode,
+        )
+        try:
+            _run_ffmpeg_progress(
+                command,
+                workflow_job_id=workflow_job_id,
+                duration_seconds=duration_seconds,
+                progress_start=progress_start,
+                progress_end=progress_end,
+            )
+            return encoder, audio_mode
+        except SubtitleRenderCancelled:
+            raise
+        except RuntimeError as exc:
+            errors.append(f"{encoder}/{audio_mode}：{exc}")
+    raise RuntimeError("；".join(errors) or "FFmpeg 字幕烧录失败")
+
+
+def _build_ffmpeg_render_command(
+    input_path: Path,
+    subtitle_path: Path,
+    output_path: Path,
+    *,
+    encoder: str,
+    audio_mode: str,
+) -> list[str]:
+    video_args = (
+        ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
+        if encoder == "h264_nvenc"
+        else ["-c:v", "libx264", "-preset", "medium", "-crf", "20"]
+    )
+    audio_args = ["-c:a", "copy"] if audio_mode == "copy" else ["-c:a", "aac", "-b:a", "192k"]
+    return [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(input_path),
+        "-map", "0:v:0", "-map", "0:a:0?",
+        "-vf", _ffmpeg_subtitles_filter(subtitle_path),
+        *video_args, "-pix_fmt", "yuv420p", *audio_args,
+        "-movflags", "+faststart", "-progress", "pipe:1", "-nostats",
+        str(output_path),
+    ]
+
+
+def _run_ffmpeg_progress(
+    command: list[str],
+    *,
+    workflow_job_id: str | None,
+    duration_seconds: float,
+    progress_start: int,
+    progress_end: int,
+) -> None:
+    from app.services import job_service
+
+    process = popen_process_group(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+    output_tail: list[str] = []
+    assert process.stdout is not None
+    try:
+        for raw_line in process.stdout:
+            line = raw_line.strip()
+            if line:
+                output_tail.append(line)
+                output_tail = output_tail[-40:]
+            if workflow_job_id and job_service.is_cancel_requested(workflow_job_id):
+                terminate_process_tree(process)
+                raise SubtitleRenderCancelled("用户已取消字幕烧录")
+            if workflow_job_id and line.startswith("out_time_ms=") and duration_seconds > 0:
+                try:
+                    processed_seconds = int(line.split("=", 1)[1]) / 1_000_000
+                except ValueError:
+                    continue
+                ratio = max(0.0, min(1.0, processed_seconds / duration_seconds))
+                progress = round(progress_start + (progress_end - progress_start) * ratio)
+                job_service.update_job_progress(workflow_job_id, progress, "正在烧录并验证字幕成片")
+        return_code = process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            terminate_process_tree(process)
+    if return_code != 0:
+        raise RuntimeError("\n".join(output_tail[-8:]) or f"FFmpeg 退出码 {return_code}")
+
+
+def _validate_rendered_media(
+    path: Path,
+    *,
+    source_duration: float,
+    source_has_audio: bool,
+) -> dict[str, Any]:
+    if not path.exists() or path.stat().st_size <= 0:
+        raise RuntimeError("字幕临时输出为空")
+    probe = _probe_media(path)
+    if probe["video_codec"] != "h264":
+        raise RuntimeError(f"字幕成片视频编码不是 H.264：{probe['video_codec'] or '未知'}")
+    if probe["pixel_format"] != "yuv420p":
+        raise RuntimeError(f"字幕成片像素格式不是 yuv420p：{probe['pixel_format'] or '未知'}")
+    if source_has_audio and not probe["has_audio"]:
+        raise RuntimeError("原切片包含音频，但字幕成片缺少音轨")
+    tolerance = max(1.5, source_duration * 0.03)
+    if source_duration > 0 and abs(probe["duration"] - source_duration) > tolerance:
+        raise RuntimeError("字幕成片时长与原切片不一致")
+    return {
+        "video_codec": probe["video_codec"],
+        "pixel_format": probe["pixel_format"],
+        "has_audio": probe["has_audio"],
+        "audio_codec": probe["audio_codec"],
+        "duration_seconds": probe["duration"],
+        "size_bytes": path.stat().st_size,
     }

@@ -624,6 +624,11 @@ def _loads_ai_json(raw_text: str) -> Any:
     raise AIAnalysisError("JSON 解析失败：AI 没有返回可识别的 JSON 内容")
 
 
+def loads_ai_json(raw_text: str) -> Any:
+    """供不同 AI 工作流复用同一套容错 JSON 解析。"""
+    return _loads_ai_json(raw_text)
+
+
 def _iter_json_candidates(raw_text: str) -> list[str]:
     cleaned = (raw_text or "").strip().lstrip("\ufeff")
     candidates: list[str] = []
@@ -886,5 +891,6 @@ __all__ = [
     "build_provider",
     "build_remote_provider",
     "inspect_local_analysis_plan",
+    "loads_ai_json",
     "result_to_jsonable",
 ]

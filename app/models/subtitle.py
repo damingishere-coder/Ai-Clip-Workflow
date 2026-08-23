@@ -64,6 +64,15 @@ class SubtitleAIRevisionRequest(BaseModel):
     instructions: str = Field(default="", max_length=2000)
 
 
+class SubtitleAISuggestionAcceptRequest(BaseModel):
+    base_revision_id: str = Field(min_length=1, max_length=64)
+    cue_ids: list[str] = Field(min_length=1, max_length=500)
+
+
+class SubtitleTaskRenderRequest(BaseModel):
+    approve_active_revisions: bool = True
+
+
 class SubtitleStyleExtendedUpdate(BaseModel):
     font_family: str = Field(default="Microsoft YaHei", min_length=1, max_length=120)
     font_size: int = Field(default=42, ge=12, le=160)

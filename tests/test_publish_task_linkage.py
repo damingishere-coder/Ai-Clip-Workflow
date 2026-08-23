@@ -51,6 +51,15 @@ def _cleanup() -> None:
             )
         connection.execute("DELETE FROM publish_jobs WHERE task_id LIKE ?", (f"{PREFIX}%",))
         connection.execute("DELETE FROM subtitle_jobs WHERE task_id LIKE ?", (f"{PREFIX}%",))
+        connection.execute(
+            "DELETE FROM subtitle_cues WHERE revision_id IN (SELECT id FROM subtitle_revisions WHERE track_id IN (SELECT id FROM subtitle_tracks WHERE task_id LIKE ?))",
+            (f"{PREFIX}%",),
+        )
+        connection.execute(
+            "DELETE FROM subtitle_revisions WHERE track_id IN (SELECT id FROM subtitle_tracks WHERE task_id LIKE ?)",
+            (f"{PREFIX}%",),
+        )
+        connection.execute("DELETE FROM subtitle_tracks WHERE task_id LIKE ?", (f"{PREFIX}%",))
         connection.execute("DELETE FROM output_clip WHERE task_id LIKE ?", (f"{PREFIX}%",))
         connection.execute("DELETE FROM clip_candidates WHERE task_id LIKE ?", (f"{PREFIX}%",))
         connection.execute("DELETE FROM tasks WHERE id LIKE ?", (f"{PREFIX}%",))
@@ -356,18 +365,40 @@ def test_subtitle_sync_updates_only_unscheduled_video_sources(
     subtitled_path.write_bytes(b"subtitled")
     now = _time()
     with get_connection() as connection:
+        track_id = f"{PREFIX}track-{uuid4().hex[:8]}"
+        revision_id = f"{PREFIX}revision-{uuid4().hex[:8]}"
+        connection.execute(
+            """
+            INSERT INTO subtitle_tracks (
+                id, task_id, track_type, output_clip_id, name, active_revision_id,
+                sync_status, created_at, updated_at
+            ) VALUES (?, ?, 'clip', ?, '已审核字幕', ?, 'manual', ?, ?)
+            """,
+            (track_id, task_id, output_id, revision_id, now, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO subtitle_revisions (
+                id, track_id, revision_number, origin, status, cue_count,
+                checksum, created_at, approved_at
+            ) VALUES (?, ?, 1, 'manual', 'approved', 1, 'verified-test', ?, ?)
+            """,
+            (revision_id, track_id, now, now),
+        )
         connection.execute(
             """
             INSERT INTO subtitle_jobs (
-                id, task_id, output_clip_id, status, output_file_path,
-                is_active, created_at, updated_at
-            ) VALUES (?, ?, ?, 'completed', ?, 1, ?, ?)
+                id, task_id, output_clip_id, revision_id, status, output_file_path,
+                validation_status, verified_at, is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'completed', ?, 'verified', ?, 1, ?, ?)
             """,
             (
                 f"{PREFIX}subtitle-{uuid4().hex[:8]}",
                 task_id,
                 output_id,
+                revision_id,
                 str(subtitled_path),
+                now,
                 now,
                 now,
             ),

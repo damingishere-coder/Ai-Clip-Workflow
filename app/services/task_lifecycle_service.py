@@ -30,6 +30,7 @@ ACTIVE_TASK_STATUSES = {
     TaskStatus.AI_ANALYZING.value,
     TaskStatus.CLIP_SELECTING.value,
     TaskStatus.VIDEO_CUTTING.value,
+    TaskStatus.SUBTITLE_DRAFTING.value,
     TaskStatus.METADATA_GENERATING.value,
     TaskStatus.SCHEDULE_CREATING.value,
     TaskStatus.PUBLISH_JOB_CREATING.value,

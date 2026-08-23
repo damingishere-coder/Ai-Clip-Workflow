@@ -1878,7 +1878,11 @@ function renderTaskLiveActions(data) {
   const reviewAction = taskLiveActions.querySelector("[data-live-review-action]");
   if (reviewAction) reviewAction.hidden = !actions.review;
   const syncAction = taskLiveActions.querySelector("[data-live-sync-action]");
-  if (syncAction) syncAction.hidden = Number(data.counts?.outputs || 0) <= 0;
+  if (syncAction) {
+    syncAction.hidden = primaryAction === "subtitle_review" || Number(data.counts?.outputs || 0) <= 0;
+  }
+  const subtitleSkip = taskLiveActions.querySelector("[data-live-subtitle-skip]");
+  if (subtitleSkip) subtitleSkip.hidden = primaryAction !== "subtitle_review";
 }
 
 function renderTaskLiveStatus(data) {
@@ -2021,8 +2025,8 @@ document.querySelectorAll("[data-render-subtitle]").forEach((button) => {
     const errorNode = card.querySelector("[data-subtitle-error]");
     const originalText = button.textContent;
     button.disabled = true;
-    button.textContent = "加字幕中...";
-    if (statusNode) statusNode.textContent = "字幕生成中";
+    button.textContent = "正在入队...";
+    if (statusNode) statusNode.textContent = "字幕排队中";
     if (errorNode) errorNode.textContent = "";
 
     try {
@@ -2031,13 +2035,51 @@ document.querySelectorAll("[data-render-subtitle]").forEach((button) => {
       if (!response.ok) {
         throw new Error(data.detail || "自动加字幕失败");
       }
-      if (statusNode) statusNode.textContent = data.output_clip?.subtitle_status_label || "已加字幕";
-      if (errorNode) errorNode.textContent = data.message || "自动加字幕完成。";
-      window.setTimeout(() => window.location.reload(), 700);
+      if (errorNode) errorNode.textContent = data.message || "字幕任务已加入队列。";
+      button.textContent = "后台烧录中";
+      await pollSubtitleWorkflowJob(data.job_id, statusNode, errorNode);
+      window.location.reload();
     } catch (error) {
       if (statusNode) statusNode.textContent = "字幕失败";
       if (errorNode) errorNode.textContent = `自动加字幕失败：${error.message}`;
     } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
+});
+
+async function pollSubtitleWorkflowJob(jobId, statusNode, messageNode) {
+  if (!jobId) throw new Error("后台没有返回字幕 job id");
+  while (true) {
+    const response = await fetch(`/api/tasks/jobs/${encodeURIComponent(jobId)}`);
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.detail || "读取字幕任务状态失败");
+    if (statusNode) statusNode.textContent = `${job.status_label || job.status} · ${Number(job.progress || 0)}%`;
+    if (messageNode) messageNode.textContent = job.message || "字幕任务处理中";
+    if (job.status === "completed") return job;
+    if (job.status === "failed" || job.status === "cancelled") {
+      throw new Error(job.error_message || job.message || "字幕任务未完成");
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 1500));
+  }
+}
+
+document.querySelectorAll("[data-live-subtitle-skip]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    if (!window.confirm("确认跳过字幕吗？后续发送中心将明确使用原片切片。")) return;
+    const taskId = button.dataset.taskId;
+    button.disabled = true;
+    const originalText = button.textContent;
+    button.textContent = "正在恢复流水线...";
+    try {
+      const data = await apiFetch(`/api/subtitles/tasks/${encodeURIComponent(taskId)}/skip-and-resume`, {
+        method: "POST",
+      });
+      if (taskLiveNote) taskLiveNote.textContent = data.message || "已跳过字幕并恢复流水线";
+      startTaskLiveStatusPolling(true);
+    } catch (error) {
+      window.alert(`跳过字幕失败：${summarizeErrorMessage(error.message)}`);
       button.disabled = false;
       button.textContent = originalText;
     }

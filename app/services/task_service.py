@@ -113,6 +113,7 @@ AUTO_WORKFLOW_STEPS = [
     "AI 分析",
     "自动选片",
     "原片切割",
+    "字幕审核",
     "标题文案",
     "发送队列",
     "发布任务",
@@ -127,6 +128,8 @@ STATUS_LABELS = {
     TaskStatus.AI_ANALYZING.value: "AI 分析中",
     TaskStatus.CLIP_SELECTING.value: "自动选片中",
     TaskStatus.VIDEO_CUTTING.value: "原片切割中",
+    TaskStatus.SUBTITLE_DRAFTING.value: "生成字幕草稿中",
+    TaskStatus.PENDING_SUBTITLE_REVIEW.value: "字幕待审核",
     TaskStatus.METADATA_GENERATING.value: "生成标题文案中",
     TaskStatus.SCHEDULE_CREATING.value: "准备发送队列中",
     TaskStatus.PUBLISH_JOB_CREATING.value: "创建发布任务中",
@@ -137,6 +140,7 @@ STATUS_LABELS = {
     TaskStatus.FAILED_AI_ANALYZING.value: "AI 分析失败",
     TaskStatus.FAILED_CLIP_SELECTING.value: "自动选片失败",
     TaskStatus.FAILED_VIDEO_CUTTING.value: "原片切割失败",
+    TaskStatus.FAILED_SUBTITLE_DRAFTING.value: "字幕草稿生成失败",
     TaskStatus.FAILED_METADATA_GENERATING.value: "标题文案生成失败",
     TaskStatus.FAILED_SCHEDULE_CREATING.value: "发送队列准备失败",
     TaskStatus.FAILED_PUBLISH_JOB_CREATING.value: "发布任务创建失败",
@@ -160,9 +164,11 @@ STATUS_PROGRESS = {
     TaskStatus.AI_ANALYZING.value: 45,
     TaskStatus.CLIP_SELECTING.value: 58,
     TaskStatus.VIDEO_CUTTING.value: 70,
-    TaskStatus.METADATA_GENERATING.value: 80,
-    TaskStatus.SCHEDULE_CREATING.value: 88,
-    TaskStatus.PUBLISH_JOB_CREATING.value: 94,
+    TaskStatus.SUBTITLE_DRAFTING.value: 75,
+    TaskStatus.PENDING_SUBTITLE_REVIEW.value: 78,
+    TaskStatus.METADATA_GENERATING.value: 84,
+    TaskStatus.SCHEDULE_CREATING.value: 90,
+    TaskStatus.PUBLISH_JOB_CREATING.value: 95,
     TaskStatus.READY_TO_PUBLISH.value: 100,
     TaskStatus.COMPLETED.value: 100,
     TaskStatus.FAILED_PREPARING_SOURCE.value: 8,
@@ -170,9 +176,10 @@ STATUS_PROGRESS = {
     TaskStatus.FAILED_AI_ANALYZING.value: 45,
     TaskStatus.FAILED_CLIP_SELECTING.value: 58,
     TaskStatus.FAILED_VIDEO_CUTTING.value: 70,
-    TaskStatus.FAILED_METADATA_GENERATING.value: 80,
-    TaskStatus.FAILED_SCHEDULE_CREATING.value: 88,
-    TaskStatus.FAILED_PUBLISH_JOB_CREATING.value: 94,
+    TaskStatus.FAILED_SUBTITLE_DRAFTING.value: 75,
+    TaskStatus.FAILED_METADATA_GENERATING.value: 84,
+    TaskStatus.FAILED_SCHEDULE_CREATING.value: 90,
+    TaskStatus.FAILED_PUBLISH_JOB_CREATING.value: 95,
     TaskStatus.pending_video.value: 0,
     TaskStatus.pending_processing.value: 5,
     TaskStatus.audio_extracting.value: 20,
@@ -193,6 +200,7 @@ AUTO_PIPELINE_RUNNING_STATUSES = {
     TaskStatus.AI_ANALYZING.value,
     TaskStatus.CLIP_SELECTING.value,
     TaskStatus.VIDEO_CUTTING.value,
+    TaskStatus.SUBTITLE_DRAFTING.value,
     TaskStatus.METADATA_GENERATING.value,
     TaskStatus.SCHEDULE_CREATING.value,
     TaskStatus.PUBLISH_JOB_CREATING.value,
@@ -207,6 +215,7 @@ AUTO_PIPELINE_FAILED_STATUSES = {
     TaskStatus.FAILED_AI_ANALYZING.value,
     TaskStatus.FAILED_CLIP_SELECTING.value,
     TaskStatus.FAILED_VIDEO_CUTTING.value,
+    TaskStatus.FAILED_SUBTITLE_DRAFTING.value,
     TaskStatus.FAILED_METADATA_GENERATING.value,
     TaskStatus.FAILED_SCHEDULE_CREATING.value,
     TaskStatus.FAILED_PUBLISH_JOB_CREATING.value,
@@ -254,22 +263,25 @@ def get_task_workflow_steps(task: dict) -> list[dict[str, str]]:
             TaskStatus.AI_ANALYZING.value: 4,
             TaskStatus.CLIP_SELECTING.value: 5,
             TaskStatus.VIDEO_CUTTING.value: 6,
-            TaskStatus.METADATA_GENERATING.value: 7,
-            TaskStatus.SCHEDULE_CREATING.value: 8,
-            TaskStatus.PUBLISH_JOB_CREATING.value: 9,
-            TaskStatus.READY_TO_PUBLISH.value: 10,
-            TaskStatus.COMPLETED.value: 10,
+            TaskStatus.SUBTITLE_DRAFTING.value: 7,
+            TaskStatus.PENDING_SUBTITLE_REVIEW.value: 7,
+            TaskStatus.METADATA_GENERATING.value: 8,
+            TaskStatus.SCHEDULE_CREATING.value: 9,
+            TaskStatus.PUBLISH_JOB_CREATING.value: 10,
+            TaskStatus.READY_TO_PUBLISH.value: 11,
+            TaskStatus.COMPLETED.value: 11,
             TaskStatus.FAILED_PREPARING_SOURCE.value: 2,
             TaskStatus.FAILED_TRANSCRIBING.value: 3,
             TaskStatus.FAILED_AI_ANALYZING.value: 4,
             TaskStatus.FAILED_CLIP_SELECTING.value: 5,
             TaskStatus.FAILED_VIDEO_CUTTING.value: 6,
-            TaskStatus.FAILED_METADATA_GENERATING.value: 7,
-            TaskStatus.FAILED_SCHEDULE_CREATING.value: 8,
-            TaskStatus.FAILED_PUBLISH_JOB_CREATING.value: 9,
+            TaskStatus.FAILED_SUBTITLE_DRAFTING.value: 7,
+            TaskStatus.FAILED_METADATA_GENERATING.value: 8,
+            TaskStatus.FAILED_SCHEDULE_CREATING.value: 9,
+            TaskStatus.FAILED_PUBLISH_JOB_CREATING.value: 10,
             TaskStatus.pending_review.value: 5,
-            TaskStatus.completed.value: 10,
-            TaskStatus.completed_with_errors.value: 10,
+            TaskStatus.completed.value: 11,
+            TaskStatus.completed_with_errors.value: 11,
             TaskStatus.failed.value: 1,
         }
         failed_statuses = {
@@ -278,6 +290,7 @@ def get_task_workflow_steps(task: dict) -> list[dict[str, str]]:
             TaskStatus.FAILED_AI_ANALYZING.value,
             TaskStatus.FAILED_CLIP_SELECTING.value,
             TaskStatus.FAILED_VIDEO_CUTTING.value,
+            TaskStatus.FAILED_SUBTITLE_DRAFTING.value,
             TaskStatus.FAILED_METADATA_GENERATING.value,
             TaskStatus.FAILED_SCHEDULE_CREATING.value,
             TaskStatus.FAILED_PUBLISH_JOB_CREATING.value,
@@ -606,6 +619,8 @@ def get_task_live_status(task_id: str) -> dict:
     if auto_mode:
         if status in AUTO_PIPELINE_FAILED_STATUSES:
             primary_action = "retry"
+        elif status == TaskStatus.PENDING_SUBTITLE_REVIEW.value:
+            primary_action = "subtitle_review"
         elif status in {
             TaskStatus.READY_TO_PUBLISH.value,
             TaskStatus.COMPLETED.value,
@@ -927,6 +942,13 @@ def sync_reviewed_clips_to_publish_center(
     task_id: str,
     payloads: list[ClipCandidateBatchItem],
 ) -> dict:
+    with get_connection() as connection:
+        task = connection.execute(
+            "SELECT auto_mode, status FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (task_id,),
+        ).fetchone()
+    if task and bool(task["auto_mode"]) and task["status"] == TaskStatus.PENDING_SUBTITLE_REVIEW.value:
+        raise ValueError("自动流水线正在等待字幕审核，请先完成字幕决定，再同步发送中心")
     save_result = update_clip_candidates_batch(task_id, payloads)
     needs_regeneration = bool(save_result["changed_count"]) or not _active_outputs_match_enabled_candidates(task_id)
 
@@ -1070,13 +1092,20 @@ def list_output_clips(task_id: str) -> list[dict]:
                 clip_candidates.enabled AS clip_enabled,
                 subtitle_jobs.id AS subtitle_job_id,
                 subtitle_jobs.status AS subtitle_status,
+                subtitle_jobs.revision_id AS subtitle_revision_id,
                 subtitle_jobs.subtitle_file_path,
                 subtitle_jobs.output_file_path AS subtitled_output_file_path,
                 subtitle_jobs.error_message AS subtitle_error_message,
+                subtitle_jobs.validation_status AS subtitle_validation_status,
+                subtitle_jobs.validation_json AS subtitle_validation_json,
+                subtitle_jobs.encoder AS subtitle_encoder,
+                subtitle_jobs.verified_at AS subtitle_verified_at,
+                subtitle_revisions.status AS subtitle_revision_status,
                 subtitle_jobs.updated_at AS subtitle_updated_at
             FROM output_clip
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
             LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
+            LEFT JOIN subtitle_revisions ON subtitle_revisions.id = subtitle_jobs.revision_id
             WHERE output_clip.task_id = ? AND output_clip.is_active = 1
             ORDER BY
                 CASE WHEN output_clip.output_file_name IS NULL OR output_clip.output_file_name = '' THEN 1 ELSE 0 END,
@@ -1112,6 +1141,14 @@ def list_output_clips(task_id: str) -> list[dict]:
                 "clip_end_seconds": clip_end_seconds,
                 "subtitle_status": subtitle_status,
                 "subtitle_status_label": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),
+                "subtitle_publish_ready": bool(
+                    subtitle_status == "completed"
+                    and output.get("subtitle_validation_status") == "verified"
+                    and output.get("subtitle_revision_status") == "approved"
+                    and subtitled_path
+                    and subtitled_path.exists()
+                    and subtitled_path.is_file()
+                ),
                 "subtitle_stage": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),
                 "subtitled_file_exists": bool(subtitled_path and subtitled_path.exists() and subtitled_path.is_file()),
                 "subtitled_media_url": f"/media/tasks/{task_id}/subtitled-clips/{output['id']}",
@@ -1138,8 +1175,9 @@ def get_output_clip(task_id: str, output_clip_id: str) -> dict | None:
     with get_connection() as connection:
         subtitle_row = connection.execute(
             """
-            SELECT *
+            SELECT subtitle_jobs.*, subtitle_revisions.status AS subtitle_revision_status
             FROM subtitle_jobs
+            LEFT JOIN subtitle_revisions ON subtitle_revisions.id = subtitle_jobs.revision_id
             WHERE task_id = ? AND output_clip_id = ? AND is_active = 1
             """,
             (task_id, output_clip_id),
@@ -1152,6 +1190,12 @@ def get_output_clip(task_id: str, output_clip_id: str) -> dict | None:
                 "subtitle_file_path": subtitle_row["subtitle_file_path"],
                 "subtitled_output_file_path": subtitle_row["output_file_path"],
                 "subtitle_error_message": subtitle_row["error_message"],
+                "subtitle_revision_id": subtitle_row["revision_id"],
+                "subtitle_revision_status": subtitle_row["subtitle_revision_status"],
+                "subtitle_validation_status": subtitle_row["validation_status"],
+                "subtitle_validation_json": subtitle_row["validation_json"],
+                "subtitle_encoder": subtitle_row["encoder"],
+                "subtitle_verified_at": subtitle_row["verified_at"],
                 "subtitle_status_label": SUBTITLE_STATUS_LABELS.get(subtitle_row["status"], subtitle_row["status"]),
             }
         )

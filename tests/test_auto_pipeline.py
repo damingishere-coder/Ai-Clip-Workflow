@@ -33,6 +33,14 @@ def auto_pipeline_db_cleanup(monkeypatch):
         connection.execute("DELETE FROM ai_analysis_windows WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM publish_jobs WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM subtitle_jobs WHERE task_id LIKE 'test-auto-%'")
+        connection.execute("DELETE FROM workflow_jobs WHERE task_id LIKE 'test-auto-%'")
+        connection.execute(
+            "DELETE FROM subtitle_cues WHERE revision_id IN (SELECT id FROM subtitle_revisions WHERE track_id IN (SELECT id FROM subtitle_tracks WHERE task_id LIKE 'test-auto-%'))"
+        )
+        connection.execute(
+            "DELETE FROM subtitle_revisions WHERE track_id IN (SELECT id FROM subtitle_tracks WHERE task_id LIKE 'test-auto-%')"
+        )
+        connection.execute("DELETE FROM subtitle_tracks WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM output_clip WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM cut_runs WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM clip_candidates WHERE task_id LIKE 'test-auto-%'")
@@ -44,6 +52,14 @@ def auto_pipeline_db_cleanup(monkeypatch):
         connection.execute("DELETE FROM ai_analysis_windows WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM publish_jobs WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM subtitle_jobs WHERE task_id LIKE 'test-auto-%'")
+        connection.execute("DELETE FROM workflow_jobs WHERE task_id LIKE 'test-auto-%'")
+        connection.execute(
+            "DELETE FROM subtitle_cues WHERE revision_id IN (SELECT id FROM subtitle_revisions WHERE track_id IN (SELECT id FROM subtitle_tracks WHERE task_id LIKE 'test-auto-%'))"
+        )
+        connection.execute(
+            "DELETE FROM subtitle_revisions WHERE track_id IN (SELECT id FROM subtitle_tracks WHERE task_id LIKE 'test-auto-%')"
+        )
+        connection.execute("DELETE FROM subtitle_tracks WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM output_clip WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM cut_runs WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM clip_candidates WHERE task_id LIKE 'test-auto-%'")
@@ -289,7 +305,7 @@ def test_create_auto_publish_job_records_scheduled_at():
             "scheduled_at": "2026-06-23T08:10:00+00:00",
         }
     ]
-    result = create_auto_publish_jobs(task, scheduled_items)
+    result = create_auto_publish_jobs(task, scheduled_items, subtitle_delivery_mode="original")
     assert result["created_count"] == 1
     with get_connection() as connection:
         row = connection.execute(
@@ -343,6 +359,7 @@ def test_create_auto_publish_job_without_schedule_waits_for_send_center():
                 "scheduled_at": "",
             }
         ],
+        subtitle_delivery_mode="original",
     )
     assert result["created_count"] == 1
     with get_connection() as connection:
@@ -490,7 +507,7 @@ def test_live_status_endpoint_tracks_running_auto_pipeline():
     assert payload["is_running"] is True
     assert payload["should_poll"] is True
     assert payload["actions"]["primary"] == "processing"
-    assert len(payload["workflow_steps"]) == 10
+    assert len(payload["workflow_steps"]) == 11
     assert payload["workflow_steps"][3]["state"] == "current"
     assert any("实时状态测试日志" in line for line in payload["log_lines"])
 

@@ -144,6 +144,7 @@ def test_auto_pipeline_creates_only_metadata_target_platform(tmp_path):
             "metadata": {"platform": "bilibili", "title": "自动标题", "caption": "自动正文", "hashtags": ["自动"], "risk_flags": []},
             "scheduled_at": "",
         }],
+        subtitle_delivery_mode="original",
     )
     created = result["created"][0]
     assert created["platform"] == "bilibili"

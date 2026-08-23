@@ -233,6 +233,7 @@ def test_dismiss_keeps_files_and_other_platform_and_blocks_recreation(tmp_path: 
                 "scheduled_at": "",
             }
         ],
+        subtitle_delivery_mode="original",
     )
     assert auto_result["created_count"] == 0
     assert auto_result["skipped_count"] == 1

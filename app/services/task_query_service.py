@@ -106,13 +106,20 @@ def _batch_all_output_clips(task_ids: list[str]) -> dict[str, list[dict]]:
                 clip_candidates.enabled AS clip_enabled,
                 subtitle_jobs.id AS subtitle_job_id,
                 subtitle_jobs.status AS subtitle_status,
+                subtitle_jobs.revision_id AS subtitle_revision_id,
                 subtitle_jobs.subtitle_file_path,
                 subtitle_jobs.output_file_path AS subtitled_output_file_path,
                 subtitle_jobs.error_message AS subtitle_error_message,
+                subtitle_jobs.validation_status AS subtitle_validation_status,
+                subtitle_jobs.validation_json AS subtitle_validation_json,
+                subtitle_jobs.encoder AS subtitle_encoder,
+                subtitle_jobs.verified_at AS subtitle_verified_at,
+                subtitle_revisions.status AS subtitle_revision_status,
                 subtitle_jobs.updated_at AS subtitle_updated_at
             FROM output_clip
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
-            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
+            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
+            LEFT JOIN subtitle_revisions ON subtitle_revisions.id = subtitle_jobs.revision_id
             WHERE output_clip.task_id IN ({placeholders}) AND output_clip.is_active = 1
             ORDER BY
                 CASE WHEN output_clip.output_file_name IS NULL OR output_clip.output_file_name = '' THEN 1 ELSE 0 END,
@@ -148,6 +155,14 @@ def _batch_all_output_clips(task_ids: list[str]) -> dict[str, list[dict]]:
                 "clip_end_seconds": clip_end_seconds,
                 "subtitle_status": subtitle_status,
                 "subtitle_status_label": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),
+                "subtitle_publish_ready": bool(
+                    subtitle_status == "completed"
+                    and output.get("subtitle_validation_status") == "verified"
+                    and output.get("subtitle_revision_status") == "approved"
+                    and subtitled_path
+                    and subtitled_path.exists()
+                    and subtitled_path.is_file()
+                ),
                 "subtitle_stage": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),
                 "subtitled_file_exists": bool(subtitled_path and subtitled_path.exists() and subtitled_path.is_file()),
                 "subtitled_media_url": f"/media/tasks/{output['task_id']}/subtitled-clips/{output['id']}",
@@ -177,7 +192,15 @@ def get_dashboard_context() -> dict:
         for task in tasks
         if task["status"] in {TaskStatus.pending_video.value, TaskStatus.pending_processing.value}
     )
-    review_count = sum(1 for task in tasks if task["status"] == TaskStatus.pending_review.value)
+    review_count = sum(
+        1
+        for task in tasks
+        if task["status"]
+        in {
+            TaskStatus.pending_review.value,
+            TaskStatus.PENDING_SUBTITLE_REVIEW.value,
+        }
+    )
     completed_count = sum(
         1
         for task in tasks
@@ -192,7 +215,7 @@ def get_dashboard_context() -> dict:
         "stats": [
             {"label": "今日新增任务", "value": today_count, "note": "来自 SQLite", "tone": "blue"},
             {"label": "待处理", "value": pending_count, "note": "可继续推进", "tone": "amber"},
-            {"label": "待检查", "value": review_count, "note": "AI 结果可生成切片", "tone": "purple"},
+            {"label": "待检查", "value": review_count, "note": "包含选片和字幕审核", "tone": "purple"},
             {"label": "已切片任务", "value": completed_count, "note": f"输出 {output_clip_count} 条切片", "tone": "green"},
             {"label": "待加字幕", "value": ready_for_subtitle_count, "note": "切片后工作流", "tone": "blue"},
             {"label": "待推送", "value": ready_for_subtitle_count, "note": "需字幕和发布确认", "tone": "red"},

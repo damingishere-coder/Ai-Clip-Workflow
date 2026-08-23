@@ -47,6 +47,8 @@ def execute_job(job_id: str, *, lease_owner: str | None = None, already_claimed:
             _execute_transcript(job_id, task_id, job.get("payload_json") or {})
         elif job_type == job_service.JOB_TYPE_AUTO_PIPELINE:
             _execute_auto_pipeline(job_id, task_id, job.get("payload_json") or {})
+        elif job_type == job_service.JOB_TYPE_SUBTITLE:
+            _execute_subtitle(job_id, task_id, job.get("payload_json") or {})
         else:
             raise ValueError(f"暂不支持的 job 类型：{job_type}")
     except Exception as exc:
@@ -124,6 +126,22 @@ def _execute_auto_pipeline(job_id: str, task_id: str, payload: dict) -> None:
     job_service.mark_job_completed(job_id, result)
 
 
+def _execute_subtitle(job_id: str, task_id: str, payload: dict) -> None:
+    from app.services.subtitle_auto_workflow_service import execute_subtitle_render_job
+    from app.services.subtitle_workflow_service import SubtitleRenderCancelled
+
+    job_service.update_job_progress(job_id, 3, "正在核对已审核的字幕 revision")
+    try:
+        result = execute_subtitle_render_job(job_id, task_id, payload)
+    except SubtitleRenderCancelled:
+        job_service.mark_job_cancelled(job_id, "字幕批量烧录已取消")
+        return
+    if job_service.is_cancel_requested(job_id):
+        job_service.mark_job_cancelled(job_id, "字幕批量烧录已取消")
+        return
+    job_service.mark_job_completed(job_id, result)
+
+
 class WorkflowJobRunner:
     """应用生命周期内的单 worker 线程。"""
 
@@ -153,6 +171,7 @@ class WorkflowJobRunner:
             self._run_job_subprocess(job["id"])
 
     def _run_job_subprocess(self, job_id: str) -> None:
+        job_before_start = job_service.get_job(job_id) or {}
         process = popen_process_group(
             [sys.executable, "-m", "app.services.job_worker_process", job_id, self.owner],
             cwd=str(settings.project_root),
@@ -162,15 +181,27 @@ class WorkflowJobRunner:
         last_heartbeat = 0.0
         last_progress_at = time.monotonic()
         previous_progress: tuple[int, str] | None = None
-        no_progress_timeout = max(
-            900,
-            settings.ffmpeg_audio_extract_timeout,
-            settings.ffmpeg_cut_timeout,
-            settings.volcengine_asr_timeout_seconds,
+        no_progress_timeout = (
+            settings.ffmpeg_subtitle_timeout
+            if job_before_start.get("job_type") == job_service.JOB_TYPE_SUBTITLE
+            else max(
+                900,
+                settings.ffmpeg_audio_extract_timeout,
+                settings.ffmpeg_cut_timeout,
+                settings.volcengine_asr_timeout_seconds,
+            )
         )
         while process.poll() is None:
             if self._stop_event.wait(1):
                 terminate_process_tree(process)
+                if job_before_start.get("job_type") == job_service.JOB_TYPE_SUBTITLE:
+                    from app.services.subtitle_auto_workflow_service import cleanup_interrupted_subtitle_job
+
+                    cleanup_interrupted_subtitle_job(
+                        job_id,
+                        status="queued",
+                        message="应用停止，等待恢复字幕烧录",
+                    )
                 job_service.release_job_lease(job_id, self.owner)
                 return
             job = job_service.get_job(job_id)
@@ -179,6 +210,10 @@ class WorkflowJobRunner:
                 return
             if job_service.is_cancel_requested(job_id):
                 terminate_process_tree(process)
+                if job.get("job_type") == job_service.JOB_TYPE_SUBTITLE:
+                    from app.services.subtitle_auto_workflow_service import cleanup_interrupted_subtitle_job
+
+                    cleanup_interrupted_subtitle_job(job_id, status="cancelled", message="用户已取消字幕烧录")
                 job_service.mark_job_cancelled(job_id, "任务已取消，子进程树已终止")
                 return
             progress_state = (int(job.get("progress") or 0), str(job.get("message") or ""))
@@ -187,6 +222,14 @@ class WorkflowJobRunner:
                 last_progress_at = time.monotonic()
             if time.monotonic() - last_progress_at > no_progress_timeout:
                 terminate_process_tree(process)
+                if job.get("job_type") == job_service.JOB_TYPE_SUBTITLE:
+                    from app.services.subtitle_auto_workflow_service import cleanup_interrupted_subtitle_job
+
+                    cleanup_interrupted_subtitle_job(
+                        job_id,
+                        status="failed",
+                        message=f"字幕烧录连续 {no_progress_timeout} 秒没有进展",
+                    )
                 job_service.mark_job_failed(job_id, f"任务连续 {no_progress_timeout} 秒没有进展，已终止子进程树")
                 return
             if time.monotonic() - last_heartbeat >= 20:
@@ -194,6 +237,14 @@ class WorkflowJobRunner:
                 last_heartbeat = time.monotonic()
         final_job = job_service.get_job(job_id)
         if process.returncode != 0 and final_job and final_job.get("status") == job_service.JOB_STATUS_RUNNING:
+            if final_job.get("job_type") == job_service.JOB_TYPE_SUBTITLE:
+                from app.services.subtitle_auto_workflow_service import cleanup_interrupted_subtitle_job
+
+                cleanup_interrupted_subtitle_job(
+                    job_id,
+                    status="failed",
+                    message=f"字幕 Job 子进程异常退出，退出码：{process.returncode}",
+                )
             job_service.mark_job_failed(job_id, f"Job 子进程异常退出，退出码：{process.returncode}")
         elif process.returncode == 0 and final_job and final_job.get("status") == job_service.JOB_STATUS_RUNNING:
             job_service.mark_job_failed(job_id, "Job 子进程已退出但没有写入终态")

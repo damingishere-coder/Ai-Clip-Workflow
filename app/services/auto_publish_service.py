@@ -10,6 +10,7 @@ from app.db.database import get_connection
 from app.services.publish_copy_rules import PUBLISH_COPY_RULE_VERSION
 from app.services.publish_service import DEFAULT_BILIBILI_TID, USER_REMOVED_ERROR_CODE, get_publish_job
 from app.services.publish_domain import AUTO_PUBLISH_PLATFORMS, validate_publish_mode, validate_target_platform
+from app.services.storage_service import resolve_video_file_path
 from app.services.task_service import _now_iso
 
 
@@ -18,18 +19,29 @@ def platforms_for_task(task: dict) -> list[str]:
     return list(AUTO_PUBLISH_PLATFORMS)
 
 
-def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
+def create_auto_publish_jobs(
+    task: dict,
+    scheduled_items: list[dict],
+    *,
+    subtitle_delivery_mode: str,
+) -> dict:
     """为全自动流水线生成发布任务。
 
     本轮只创建任务记录，不调用平台 API，也不启动 opencli 发送。
     """
 
+    if subtitle_delivery_mode not in {"subtitled", "original"}:
+        raise ValueError("字幕交付模式必须是 subtitled 或 original")
     created_ids: list[str] = []
     skipped_ids: list[str] = []
     now = _now_iso()
     with get_connection() as connection:
         for item in scheduled_items:
             output_clip = item["output_clip"]
+            video_source, video_file_path, subtitle_evidence = _resolve_auto_video_source(
+                output_clip,
+                subtitle_delivery_mode,
+            )
             metadata = item["metadata"]
             cover = item.get("cover") or {}
             platform = validate_target_platform(metadata["platform"])
@@ -104,6 +116,8 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                 "cover_time_seconds": cover_time_seconds,
                 "risk_flags": metadata.get("risk_flags") or [],
                 "publish_mode": publish_mode,
+                "subtitle_delivery_mode": subtitle_delivery_mode,
+                **subtitle_evidence,
                 "note": "全自动流水线已直接创建最终发布任务，可在发送中心设置排期。",
             }
             connection.execute(
@@ -117,7 +131,7 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                     schedule_timezone, timezone, status, audit_status, error_message, last_error,
                     provider_response, publish_result, max_attempts, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'public',
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'public',
                     'time', ?, 1, ?, 'original', '', ?, ?, ?, ?, ?, 'not_submitted', '', '', ?, '', ?, ?, ?)
                 """,
                 (
@@ -128,8 +142,9 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
                     account_id,
                     platform,
                     publish_mode,
-                    output_clip.get("output_file_path") or "",
-                    output_clip.get("output_file_path") or "",
+                    video_source,
+                    video_file_path,
+                    video_file_path,
                     metadata.get("title") or "精彩片段",
                     metadata.get("caption") or "",
                     metadata.get("caption") or "",
@@ -159,3 +174,34 @@ def create_auto_publish_jobs(task: dict, scheduled_items: list[dict]) -> dict:
         "created_count": len(created_ids),
         "skipped_count": len(skipped_ids),
     }
+
+
+def _resolve_auto_video_source(output_clip: dict, delivery_mode: str) -> tuple[str, str, dict]:
+    if delivery_mode == "original":
+        raw_path = str(output_clip.get("output_file_path") or "")
+        path = resolve_video_file_path(raw_path) if raw_path else None
+        if not path or not path.exists() or not path.is_file():
+            raise ValueError("原片切片文件不存在，不能创建发布任务")
+        return "original", raw_path, {"subtitle_skip_confirmed": True}
+
+    raw_path = str(output_clip.get("subtitled_output_file_path") or "")
+    path = resolve_video_file_path(raw_path) if raw_path else None
+    if (
+        output_clip.get("subtitle_status") != "completed"
+        or output_clip.get("subtitle_validation_status") != "verified"
+        or output_clip.get("subtitle_revision_status") != "approved"
+        or not path
+        or not path.exists()
+        or not path.is_file()
+    ):
+        raise ValueError("字幕成片尚未同时通过 revision 审核和 FFprobe 验证，不能进入发送中心")
+    return (
+        "subtitled",
+        raw_path,
+        {
+            "subtitle_revision_id": output_clip.get("subtitle_revision_id") or "",
+            "subtitle_revision_status": output_clip.get("subtitle_revision_status") or "",
+            "subtitle_validation_status": output_clip.get("subtitle_validation_status") or "",
+            "subtitle_verified_at": output_clip.get("subtitle_verified_at") or "",
+        },
+    )

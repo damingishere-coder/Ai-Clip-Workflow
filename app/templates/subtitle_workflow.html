@@ -16,7 +16,9 @@
     <a class="secondary-button" href="/subtitles">返回字幕任务列表</a>
     <a class="secondary-button" href="/tasks/{{ task.id }}/clips/review">返回片段审核</a>
     {% if output_clips %}
+    {% if not (task.auto_mode and task.status == "PENDING_SUBTITLE_REVIEW") %}
     <button class="primary-button" type="button" data-sync-publish-task data-task-id="{{ task.id }}" data-prefer-subtitled="true">同步发送中心</button>
+    {% endif %}
     <a class="secondary-button" href="/publish?task_id={{ task.id }}&tab=content">查看本任务发送内容</a>
     {% endif %}
   </div>
@@ -37,6 +39,29 @@
   </article>
   {% endfor %}
 </section>
+
+{% if task.auto_mode and task.status == "PENDING_SUBTITLE_REVIEW" %}
+<section class="panel subtitle-review-gate" id="subtitle-review-gate" data-task-id="{{ task.id }}">
+  <div>
+    <p class="eyebrow">Review Gate</p>
+    <h2>自动流水线已在字幕审核处暂停</h2>
+    <p>请先检查和编辑字幕。点击“审核并批量烧录”会批准每条切片的当前版本，全部成片验证通过后才恢复发送中心流程。</p>
+  </div>
+  <div class="button-row">
+    <button class="primary-button" id="subtitle-batch-approve-render" type="button">审核并批量烧录</button>
+    <button class="secondary-button" id="subtitle-skip-and-resume" type="button">跳过字幕，使用原片继续</button>
+  </div>
+  <div class="subtitle-batch-job" id="subtitle-batch-job" hidden>
+    <div class="large-progress"><span id="subtitle-batch-progress-bar" style="width:0%"></span></div>
+    <strong id="subtitle-batch-progress-label">等待开始</strong>
+    <p id="subtitle-batch-message"></p>
+    <div class="button-row">
+      <button class="secondary-button compact-button" id="subtitle-batch-cancel" type="button" hidden>取消烧录</button>
+      <button class="secondary-button compact-button" id="subtitle-batch-retry" type="button" hidden>重试失败任务</button>
+    </div>
+  </div>
+</section>
+{% endif %}
 
 <section class="panel subtitle-editor" id="subtitle-editor" data-task-id="{{ task.id }}">
   <div class="panel-header subtitle-editor-heading">
@@ -104,8 +129,25 @@
     <button class="secondary-button compact-button" id="subtitle-shift" type="button">执行位移</button>
     <button class="secondary-button compact-button" id="subtitle-undo" type="button" disabled>撤销</button>
     <button class="secondary-button compact-button" id="subtitle-redo" type="button" disabled>重做</button>
+    <button class="secondary-button compact-button" id="subtitle-ai-suggest" type="button" disabled>AI 纠错建议</button>
     <button class="primary-button compact-button" id="subtitle-save-now" type="button" disabled>立即保存</button>
   </div>
+
+  <section class="subtitle-ai-suggestion-panel" id="subtitle-ai-suggestion-panel" hidden aria-live="polite">
+    <div class="panel-header compact">
+      <div>
+        <p class="eyebrow">AI Suggestions</p>
+        <h3>AI 只建议文字和 cue 内断行</h3>
+        <p id="subtitle-ai-suggestion-summary">勾选字幕行后生成建议；时间戳和说话人不会交给 AI 修改。</p>
+      </div>
+      <div class="button-row">
+        <button class="secondary-button compact-button" id="subtitle-ai-select-all" type="button">全选差异</button>
+        <button class="primary-button compact-button" id="subtitle-ai-accept" type="button">接受选中建议</button>
+        <button class="text-button" id="subtitle-ai-close" type="button">关闭</button>
+      </div>
+    </div>
+    <div class="subtitle-ai-diff-list" id="subtitle-ai-diff-list"></div>
+  </section>
 
   <div class="subtitle-quality-summary" id="subtitle-quality-summary" aria-live="polite">
     质量检查会提示重叠、间隔、时长、行数与中文阅读速度，但不会自动改字。
@@ -410,6 +452,6 @@
 <script src="{{ url_for('static', path='vendor/wavesurfer/wavesurfer.min.js') }}?v=7.12.11"></script>
 <script src="{{ url_for('static', path='vendor/wavesurfer/regions.min.js') }}?v=7.12.11"></script>
 <script src="{{ url_for('static', path='vendor/wavesurfer/timeline.min.js') }}?v=7.12.11"></script>
-<script src="{{ url_for('static', path='js/subtitle-editor.js') }}?v=20260823-pr3"></script>
+<script src="{{ url_for('static', path='js/subtitle-editor.js') }}?v=20260824-pr4"></script>
 {% endif %}
 {% endblock %}

@@ -28,12 +28,19 @@
     shift: root.querySelector("#subtitle-shift"),
     undo: root.querySelector("#subtitle-undo"),
     redo: root.querySelector("#subtitle-redo"),
+    aiSuggest: root.querySelector("#subtitle-ai-suggest"),
     save: root.querySelector("#subtitle-save-now"),
     importFile: root.querySelector("#subtitle-import-file"),
     exports: ["srt", "vtt", "ass"].map((format) => [
       format,
       root.querySelector(`#subtitle-export-${format}`),
     ]),
+    aiPanel: root.querySelector("#subtitle-ai-suggestion-panel"),
+    aiSummary: root.querySelector("#subtitle-ai-suggestion-summary"),
+    aiDiffList: root.querySelector("#subtitle-ai-diff-list"),
+    aiSelectAll: root.querySelector("#subtitle-ai-select-all"),
+    aiAccept: root.querySelector("#subtitle-ai-accept"),
+    aiClose: root.querySelector("#subtitle-ai-close"),
   };
 
   const ROW_HEIGHT = 132;
@@ -57,6 +64,21 @@
     dirty: false,
     changeVersion: 0,
     requestToken: 0,
+    suggestion: null,
+  };
+
+  const batch = {
+    root: document.querySelector("#subtitle-review-gate"),
+    approve: document.querySelector("#subtitle-batch-approve-render"),
+    skip: document.querySelector("#subtitle-skip-and-resume"),
+    panel: document.querySelector("#subtitle-batch-job"),
+    bar: document.querySelector("#subtitle-batch-progress-bar"),
+    label: document.querySelector("#subtitle-batch-progress-label"),
+    message: document.querySelector("#subtitle-batch-message"),
+    cancel: document.querySelector("#subtitle-batch-cancel"),
+    retry: document.querySelector("#subtitle-batch-retry"),
+    jobId: "",
+    pollTimer: null,
   };
 
   function setStatus(message, tone = "blue") {
@@ -93,6 +115,7 @@
     state.cues = snapshot.map((cue) => ({ ...cue }));
     state.selectedIds.clear();
     state.currentCueId = null;
+    updateAiButton();
     markChanged();
     applySearch();
     updateCurrentCue();
@@ -173,6 +196,7 @@
   }
 
   function renderVirtualRows() {
+    updateAiButton();
     if (!state.visibleIndices.length) {
       elements.viewport.innerHTML = '<div class="subtitle-cue-empty">没有匹配的字幕行</div>';
       return;
@@ -215,6 +239,7 @@
       row.querySelector("[data-cue-select]").addEventListener("change", (event) => {
         if (event.target.checked) state.selectedIds.add(cue.id);
         else state.selectedIds.delete(cue.id);
+        updateAiButton();
         renderVirtualRows();
       });
       row.querySelector("[data-cue-seek]").addEventListener("click", () => selectCue(cue, true));
@@ -354,6 +379,7 @@
       state.revision = first.revision;
       state.cues = cues;
       state.selectedIds.clear();
+      state.suggestion = null;
       state.currentCueId = null;
       state.undo = [];
       state.redo = [];
@@ -362,6 +388,7 @@
       elements.track.value = trackId;
       elements.video.src = state.track.media_url;
       elements.approve.disabled = !state.revision;
+      updateAiButton();
       elements.save.disabled = true;
       elements.exports.forEach(([, button]) => { button.disabled = !state.revision; });
       renderRevisionMeta();
@@ -448,6 +475,7 @@
         state.cues = (payload.revision.cues || []).map((cue) => ({ ...cue }));
         state.dirty = false;
         state.selectedIds.clear();
+        updateAiButton();
         elements.save.disabled = true;
         applySearch();
         setStatus(`Revision ${state.revision.revision_number} 已保存`, "green");
@@ -468,6 +496,11 @@
 
   function selectedCues() {
     return state.cues.filter((cue) => state.selectedIds.has(cue.id));
+  }
+
+  function updateAiButton() {
+    if (!elements.aiSuggest) return;
+    elements.aiSuggest.disabled = !state.revision || state.selectedIds.size === 0 || state.selectedIds.size > 500;
   }
 
   elements.track.addEventListener("change", () => loadTrack(elements.track.value));
@@ -500,6 +533,7 @@
     if (!state.selectedIds.size) return setStatus("请先勾选要删除的字幕行", "amber");
     mutate(() => { state.cues = state.cues.filter((cue) => !state.selectedIds.has(cue.id)); });
     state.selectedIds.clear();
+    updateAiButton();
   });
 
   elements.merge.addEventListener("click", () => {
@@ -566,6 +600,81 @@
     }
   });
 
+  elements.aiSuggest?.addEventListener("click", async () => {
+    if (state.dirty) await saveRevision(false);
+    const cueIds = [...state.selectedIds];
+    if (state.dirty || !state.revision || !cueIds.length) return;
+    elements.aiSuggest.disabled = true;
+    setStatus(`正在分批生成 ${cueIds.length} 条 AI 建议…`, "blue");
+    try {
+      const payload = await api(`/api/subtitles/tracks/${encodeURIComponent(state.track.id)}/ai-suggestions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ revision_id: state.revision.id, cue_ids: cueIds, instructions: "" }),
+      });
+      state.suggestion = payload;
+      renderAiSuggestionDiff();
+      setStatus(`AI 返回 ${payload.diff?.length || 0} 条文字差异，尚未应用`, "green");
+    } catch (error) {
+      setStatus(`AI 建议失败：${error.message}`, "red");
+    } finally {
+      updateAiButton();
+    }
+  });
+
+  function renderAiSuggestionDiff() {
+    const diff = state.suggestion?.diff || [];
+    elements.aiPanel.hidden = false;
+    elements.aiSummary.textContent = diff.length
+      ? `共 ${diff.length} 条文字差异。建议版本不会覆盖当前人工版本，请勾选后接受。`
+      : "AI 没有建议修改；当前字幕保持不变。";
+    elements.aiDiffList.innerHTML = diff.length
+      ? diff.map((item) => `
+          <label class="subtitle-ai-diff-row">
+            <input type="checkbox" data-ai-diff-cue value="${escapeHtml(item.cue_id)}" checked>
+            <span class="subtitle-ai-diff-time">${formatMs(item.start_ms)}</span>
+            <span class="subtitle-ai-diff-before">${escapeHtml(item.original_text)}</span>
+            <span class="subtitle-ai-diff-arrow">→</span>
+            <span class="subtitle-ai-diff-after">${escapeHtml(item.suggested_text)}</span>
+          </label>
+        `).join("")
+      : '<p class="form-hint">没有差异可接受。</p>';
+    elements.aiAccept.disabled = diff.length === 0;
+  }
+
+  elements.aiSelectAll?.addEventListener("click", () => {
+    elements.aiDiffList.querySelectorAll("[data-ai-diff-cue]").forEach((input) => { input.checked = true; });
+  });
+
+  elements.aiClose?.addEventListener("click", () => {
+    elements.aiPanel.hidden = true;
+    state.suggestion = null;
+  });
+
+  elements.aiAccept?.addEventListener("click", async () => {
+    if (!state.suggestion || !state.revision) return;
+    const cueIds = [...elements.aiDiffList.querySelectorAll("[data-ai-diff-cue]:checked")].map((input) => input.value);
+    if (!cueIds.length) return setStatus("请至少勾选一条 AI 文字建议", "amber");
+    elements.aiAccept.disabled = true;
+    try {
+      const payload = await api(
+        `/api/subtitles/tracks/${encodeURIComponent(state.track.id)}/ai-suggestions/${encodeURIComponent(state.suggestion.revision.id)}/accept`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ base_revision_id: state.suggestion.base_revision_id, cue_ids: cueIds }),
+        },
+      );
+      state.suggestion = null;
+      elements.aiPanel.hidden = true;
+      await loadTrack(state.track.id);
+      setStatus(`已接受 ${cueIds.length} 条建议并创建人工草稿 Revision ${payload.revision.revision_number}`, "green");
+    } catch (error) {
+      setStatus(`接受 AI 建议失败：${error.message}`, "red");
+      elements.aiAccept.disabled = false;
+    }
+  });
+
   elements.importFile.addEventListener("change", async () => {
     const file = elements.importFile.files?.[0];
     if (!file || !state.track) return;
@@ -587,6 +696,101 @@
     window.location.href = `/api/subtitles/tracks/${encodeURIComponent(state.track.id)}/export?format_name=${format}&revision_id=${encodeURIComponent(state.revision.id)}`;
   }));
 
+  function renderBatchJob(job) {
+    if (!batch.panel || !job) return;
+    batch.panel.hidden = false;
+    batch.jobId = job.id;
+    const progress = Math.max(0, Math.min(100, Number(job.progress || 0)));
+    batch.bar.style.width = `${progress}%`;
+    batch.label.textContent = `${job.status_label || job.status} · ${progress}%`;
+    batch.message.textContent = job.error_message || job.message || "字幕任务状态已更新";
+    const active = job.status === "queued" || job.status === "running";
+    batch.cancel.hidden = !active;
+    batch.retry.hidden = !(job.status === "failed" || job.status === "cancelled");
+    batch.approve.disabled = active;
+    batch.skip.disabled = active;
+  }
+
+  async function pollBatchJob(jobId) {
+    window.clearTimeout(batch.pollTimer);
+    try {
+      const job = await api(`/api/tasks/jobs/${encodeURIComponent(jobId)}`);
+      renderBatchJob(job);
+      if (job.status === "queued" || job.status === "running") {
+        batch.pollTimer = window.setTimeout(() => pollBatchJob(jobId), 1500);
+      } else if (job.status === "completed") {
+        batch.message.textContent = "字幕成片全部验证通过，自动流水线已恢复。即将返回任务详情。";
+        window.setTimeout(() => { window.location.href = `/tasks/${encodeURIComponent(state.taskId)}`; }, 1600);
+      }
+    } catch (error) {
+      batch.message.textContent = `读取字幕 Job 失败：${error.message}`;
+      batch.pollTimer = window.setTimeout(() => pollBatchJob(jobId), 3000);
+    }
+  }
+
+  batch.approve?.addEventListener("click", async () => {
+    if (state.dirty) await saveRevision(false);
+    if (state.dirty) return;
+    if (!window.confirm("确认审核所有切片的当前字幕版本并批量烧录吗？全部验证通过后流水线会自动继续。")) return;
+    batch.approve.disabled = true;
+    batch.skip.disabled = true;
+    try {
+      const payload = await api(`/api/subtitles/tasks/${encodeURIComponent(state.taskId)}/approve-and-render`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approve_active_revisions: true }),
+      });
+      renderBatchJob(payload.job);
+      pollBatchJob(payload.job_id);
+    } catch (error) {
+      batch.message.textContent = `批量烧录未启动：${error.message}`;
+      batch.panel.hidden = false;
+      batch.approve.disabled = false;
+      batch.skip.disabled = false;
+    }
+  });
+
+  batch.skip?.addEventListener("click", async () => {
+    if (!window.confirm("确认跳过字幕并使用原片继续吗？该选择会写入发布任务，不能静默改回字幕版。")) return;
+    batch.skip.disabled = true;
+    try {
+      await api(`/api/subtitles/tasks/${encodeURIComponent(state.taskId)}/skip-and-resume`, { method: "POST" });
+      window.location.href = `/tasks/${encodeURIComponent(state.taskId)}`;
+    } catch (error) {
+      batch.message.textContent = `跳过字幕失败：${error.message}`;
+      batch.panel.hidden = false;
+      batch.skip.disabled = false;
+    }
+  });
+
+  batch.cancel?.addEventListener("click", async () => {
+    if (!batch.jobId || !window.confirm("确认取消当前字幕烧录吗？已完成并验证的切片会保留，可稍后重试缺失部分。")) return;
+    const payload = await api(`/api/tasks/jobs/${encodeURIComponent(batch.jobId)}/cancel`, { method: "POST" });
+    renderBatchJob(payload.job);
+    pollBatchJob(batch.jobId);
+  });
+
+  batch.retry?.addEventListener("click", async () => {
+    if (!batch.jobId) return;
+    const payload = await api(`/api/tasks/jobs/${encodeURIComponent(batch.jobId)}/retry`, { method: "POST" });
+    renderBatchJob(payload.job);
+    pollBatchJob(batch.jobId);
+  });
+
+  async function loadLatestBatchJob() {
+    if (!batch.root) return;
+    try {
+      const payload = await api(`/api/subtitles/tasks/${encodeURIComponent(state.taskId)}/jobs`);
+      const latest = (payload.jobs || [])[0];
+      if (latest) {
+        renderBatchJob(latest);
+        if (latest.status === "queued" || latest.status === "running") pollBatchJob(latest.id);
+      }
+    } catch (_error) {
+      // 页面仍可编辑字幕；Job 状态读取失败时由用户再次点击触发明确错误。
+    }
+  }
+
   window.addEventListener("beforeunload", (event) => {
     if (!state.dirty) return;
     event.preventDefault();
@@ -594,4 +798,5 @@
   });
 
   loadTracks();
+  loadLatestBatchJob();
 })();
