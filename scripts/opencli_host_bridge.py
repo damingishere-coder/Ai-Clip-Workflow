@@ -142,7 +142,7 @@ class OpenCLIHostBridgeHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    # 兼容旧启动命令，但实际启动 v2.0 的受保护发布 Worker。
+    # 兼容旧启动命令，但实际启动 v2.1 的受保护发布 Worker。
     from scripts.publish_host_worker import main as worker_main
 
     worker_main()

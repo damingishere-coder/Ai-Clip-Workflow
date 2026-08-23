@@ -2,7 +2,7 @@
 
 这份文档面向第一次使用牛马片场、对代码和终端不熟悉的用户。请按顺序操作，不需要先理解全部技术细节。
 
-适用版本：`2.0.0`
+适用版本：`2.1.0`
 
 ## 1. 项目能做什么
 
@@ -53,7 +53,7 @@ Copy-Item .env.example .env
 - 视频和任务存储目录是否存在。
 - 临时上传目录是否有足够空间。
 - 需要使用的转写服务配置。
-- 远程 AI 或本地 Ollama 配置。
+- 受控 Codex CLI、远程 AI 或本地 Ollama 配置。
 - Windows Worker 地址和 Token。
 
 真实 API Key 只能写入本机 `.env`，不要写进代码、README、Issue、截图或提交记录。
@@ -145,6 +145,10 @@ uvicorn app.main:app --reload --port 8001
 完成以上步骤，说明本地生产链路基本可用。
 
 ## 7. AI 与转写配置
+
+### Codex CLI（默认推荐）
+
+已安装并登录 Codex CLI 时，系统可以把脱敏后的文字稿分析任务交给本机 `codex` 进程。默认命令、模型和超时由 `AI_CODEX_PATH`、`AI_CODEX_HOME`、`AI_CODEX_MODEL`、`AI_CODEX_TIMEOUT_SECONDS` 控制；不要把登录信息写入仓库，也不要为了本项目改变 Codex 的提供商或认证方式。
 
 ### 远程 AI
 

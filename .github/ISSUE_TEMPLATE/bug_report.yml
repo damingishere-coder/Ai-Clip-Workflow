@@ -13,7 +13,7 @@ body:
     attributes:
       label: 项目版本
       description: 填写版本号或 commit SHA。
-      placeholder: 例如 2.0.0
+      placeholder: 例如 2.1.0
     validations:
       required: true
 

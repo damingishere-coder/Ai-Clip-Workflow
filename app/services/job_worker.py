@@ -60,6 +60,7 @@ def _execute_video_cut(job_id: str, task_id: str) -> None:
         "message": result.get("message"),
         "output_dir": result.get("output_dir"),
         "cut_count": len(result.get("results") or []),
+        "publish_sync": result.get("publish_sync"),
     }
 
     job_service.mark_job_completed(job_id, result_summary)

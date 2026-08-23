@@ -9,7 +9,7 @@ Windows 本地运行的 AI 视频高光生产工作台，面向直播录像、�
 [中文](README.md) · [English](README.en.md) · [快速开始](docs/PROJECT_GUIDE.md) · [通用启动](docs/PORTABLE_SETUP.md) · [备份恢复](docs/BACKUP_AND_RESTORE.md) · [技术说明](docs/TECHNICAL_REFERENCE.md) · [路线图](ROADMAP.md)
 
 ![CI](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml/badge.svg)
-![Version](https://img.shields.io/badge/version-2.0.0-0969da)
+![Version](https://img.shields.io/badge/version-2.1.0-0969da)
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4)
 ![FastAPI](https://img.shields.io/badge/backend-FastAPI-009688)
@@ -63,7 +63,7 @@ Demo 会使用独立的 `demo-data/` 和 `workspace/demo/`，生成虚构任务�
 
 牛马片场把这些步骤收拢到一条本地工作流中：
 
-- **AI 找高光**：支持远程 OpenAI-compatible / DeepSeek 和本地 Ollama。
+- **AI 找高光**：优先支持本机受控 Codex CLI，并兼容远程 OpenAI-compatible / DeepSeek 和本地 Ollama。
 - **人工可控**：候选片段可以启用、禁用，并修改标题、摘要和出入点。
 - **统一生产**：转写、切片、文案、封面帧、排期和执行记录集中管理。
 - **本地优先**：视频、数据库、API Key 和浏览器登录状态保留在用户电脑。

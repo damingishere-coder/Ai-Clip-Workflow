@@ -1,4 +1,4 @@
-"""v2.0.0 全自动任务流水线回归测试。"""
+"""v2.1.0 全自动任务流水线回归测试。"""
 
 from __future__ import annotations
 

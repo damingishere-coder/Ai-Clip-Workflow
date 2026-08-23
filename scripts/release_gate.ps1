@@ -78,11 +78,11 @@ $readmeText = Get-Content -LiteralPath (Join-Path $ProjectRoot 'README.md') -Raw
 $englishReadmeText = Get-Content -LiteralPath (Join-Path $ProjectRoot 'README.en.md') -Raw -Encoding UTF8
 $changelogText = Get-Content -LiteralPath (Join-Path $ProjectRoot 'CHANGELOG.md') -Raw -Encoding UTF8
 
-Assert-Gate ($mainText -match 'version="2\.0\.0"') '应用版本' 'app/main.py 不是 2.0.0。'
-Assert-Gate ($readmeText -match 'version-2\.0\.0') '中文 README 版本' '版本徽章不是 2.0.0。'
-Assert-Gate ($englishReadmeText -match 'version-2\.0\.0') '英文 README 版本' '版本徽章不是 2.0.0。'
-Assert-Gate ($changelogText -match '(?m)^## 2\.0\.0 - ') 'Changelog' '缺少 2.0.0 正式记录。'
+Assert-Gate ($mainText -match 'version="2\.1\.0"') '应用版本' 'app/main.py 不是 2.1.0。'
+Assert-Gate ($readmeText -match 'version-2\.1\.0') '中文 README 版本' '版本徽章不是 2.1.0。'
+Assert-Gate ($englishReadmeText -match 'version-2\.1\.0') '英文 README 版本' '版本徽章不是 2.1.0。'
+Assert-Gate ($changelogText -match '(?m)^## 2\.1\.0 - ') 'Changelog' '缺少 2.1.0 正式记录。'
 
 Write-Host ''
-Write-Host '=== v2.0.0 发布门禁通过 ===' -ForegroundColor Green
-Write-Host '下一步：核对 docs/RELEASE_CHECKLIST.md，然后创建 tag v2.0.0 和 GitHub Release。'
+Write-Host '=== v2.1.0 发布门禁通过 ===' -ForegroundColor Green
+Write-Host '下一步：核对 docs/RELEASE_CHECKLIST.md，然后创建 tag v2.1.0 和 GitHub Release。'

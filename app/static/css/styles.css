@@ -1348,6 +1348,37 @@ fieldset input.visually-hidden-file {
   gap: 10px;
 }
 
+.clip-bulk-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  position: sticky;
+  top: 76px;
+  z-index: 4;
+  padding: 10px 12px;
+  border: 1px solid rgba(31, 111, 255, 0.18);
+  border-radius: 12px;
+  background: rgba(247, 250, 255, 0.94);
+  box-shadow: 0 8px 24px rgba(31, 77, 143, 0.08);
+  backdrop-filter: blur(14px);
+}
+
+.clip-bulk-select-control {
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.clip-bulk-select-count {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .clip-card {
   gap: 11px;
   padding: 12px;
@@ -5126,7 +5157,7 @@ td a,
   .publish-history-row { grid-template-columns: 1fr 1fr; }
 }
 
-/* v2.0 发送中心：内容准备、排期计划、执行记录 */
+/* v2.1 发送中心：内容准备、排期计划、执行记录 */
 .publish-content-list,
 .publish-plan-list,
 .publish-execution-list {

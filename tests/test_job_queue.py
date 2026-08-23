@@ -7,6 +7,7 @@
 - TestJobQuery: 查询和过滤
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -92,6 +93,81 @@ class TestJobCreate:
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT, job_id=custom_id)
 
         assert job["id"] == custom_id
+
+    def test_create_or_get_active_job_reuses_queued_job(self, tmp_path, monkeypatch):
+        """同一任务存在 queued 切片 job 时，不重复创建。"""
+        self._setup(tmp_path, monkeypatch)
+        from app.services.job_service import (
+            JOB_TYPE_VIDEO_CUT,
+            create_or_get_active_job,
+            list_jobs,
+        )
+
+        task_id = _create_test_task()
+        first_job, first_created = create_or_get_active_job(task_id, JOB_TYPE_VIDEO_CUT)
+        second_job, second_created = create_or_get_active_job(task_id, JOB_TYPE_VIDEO_CUT)
+
+        assert first_created is True
+        assert second_created is False
+        assert second_job["id"] == first_job["id"]
+        assert len(list_jobs(task_id=task_id)) == 1
+
+    def test_create_or_get_active_job_reuses_running_job(self, tmp_path, monkeypatch):
+        """同一任务存在 running 切片 job 时，不重复创建。"""
+        self._setup(tmp_path, monkeypatch)
+        from app.services.job_service import (
+            JOB_TYPE_VIDEO_CUT,
+            create_or_get_active_job,
+            mark_job_running,
+        )
+
+        task_id = _create_test_task()
+        first_job, _ = create_or_get_active_job(task_id, JOB_TYPE_VIDEO_CUT)
+        mark_job_running(first_job["id"])
+
+        second_job, second_created = create_or_get_active_job(task_id, JOB_TYPE_VIDEO_CUT)
+
+        assert second_created is False
+        assert second_job["id"] == first_job["id"]
+        assert second_job["status"] == "running"
+
+    def test_create_or_get_active_job_allows_new_job_after_completion(self, tmp_path, monkeypatch):
+        """旧切片 job 完成后，可以创建下一轮任务。"""
+        self._setup(tmp_path, monkeypatch)
+        from app.services.job_service import (
+            JOB_TYPE_VIDEO_CUT,
+            create_or_get_active_job,
+            mark_job_completed,
+            mark_job_running,
+        )
+
+        task_id = _create_test_task()
+        first_job, _ = create_or_get_active_job(task_id, JOB_TYPE_VIDEO_CUT)
+        mark_job_running(first_job["id"])
+        mark_job_completed(first_job["id"])
+
+        second_job, second_created = create_or_get_active_job(task_id, JOB_TYPE_VIDEO_CUT)
+
+        assert second_created is True
+        assert second_job["id"] != first_job["id"]
+
+    def test_create_or_get_active_job_deduplicates_concurrent_requests(self, tmp_path, monkeypatch):
+        """两个并发请求只能创建一个进行中的切片 job。"""
+        self._setup(tmp_path, monkeypatch)
+        from app.services.job_service import JOB_TYPE_VIDEO_CUT, create_or_get_active_job, list_jobs
+
+        task_id = _create_test_task()
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(
+                    lambda _: create_or_get_active_job(task_id, JOB_TYPE_VIDEO_CUT),
+                    range(2),
+                )
+            )
+
+        assert len({job["id"] for job, _ in results}) == 1
+        assert sum(1 for _, created in results if created) == 1
+        assert len(list_jobs(task_id=task_id)) == 1
 
 
 class TestJobLifecycle:

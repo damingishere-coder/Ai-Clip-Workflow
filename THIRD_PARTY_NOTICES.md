@@ -1,6 +1,6 @@
 # 第三方参考与许可证说明
 
-牛马片场 v2.0.0 的发布模块在设计阶段参考了以下开源项目和官方文档。项目没有整仓复制这些外部代码，平台 Publisher、Registry、调度器和 Windows Worker 均按牛马片场现有 FastAPI / SQLite 架构独立实现。
+牛马片场 v2.1.0 的发布模块在设计阶段参考了以下开源项目和官方文档。项目没有整仓复制这些外部代码，平台 Publisher、Registry、调度器和 Windows Worker 均按牛马片场现有 FastAPI / SQLite 架构独立实现。
 
 ## social-auto-upload-web-ui
 

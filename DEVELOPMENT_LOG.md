@@ -1,5 +1,14 @@
 # Development Log
 
+## 2026-08-23 v2.1.0 主线整合与片段审核稳定性增强
+
+- 审计全部本地/远端分支、开放 PR 和 5 个 worktree：图片文档、续接排期、发送中心文案规则等近期分支已进入 `origin/master`；当前 PR #38 是唯一需要整体合入的有效新主线。存在冲突、失败 CI 或旧 opencli 架构的历史分支不做盲目整分支合并。
+- 保留旧 `fix/task-automation-button-experience` worktree 的 15 个未提交文件不动，从中按当前架构重新实现三项兼容能力：切片 job 原子去重、手动切片后台进度、AI 分析期间统一锁定控件；与现行永久删除语义冲突的旧“仅隐藏任务”改动没有覆盖回来。
+- 从 `feature/group-select-all` 选择性补齐片段审核“全选当前列表 / 取消全选”、启用数量和半选状态；发送中心组内全选已由主线新版完整覆盖，不重复合并旧实现。
+- 项目版本、FastAPI API、Windows Worker、备份 manifest、README 徽章、页面侧栏、发布门禁和当前版本文档统一升级为 `2.1.0` / `v2.1`，同时保留 2.0.0 及更早的历史 Changelog 与开发记录。
+- 第一轮验证通过：Git 空白检查、Ruff、Python 编译、`app.js` 语法和 41 个定向回归全部通过；仅有 7 条既有 Pydantic V1 `@validator` 弃用警告，未运行真实外部 AI、真实投稿或生产数据库迁移。
+- 完整验证通过：`448 passed`；全部 JavaScript、PowerShell 语法、正式 / 开发 / Demo 三套 Compose 和 `pip check` 均通过。保留 9 条既有依赖弃用警告；2.1.0 Tag / Release 仍需最终 `master` 的新实机验收报告。
+
 ## 2026-08-22 PR #38 与发送中心新版整合验收
 
 - 将已合并到 `origin/master` 的发送中心新版安全整合进 `feature/task-defaults-and-safe-startup`，人工解决 `DEVELOPMENT_LOG.md` 与 `NEXT_STEPS.md` 两处文档冲突；PR #38 的任务名称历史、Windows 原生运行脚本和 Docker 回退说明均完整保留。

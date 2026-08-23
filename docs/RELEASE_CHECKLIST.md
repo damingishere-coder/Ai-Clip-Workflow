@@ -1,4 +1,4 @@
-# v2.0.0 Release 检查清单
+# v2.1.0 Release 检查清单
 
 本清单用于发布牛马片场正式版本。只有代码检查、Windows 实机验收、备份保护和文档核对均通过后，才创建 Git Tag 与 GitHub Release。
 
@@ -72,7 +72,7 @@ git pull --ff-only
 确认输出：
 
 ```text
-=== v2.0.0 发布门禁通过 ===
+=== v2.1.0 发布门禁通过 ===
 ```
 
 门禁会阻止以下情况发布：
@@ -85,7 +85,7 @@ git pull --ff-only
 - 当前分支不是 `master`
 - 验收报告对应旧 commit
 - Git 工作区不干净
-- 应用、README 或 Changelog 版本不是 `2.0.0`
+- 应用、README 或 Changelog 版本不是 `2.1.0`
 
 将经过人工检查的 `acceptance-results/latest.md` 正文粘贴到 Issue #23。不要上传整个目录、完整日志、`.env`、SQLite 或视频。
 
@@ -128,8 +128,8 @@ git pull --ff-only
 
 ## 6. 文档和版本一致性
 
-- [ ] `app/main.py` 版本为 `2.0.0`
-- [ ] README 中英文版本徽章为 `2.0.0`
+- [ ] `app/main.py` 版本为 `2.1.0`
+- [ ] README 中英文版本徽章为 `2.1.0`
 - [ ] `CHANGELOG.md` 包含本次版本的重要变化
 - [ ] `README.md` 快速开始命令可复制执行
 - [ ] `.env.example` 没有个人绝对路径和真实密钥
@@ -158,21 +158,21 @@ git pull --ff-only
 建议填写：
 
 ```text
-Tag: v2.0.0
+Tag: v2.1.0
 Target: master
-Title: NiuMa Studio v2.0.0 — Local AI Highlight Production Workflow
+Title: NiuMa Studio v2.1.0 — Local AI Highlight Production Workflow
 Latest release: Yes
 Pre-release: No
 ```
 
-发布正文以 `CHANGELOG.md` 的 2.0.0 内容为基础，并明确：
+发布正文以 `CHANGELOG.md` 的 2.1.0 内容为基础，并明确：
 
 - Windows 本地单用户工具
 - Demo 不连接真实账号
 - 抖音与 B站发布需要逐账号灰度验证
 - 不绕过登录、验证码或平台风控
 - 升级前应使用 `pre_upgrade.ps1` 创建本地回滚包
-- v2.0.0 的 Windows 10/11 + Docker Desktop 验收日期和对应 commit
+- v2.1.0 的 Windows 10/11 + Docker Desktop 验收日期和对应 commit
 
 GitHub 会自动提供源码 ZIP 和 tar.gz。当前没有经过签名和实机验证的 Windows 安装包时，不要上传名为“安装包”的临时压缩文件。
 

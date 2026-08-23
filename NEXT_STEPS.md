@@ -1,5 +1,13 @@
 # Next Steps
 
+## 2026-08-23 v2.1.0 主线同步后检查
+
+1. 最终提交进入 `master` 后先查看 GitHub CI；只有 Python、Windows host smoke 和 Docker image smoke 全部通过，才把该提交作为 2.1.0 候选版本。
+2. 在片段审核页测试“全选当前列表 / 取消全选”，确认启用数量和半选状态正确；点击“生成切片”后应看到排队与运行进度，连续点击不会创建两条切片任务。
+3. 在任务详情启动一次低风险 AI 分析，确认分析期间 Prompt、候选数量和三个分析入口都锁定，完成或失败后恢复；这项测试会调用所选 AI，请自行确认额度后再操作。
+4. 本次主线同步不创建 `v2.1.0` Tag 或 GitHub Release。发布前必须在最终 `master` 上重新运行 Windows 10/11 + Docker Desktop 实机验收和 `release_gate.ps1`，旧 2.0.0 报告不能作为 2.1.0 证据。
+5. 旧 `fix/task-automation-button-experience` worktree 的未提交内容继续原样保留；不要直接整批合并，其中“仅隐藏任务”会与当前永久删除托管产物的语义冲突。
+
 ## 2026-08-22 整合后使用与合并检查
 
 1. 当前 `feature/task-defaults-and-safe-startup` 已同时包含 PR #38 原生运行能力和发送中心新版；推送后先检查 PR #38 的 GitHub CI 与差异，再由用户决定是否合并到 `master`，不要自动删除分支。
@@ -255,7 +263,7 @@
 1. 在项目目录启动后台：`.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001`。
 2. 打开 `http://127.0.0.1:8001/tasks/new`，新建任务并勾选“新建后自动跑完整流水线”。
 3. 等任务自动完成准备视频、转写/读取文本、AI 分析、自动选片、原片切割、生成标题文案和创建待发送任务。
-4. 该段是 v1.4.0 历史测试记录。当时默认 `manual_export`；v2.0.0 当前默认 `local_browser`，到点后会调用 Windows Worker 真实投稿。手动扫描命令仍是 `.\.venv\Scripts\python.exe -m app.publish_scheduler run-once`。
+4. 该段是 v1.4.0 历史测试记录。当时默认 `manual_export`；v2.1.0 当前默认 `local_browser`，到点后会调用 Windows Worker 真实投稿。手动扫描命令仍是 `.\.venv\Scripts\python.exe -m app.publish_scheduler run-once`。
 5. 发布包默认在 `outputs/publish_packages/{task_id}/{clip_id}/`，应能看到 `clip.mp4`、`title.txt`、`caption.txt`、`hashtags.txt`、`cover_text.txt`、`publish_plan.json`、`metadata.json`。
 6. 打开 `/publish`，在发布记录里查看 `SCHEDULED`、`PUBLISHING`、`PUBLISHED`、`FAILED`、`NEED_REVIEW` 等状态；也可以访问 `/api/publish/queue/snapshot` 查看队列快照。
 7. 失败任务可以调用 `POST /api/publish/jobs/{job_id}/retry` 重试；立即发布可以调用 `POST /api/publish/jobs/{job_id}/publish-now`；取消和跳过分别调用 `/cancel`、`/skip`。

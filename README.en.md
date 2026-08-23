@@ -9,7 +9,7 @@ A Windows-first, local AI video highlight workspace for livestream recordings, i
 [中文](README.md) · [English](README.en.md) · [Quick Start](docs/PROJECT_GUIDE.md) · [Portable Setup](docs/PORTABLE_SETUP.md) · [Backup & Restore](docs/BACKUP_AND_RESTORE.md) · [Technical Reference](docs/TECHNICAL_REFERENCE.md) · [Roadmap](ROADMAP.md)
 
 ![CI](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml/badge.svg)
-![Version](https://img.shields.io/badge/version-2.0.0-0969da)
+![Version](https://img.shields.io/badge/version-2.1.0-0969da)
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4)
 ![FastAPI](https://img.shields.io/badge/backend-FastAPI-009688)
@@ -63,7 +63,7 @@ Producing short clips from long-form video involves much more than cutting a fil
 
 NiuMa Studio brings those steps into one local workflow:
 
-- **AI highlight discovery** with OpenAI-compatible APIs, DeepSeek, or local Ollama models.
+- **AI highlight discovery** with a controlled local Codex CLI, OpenAI-compatible APIs, DeepSeek, or local Ollama models.
 - **Human review** for enabling, disabling, retiming, and rewriting candidate clips.
 - **Unified production** for transcription, clipping, copy, cover frames, schedules, and execution history.
 - **Local-first storage** for videos, databases, API keys, and browser login state.

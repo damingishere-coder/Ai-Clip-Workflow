@@ -11,7 +11,7 @@
 - 视频处理：FFmpeg / FFprobe。
 - 远程转写：火山引擎。
 - 本地转写：faster-whisper。
-- AI 分析：OpenAI-compatible / DeepSeek 或本地 Ollama。
+- AI 分析：受控 Codex CLI、OpenAI-compatible / DeepSeek 或本地 Ollama。
 - 真实发布：Windows Chrome Worker。
 - 后端支持平台：抖音、B站；当前发送中心前台、任务同步和全自动流水线只启用抖音，B站 API、Publisher 与历史数据保留。
 
@@ -58,6 +58,7 @@
 
 ### AI 选片
 
+- 受控本机 Codex CLI（默认推荐，不改变 Codex 提供商或认证配置）。
 - 远程 OpenAI-compatible / DeepSeek。
 - 本地 Ollama。
 - 通用内容价值模式。
@@ -76,7 +77,7 @@ AI 结果只提供候选，不应跳过人工审核直接投稿。
 - 保存审核结果。
 - 在选择变化、文件缺失或版本不一致时生成安全的新切片版本。
 
-字幕工作台保留 ASS / FFmpeg 成片能力。v2.0 全自动主流程暂不强制生成、烧录或叠加字幕，避免字幕失败阻断整条发布流程。
+字幕工作台保留 ASS / FFmpeg 成片能力。v2.1 全自动主流程暂不强制生成、烧录或叠加字幕，避免字幕失败阻断整条发布流程。
 
 ## 6. 发送中心
 
