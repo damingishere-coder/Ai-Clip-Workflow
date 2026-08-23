@@ -3,12 +3,18 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.models.settings import AIConfigUpdate
+from app.services.ai.codex_cli_provider import CodexCliConfig, CodexCliProvider
 from app.services.ai.diagnostics import fetch_ollama_models
 
 
 SETTING_ATTRS = {
     "AI_DEFAULT_PROVIDER": "ai_default_provider",
+    "AI_PUBLISH_PROVIDER": "ai_publish_provider",
     "AI_REQUEST_TIMEOUT_SECONDS": "ai_request_timeout_seconds",
+    "AI_CODEX_PATH": "ai_codex_path",
+    "AI_CODEX_HOME": "ai_codex_home",
+    "AI_CODEX_MODEL": "ai_codex_model",
+    "AI_CODEX_TIMEOUT_SECONDS": "ai_codex_timeout_seconds",
     "TRANSCRIPTION_PROVIDER": "transcription_provider",
     "TRANSCRIPTION_FALLBACK_PROVIDER": "transcription_fallback_provider",
     "VOLCENGINE_ASR_API_URL": "volcengine_asr_api_url",
@@ -67,6 +73,7 @@ LEGACY_FALLBACK_KEYS = {
 
 INTEGER_ATTRS = {
     "ai_request_timeout_seconds",
+    "ai_codex_timeout_seconds",
     "volcengine_asr_timeout_seconds",
     "ai_analysis_request_timeout_seconds",
     "ai_publish_request_timeout_seconds",
@@ -85,7 +92,17 @@ ENV_APPEND_GROUPS = [
         "# AI common switch",
         [
             "AI_DEFAULT_PROVIDER",
+            "AI_PUBLISH_PROVIDER",
             "AI_REQUEST_TIMEOUT_SECONDS",
+        ],
+    ),
+    (
+        "# Codex CLI - reuses the current Windows ChatGPT login",
+        [
+            "AI_CODEX_PATH",
+            "AI_CODEX_HOME",
+            "AI_CODEX_MODEL",
+            "AI_CODEX_TIMEOUT_SECONDS",
         ],
     ),
     (
@@ -284,6 +301,20 @@ def get_ai_config_context() -> dict:
         local_models = []
         local_ollama_online = False
         local_ollama_error = str(exc)
+    codex_status = CodexCliProvider(
+        CodexCliConfig(
+            executable=values["AI_CODEX_PATH"],
+            model=values["AI_CODEX_MODEL"],
+            timeout_seconds=int(values["AI_CODEX_TIMEOUT_SECONDS"]),
+            codex_home=values["AI_CODEX_HOME"],
+        )
+    ).version_status()
+    analysis_ready = bool(codex_status["ok"]) if values["AI_DEFAULT_PROVIDER"] == "codex" else analysis_ready
+    if values["AI_DEFAULT_PROVIDER"] == "local":
+        analysis_ready = local_ready
+    publish_ready = bool(codex_status["ok"]) if values["AI_PUBLISH_PROVIDER"] == "codex" else publish_ready
+    if values["AI_PUBLISH_PROVIDER"] == "local":
+        publish_ready = local_ready
     return {
         "env_path": str(_env_path()),
         "env_exists": _env_path().exists(),
@@ -301,6 +332,8 @@ def get_ai_config_context() -> dict:
         "local_ollama_models": local_models,
         "local_ollama_error": local_ollama_error,
         "default_provider": values["AI_DEFAULT_PROVIDER"],
+        "publish_provider": values["AI_PUBLISH_PROVIDER"],
+        "codex_status": codex_status,
         "configured_count": int(transcription_ready) + int(analysis_ready) + int(publish_ready),
         "local_model_options": LOCAL_MODEL_OPTIONS,
         "remote_model_options": REMOTE_MODEL_OPTIONS,
@@ -334,8 +367,13 @@ def save_ai_config(payload: AIConfigUpdate) -> dict:
     publish_protocol = _normalize_remote_protocol(publish_base_url, payload.ai_publish_remote_protocol)
 
     updates = {
-        "AI_DEFAULT_PROVIDER": payload.ai_default_provider.strip() or "remote",
+        "AI_DEFAULT_PROVIDER": payload.ai_default_provider.strip() or "codex",
+        "AI_PUBLISH_PROVIDER": payload.ai_publish_provider.strip() or "codex",
         "AI_REQUEST_TIMEOUT_SECONDS": str(payload.ai_request_timeout_seconds),
+        "AI_CODEX_PATH": payload.ai_codex_path.strip() or "codex",
+        "AI_CODEX_HOME": payload.ai_codex_home.strip(),
+        "AI_CODEX_MODEL": payload.ai_codex_model.strip() or "gpt-5.6-sol",
+        "AI_CODEX_TIMEOUT_SECONDS": str(payload.ai_codex_timeout_seconds),
         "TRANSCRIPTION_PROVIDER": payload.transcription_provider.strip() or "volcengine",
         "TRANSCRIPTION_FALLBACK_PROVIDER": payload.transcription_fallback_provider.strip(),
         "VOLCENGINE_ASR_API_URL": payload.volcengine_asr_api_url.strip()

@@ -11,6 +11,35 @@
 - 在 Windows 10/11 + Docker Desktop 实机生成当前 `master` 的脱敏验收报告。
 - 完成抖音 / B站真实发布灰度验证矩阵。
 
+## 2.1.0 - 2026-08-23
+
+### Added
+
+- 接入受控 Codex CLI 文本分析与发送中心文案生成，并保留远程 DeepSeek 和本地 Ollama 回退路径。
+- 增加 Windows 原生日常启停脚本，统一工作台与 Windows Chrome Worker 的启动、停止、检测和 Docker 回退说明。
+- 新建任务固定使用综艺笑点优先模式，并按最近创建时间提供可见任务名称历史候选。
+- 片段审核增加当前列表全选、启用数量与半选状态。
+- 手动生成切片改为后台任务进度，重复点击或并发请求复用同一条进行中任务。
+
+### Changed
+
+- 发送中心前台固定抖音，同时保留 B站历史数据、API 与 Publisher 兼容能力。
+- 统一抖音账号预检、标题、简介和话题规则，旧草稿升级前先创建 SQLite 安全备份。
+- 发送中心按原始任务分组并支持组内全选；AI 重写同步刷新标题、简介和话题。
+- AI 分析运行期间锁定相关按钮与表单控件，避免并发操作覆盖候选结果。
+- 项目、API、Windows Worker、备份清单、页面侧栏和发布文档统一升级到 `2.1.0` / `v2.1`。
+
+### Security
+
+- Codex CLI 仅作为本机受控进程能力，不改变 Codex 登录、提供商或认证配置。
+- 继续保留登录、验证码、平台风控和不确定发布结果的人工确认边界。
+
+### Validation
+
+- Ruff、Python 编译、全部前端 JavaScript 与 PowerShell 语法检查通过。
+- 完整自动化测试 `448 passed`，三套 Docker Compose 配置和 `pip check` 通过。
+- 创建 `v2.1.0` Tag 或 GitHub Release 前，仍须在最终 `master` 上重新完成 Windows 10/11 + Docker Desktop 实机验收和发布门禁。
+
 ## 2.0.0 - 2026-08-03
 
 ### Added

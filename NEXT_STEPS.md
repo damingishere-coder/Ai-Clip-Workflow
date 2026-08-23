@@ -1,5 +1,20 @@
 # Next Steps
 
+## 2026-08-23 v2.1.0 主线同步后检查
+
+1. 最终提交进入 `master` 后先查看 GitHub CI；只有 Python、Windows host smoke 和 Docker image smoke 全部通过，才把该提交作为 2.1.0 候选版本。
+2. 在片段审核页测试“全选当前列表 / 取消全选”，确认启用数量和半选状态正确；点击“生成切片”后应看到排队与运行进度，连续点击不会创建两条切片任务。
+3. 在任务详情启动一次低风险 AI 分析，确认分析期间 Prompt、候选数量和三个分析入口都锁定，完成或失败后恢复；这项测试会调用所选 AI，请自行确认额度后再操作。
+4. 本次主线同步不创建 `v2.1.0` Tag 或 GitHub Release。发布前必须在最终 `master` 上重新运行 Windows 10/11 + Docker Desktop 实机验收和 `release_gate.ps1`，旧 2.0.0 报告不能作为 2.1.0 证据。
+5. 旧 `fix/task-automation-button-experience` worktree 的未提交内容继续原样保留；不要直接整批合并，其中“仅隐藏任务”会与当前永久删除托管产物的语义冲突。
+
+## 2026-08-22 整合后使用与合并检查
+
+1. 当前 `feature/task-defaults-and-safe-startup` 已同时包含 PR #38 原生运行能力和发送中心新版；推送后先检查 PR #38 的 GitHub CI 与差异，再由用户决定是否合并到 `master`，不要自动删除分支。
+2. 日常排期时，在对应“原始处理任务”点击“全选本任务”，确认底部已选数量后点击“设置排期”，先查看“预览排期”，确认时间无误后再保存；该全选不会跨任务组。
+3. 本次实机验收只打开了排期抽屉，没有保存排期或触发真实投稿；既有 4 条排期保持不变。真实发布仍需人工确认账号登录、验证码和平台风控。
+4. 如果需要核对旧草稿升级，可保留 `data/backups/workflow-before-publish-migration-20260822-121307-772508-140328-70deb9bc.sqlite3`；不要手工删除数据库、B站历史或浏览器 Profile。
+
 ## 2026-08-22 发送中心抖音规则检查方法
 
 1. 合并并启动新版本后打开 `http://127.0.0.1:8001/publish?platform=bilibili`，页面仍应固定显示抖音，不能出现 B站切换卡；既有 B站数据库记录不会被删除。
@@ -9,12 +24,36 @@
 5. 首次打开升级后的页面会自动升级未排期抖音旧草稿并在写入前备份 SQLite；已排期、历史、B站、已移除和失效切片不变。若 AI 失败，原标题、简介和标签保持不变，可稍后点击“AI 重写文案”手动重试。
 6. 本次验收不需要点击“立即发送”。真实灰度仍必须使用低风险素材，并由用户在独立 Chrome 中人工完成登录、验证码和风控确认。
 
+## 2026-08-21 原生日常运行与 Docker 回退
+
+1. 当前工作台由 Alter 中的 `Niuma-Studio` 运行；访问 `http://127.0.0.1:8001/`。发送中心应显示 Windows Worker 正常。
+2. 不使用 Alter 时，可在项目目录运行 `.\scripts\start_native.ps1`；只查看工作台可加 `-SkipWorker`。对应停止命令为 `.\scripts\stop_native.ps1`。
+3. `NiuMa Studio Docker Watcher` 计划任务当前只是禁用，没有删除。日常原生模式不要启用它，否则登录时可能重新拉起旧 Docker 流程。
+4. 回滚前先停止 Alter 中的 `Niuma-Studio` 和本项目 Worker，再运行 `docker compose up -d`；确认容器健康后才重新启用 watcher。禁止使用 `docker compose down --volumes`、`docker volume prune` 或删除 `data`、E 盘任务目录。
+5. 切换前数据库备份是 `data/backups/workflow-pre-native-cutover-20260821-150620.sqlite3`，完整性为 `ok`。只有原生与 Docker 都无法读取正式库时才考虑恢复，不要覆盖当前数据库。
+6. 本批原生启动脚本专项测试 `11 passed`，PowerShell 5.1/7 解析均为 0；隔离与正式环境核心页面均为 HTTP 200，未触发真实投稿。
+
+## 2026-08-16 任务名称历史候选检查方法
+
+1. 重启 NiuMa Studio 后打开“新建任务”，点击“任务名称”输入框；应出现应用控制的下拉候选列表，第一条是最近创建且仍然可见的任务名称，较旧任务依次向下排列。
+2. 已隐藏或永久删除的任务名称不应出现在候选里；点击任意候选可完整填入，也可以继续手动输入任意新标题。
+3. 新建一条任务后，下次打开“新建任务”页面，该任务名称应自动成为候选第一项。
+4. 本次只读展示候选，不会修改现有任务、数据库、媒体处理或发布流程；真实创建任务前仍按原方式填写或选择任务名称。
+
 ## 2026-08-13 GitHub 主页任务详情与发送中心图片检查方法
 
 1. 打开本次 PR 的 `README.md` 预览，滚动到“产品预览”，确认“任务详情”显示任务详情图、“发送中心”显示发送中心图，且两张画面完整、位置正确。
 2. 打开 `README.en.md` 预览，确认“Task detail”和“Publishing center”与中文主页分别使用相同的对应图片。
 3. 点击两张图片查看原图，确认资源均为 `2560 × 1271` 的 PNG；GitHub 页面可能会按浏览器宽度缩放显示，但仓库中的原图没有压缩或降采样。
 4. 本次只替换 GitHub 主页图片，不需要启动服务，也不会影响本机素材、SQLite、排期或真实投稿。
+
+## 2026-08-03 DeepSeek Flash 切换后检查方法
+
+1. 重启 NiuMa Studio，使本机 `.env` 的新模型配置重新加载；不需要重新填写或更换 DeepSeek API Key。
+2. 打开系统状态页，确认“文字稿分析”和“发送中心发布文案”的模型都显示 `deepseek-v4-flash`。
+3. 用一条测试任务运行“远程 AI 分析”，再到发送中心执行一次“AI 补齐标题/话题/简介”；两处运行记录都应显示 `deepseek-v4-flash`。
+4. 本次只切换模型，不会自动发稿，也不会改动本地 Ollama、火山引擎转写、账号登录或平台风控配置。
+5. 本次专项测试与两类 DeepSeek 真实连通测试已通过；创建 PR 前需另行排查 `tests/test_publish_center_browser.py` 的历史记录等待超时，再重新运行完整测试。
 
 ## 2026-08-03 v2.0.0 发布前最终门禁
 
@@ -224,7 +263,7 @@
 1. 在项目目录启动后台：`.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001`。
 2. 打开 `http://127.0.0.1:8001/tasks/new`，新建任务并勾选“新建后自动跑完整流水线”。
 3. 等任务自动完成准备视频、转写/读取文本、AI 分析、自动选片、原片切割、生成标题文案和创建待发送任务。
-4. 该段是 v1.4.0 历史测试记录。当时默认 `manual_export`；v2.0.0 当前默认 `local_browser`，到点后会调用 Windows Worker 真实投稿。手动扫描命令仍是 `.\.venv\Scripts\python.exe -m app.publish_scheduler run-once`。
+4. 该段是 v1.4.0 历史测试记录。当时默认 `manual_export`；v2.1.0 当前默认 `local_browser`，到点后会调用 Windows Worker 真实投稿。手动扫描命令仍是 `.\.venv\Scripts\python.exe -m app.publish_scheduler run-once`。
 5. 发布包默认在 `outputs/publish_packages/{task_id}/{clip_id}/`，应能看到 `clip.mp4`、`title.txt`、`caption.txt`、`hashtags.txt`、`cover_text.txt`、`publish_plan.json`、`metadata.json`。
 6. 打开 `/publish`，在发布记录里查看 `SCHEDULED`、`PUBLISHING`、`PUBLISHED`、`FAILED`、`NEED_REVIEW` 等状态；也可以访问 `/api/publish/queue/snapshot` 查看队列快照。
 7. 失败任务可以调用 `POST /api/publish/jobs/{job_id}/retry` 重试；立即发布可以调用 `POST /api/publish/jobs/{job_id}/publish-now`；取消和跳过分别调用 `/cancel`、`/skip`。
@@ -932,3 +971,27 @@
 4. 流程完成后，进度应显示 100%，顶部自动出现“前往发送中心”，有候选片段时同时出现“检查候选片段”。
 5. 可以在 AI Prompt 文本框临时输入几个字后继续等待，确认状态更新时文字没有消失、页面也没有跳回顶部。
 6. 如果网络短暂中断，状态卡会显示“自动更新暂时中断，正在重试”；恢复后不需要手动刷新。
+
+## 2026-08-11 当前发布计划
+
+1. 保持电脑、Docker Desktop 和网络开启，至少持续到最后一条计划时间 2026-08-13 10:00（北京时间）；不要在排期中途关闭工作台或 Windows 发布 Worker。
+2. 2026-08-11 计划 6 条：07:00、10:00、13:00、16:00、19:00、22:00。
+3. 2026-08-12 计划 6 条：07:00、10:00、13:00、16:00、19:00、22:00。
+4. 2026-08-13 计划 2 条：07:00、10:00。
+5. 发送中心已保持打开，可在“排期计划”查看月历；若出现验证码、登录失效或平台风控，请按页面提示人工处理，不要重复点击“立即发送”。
+6. 当前最新确认成功发布时间为 2026-08-11 01:49:08；这是 Docker Desktop 自动恢复后处理的第 3 条过期任务，已经从剩余排期中排除。
+
+## 2026-08-16 Windows 启动检查方法
+
+1. 双击 `C:\Users\10578\Documents\启动牛马片场.bat`，确认不再出现 `UnexpectedToken`、乱码或缺少右大括号等 PowerShell 解析错误。
+2. 等待脚本显示启动成功，并确认 Docker Desktop 中 `niuma-studio` 容器状态为 `healthy`。
+3. 使用 `http://127.0.0.1:8001/` 打开牛马片场；不要继续使用已经停用的 `http://localhost:6866/`。
+4. 若发送中心提示登录失效、验证码或平台风控，按页面提示人工处理，不要绕过验证或重复投稿。
+5. 如果以后启动时只出现 Docker Hub 连接超时，并且本机已有 `niuma-studio:latest` 镜像，可在项目目录运行 `powershell.exe -ExecutionPolicy Bypass -File .\scripts\start.ps1 -NoBuild`，使用本地镜像启动。
+
+## 2026-08-22 Codex CLI 验收
+
+1. 重启牛马片场后打开系统状态页，确认默认分析方式和发送中心文案方式均为“Codex CLI”，状态显示 CLI 可执行。
+2. 先用一条短测试文字稿执行 Codex 分析，核对候选片段 JSON、时间范围和封面时间；这一步会消耗 Codex 额度，需人工发起。
+3. 在发送中心只对一条未发布草稿点击 AI 补齐，确认标题、话题、简介通过现有内容安全规则；不要点击真实发布。
+4. 若 Codex 不可用，可在系统状态页手动选择远程 AI 或本地模型；旧 API 配置和历史任务保持不变。

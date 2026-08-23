@@ -495,7 +495,7 @@ def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
         "candidate_count": task.get("candidate_clip_count") or 0,
         "selection_profile": task.get("selection_profile") or "general",
         "selection_profile_label": (
-            "综艺笑点优先" if task.get("selection_profile") == "variety_comedy" else "通用模式"
+            "康熙笑点选片模式" if task.get("selection_profile") == "variety_comedy" else "通用模式（历史任务）"
         ),
         "final_clip_target": int(task.get("final_clip_target") or 5),
         "duration": video_meta["duration"],
@@ -545,6 +545,24 @@ def list_tasks(include_deleted: bool = False) -> list[dict]:
             """
         ).fetchall()
     return [_row_to_task(row) for row in rows]
+
+
+def list_task_name_history() -> list[str]:
+    """返回可见任务的唯一非空任务名称，按最后创建时间从新到旧排列。"""
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT TRIM(task_name) AS task_name, MAX(created_at) AS latest_created_at
+            FROM tasks
+            WHERE COALESCE(is_deleted, 0) = 0
+              AND task_name IS NOT NULL
+              AND TRIM(task_name) <> ''
+            GROUP BY TRIM(task_name)
+            ORDER BY latest_created_at DESC, task_name ASC
+            LIMIT 100
+            """
+        ).fetchall()
+    return [str(row["task_name"]) for row in rows]
 
 
 def get_task(task_id: str, include_video_probe: bool = True) -> dict | None:

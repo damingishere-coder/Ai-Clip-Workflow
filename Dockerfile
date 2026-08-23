@@ -14,8 +14,9 @@ RUN sed -i "s|http://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g;
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir -r requirements.txt
+ARG PIP_INDEX_URL=
+RUN python -m pip install --no-cache-dir --upgrade pip ${PIP_INDEX_URL:+-i $PIP_INDEX_URL} \
+    && python -m pip install --no-cache-dir -r requirements.txt ${PIP_INDEX_URL:+-i $PIP_INDEX_URL}
 
 COPY app ./app
 COPY prompts ./prompts

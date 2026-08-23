@@ -4,9 +4,9 @@
 
 ### 1.1 架构形态
 
-当前 v2.0.0 保持 **FastAPI 单体应用 + SQLite + Windows 发布 Worker**。视频、AI、页面和调度器仍在同一个应用中；只有必须使用宿主系统 Chrome 的真实发布动作由 Windows Worker 执行，不引入 Redis、Celery 或微服务。
+当前 v2.1.0 保持 **FastAPI 单体应用 + SQLite + Windows 发布 Worker**。视频、AI、页面和调度器仍在同一个应用中；只有必须使用宿主系统 Chrome 的真实发布动作由 Windows Worker 执行，不引入 Redis、Celery 或微服务。
 
-v2.0 的架构目标不是云端多租户，而是把一台 Windows 电脑上的长视频生产与发布链路做完整、可恢复、可审计。SQLite 是唯一业务事实来源，E 盘任务目录保存大文件，浏览器 Profile 和平台登录态只保留在本机且不进入 Git。
+v2.1 的架构目标不是云端多租户，而是把一台 Windows 电脑上的长视频生产与发布链路做完整、可恢复、可审计。SQLite 是唯一业务事实来源，E 盘任务目录保存大文件，浏览器 Profile 和平台登录态只保留在本机且不进入 Git。
 
 ```text
 ┌─────────────────────────────────────────────────────────┐
@@ -47,7 +47,7 @@ v2.0 的架构目标不是云端多租户，而是把一台 Windows 电脑上的
 | **文件存储** | 本地文件系统 | Windows 本地目录，默认 `E:\直播间切片工作流存储` |
 | **视频处理** | FFmpeg / FFprobe | 音频提取、视频切割、字幕合成、封面帧 |
 | **语音转写** | faster-whisper / 火山引擎 | 本地模型或远程 API，输出逐句时间戳 |
-| **AI 分析** | DeepSeek API / Ollama | Provider 抽象层，支持 chat/completions 和 responses 协议 |
+| **AI 分析** | Codex CLI / DeepSeek API / Ollama | 受控本机进程与 Provider 抽象层，兼容 chat/completions 和 responses 协议 |
 | **真实发布** | Playwright + 系统 Chrome | Windows Worker 使用每个平台/账号独立浏览器目录投稿 |
 | **容器化** | Docker + docker-compose | 可选部署方式，开发/测试用 |
 
@@ -101,6 +101,7 @@ app/
     ├── publishers/          ← Registry、模式 Publisher、抖音/B站 Publisher、Worker 客户端
     └── ai/
         ├── base.py          ← AI Provider 抽象基类
+        ├── codex_cli_provider.py      ← 受控 Codex CLI Provider
         ├── local_model_provider.py    ← Ollama 本地 Provider
         ├── remote_responses_provider.py ← DeepSeek 远程 Provider
         ├── ai_clip_analyzer.py        ← AI 分析编排器
@@ -264,7 +265,7 @@ Worker 会把容器内 `/workspace/tasks/...` 映射到宿主 `.env` 的 `TASKS_
 
 ## 8. 架构演进路线
 
-### 8.1 当前阶段：v2.0 本地生产闭环（已完成）
+### 8.1 当前阶段：v2.1 本地生产闭环（已完成）
 
 - FastAPI 单体应用
 - SQLite 单文件数据库
@@ -277,7 +278,7 @@ Worker 会把容器内 `/workspace/tasks/...` 映射到宿主 `.env` 的 `TASKS_
 - E 盘统一生产存储、外部原片保护和托管产物安全删除
 - 代码检查与 CI 流程
 
-### 8.2 v2.0 后续重点
+### 8.2 v2.1 后续重点
 
 **目标**：不扩大单用户本地范围，优先用真实素材与真实账号完成灰度验收并提高可靠性。
 
@@ -325,7 +326,7 @@ Worker 会把容器内 `/workspace/tasks/...` 映射到宿主 `.env` 的 `TASKS_
 | 暂不做的 | 原因 |
 | --- | --- |
 | **SaaS 多租户** | 当前是个人本地工具，不需要租户隔离和计费系统 |
-| **绕过验证的无人值守发布** | 平台有验证码、风控、登录失效；v2.0 只在登录有效且平台无需人工确认时自动执行 |
+| **绕过验证的无人值守发布** | 平台有验证码、风控、登录失效；v2.1 只在登录有效且平台无需人工确认时自动执行 |
 | **强依赖云部署** | 首版定位 Windows 本地工具，不应强制要求云服务器 |
 | **移动端 App** | 核心工作流依赖 FFmpeg 和大文件处理，不适合移动端 |
 | **实时直播流处理** | 当前是录播后处理，实时流需要完全不同的技术栈 |
@@ -355,7 +356,7 @@ source_video
 | 服务文件 | 职责 |
 | --- | --- |
 | `transcript_service.py` | 本地 faster-whisper 转写、火山引擎远程转写、转写预览解析和进度管理 |
-| `services/ai/` | AI 候选片段分析模块：Provider 抽象、远程 DeepSeek Provider、本地 Ollama Provider、AI JSON 解析和片段分析编排 |
+| `services/ai/` | AI 候选片段分析模块：受控 Codex CLI、远程 DeepSeek、本地 Ollama、AI JSON 解析和片段分析编排 |
 | `video_cut_service.py` | FFmpeg 自动切割接口 |
 | `storage_service.py` | 任务目录与文件路径管理接口（含 `task_dir_name` 分配、路径解析、视频文件校验） |
 | `task_service.py` | 任务状态与业务编排接口（含字幕渲染、字幕样式、发布队列集成） |

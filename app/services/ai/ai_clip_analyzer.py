@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from app.core.config import settings
 from app.models.task import AIClipAnalysisResult
 from app.services.ai.base import AIProvider, AIProviderError, ProviderConfig
+from app.services.ai.codex_cli_provider import CodexCliConfig, CodexCliProvider
 from app.services.ai.local_model_provider import LocalModelProvider
 from app.services.ai.remote_responses_provider import RemoteResponsesProvider
 
@@ -142,7 +143,13 @@ def _analyze_task_transcript_in_chunks(
     for index, clip in enumerate(merged_clips, start=1):
         clip.clip_id = f"clip_{index:03d}"
 
-    provider_label = "本地 AI" if request.provider_name == "local" else "远程 AI"
+    provider_label = (
+        "Codex CLI"
+        if request.provider_name == "codex"
+        else "本地 AI"
+        if request.provider_name == "local"
+        else "远程 AI"
+    )
     summary = f"{provider_label} 已按 {len(chunks)} 个小段完成分段分析，并合并为 {len(merged_clips)} 条候选片段。"
     if failures:
         summary += f" 有 {len(failures)} 个小段失败，已跳过失败小段。"
@@ -151,10 +158,21 @@ def _analyze_task_transcript_in_chunks(
     return result
 
 
-def build_provider(provider_name: str | None = None) -> AIProvider:
-    resolved = (provider_name or settings.ai_default_provider).lower()
+def build_provider(provider_name: str | None = None, purpose: str = "analysis") -> AIProvider:
+    default_provider = settings.ai_publish_provider if purpose == "publish" else settings.ai_default_provider
+    resolved = (provider_name or default_provider).lower()
+    if resolved == "codex":
+        return CodexCliProvider(
+            CodexCliConfig(
+                executable=settings.ai_codex_path,
+                model=settings.ai_codex_model,
+                timeout_seconds=settings.ai_codex_timeout_seconds,
+                codex_home=settings.ai_codex_home,
+            )
+        )
     if resolved == "remote":
-        return build_remote_provider(settings.ai_analysis_remote_model)
+        model = settings.ai_publish_remote_model if purpose == "publish" else settings.ai_analysis_remote_model
+        return build_remote_provider(model, purpose=purpose)
     if resolved == "local":
         return LocalModelProvider(
             ProviderConfig(
@@ -166,7 +184,7 @@ def build_provider(provider_name: str | None = None) -> AIProvider:
                 fallback_protocol=settings.ai_local_fallback_protocol,
             )
         )
-    raise AIAnalysisError("AI provider 只能是 remote 或 local")
+    raise AIAnalysisError("AI provider 只能是 codex、remote 或 local")
 
 
 def build_remote_provider(model: str | None = None, purpose: str = "analysis") -> AIProvider:

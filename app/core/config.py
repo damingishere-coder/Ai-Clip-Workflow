@@ -79,9 +79,16 @@ class Settings:
     default_cut_strategy: str = "accurate"
     local_admin_token: str = _env("LOCAL_ADMIN_TOKEN", "")
     ffmpeg_timeout: int = int(_env("FFMPEG_TIMEOUT", "600"))
-    ai_provider: str = _env_first(("AI_PROVIDER", "AI_DEFAULT_PROVIDER"), "remote")
-    ai_default_provider: str = _env("AI_DEFAULT_PROVIDER", "remote")
+    ai_provider: str = _env_first(("AI_PROVIDER", "AI_DEFAULT_PROVIDER"), "codex")
+    ai_default_provider: str = _env("AI_DEFAULT_PROVIDER", "codex")
+    ai_publish_provider: str = _env("AI_PUBLISH_PROVIDER", "codex")
     ai_request_timeout_seconds: int = int(_env("AI_REQUEST_TIMEOUT_SECONDS", "120"))
+
+    # Codex CLI 复用当前 Windows 用户的 ChatGPT/Codex 登录态，不读取 API Key。
+    ai_codex_path: str = _env("AI_CODEX_PATH", "codex")
+    ai_codex_home: str = _env("AI_CODEX_HOME", "")
+    ai_codex_model: str = _env("AI_CODEX_MODEL", "gpt-5.6-sol")
+    ai_codex_timeout_seconds: int = int(_env("AI_CODEX_TIMEOUT_SECONDS", "300"))
 
     ai_analysis_remote_base_url: str = _env_first(
         ("AI_ANALYSIS_REMOTE_BASE_URL", "AI_REMOTE_BASE_URL"),

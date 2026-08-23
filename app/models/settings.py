@@ -2,8 +2,13 @@ from pydantic import BaseModel, Field
 
 
 class AIConfigUpdate(BaseModel):
-    ai_default_provider: str = Field(default="remote", pattern="^(remote|local)$")
+    ai_default_provider: str = Field(default="codex", pattern="^(codex|remote|local)$")
+    ai_publish_provider: str = Field(default="codex", pattern="^(codex|remote|local)$")
     ai_request_timeout_seconds: int = Field(default=120, ge=10, le=600)
+    ai_codex_path: str = Field(default="codex")
+    ai_codex_home: str = Field(default="")
+    ai_codex_model: str = Field(default="gpt-5.6-sol")
+    ai_codex_timeout_seconds: int = Field(default=300, ge=10, le=1800)
 
     transcription_provider: str = Field(default="volcengine", pattern="^(volcengine|local)$")
     transcription_fallback_provider: str = Field(default="")

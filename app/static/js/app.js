@@ -66,7 +66,7 @@ if (newTaskForm) {
       uploadData.append("platform", payload.platform || "general");
       uploadData.append("max_clip_duration", payload.max_clip_duration || "10");
       uploadData.append("candidate_clip_count", payload.candidate_clip_count || "12");
-      uploadData.append("selection_profile", payload.selection_profile || "general");
+      uploadData.append("selection_profile", payload.selection_profile || "variety_comedy");
       uploadData.append("final_clip_target", payload.final_clip_target || "5");
       uploadData.append("ai_preference", "");
       uploadData.append("auto_mode", payload.auto_mode === "true" ? "true" : "false");
@@ -332,7 +332,9 @@ const aiProcessResult = document.querySelector("#ai-process-result");
 const aiAnalysisSummary = document.querySelector("#ai-analysis-summary");
 const aiCandidateCountPill = document.querySelector("#ai-candidate-count-pill");
 const aiCandidateCountInput = document.querySelector("#ai-candidate-count-input");
-const aiSelectionProfile = document.querySelector("#ai-selection-profile");
+const aiSelectionProfile = aiAnalysisForm
+  ? aiAnalysisForm.dataset.selectionProfile || "variety_comedy"
+  : "variety_comedy";
 const aiFinalClipTarget = document.querySelector("#ai-final-clip-target");
 const showAiHistoryButton = document.querySelector("#show-ai-history-button");
 const refreshAiHistoryButton = document.querySelector("#refresh-ai-history-button");
@@ -344,6 +346,14 @@ const aiAnalysisProgressPercent = document.querySelector("#ai-analysis-progress-
 const aiAnalysisProgressBar = document.querySelector("#ai-analysis-progress-bar");
 const runtimeLogState = document.querySelector("#runtime-log-state");
 const runtimeLogLines = document.querySelector("#runtime-log-lines");
+const aiProcessButtons = Array.from(document.querySelectorAll(".js-ai-process-action"));
+const aiAnalysisControls = Array.from(new Set([
+  ...(aiAnalysisForm ? aiAnalysisForm.querySelectorAll("button, input, textarea, select") : []),
+  ...aiProcessButtons,
+  saveAiPromptsButton,
+  aiCandidateCountInput,
+  aiFinalClipTarget,
+].filter(Boolean)));
 const autoPipelineMonitor = document.querySelector("[data-auto-pipeline-monitor]");
 const taskLiveOverview = document.querySelector("[data-task-live-overview]");
 const taskLiveProgressBar = document.querySelector("[data-task-live-progress-bar]");
@@ -354,9 +364,25 @@ const taskLiveCandidateCount = document.querySelector("[data-task-live-candidate
 const taskLiveOutputCount = document.querySelector("[data-task-live-output-count]");
 const taskLiveActions = document.querySelector("[data-live-task-actions]");
 let aiStatusPollingTimer = null;
+let isAiAnalysisBusy = false;
+let aiAnalysisControlStates = new Map();
 let taskLiveStatusTimer = null;
 let taskLiveForcedPollingUntil = 0;
 const TASK_LIVE_STATUS_INTERVAL_MS = 3000;
+
+function setAiAnalysisControlsDisabled(disabled) {
+  if (disabled) {
+    aiAnalysisControlStates = new Map(
+      aiAnalysisControls.map((control) => [control, control.disabled]),
+    );
+    aiAnalysisControls.forEach((control) => { control.disabled = true; });
+    return;
+  }
+  aiAnalysisControls.forEach((control) => {
+    control.disabled = aiAnalysisControlStates.get(control) ?? false;
+  });
+  aiAnalysisControlStates.clear();
+}
 
 function summarizeErrorMessage(message, maxLength = 220) {
   const text = String(message || "").replace(/\s+/g, " ").trim();
@@ -589,6 +615,7 @@ if (aiAnalysisForm) {
 
 if (saveAiPromptsButton && aiAnalysisForm) {
   saveAiPromptsButton.addEventListener("click", async () => {
+    if (isAiAnalysisBusy) return;
     const originalText = saveAiPromptsButton.textContent;
     saveAiPromptsButton.disabled = true;
     saveAiPromptsButton.textContent = "保存中...";
@@ -602,18 +629,18 @@ if (saveAiPromptsButton && aiAnalysisForm) {
     } catch (error) {
       if (aiProcessResult) aiProcessResult.textContent = `保存失败：${error.message}`;
     } finally {
-      saveAiPromptsButton.disabled = false;
+      saveAiPromptsButton.disabled = isAiAnalysisBusy;
       saveAiPromptsButton.textContent = originalText;
     }
   });
 }
 
-document.querySelectorAll(".js-ai-process-action").forEach((button) => {
+aiProcessButtons.forEach((button) => {
   button.addEventListener("click", async () => {
-    if (!aiAnalysisForm) return;
+    if (!aiAnalysisForm || isAiAnalysisBusy) return;
     const originalText = button.textContent;
     const taskId = aiAnalysisForm.dataset.taskId;
-    const provider = button.dataset.provider || "remote";
+    const provider = button.dataset.provider || "codex";
     const selectedCard = getSelectedPromptPresetCard();
     const selectedPrompt = selectedCard?.querySelector("textarea")?.value.trim() || "";
     const selectedName = selectedCard?.querySelector("input[type='text']")?.value.trim() || "当前方案";
@@ -621,11 +648,15 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
       if (aiProcessResult) aiProcessResult.textContent = "请先填写当前选中的 AI Prompt 方案。";
       return;
     }
-    if (provider === "remote") {
+    if (provider === "codex") {
+      const confirmed = window.confirm(`确认使用“${selectedName}”发起 Codex CLI 分析吗？\n\n这会消耗当前 Codex 套餐额度，并覆盖现有 AI 候选结果。`);
+      if (!confirmed) return;
+    } else if (provider === "remote") {
       const confirmed = window.confirm(`确认使用“${selectedName}”发起远程 AI 分析吗？\n\n这会重新生成候选片段，并覆盖当前已有的 AI 候选结果。`);
       if (!confirmed) return;
     }
-    button.disabled = true;
+    isAiAnalysisBusy = true;
+    setAiAnalysisControlsDisabled(true);
     button.textContent = "分析中...";
     if (aiProcessResult) aiProcessResult.textContent = "正在保存 Prompt 方案并启动 AI 分析...";
     renderAiAnalysisProgress({
@@ -662,7 +693,8 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
       await pollAiAnalysisStatus(false).catch(() => {});
     } finally {
       stopAiAnalysisStatusPolling();
-      button.disabled = false;
+      isAiAnalysisBusy = false;
+      setAiAnalysisControlsDisabled(false);
       button.textContent = originalText;
     }
   });
@@ -747,6 +779,15 @@ const clipReviewForm = document.querySelector("#clip-review-form");
 const saveClipsButton = document.querySelector("#save-clips-button");
 const generateClipsButton = document.querySelector("#generate-clips-button");
 const clipReviewMessage = document.querySelector("#clip-review-message");
+const clipSelectAll = document.querySelector("[data-clip-select-all]");
+const clipSelectAllLabel = document.querySelector("[data-clip-select-all-label]");
+const clipSelectCount = document.querySelector("[data-clip-select-count]");
+const syncReviewedClipsButton = document.querySelector("[data-sync-reviewed-clips='true']");
+const cutJobProgress = document.querySelector("#cut-job-progress");
+const cutJobStatus = document.querySelector("#cut-job-status");
+const cutJobPercent = document.querySelector("#cut-job-percent");
+const cutJobProgressBar = document.querySelector("#cut-job-progress-bar");
+const cutJobMessage = document.querySelector("#cut-job-message");
 const clipPreviewVideo = document.querySelector("#clip-preview-video");
 const clipPreviewDock = document.querySelector("#clip-preview-dock");
 const clipPreviewCaption = document.querySelector("#clip-preview-caption");
@@ -774,6 +815,15 @@ const sourceMonitorMessage = document.querySelector("#source-monitor-message");
 let activePreviewEndSeconds = null;
 let activeSourceMonitor = null;
 let isSyncingSourceSlider = false;
+let isCutJobActive = false;
+
+const cutJobStatusLabels = {
+  queued: "排队中",
+  running: "运行中",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
 
 function showClipReviewMessage(message, tone = "info") {
   if (!clipReviewMessage) return;
@@ -782,14 +832,73 @@ function showClipReviewMessage(message, tone = "info") {
   clipReviewMessage.dataset.tone = tone;
 }
 
+function renderCutJobProgress(job, fallbackMessage = "") {
+  if (!cutJobProgress || !job) return;
+  const status = job.status || "queued";
+  const progress = Math.max(0, Math.min(100, Number(job.progress || 0)));
+  cutJobProgress.hidden = false;
+  cutJobProgress.dataset.status = status;
+  if (cutJobStatus) {
+    cutJobStatus.textContent = `${status}（${cutJobStatusLabels[status] || "处理中"}）`;
+  }
+  if (cutJobPercent) cutJobPercent.textContent = `${progress}%`;
+  if (cutJobProgressBar) cutJobProgressBar.style.width = `${progress}%`;
+  if (cutJobMessage) {
+    cutJobMessage.textContent = status === "failed"
+      ? (job.error_message || job.message || "切片任务失败")
+      : (job.message || fallbackMessage || "正在等待切片任务更新...");
+  }
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+async function waitForCutJob(jobId) {
+  while (true) {
+    const response = await fetch(`/api/tasks/jobs/${jobId}`);
+    const job = await response.json();
+    if (!response.ok) {
+      throw new Error(job.detail || "查询切片任务进度失败");
+    }
+    renderCutJobProgress(job);
+    if (job.status === "completed") return job;
+    if (job.status === "failed" || job.status === "cancelled") {
+      throw new Error(job.error_message || job.message || "切片任务未完成");
+    }
+    await wait(1000);
+  }
+}
+
 function getClipReviewCards() {
   return Array.from(document.querySelectorAll("[data-clip-card]"));
 }
 
+function getClipEnableCheckboxes() {
+  return getClipReviewCards()
+    .map((card) => card.querySelector("[name='enabled']"))
+    .filter(Boolean);
+}
+
+function updateClipSelectAllUi() {
+  const checkboxes = getClipEnableCheckboxes();
+  const enabledCount = checkboxes.filter((checkbox) => checkbox.checked).length;
+  const allEnabled = checkboxes.length > 0 && enabledCount === checkboxes.length;
+  if (clipSelectAll) {
+    clipSelectAll.disabled = checkboxes.length === 0 || isCutJobActive;
+    clipSelectAll.checked = allEnabled;
+    clipSelectAll.indeterminate = enabledCount > 0 && !allEnabled;
+  }
+  if (clipSelectAllLabel) clipSelectAllLabel.textContent = allEnabled ? "取消全选" : "全选当前列表";
+  if (clipSelectCount) clipSelectCount.textContent = `已启用 ${enabledCount} / ${checkboxes.length} 条`;
+}
+
 function updateClipReviewActionState() {
   const hasCards = getClipReviewCards().length > 0;
-  if (saveClipsButton) saveClipsButton.disabled = !hasCards;
-  if (generateClipsButton) generateClipsButton.disabled = !hasCards;
+  if (saveClipsButton) saveClipsButton.disabled = !hasCards || isCutJobActive;
+  if (generateClipsButton) generateClipsButton.disabled = !hasCards || isCutJobActive;
+  if (syncReviewedClipsButton) syncReviewedClipsButton.disabled = !hasCards || isCutJobActive;
+  updateClipSelectAllUi();
 }
 
 function collectClipReviewPayload() {
@@ -1173,6 +1282,26 @@ document.querySelectorAll("[data-clip-card] input[name='start_time'], [data-clip
   input.addEventListener("change", () => updateCardTimeDataset(input.closest("[data-clip-card]")));
 });
 
+if (clipSelectAll) {
+  clipSelectAll.addEventListener("change", () => {
+    const shouldEnable = clipSelectAll.checked;
+    getClipEnableCheckboxes().forEach((checkbox) => { checkbox.checked = shouldEnable; });
+    updateClipSelectAllUi();
+    showClipReviewMessage(
+      shouldEnable
+        ? "已全选当前列表。确认无误后，请点击“保存修改”写入数据库。"
+        : "已取消当前列表的全部选择。确认无误后，请点击“保存修改”写入数据库。",
+      "info",
+    );
+  });
+}
+
+clipReviewForm?.addEventListener("change", (event) => {
+  if (event.target.matches("[data-clip-card] input[name='enabled']")) updateClipSelectAllUi();
+});
+
+updateClipSelectAllUi();
+
 if (saveClipsButton && clipReviewForm) {
   saveClipsButton.addEventListener("click", async () => {
     const taskId = clipReviewForm.dataset.taskId;
@@ -1407,29 +1536,38 @@ window.addEventListener("resize", () => {
 
 if (generateClipsButton) {
   generateClipsButton.addEventListener("click", async () => {
+    if (isCutJobActive) return;
     const originalText = generateClipsButton.textContent;
-    generateClipsButton.disabled = true;
+    isCutJobActive = true;
+    updateClipReviewActionState();
     generateClipsButton.textContent = "正在确认...";
     showClipReviewMessage("正在保存当前审核选择...", "info");
 
     try {
       await persistClipReviewChanges();
-      generateClipsButton.textContent = "正在生成...";
-      showClipReviewMessage("审核选择已保存，正在生成最新切片...", "info");
+      generateClipsButton.textContent = "切片处理中...";
+      showClipReviewMessage("审核选择已保存，正在创建切片后台任务...", "info");
       const response = await fetch(generateClipsButton.dataset.endpoint, { method: "POST" });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.detail || "生成切片请求失败");
       }
-      const syncMessage = data.publish_sync?.message ? ` ${data.publish_sync.message}` : "";
+      renderCutJobProgress(data.job, data.message);
+      showClipReviewMessage(data.message || "切片任务已加入后台队列。", "info");
+      const completedJob = await waitForCutJob(data.job_id);
+      const syncMessage = completedJob.result_json?.publish_sync?.message
+        ? ` ${completedJob.result_json.publish_sync.message}`
+        : "";
       showClipReviewMessage(
-        `${data.message || "切片生成完成。"}${syncMessage} 可进入“字幕推送”继续处理，或查看本任务发送内容。`,
-        data.publish_sync?.status === "partial" ? "error" : "success",
+        `${completedJob.result_json?.message || completedJob.message || "切片生成完成。"}${syncMessage} 正在刷新切片结果...`,
+        completedJob.result_json?.publish_sync?.status === "partial" ? "error" : "success",
       );
+      window.setTimeout(() => window.location.reload(), 700);
     } catch (error) {
       showClipReviewMessage(`生成切片失败：${error.message}`, "error");
     } finally {
-      generateClipsButton.disabled = false;
+      isCutJobActive = false;
+      updateClipReviewActionState();
       generateClipsButton.textContent = originalText;
     }
   });
@@ -1445,7 +1583,7 @@ async function saveTaskSelectionSettings() {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      selection_profile: aiSelectionProfile.value || "general",
+      selection_profile: aiSelectionProfile || "variety_comedy",
       final_clip_target: finalTarget,
     }),
   });
@@ -2181,6 +2319,7 @@ if (aiConfigForm) {
     const formData = new FormData(aiConfigForm);
     const payload = Object.fromEntries(formData.entries());
     payload.ai_request_timeout_seconds = Number(payload.ai_request_timeout_seconds || 120);
+    payload.ai_codex_timeout_seconds = Number(payload.ai_codex_timeout_seconds || 300);
     payload.volcengine_asr_timeout_seconds = Number(payload.volcengine_asr_timeout_seconds || 300);
     payload.ai_analysis_request_timeout_seconds = Number(payload.ai_analysis_request_timeout_seconds || 120);
     payload.ai_publish_request_timeout_seconds = Number(payload.ai_publish_request_timeout_seconds || 120);

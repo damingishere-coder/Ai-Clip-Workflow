@@ -252,7 +252,7 @@ def test_fallback_metadata() -> None:
     assert metadata["description"]
 
 
-def test_publish_metadata_ai_uses_publish_remote_interface_even_when_default_local() -> None:
+def test_publish_metadata_ai_uses_selected_publish_provider() -> None:
     captured: dict[str, str] = {}
 
     class FakeProvider:
@@ -260,19 +260,23 @@ def test_publish_metadata_ai_uses_publish_remote_interface_even_when_default_loc
             captured["prompt"] = prompt
             return '{"title":"AI发布标题","tags":["综艺片段","高光时刻"],"description":"适合发布的简介"}'
 
-    original_builder = publish_service.build_remote_provider
+    original_builder = publish_service.build_provider
     original_default_provider = publish_service.settings.ai_default_provider
+    original_publish_provider = publish_service.settings.ai_publish_provider
     original_publish_model = publish_service.settings.ai_publish_remote_model
     try:
         object.__setattr__(publish_service.settings, "ai_default_provider", "local")
+        object.__setattr__(publish_service.settings, "ai_publish_provider", "remote")
         object.__setattr__(publish_service.settings, "ai_publish_remote_model", "deepseek-chat")
 
-        def fake_build_remote_provider(model: str | None = None, purpose: str = "analysis") -> FakeProvider:
-            captured["model"] = model or ""
+        def fake_build_provider(provider_name: str | None = None, purpose: str = "analysis") -> FakeProvider:
+            captured["provider_name"] = provider_name or ""
             captured["purpose"] = purpose
-            return FakeProvider()
+            provider = FakeProvider()
+            provider.name = "remote"
+            return provider
 
-        publish_service.build_remote_provider = fake_build_remote_provider
+        publish_service.build_provider = fake_build_provider
         metadata = publish_service.generate_publish_metadata(
             {
                 "clip_title": "Great live moment",
@@ -283,11 +287,12 @@ def test_publish_metadata_ai_uses_publish_remote_interface_even_when_default_loc
             use_ai=True,
         )
     finally:
-        publish_service.build_remote_provider = original_builder
+        publish_service.build_provider = original_builder
         object.__setattr__(publish_service.settings, "ai_default_provider", original_default_provider)
+        object.__setattr__(publish_service.settings, "ai_publish_provider", original_publish_provider)
         object.__setattr__(publish_service.settings, "ai_publish_remote_model", original_publish_model)
 
-    assert captured["model"] == "deepseek-chat"
+    assert captured["provider_name"] == "remote"
     assert captured["purpose"] == "publish"
     assert "原标题" in captured["prompt"]
     assert metadata["source"] == "ai:remote-publish:deepseek-chat"
@@ -519,7 +524,7 @@ def main() -> None:
     print("bilibili browser commands: OK")
     test_fallback_metadata()
     print("fallback metadata: OK")
-    test_publish_metadata_ai_uses_publish_remote_interface_even_when_default_local()
+    test_publish_metadata_ai_uses_selected_publish_provider()
     print("publish metadata remote interface routing: OK")
     test_publish_metadata_sanitizes_sensitive_words()
     print("publish metadata safety: OK")

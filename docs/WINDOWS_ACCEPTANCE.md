@@ -1,6 +1,6 @@
 # Windows 实机验收与发布证据
 
-本指南用于在真实的 Windows 10/11 + Docker Desktop 电脑上验证牛马片场 v2.0.0。
+本指南用于在真实的 Windows 10/11 + Docker Desktop 电脑上验证牛马片场 v2.1.0。
 
 GitHub Actions 中的 `Windows host smoke test` 只能验证 PowerShell、Windows 路径、原生 Python Demo、页面访问和备份命令。GitHub 托管的 Windows Runner 不是普通用户的 Windows 10/11 + Docker Desktop 环境，因此不能替代本指南中的实机验收。
 
@@ -157,12 +157,12 @@ $env:DEBIAN_SECURITY_MIRROR = "https://mirrors.aliyun.com/debian-security"
 - 当前分支为 `master`。
 - 当前 Git commit 与验收报告一致。
 - Git 工作区干净。
-- 应用、README 和 Changelog 都是 `2.0.0`。
+- 应用、README 和 Changelog 都是 `2.1.0`。
 
 通过后会显示：
 
 ```text
-=== v2.0.0 发布门禁通过 ===
+=== v2.1.0 发布门禁通过 ===
 ```
 
 ## 四、提交 Issue #23 验收证据
@@ -236,7 +236,7 @@ Get-NetTCPConnection -LocalPort 8001 -State Listen
 
 ## 六、Release 边界
 
-Windows 实机验收通过后，可以发布 v2.0.0 的基础工作台能力。
+Windows 实机验收通过后，可以发布 v2.1.0 的基础工作台能力。
 
 Release 中仍需明确：
 

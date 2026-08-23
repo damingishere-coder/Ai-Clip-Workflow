@@ -100,6 +100,68 @@ def create_job(
     return get_job(resolved_job_id)
 
 
+def create_or_get_active_job(
+    task_id: str,
+    job_type: str,
+    payload: Optional[dict] = None,
+) -> tuple[dict, bool]:
+    """原子复用进行中的 job，或创建新的 queued job。
+
+    返回值中的布尔值表示是否新建。`BEGIN IMMEDIATE` 将“查询 + 新建”
+    串行化，避免连续点击或并发请求为同一任务创建重复的切片作业。
+    """
+    resolved_job_id = uuid4().hex[:12]
+    now = _now_iso()
+    payload_json = json.dumps(payload or {}, ensure_ascii=False)
+
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        existing = connection.execute(
+            """
+            SELECT id
+            FROM workflow_jobs
+            WHERE task_id = ?
+              AND job_type = ?
+              AND status IN (?, ?)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (
+                task_id,
+                job_type,
+                JOB_STATUS_QUEUED,
+                JOB_STATUS_RUNNING,
+            ),
+        ).fetchone()
+        if existing:
+            connection.commit()
+            return get_job(existing["id"]), False
+
+        connection.execute(
+            """
+            INSERT INTO workflow_jobs (
+                id, task_id, job_type, status, progress, message,
+                payload_json, result_json, error_message,
+                created_at, updated_at, started_at, finished_at
+            )
+            VALUES (?, ?, ?, ?, 0, ?, ?, '{}', NULL, ?, ?, NULL, NULL)
+            """,
+            (
+                resolved_job_id,
+                task_id,
+                job_type,
+                JOB_STATUS_QUEUED,
+                f"{JOB_TYPE_LABELS.get(job_type, job_type)}任务已加入队列",
+                payload_json,
+                now,
+                now,
+            ),
+        )
+        connection.commit()
+
+    return get_job(resolved_job_id), True
+
+
 # ── 查询 job ─────────────────────────────────────────────────────
 
 def get_job(job_id: str) -> dict | None:

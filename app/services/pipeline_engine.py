@@ -474,7 +474,7 @@ class PipelineEngine:
             "need_review_clips": need_review,
             "failures": failures,
             "next_step": "打开发送中心核对内容、账号与北京时间；确认后可立即发送或设置排期。",
-            "subtitle_note": "v2.0 全自动模式继续跳过加字幕、字幕样式渲染和字幕烧录。",
+            "subtitle_note": "v2.1 全自动模式继续跳过加字幕、字幕样式渲染和字幕烧录。",
         }
         summary_path = paths["analysis_path"].parent / "task_summary.json"
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

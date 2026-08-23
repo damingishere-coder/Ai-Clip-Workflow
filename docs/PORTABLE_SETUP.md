@@ -57,14 +57,18 @@ Chrome 和宿主机 FFmpeg 在普通 Docker 工作台模式下只是提醒。准
 
 - 启动正式 `docker-compose.yml`
 - 不启用代码热重载
-- 不自动连接真实平台 Worker
+- 检测到 Google Chrome 时自动启动 Windows 发布 Worker
 - 等待 `/health` 正常后打开浏览器
+
+只启动工作台时使用 `.\scripts\start.ps1 -SkipWorker`。Demo 和 Development 模式会自动跳过 Worker；`-WithPublisher` 仅为兼容旧命令，不再是必需参数。
 
 停止：
 
 ```powershell
 .\scripts\stop.ps1
 ```
+
+停止脚本默认会同时停止 Docker 服务和本项目的 Windows 发布 Worker。
 
 ## 4. 隔离 Demo
 
@@ -117,10 +121,10 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ## 6. 真实发布
 
 ```powershell
-.\scripts\start.ps1 -WithPublisher
+.\scripts\start.ps1
 ```
 
-此模式复用现有 `start_niuma_studio.ps1` 和 `start_publish_worker.ps1`，需要：
+正式模式检测到 Google Chrome 时会自动启动 Windows 发布 Worker；`-WithPublisher` 仅为兼容旧命令，不再是必需参数。此模式复用现有 `start_niuma_studio.ps1` 和 `start_publish_worker.ps1`，需要：
 
 - Windows
 - Google Chrome

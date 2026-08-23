@@ -1,5 +1,22 @@
 # Development Log
 
+## 2026-08-23 v2.1.0 主线整合与片段审核稳定性增强
+
+- 审计全部本地/远端分支、开放 PR 和 5 个 worktree：图片文档、续接排期、发送中心文案规则等近期分支已进入 `origin/master`；当前 PR #38 是唯一需要整体合入的有效新主线。存在冲突、失败 CI 或旧 opencli 架构的历史分支不做盲目整分支合并。
+- 保留旧 `fix/task-automation-button-experience` worktree 的 15 个未提交文件不动，从中按当前架构重新实现三项兼容能力：切片 job 原子去重、手动切片后台进度、AI 分析期间统一锁定控件；与现行永久删除语义冲突的旧“仅隐藏任务”改动没有覆盖回来。
+- 从 `feature/group-select-all` 选择性补齐片段审核“全选当前列表 / 取消全选”、启用数量和半选状态；发送中心组内全选已由主线新版完整覆盖，不重复合并旧实现。
+- 项目版本、FastAPI API、Windows Worker、备份 manifest、README 徽章、页面侧栏、发布门禁和当前版本文档统一升级为 `2.1.0` / `v2.1`，同时保留 2.0.0 及更早的历史 Changelog 与开发记录。
+- 第一轮验证通过：Git 空白检查、Ruff、Python 编译、`app.js` 语法和 41 个定向回归全部通过；仅有 7 条既有 Pydantic V1 `@validator` 弃用警告，未运行真实外部 AI、真实投稿或生产数据库迁移。
+- 完整验证通过：`448 passed`；全部 JavaScript、PowerShell 语法、正式 / 开发 / Demo 三套 Compose 和 `pip check` 均通过。保留 9 条既有依赖弃用警告；2.1.0 Tag / Release 仍需最终 `master` 的新实机验收报告。
+
+## 2026-08-22 PR #38 与发送中心新版整合验收
+
+- 将已合并到 `origin/master` 的发送中心新版安全整合进 `feature/task-defaults-and-safe-startup`，人工解决 `DEVELOPMENT_LOG.md` 与 `NEXT_STEPS.md` 两处文档冲突；PR #38 的任务名称历史、Windows 原生运行脚本和 Docker 回退说明均完整保留。
+- 原生启动改动先以 `69dcc8f 新增：支持 Windows 原生日常启动` 独立保存；合并后的 Ruff、Python 编译、JavaScript 语法、PowerShell 7 / 5.1 AST、69 个定向测试和完整 `436 passed` 全部通过。
+- 通过 Alter 只重启 `Niuma-Studio` Web：8001 Web PID 从 `76964` 更新为 `140328`，8765 Worker PID 保持 `139904`，没有停止或清理抖音浏览器登录目录。重启前后 `/health=ok`，Scheduler 正常、`publishing_count=0`、`scheduled_count=4`、Worker 可用。
+- 实机打开带 `platform=bilibili` 的发送中心仍固定显示抖音，B站切换入口为 0；首个原始任务点击“全选本任务”后准确选择本组 5 条、其他任务组 0 条，底部显示“已选 5 条”，排期抽屉显示 5 条并提供“预览排期”。部分选择、再次全选和最终取消均正常，未提交排期或真实投稿。
+- 首次打开新版页面自动升级 5 条未排期抖音草稿，表单中的标题、简介和标签立即与最终发送字段一致；升级前生成 `data/backups/workflow-before-publish-migration-20260822-121307-772508-140328-70deb9bc.sqlite3`，没有改动 4 条既有排期和 B站历史。
+
 ## 2026-08-22 发送中心账号与抖音文案规则统一
 
 - 修复发送中心账号徽章与发布预检口径不一致：唯一且正常的抖音账号会自动匹配并显示“内容完整”，多个账号仍需手动选择，登录失效明确显示“账号需登录”；手工保存和旧草稿升级会正式写入唯一匹配账号。
@@ -10,11 +27,34 @@
 - 新增幂等的未排期抖音草稿升级接口；首次打开发送中心自动调用，写入前强制创建本次专属 SQLite 安全备份，只处理有效切片的 `DRAFT / WAITING` 且无排期记录，并在 `provider_response` 记录规则版本与结果。升级期间刚被编辑、排期或失效的记录会通过乐观并发条件跳过；已排期、B站、历史、已移除和失效切片全部不改动。
 - 新增账号一致性、抖音文案边界、失败原文保护、升级幂等、单平台同步及浏览器组内全选回归；发布专项测试 `75 passed`、完整测试 `420 passed`，Ruff、Python 编译、JavaScript 语法和差异检查均通过；未连接真实账号、未触发真实投稿。
 
+## 2026-08-21 推送前启动与任务名历史一致性修正
+
+- 任务名称历史现在只返回可见、非空的唯一名称，按该名称最后一次创建时间从新到旧排列，并限制最多 100 条；前后空白会被清理后再去重。
+- Windows 正式启动脚本在检测到 Chrome 时默认启动发布 Worker；`-SkipWorker` 只启动工作台，Demo/Development 自动跳过 Worker，`-WithPublisher` 仅保留为兼容旧命令。
+- 启动成功提示已区分主动跳过、开发模式、未检测到 Chrome 和 Worker 启动失败；停止脚本文档明确默认同时停止 Docker 与本项目 Worker。
+- `README.md` 与 `docs/PORTABLE_SETUP.md` 已同步上述安全启动方法。主控相关测试 `36 passed`、完整测试 `424 passed`；Python 编译、JavaScript 语法、Docker Compose 配置和 Git 空白检查均通过，仅保留 9 个既有依赖弃用警告。`scripts/start.ps1` Windows PowerShell AST 错误数为 0，文件仍保留 UTF-8 BOM。
+
+## 2026-08-16 新建任务页任务名称历史候选
+
+- “新建任务”页的任务名称框改为读取应用任务列表中的可见任务名称，并按创建时间从新到旧展示候选；最新可见任务排第一，较旧任务依次向下，已隐藏/永久删除的任务不会出现。
+- 点击候选可完整填入任务名称，仍允许手动输入任意新标题；输入框继续保持 `required` 校验，创建任务请求字段与表单提交流程均未改变。
+- 新增只读函数 `list_task_name_history()`：仅从 `tasks` 表查询 `task_name`，沿用与正常任务列表一致的可见性条件 `COALESCE(is_deleted, 0) = 0` 并按 `created_at DESC` 排序，不探测文件也不统计切片；`/tasks/new` 路由直接调用并注入模板。
+- 页面使用浏览器原生 `<datalist>` 紧邻输入框渲染，配合 `list` 关联和 `autocomplete="off"`，选项顺序保留服务返回顺序，Jinja 自动转义保持开启；未新增 JavaScript、自定义 CSS、HTTP API 或数据库结构变化。
+- 新增隔离测试 `tests/test_task_name_history.py`：三个不同创建时间任务按新到旧返回、`is_deleted=1` 不返回、新建任务页包含 `list`/`autocomplete="off"` 且两条中文长标题按最新在前渲染；每个用例使用自动销毁的临时 SQLite，不连接正式数据库。专项及原有相关测试 `6 passed`，Python 编译与 Git 空白检查通过。
+
 ## 2026-08-13 GitHub 主页任务详情与发送中心图片更新
 
 - 中文、英文 GitHub 主页的“任务详情 / Task detail”和“发送中心 / Publishing center”预览已分别改为用户提供的对应实机 PNG 图片。
 - 两张图片均以原始 `2560 × 1271` 分辨率直接复制到 `docs/images/task-detail.png` 和 `docs/images/publish-center.png`，未缩放、未压缩、未转码，保留原始清晰度。
 - 仅调整项目主页图片资源与引用，不修改应用页面、业务逻辑、数据库或发布流程。
+
+## 2026-08-03 DeepSeek 接口统一切换 Flash 模型
+
+- 本机 `.env` 中的文字稿分析、发送中心发布文案及旧版兼容模型变量统一切换为 `deepseek-v4-flash`；DeepSeek 接口地址、协议和现有 API Key 均保持不变。
+- `.env.example` 的文字稿分析与发布文案默认模型同步改为 `deepseek-v4-flash`，避免新环境仍使用旧的 `deepseek-chat` 示例值。
+- 项目代码中的远程 AI 默认值原本已经是 `deepseek-v4-flash`，本次未改动本地 Ollama 模型、火山引擎转写接口或其他发布配置。
+- 文字稿分析与发布文案接口均已完成最小真实 JSON 连通测试；Docker 应用重建后为 `healthy`，容器内 5 个远程模型变量全部为 `deepseek-v4-flash`，首页返回 HTTP 200。
+- Python 编译、AI 配置保存和 DeepSeek 请求格式专项测试通过；完整测试为 `412 passed, 1 failed`，失败项是未改动的发送中心 Playwright 历史记录等待超时，单独重跑仍失败，因此按项目门禁暂不提交、推送或创建 PR。
 
 ## 2026-08-03 Windows 实机验收安全与 PowerShell 5.1 兼容修复
 
@@ -989,3 +1029,38 @@
 - 完成或失败后停止轮询，并原地显示发送中心、片段检查、重试或继续入口；重试/继续全自动流程也不再触发整页刷新。
 - 网络短暂异常时保留当前页面数据并继续重试，不会清空用户正在编辑的 AI Prompt 或改变滚动位置。
 - 新增处理中、失败、完成、404 和前端无整页刷新测试；专项测试 `21 passed`、完整测试 `407 passed`，JavaScript 与 Python 语法检查通过。浏览器实测从 AI 分析中切换到失败状态时，状态卡、日志和重试按钮在 3 秒内更新，未保存输入保持不变。
+
+## 2026-08-11 关机后发布恢复与排期重排
+
+- 检查 Docker、Windows Worker、工作台日志和正式 SQLite 数据库；关机前最后一条确认成功发布于 2026-08-08 16:00:20（北京时间）。
+- Docker Desktop 恢复后，`restart: unless-stopped` 自动拉起工作台并处理了 3 条过期任务；3 条均取得抖音“发布成功”证据，成功时间分别为 2026-08-11 01:48:32、01:48:50、01:49:08，未重复加入新排期。
+- 在继续领取第 4 条前停止容器，核对 Worker execution journal 后把第 3 条成功结果回写正式数据库，再重新启动工作台。
+- 发现 `idx_tasks_status_created` 索引漏 1 行；保留原始备份后只重建该索引，未删除任务或发布记录，最终 `PRAGMA integrity_check` 为 `ok`。
+- 剩余 14 条抖音任务从 2026-08-11 07:00 起按北京时间每 3 小时发送，每日时段为 07:00～22:00；8 月 11 日 6 条、8 月 12 日 6 条、8 月 13 日 2 条，最后一条为 2026-08-13 10:00。
+- 重排前备份：`backups/niuma-studio-before-schedule-date-correction-20260811-015125.sqlite3`；备份与正式数据库完整性检查均通过。
+- 发送中心页面已验证：调度器正常、Windows Worker 正常、已排期 14、发送中 0，14 条均显示“发送条件已满足”。
+
+## 2026-08-16 Windows 启停脚本编码兼容修复
+
+- 定位到 `scripts/start.ps1` 和 `scripts/stop.ps1` 在未提交修改中丢失 UTF-8 BOM，导致桌面批处理调用 Windows PowerShell 5.1 时把中文误读为乱码，并产生字符串、数组索引和大括号解析错误。
+- 恢复两个入口脚本的 UTF-8 BOM，保留现有启动 Worker、启动 Docker、连接检查和停止流程，不修改脚本参数、Docker 配置、数据库或存储数据。
+- 增加入口脚本 BOM 回归测试，弥补 PowerShell 7 语法检查无法发现 Windows PowerShell 5.1 编码误读的问题。
+- 项目正式访问地址仍为 `http://127.0.0.1:8001/`；旧地址 `http://localhost:6866/` 不再提供服务。
+- Windows PowerShell 5.1 解析检查为 0 个错误，专项测试 `5 passed`；修复后的停止脚本正常退出且未删除正式数据。默认联网构建因 Docker Hub 认证地址暂时不可达而失败，随后使用本地 `niuma-studio:latest` 镜像执行 `start.ps1 -NoBuild` 成功，容器为 `healthy`、首页 HTTP 200、Worker 连接正常。
+## 2026-08-21 Windows 原生日常模式与 Docker 回退
+
+- 新增 `scripts/run_native.ps1`、`scripts/start_native.ps1` 和 `scripts/stop_native.ps1`：FastAPI 默认使用 `127.0.0.1:8001`，Windows 发布 Worker 默认使用 `127.0.0.1:8765`，SQLite 与 E 盘任务目录继续复用原数据。
+- 原生启动器支持自定义端口、存储目录、数据目录和数据库路径；状态文件记录 PID、启动时间、项目根和端口，停止前做多重身份校验，避免误关其他进程。
+- 修复 PowerShell 5.1/7 的目录创建参数、ISO UTC 时间 roundtrip 解析、Worker 子脚本 `$LASTEXITCODE` 遗留值等实机问题，并增加静态回归测试。
+- 切换前停止 Docker 写入并生成 `data/backups/workflow-pre-native-cutover-20260821-150620.sqlite3`，备份 `PRAGMA integrity_check=ok`，包含 16 张表；未备份或输出 `.env`。
+- 已禁用但未删除计划任务 `NiuMa Studio Docker Watcher`，避免登录时自动重启 Docker Worker；Docker Compose 配置和镜像保留为回退入口，未执行 volume/prune。
+- 隔离端口 `18001` 使用在线 SQLite 快照完成 `/health`、首页、任务、片段和发送中心冒烟，均为 HTTP 200；正式原生 `8001` 的相同页面和调度器健康检查通过，Windows Worker 状态正常。
+- 当前 Web 进程由 Alter 以 `Niuma-Studio` 托管并启用崩溃自动重启；发布 Worker 仍是本项目的 Windows 原生进程。
+- 专项测试 `11 passed`，Windows PowerShell 5.1 与 PowerShell 7 三个脚本均为 0 个解析错误；未触发任何真实投稿。
+
+## 2026-08-22 Codex CLI 替代 DeepSeek 文本调用
+
+- 新增隔离的 Codex CLI JSON Provider，统一供文字稿分析、综艺分析和发送中心发布文案使用；Prompt 只通过 stdin 传入，一次性目录使用只读 sandbox 和 ephemeral 会话。
+- 系统状态页新增 Codex 路径、模型、超时和版本检查；分析与发布文案分别选择 Provider，默认均为 Codex，远程 DeepSeek 与本地 Ollama 继续作为人工回退。
+- 任务详情页把 Codex CLI 分析作为主按钮，发起前明确提示会消耗 Codex 套餐额度；转写 Provider 仍只允许火山/本地，不与文本 AI Provider 混用。
+- 本机 `.env` 仅把非敏感 Provider 配置切换到 Codex，未读取、输出或改动已有 API Key；未执行真实 AI、发布或投递。

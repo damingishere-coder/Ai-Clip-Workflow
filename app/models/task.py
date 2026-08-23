@@ -45,7 +45,7 @@ class TaskCreate(BaseModel):
     nas_file_path: Optional[str] = None
     max_clip_duration: int = Field(default=10, ge=1, le=60)
     candidate_clip_count: int = Field(default=12, ge=1, le=50)
-    selection_profile: Literal["general", "variety_comedy"] = "general"
+    selection_profile: Literal["general", "variety_comedy"] = "variety_comedy"
     final_clip_target: int = Field(default=5, ge=1, le=12)
     ai_preference: Optional[str] = None
     auto_mode: bool = False
@@ -107,7 +107,7 @@ class TaskCandidateClipCountUpdate(BaseModel):
 
 
 class TaskSelectionSettingsUpdate(BaseModel):
-    selection_profile: Literal["general", "variety_comedy"] = "general"
+    selection_profile: Literal["general", "variety_comedy"] = "variety_comedy"
     final_clip_target: int = Field(default=5, ge=1, le=12)
 
 

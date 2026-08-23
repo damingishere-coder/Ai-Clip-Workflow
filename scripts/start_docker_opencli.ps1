@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $ProjectRoot
 
-Write-Host '此兼容脚本现在会启动 v2.0 Windows Chrome 发布 Worker。'
+Write-Host '此兼容脚本现在会启动 v2.1 Windows Chrome 发布 Worker。'
 & (Join-Path $PSScriptRoot 'start_publish_worker.ps1') -Port $BridgePort
 
 Write-Host '正在刷新 Docker 服务：http://127.0.0.1:8001'

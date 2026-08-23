@@ -56,7 +56,7 @@ async def create_upload_task(
     platform: str = Form("general"),
     max_clip_duration: int = Form(10),
     candidate_clip_count: int = Form(12),
-    selection_profile: str = Form("general"),
+    selection_profile: str = Form("variety_comedy"),
     final_clip_target: int = Form(5),
     ai_preference: str | None = Form(None),
     auto_mode: bool = Form(False),
@@ -265,7 +265,7 @@ async def cancel_transcript(task_id: str) -> dict:
 @router.post("/{task_id}/process/ai")
 async def process_ai_analysis(
     task_id: str,
-    provider: str | None = Query(default=None, pattern="^(remote|local)$"),
+    provider: str | None = Query(default=None, pattern="^(codex|remote|local)$"),
 ) -> dict:
     try:
         return await run_in_threadpool(task_service.process_task_ai_analysis, task_id, provider=provider)
@@ -444,20 +444,28 @@ async def process_video_cuts_async(
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    # 创建 job
+    # 同一任务只保留一个 queued/running 的 video_cut job。
     try:
-        job = job_service.create_job(task_id=task_id, job_type=job_service.JOB_TYPE_VIDEO_CUT)
+        job, created = job_service.create_or_get_active_job(
+            task_id=task_id,
+            job_type=job_service.JOB_TYPE_VIDEO_CUT,
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"创建切片任务失败：{exc}") from exc
 
-    # 放入后台执行
-    background_tasks.add_task(_run_job_in_background, job["id"])
+    if created:
+        background_tasks.add_task(_run_job_in_background, job["id"])
 
     return {
-        "status": "queued",
-        "message": "切片任务已加入后台队列，可通过 job id 查询进度",
+        "status": job["status"],
+        "message": (
+            "切片任务已加入后台队列，可通过 job id 查询进度"
+            if created
+            else "已有切片任务正在运行，已继续显示原任务进度"
+        ),
         "job_id": job["id"],
         "job": job,
+        "created": created,
     }
 
 

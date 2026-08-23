@@ -27,6 +27,7 @@ from app.services.task_service import (
     list_clip_candidates,
     list_ai_analysis_runs,
     list_output_clips,
+    list_task_name_history,
     list_tasks,
 )
 
@@ -79,6 +80,7 @@ async def new_task_page(request: Request):
             "settings": settings,
             "candidate_count_options": [5, 8, 12, 20],
             "workflow_steps": get_workflow_steps(),
+            "task_name_history": list_task_name_history(),
         },
     )
 
