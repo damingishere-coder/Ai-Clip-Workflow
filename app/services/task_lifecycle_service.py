@@ -16,6 +16,7 @@ from app.services.storage_service import (
     validate_source_video_path,
 )
 from app.services.task_log_service import append_task_log
+from app.services.media_preflight_service import preflight_media
 
 
 class TaskDeletionConflictError(RuntimeError):
@@ -48,14 +49,21 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
         exclude_task_id=resolved_task_id,
     )
     now = _now_iso()
-    create_task_directory(resolved_task_id, resolved_task_dir_name)
-
     source_path = payload.nas_file_path if payload.source_type == "nas" else payload.original_video_path
     has_source_file = bool(source_path)
+    media_preflight = None
     if source_path:
         valid, error_message = validate_source_video_path(source_path)
         if not valid:
             raise ValueError(error_message)
+        output_limit = (
+            payload.highlight_total_limit
+            if payload.selection_profile == "long_live_talk"
+            else payload.candidate_clip_count
+        )
+        media_preflight = preflight_media(source_path, total_output_limit=output_limit)
+
+    create_task_directory(resolved_task_id, resolved_task_dir_name)
 
     initial_status = TaskStatus.CREATED.value if payload.auto_mode else (
         TaskStatus.pending_processing.value if has_source_file else TaskStatus.pending_video.value
@@ -89,6 +97,8 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
             "candidate_clip_count": payload.candidate_clip_count,
             "selection_profile": payload.selection_profile,
             "final_clip_target": payload.final_clip_target,
+            "highlight_density_per_hour": payload.highlight_density_per_hour,
+            "highlight_total_limit": payload.highlight_total_limit,
             "ai_preference": payload.ai_preference,
             "ai_prompt_preset_id": "preset_001",
             "auto_mode": 1 if payload.auto_mode else 0,
@@ -123,7 +133,7 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
     append_task_log(resolved_task_id, "任务已创建")
     if payload.auto_mode:
         append_task_log(resolved_task_id, "已开启全自动模式，等待流水线启动")
-    return {
+    result = {
         "id": resolved_task_id,
         "task_name": payload.task_name,
         "task_dir_name": resolved_task_dir_name,
@@ -133,6 +143,9 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
         "detail_url": f"/tasks/{resolved_task_id}",
         "message": "任务已创建并写入数据库。",
     }
+    if media_preflight:
+        result["media_preflight"] = media_preflight.to_dict()
+    return result
 
 
 def update_task_status(
@@ -223,30 +236,48 @@ def update_task_selection_settings(
     task_id: str,
     selection_profile: str,
     final_clip_target: int,
+    highlight_density_per_hour: int = 4,
+    highlight_total_limit: int = 30,
 ) -> dict:
     from app.services.task_service import _now_iso, get_task  # noqa: F811
 
     task = get_task(task_id, include_video_probe=False)
     if not task:
         raise ValueError("任务不存在")
-    if selection_profile not in {"general", "variety_comedy"}:
-        raise ValueError("选片模式只能是康熙笑点选片模式或通用模式（历史任务）")
+    if selection_profile not in {"general", "variety_comedy", "long_live_talk"}:
+        raise ValueError("选片模式只能是通用内容价值、康熙笑点选片模式或长直播高光")
     if final_clip_target < 1 or final_clip_target > 12:
         raise ValueError("最终启用目标必须在 1 到 12 条之间")
+    if not 1 <= highlight_density_per_hour <= 10:
+        raise ValueError("每小时高光密度必须在 1 到 10 条之间")
+    if not 1 <= highlight_total_limit <= 50:
+        raise ValueError("高光总上限必须在 1 到 50 条之间")
 
     now = _now_iso()
     with get_connection() as connection:
         connection.execute(
             """
             UPDATE tasks
-            SET selection_profile = ?, final_clip_target = ?, updated_at = ?
+            SET selection_profile = ?, final_clip_target = ?,
+                highlight_density_per_hour = ?, highlight_total_limit = ?, updated_at = ?
             WHERE id = ?
             """,
-            (selection_profile, final_clip_target, now, task_id),
+            (
+                selection_profile,
+                final_clip_target,
+                highlight_density_per_hour,
+                highlight_total_limit,
+                now,
+                task_id,
+            ),
         )
         connection.commit()
 
-    profile_label = "康熙笑点选片模式" if selection_profile == "variety_comedy" else "通用模式（历史任务）"
+    profile_label = {
+        "general": "通用内容价值",
+        "variety_comedy": "康熙笑点选片模式",
+        "long_live_talk": "长直播高光（语言类）",
+    }[selection_profile]
     append_task_log(task_id, f"已更新选片模式：{profile_label}，最终启用目标：{final_clip_target} 条")
     return {
         "status": "ok",

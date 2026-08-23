@@ -115,6 +115,8 @@
       <span class="status-pill" id="ai-candidate-count-pill">{{ task.candidate_count }} 条候选</span>
     </div>
     <form id="ai-analysis-form" class="settings-form ai-prompt-form" data-task-id="{{ task.id }}" data-selection-profile="{{ task.selection_profile }}">
+      <input id="ai-highlight-density" type="hidden" value="{{ task.highlight_density_per_hour or 4 }}">
+      <input id="ai-highlight-total-limit" type="hidden" value="{{ task.highlight_total_limit or 30 }}">
       <div class="ai-analysis-controls">
         <label>
           <span>候选池上限</span>
@@ -127,8 +129,10 @@
           <span>选片模式</span>
           {% if task.selection_profile == "variety_comedy" %}
           <p class="form-hint"><strong>康熙笑点选片模式</strong>（固定）</p>
+          {% elif task.selection_profile == "long_live_talk" %}
+          <p class="form-hint"><strong>长直播高光（语言类）</strong>（每小时 {{ task.highlight_density_per_hour }} 条，总上限 {{ task.highlight_total_limit }} 条）</p>
           {% else %}
-          <p class="form-hint"><strong>通用模式</strong>（历史任务，保持原样）</p>
+          <p class="form-hint"><strong>通用内容价值</strong></p>
           {% endif %}
         </label>
         <label>

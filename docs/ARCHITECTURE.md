@@ -1,5 +1,14 @@
 # 系统架构
 
+## 2026-08-23：长直播基础层
+
+- 新建任务必须显式选择 `general`、`variety_comedy` 或 `long_live_talk`；数据库的 `general` 默认值只用于旧数据兼容。
+- 数小时重型流程由 SQLite `workflow_jobs` 单 worker 串行领取，并为每个 Job 启动独立 Python 子进程。Job 使用 lease、heartbeat、尝试次数、取消标志和 checkpoint；Web 重启后可接管过期 lease，取消时终止子进程树。
+- 创建任务前检查视频轨、音轨、时长、编码、分辨率、帧率、首尾抽样解码与 E 盘剩余空间；超过 6 小时只提示。
+- 转写事实来源改为 `transcription_runs + transcription_chunks`。每块独立提交带校验和的结构化结果；`transcript.md` 是兼容导出。
+- 本地 faster-whisper 保存词级毫秒时间戳与置信度。仅 `TRANSCRIPTION_DEVICE=auto` 自动探测 CUDA，显式 `cpu` 不覆盖。
+- FFmpeg 音频提取写临时文件后原子替换，支持无进展超时、Job 取消和 Windows 进程树终止。
+
 ## 1. 当前架构概览
 
 ### 1.1 架构形态
@@ -55,8 +64,8 @@ v2.1 的架构目标不是云端多租户，而是把一台 Windows 电脑上的
 
 - **单体业务应用**：页面、路由、视频、AI、SQLite 和 Scheduler 保持同一 FastAPI 应用；Windows Worker 只隔离宿主 Chrome 操作。
 - **SQLite 单写入者**：只有 Docker 内的 FastAPI 可以读写 `workflow.sqlite3`；Windows Worker 不导入数据库仓储、不打开 SQLite，只通过 HTTP 返回账号检查/发布结果并写独立执行日志。
-- **同步 FFmpeg**：视频处理通过 `subprocess` 同步调用，阻塞当前请求直到完成。
-- **无外部消息队列**：发布队列直接使用 SQLite 原子状态更新，无 Redis / Celery。
+- **受管 FFmpeg**：长流程由持久化 Job worker 调用；已接入的音频提取支持进度、无进展超时、取消和进程树终止。
+- **无外部消息队列**：工作流与发布队列均使用 SQLite 原子领取，无 Redis / Celery。
 - **无用户体系**：单用户本地使用，通过 `LOCAL_ADMIN_TOKEN` 做简易鉴权。
 - **统一定时调度**：立即发送与未来排期都先写 `SCHEDULED`，再由 `PublishScheduler` 原子领取。
 - **终态原子提交**：平台结果、任务终态和事件由 FastAPI 在同一 SQLite 事务写入；任一步失败都会回滚，避免出现“平台结果已记但任务仍在发送中”。

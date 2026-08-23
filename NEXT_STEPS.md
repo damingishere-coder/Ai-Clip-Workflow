@@ -1,5 +1,14 @@
 # Next Steps
 
+## 2026-08-23 长直播四阶段进度
+
+- [x] PR 1：模式必选、已有文件入口、媒体/磁盘预检、持久化重型 Job、转写断点与词级时间戳。
+- [ ] PR 2：`long_live_talk` 5 分钟重叠窗口、每小时覆盖、全局配额、去重、90% 覆盖门禁和窗口级恢复。
+- [ ] PR 3：统一字幕 track/revision/cue、pysubs2 导入导出、wavesurfer 波形与专业编辑器。
+- [ ] PR 4：字幕审核暂停、AI 建议 revision、异步批量烧录、NVENC 回退和发送中心门禁。
+
+当前验证重点：完成 PR 1 专项与全量回归；不要在 PR 1 宣称长直播选片或新字幕系统已经可用。
+
 ## 2026-08-23 v2.1.0 主线同步后检查
 
 1. 最终提交进入 `master` 后先查看 GitHub CI；只有 Python、Windows host smoke 和 Docker image smoke 全部通过，才把该提交作为 2.1.0 候选版本。

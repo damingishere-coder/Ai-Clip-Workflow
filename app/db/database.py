@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from app.core.config import settings
-from app.services.database_backup_service import create_publish_migration_backup
+from app.services.database_backup_service import create_publish_migration_backup, create_schema_migration_backup
 
 
 DEFAULT_AI_PROMPT_PRESET_ID = "preset_001"
@@ -32,6 +32,13 @@ def init_db() -> None:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.tasks_dir.mkdir(parents=True, exist_ok=True)
 
+    if _requires_long_live_schema_migration(settings.database_path):
+        create_schema_migration_backup(
+            settings.database_path,
+            settings.data_dir / "backups",
+            "long-live-foundation",
+        )
+
     with get_connection() as connection:
         connection.executescript(
             """
@@ -47,6 +54,8 @@ def init_db() -> None:
                 candidate_clip_count INTEGER NOT NULL DEFAULT 12,
                 selection_profile TEXT NOT NULL DEFAULT 'general',
                 final_clip_target INTEGER NOT NULL DEFAULT 5,
+                highlight_density_per_hour INTEGER NOT NULL DEFAULT 4,
+                highlight_total_limit INTEGER NOT NULL DEFAULT 30,
                 ai_preference TEXT,
                 ai_prompt_preset_id TEXT NOT NULL DEFAULT 'preset_001',
                 auto_mode INTEGER NOT NULL DEFAULT 0,
@@ -308,6 +317,55 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL,
                 started_at TEXT,
                 finished_at TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 3,
+                next_attempt_at TEXT,
+                lease_owner TEXT,
+                lease_expires_at TEXT,
+                heartbeat_at TEXT,
+                cancel_requested INTEGER NOT NULL DEFAULT 0,
+                checkpoint_json TEXT,
+                checkpoint_updated_at TEXT,
+                FOREIGN KEY(task_id) REFERENCES tasks(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS transcription_runs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                source_fingerprint TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL DEFAULT '',
+                device TEXT NOT NULL DEFAULT '',
+                compute_type TEXT NOT NULL DEFAULT '',
+                chunk_seconds INTEGER NOT NULL,
+                overlap_seconds INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'processing',
+                total_chunks INTEGER NOT NULL DEFAULT 0,
+                completed_chunks INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                FOREIGN KEY(task_id) REFERENCES tasks(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS transcription_chunks (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                start_ms INTEGER NOT NULL,
+                end_ms INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                result_json TEXT,
+                result_checksum TEXT,
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(run_id, chunk_index),
+                FOREIGN KEY(run_id) REFERENCES transcription_runs(id) ON DELETE CASCADE,
                 FOREIGN KEY(task_id) REFERENCES tasks(id)
             );
 
@@ -354,12 +412,33 @@ def init_db() -> None:
         _migrate_publish_job_events_table(connection)
         _restore_legacy_user_cancelled_publish_jobs(connection)
         _migrate_workflow_jobs_table(connection)
+        _migrate_transcription_tables(connection)
         _migrate_cut_runs_table(connection)
         _seed_ai_prompt_presets(connection)
         _seed_subtitle_style_preset(connection)
         _seed_publish_platform_configs(connection)
         _create_indexes(connection)
         connection.commit()
+
+
+def _requires_long_live_schema_migration(database_path) -> bool:
+    """只对已经存在且确实缺少新结构的数据库创建一次迁移前备份。"""
+    if not database_path.exists() or database_path.stat().st_size == 0:
+        return False
+    try:
+        connection = sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+        task_columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)").fetchall()}
+        job_columns = {row[1] for row in connection.execute("PRAGMA table_info(workflow_jobs)").fetchall()}
+        table_names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    finally:
+        if "connection" in locals():
+            connection.close()
+    return (
+        "highlight_density_per_hour" not in task_columns
+        or "lease_owner" not in job_columns
+        or "transcription_runs" not in table_names
+        or "transcription_chunks" not in table_names
+    )
 
 
 def _get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
@@ -393,6 +472,10 @@ def _create_indexes(connection: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_execution ON publish_jobs(execution_id)",
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_history_visibility ON publish_jobs(history_hidden, platform, status, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_publish_job_events_job_time ON publish_job_events(job_id, occurred_at)",
+        "CREATE INDEX IF NOT EXISTS idx_workflow_jobs_claim ON workflow_jobs(status, next_attempt_at, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_workflow_jobs_task_type_status ON workflow_jobs(task_id, job_type, status)",
+        "CREATE INDEX IF NOT EXISTS idx_transcription_runs_task_active ON transcription_runs(task_id, is_active, updated_at)",
+        "CREATE INDEX IF NOT EXISTS idx_transcription_chunks_run_status ON transcription_chunks(run_id, status, chunk_index)",
         """CREATE UNIQUE INDEX IF NOT EXISTS uq_publish_jobs_active_clip_platform_mode
            ON publish_jobs(output_clip_id, platform, publish_mode)
            WHERE status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'PUBLISHING', 'NEED_REVIEW')
@@ -420,6 +503,8 @@ def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
         "candidate_clip_count": "ALTER TABLE tasks ADD COLUMN candidate_clip_count INTEGER NOT NULL DEFAULT 12",
         "selection_profile": "ALTER TABLE tasks ADD COLUMN selection_profile TEXT NOT NULL DEFAULT 'general'",
         "final_clip_target": "ALTER TABLE tasks ADD COLUMN final_clip_target INTEGER NOT NULL DEFAULT 5",
+        "highlight_density_per_hour": "ALTER TABLE tasks ADD COLUMN highlight_density_per_hour INTEGER NOT NULL DEFAULT 4",
+        "highlight_total_limit": "ALTER TABLE tasks ADD COLUMN highlight_total_limit INTEGER NOT NULL DEFAULT 30",
         "ai_preference": "ALTER TABLE tasks ADD COLUMN ai_preference TEXT",
         "ai_prompt_preset_id": "ALTER TABLE tasks ADD COLUMN ai_prompt_preset_id TEXT NOT NULL DEFAULT 'preset_001'",
         "auto_mode": "ALTER TABLE tasks ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0",
@@ -490,8 +575,10 @@ def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
         UPDATE tasks SET task_dir_name = id WHERE task_dir_name IS NULL OR task_dir_name = '';
         UPDATE tasks SET is_deleted = 0 WHERE is_deleted IS NULL;
         UPDATE tasks SET ai_prompt_preset_id = 'preset_001' WHERE ai_prompt_preset_id IS NULL OR ai_prompt_preset_id = '';
-        UPDATE tasks SET selection_profile = 'general' WHERE selection_profile NOT IN ('general', 'variety_comedy') OR selection_profile IS NULL OR selection_profile = '';
+        UPDATE tasks SET selection_profile = 'general' WHERE selection_profile NOT IN ('general', 'variety_comedy', 'long_live_talk') OR selection_profile IS NULL OR selection_profile = '';
         UPDATE tasks SET final_clip_target = 5 WHERE final_clip_target IS NULL OR final_clip_target < 1 OR final_clip_target > 12;
+        UPDATE tasks SET highlight_density_per_hour = 4 WHERE highlight_density_per_hour IS NULL OR highlight_density_per_hour < 1 OR highlight_density_per_hour > 10;
+        UPDATE tasks SET highlight_total_limit = 30 WHERE highlight_total_limit IS NULL OR highlight_total_limit < 1 OR highlight_total_limit > 50;
         UPDATE tasks SET source_type = 'upload' WHERE source_type NOT IN ('upload', 'nas') OR source_type IS NULL OR source_type = '';
 
         UPDATE tasks SET platform = 'douyin' WHERE platform IN ('抖音', 'douyin');
@@ -1135,10 +1222,45 @@ def _migrate_workflow_jobs_table(connection: sqlite3.Connection) -> None:
         "updated_at": "ALTER TABLE workflow_jobs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
         "started_at": "ALTER TABLE workflow_jobs ADD COLUMN started_at TEXT",
         "finished_at": "ALTER TABLE workflow_jobs ADD COLUMN finished_at TEXT",
+        "attempt_count": "ALTER TABLE workflow_jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
+        "max_attempts": "ALTER TABLE workflow_jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3",
+        "next_attempt_at": "ALTER TABLE workflow_jobs ADD COLUMN next_attempt_at TEXT",
+        "lease_owner": "ALTER TABLE workflow_jobs ADD COLUMN lease_owner TEXT",
+        "lease_expires_at": "ALTER TABLE workflow_jobs ADD COLUMN lease_expires_at TEXT",
+        "heartbeat_at": "ALTER TABLE workflow_jobs ADD COLUMN heartbeat_at TEXT",
+        "cancel_requested": "ALTER TABLE workflow_jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0",
+        "checkpoint_json": "ALTER TABLE workflow_jobs ADD COLUMN checkpoint_json TEXT",
+        "checkpoint_updated_at": "ALTER TABLE workflow_jobs ADD COLUMN checkpoint_updated_at TEXT",
     }
     for column, statement in migrations.items():
         if column not in columns:
             connection.execute(statement)
+
+
+def _migrate_transcription_tables(connection: sqlite3.Connection) -> None:
+    """创建转写分块 checkpoint 表；重复启动不会覆盖现有结果。"""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS transcription_runs (
+            id TEXT PRIMARY KEY, task_id TEXT NOT NULL, source_fingerprint TEXT NOT NULL,
+            provider TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', device TEXT NOT NULL DEFAULT '',
+            compute_type TEXT NOT NULL DEFAULT '', chunk_seconds INTEGER NOT NULL,
+            overlap_seconds INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'processing',
+            total_chunks INTEGER NOT NULL DEFAULT 0, completed_chunks INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 0, error_message TEXT, created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL, completed_at TEXT, FOREIGN KEY(task_id) REFERENCES tasks(id)
+        );
+        CREATE TABLE IF NOT EXISTS transcription_chunks (
+            id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued', attempt_count INTEGER NOT NULL DEFAULT 0,
+            result_json TEXT, result_checksum TEXT, error_message TEXT, created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL, UNIQUE(run_id, chunk_index),
+            FOREIGN KEY(run_id) REFERENCES transcription_runs(id) ON DELETE CASCADE,
+            FOREIGN KEY(task_id) REFERENCES tasks(id)
+        );
+        """
+    )
 
 
 def _migrate_cut_runs_table(connection: sqlite3.Connection) -> None:

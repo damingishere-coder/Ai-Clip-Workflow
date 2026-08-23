@@ -854,6 +854,51 @@ dd {
   line-height: 1.6;
 }
 
+.segmented-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.segmented-control label {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.file-browser-list {
+  display: grid;
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.file-browser-item {
+  width: 100%;
+  padding: 11px 13px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.file-browser-item:hover,
+.file-browser-item.is-selected {
+  background: rgba(37, 111, 255, 0.08);
+  color: var(--blue);
+}
+
 .file-upload-button {
   display: inline-flex;
   grid-auto-flow: column;

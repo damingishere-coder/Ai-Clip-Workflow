@@ -86,6 +86,7 @@ class TestTaskLifecycle:
             task_name="测试任务-最小",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=5,
             candidate_clip_count=8,
             ai_preference="",
@@ -105,6 +106,7 @@ class TestTaskLifecycle:
             task_name="NAS 测试",
             source_type="nas",
             platform="bilibili",
+            selection_profile="general",
             nas_file_path="/not/exist/video.mp4",
             max_clip_duration=3,
             candidate_clip_count=5,
@@ -121,6 +123,7 @@ class TestTaskLifecycle:
             task_name="状态更新测试",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
@@ -144,6 +147,7 @@ class TestTaskLifecycle:
             task_name="删除测试",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
@@ -163,6 +167,7 @@ class TestTaskLifecycle:
             task_name="数量测试",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
@@ -202,6 +207,7 @@ class TestAIAnalysisEntry:
             task_name="AI 测试-无转写",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
@@ -221,6 +227,7 @@ class TestAIAnalysisEntry:
             task_name="AI 状态测试",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
@@ -239,7 +246,7 @@ class TestAIAnalysisEntry:
 
         task_id = "test-ai-replace"
         create_task_record(
-            TaskCreate(task_name="候选替换测试", source_type="upload", platform="general"),
+            TaskCreate(task_name="候选替换测试", source_type="upload", platform="general", selection_profile="general"),
             task_id=task_id,
         )
         _replace_clip_candidates(
@@ -275,7 +282,7 @@ class TestAIAnalysisEntry:
 
         task_id = "test-ai-replace-rollback"
         create_task_record(
-            TaskCreate(task_name="候选回滚测试", source_type="upload", platform="general"),
+            TaskCreate(task_name="候选回滚测试", source_type="upload", platform="general", selection_profile="general"),
             task_id=task_id,
         )
         now = _now_iso()
@@ -338,7 +345,7 @@ class TestAIAnalysisEntry:
 
         task_id = "test-ai-restore-history"
         create_task_record(
-            TaskCreate(task_name="历史恢复测试", source_type="upload", platform="general"),
+            TaskCreate(task_name="历史恢复测试", source_type="upload", platform="general", selection_profile="general"),
             task_id=task_id,
         )
         payload = {
@@ -393,6 +400,7 @@ class TestVideoCutEntry:
             task_name="切片测试-无片段",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
@@ -429,6 +437,7 @@ class TestSubtitleEntry:
             task_name="字幕测试",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
@@ -454,6 +463,7 @@ class TestTranscriptEntry:
             task_name="转写测试-无音频",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",

@@ -4,6 +4,7 @@ import tempfile
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
@@ -11,6 +12,7 @@ from app.db.database import init_db
 from app.routers import ai_prompts, files, media, pages, publish, settings as settings_router, tasks
 from app.services.publish_scheduler import start_scheduler_background
 from app.services.storage_service import configure_runtime_media_storage
+from app.services.job_worker import WorkflowJobRunner
 
 
 # /media 和 /static 的 Origin 白名单
@@ -50,11 +52,15 @@ async def lifespan(app: FastAPI):
     previous_temp_env = {name: os.environ.get(name) for name in ("TEMP", "TMP")}
     app.state.media_storage = configure_runtime_media_storage()
     init_db()
+    workflow_job_runner = WorkflowJobRunner()
+    workflow_job_runner.start()
+    app.state.workflow_job_runner = workflow_job_runner
     scheduler = await start_scheduler_background()
     app.state.publish_scheduler = scheduler
     try:
         yield
     finally:
+        workflow_job_runner.stop()
         if scheduler:
             scheduler.stop()
         tempfile.tempdir = previous_temp
@@ -71,6 +77,15 @@ app = FastAPI(
     version="2.1.0",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    for error in exc.errors():
+        location = tuple(error.get("loc") or ())
+        if "selection_profile" in location:
+            return JSONResponse(status_code=422, content={"detail": "请选择有效的选片模式"})
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
 @app.middleware("http")

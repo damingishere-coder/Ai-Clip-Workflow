@@ -78,6 +78,7 @@ class PipelineEngine:
         task_id: str,
         retry: bool = False,
         start_step: TaskStatus | str | None = None,
+        job_id: str | None = None,
     ) -> dict:
         task = self._get_task(task_id)
         if not task.get("auto_mode"):
@@ -112,6 +113,19 @@ class PipelineEngine:
 
         for step in steps:
             try:
+                if job_id:
+                    from app.services import job_service
+                    if job_service.is_cancel_requested(job_id):
+                        raise RuntimeError("用户已取消全自动流水线")
+                    step_index = STEP_STATUSES.index(step)
+                    job_service.update_job_progress(
+                        job_id,
+                        5 + round(step_index / max(1, len(STEP_STATUSES)) * 90),
+                        f"正在执行：{step.value}",
+                    )
+                    job = job_service.get_job(job_id)
+                    if job and job.get("lease_owner"):
+                        job_service.heartbeat_job(job_id, str(job["lease_owner"]))
                 task_service.update_task_status(task_id, step)
                 context[step.value] = handlers[step](task_id, context)
             except Exception as exc:
@@ -586,8 +600,9 @@ def run_auto_pipeline(
     task_id: str,
     retry: bool = False,
     start_step: TaskStatus | str | None = None,
+    job_id: str | None = None,
 ) -> dict:
-    return PipelineEngine().run(task_id, retry=retry, start_step=start_step)
+    return PipelineEngine().run(task_id, retry=retry, start_step=start_step, job_id=job_id)
 
 
 def start_auto_pipeline(
@@ -597,6 +612,20 @@ def start_auto_pipeline(
     start_step: TaskStatus | str | None = None,
 ) -> dict:
     if background_tasks is not None:
-        background_tasks.add_task(run_auto_pipeline, task_id, retry, start_step)
-        return {"status": "started", "message": "全自动流水线已在后台启动。", "task_id": task_id}
+        from app.services import job_service
+
+        job, created = job_service.create_or_get_active_job(
+            task_id=task_id,
+            job_type=job_service.JOB_TYPE_AUTO_PIPELINE,
+            payload={
+                "retry": retry,
+                "start_step": start_step.value if isinstance(start_step, TaskStatus) else start_step,
+            },
+        )
+        return {
+            "status": job["status"],
+            "message": "全自动流水线已加入持久化队列。" if created else "全自动流水线已经在排队或运行。",
+            "task_id": task_id,
+            "job_id": job["id"],
+        }
     return run_auto_pipeline(task_id, retry=retry, start_step=start_step)

@@ -1,19 +1,31 @@
-"""轻量本地工作流任务队列 —— Job Worker
+"""单进程持久化工作流 Worker。
 
-负责在后台执行 job 记录对应的长任务。
-第一轮仅接入自动切片（video_cut），后续再逐步迁移其他流程。
+数据库 lease 让应用重启后可接管过期任务；默认只运行一个本地重型任务。
 """
+
+from __future__ import annotations
+
+import os
+import socket
+import subprocess
+import sys
+import threading
+import time
+from uuid import uuid4
 
 from app.services import job_service
 from app.services import task_service
+from app.core.config import settings
+from app.services.managed_process_service import popen_process_group, terminate_process_tree
 
 
-def execute_job(job_id: str) -> dict:
+def execute_job(job_id: str, *, lease_owner: str | None = None, already_claimed: bool = False) -> dict:
     """根据 job 记录执行对应的后台任务
 
     这是一个同步函数，调用方应自行决定放在线程池还是 BackgroundTasks 中运行。
     返回最终的 job 记录。
     """
+    owner = lease_owner or f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
     job = job_service.get_job(job_id)
     if not job:
         raise ValueError(f"job 不存在：{job_id}")
@@ -23,14 +35,18 @@ def execute_job(job_id: str) -> dict:
     job_type = job.get("job_type")
     task_id = job.get("task_id")
 
-    # 标记开始执行
-    job = job_service.mark_job_running(job_id)
-    if not job:
-        raise RuntimeError(f"无法更新 job 状态：{job_id}")
+    if not already_claimed:
+        job = job_service.claim_job(job_id, owner)
+        if not job:
+            return job_service.get_job(job_id)
 
     try:
         if job_type == job_service.JOB_TYPE_VIDEO_CUT:
             _execute_video_cut(job_id, task_id)
+        elif job_type == job_service.JOB_TYPE_TRANSCRIPT:
+            _execute_transcript(job_id, task_id, job.get("payload_json") or {})
+        elif job_type == job_service.JOB_TYPE_AUTO_PIPELINE:
+            _execute_auto_pipeline(job_id, task_id, job.get("payload_json") or {})
         else:
             raise ValueError(f"暂不支持的 job 类型：{job_type}")
     except Exception as exc:
@@ -64,3 +80,120 @@ def _execute_video_cut(job_id: str, task_id: str) -> None:
     }
 
     job_service.mark_job_completed(job_id, result_summary)
+
+
+def _execute_transcript(job_id: str, task_id: str, payload: dict) -> None:
+    from app.services import transcript_workflow_service
+    from app.services.storage_service import get_artifact_paths
+    from app.services.transcript_service import read_transcript_progress
+
+    job_service.update_job_progress(job_id, 5, "正在准备音频和转写 checkpoint")
+    transcript_workflow_service.process_task_transcript_workflow(
+        task_id,
+        background_tasks=None,
+        force=bool(payload.get("force")),
+        provider=payload.get("provider"),
+        job_id=job_id,
+    )
+    if job_service.is_cancel_requested(job_id):
+        job_service.mark_job_cancelled(job_id, "转写已取消，已完成分块 checkpoint 会保留")
+        return
+    progress = read_transcript_progress(get_artifact_paths(task_id)["transcript_path"])
+    if progress.get("status") == "failed":
+        raise RuntimeError(str(progress.get("message") or "转写失败"))
+    job_service.mark_job_completed(
+        job_id,
+        {"task_id": task_id, "transcript_status": progress.get("status"), "checkpoint_retained": True},
+    )
+
+
+def _execute_auto_pipeline(job_id: str, task_id: str, payload: dict) -> None:
+    from app.services.pipeline_engine import run_auto_pipeline
+
+    result = run_auto_pipeline(
+        task_id,
+        retry=bool(payload.get("retry")),
+        start_step=payload.get("start_step"),
+        job_id=job_id,
+    )
+    if job_service.is_cancel_requested(job_id):
+        job_service.mark_job_cancelled(job_id, "全自动流水线已取消")
+        return
+    if result.get("status") == "failed":
+        raise RuntimeError(str(result.get("last_error") or "全自动流水线失败"))
+    job_service.mark_job_completed(job_id, result)
+
+
+class WorkflowJobRunner:
+    """应用生命周期内的单 worker 线程。"""
+
+    def __init__(self, poll_seconds: float = 1.0) -> None:
+        self.poll_seconds = poll_seconds
+        self.owner = f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(target=self._run, name="workflow-job-worker", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            job = job_service.claim_next_job(self.owner)
+            if not job:
+                self._stop_event.wait(self.poll_seconds)
+                continue
+            self._run_job_subprocess(job["id"])
+
+    def _run_job_subprocess(self, job_id: str) -> None:
+        process = popen_process_group(
+            [sys.executable, "-m", "app.services.job_worker_process", job_id, self.owner],
+            cwd=str(settings.project_root),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        last_heartbeat = 0.0
+        last_progress_at = time.monotonic()
+        previous_progress: tuple[int, str] | None = None
+        no_progress_timeout = max(
+            900,
+            settings.ffmpeg_audio_extract_timeout,
+            settings.ffmpeg_cut_timeout,
+            settings.volcengine_asr_timeout_seconds,
+        )
+        while process.poll() is None:
+            if self._stop_event.wait(1):
+                terminate_process_tree(process)
+                job_service.release_job_lease(job_id, self.owner)
+                return
+            job = job_service.get_job(job_id)
+            if not job:
+                terminate_process_tree(process)
+                return
+            if job_service.is_cancel_requested(job_id):
+                terminate_process_tree(process)
+                job_service.mark_job_cancelled(job_id, "任务已取消，子进程树已终止")
+                return
+            progress_state = (int(job.get("progress") or 0), str(job.get("message") or ""))
+            if previous_progress != progress_state:
+                previous_progress = progress_state
+                last_progress_at = time.monotonic()
+            if time.monotonic() - last_progress_at > no_progress_timeout:
+                terminate_process_tree(process)
+                job_service.mark_job_failed(job_id, f"任务连续 {no_progress_timeout} 秒没有进展，已终止子进程树")
+                return
+            if time.monotonic() - last_heartbeat >= 20:
+                job_service.heartbeat_job(job_id, self.owner)
+                last_heartbeat = time.monotonic()
+        final_job = job_service.get_job(job_id)
+        if process.returncode != 0 and final_job and final_job.get("status") == job_service.JOB_STATUS_RUNNING:
+            job_service.mark_job_failed(job_id, f"Job 子进程异常退出，退出码：{process.returncode}")
+        elif process.returncode == 0 and final_job and final_job.get("status") == job_service.JOB_STATUS_RUNNING:
+            job_service.mark_job_failed(job_id, "Job 子进程已退出但没有写入终态")

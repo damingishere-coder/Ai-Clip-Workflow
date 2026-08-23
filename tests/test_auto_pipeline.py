@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 import pytest
@@ -22,7 +23,11 @@ from app.services.task_service import get_task
 
 
 @pytest.fixture(autouse=True)
-def auto_pipeline_db_cleanup():
+def auto_pipeline_db_cleanup(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.task_lifecycle_service.preflight_media",
+        lambda *_args, **_kwargs: SimpleNamespace(to_dict=lambda: {"warnings": []}),
+    )
     init_db()
     with get_connection() as connection:
         connection.execute("DELETE FROM publish_jobs WHERE task_id LIKE 'test-auto-%'")
@@ -71,12 +76,13 @@ def _create_auto_task(task_id: str = "test-auto-task") -> dict:
         task_name=task_id,
         source_type="upload",
         platform="general",
+        selection_profile="general",
         original_video_path=str(video),
         max_clip_duration=5,
         candidate_clip_count=5,
         auto_mode=True,
     )
-    create_task_record(payload, task_id=task_id)
+    create_task_record(payload, task_id=task_id, task_dir_name=task_id)
     return get_task(task_id, include_video_probe=False)
 
 
@@ -98,6 +104,7 @@ def test_auto_mode_false_does_not_start_pipeline(monkeypatch):
         "task_name": "test-auto-manual",
         "source_type": "upload",
         "platform": "general",
+        "selection_profile": "general",
         "original_video_path": str(video),
         "auto_mode": False,
     }
@@ -115,6 +122,7 @@ def test_auto_mode_true_starts_pipeline(monkeypatch):
         "task_name": "test-auto-start",
         "source_type": "upload",
         "platform": "general",
+        "selection_profile": "general",
         "original_video_path": str(video),
         "auto_mode": True,
     }
@@ -415,7 +423,7 @@ def test_auto_selection_uses_candidate_count_and_task_max_duration():
         auto_min_clip_seconds=120,
         auto_max_clip_seconds=7200,
     )
-    create_task_record(payload, task_id=task_id)
+    create_task_record(payload, task_id=task_id, task_dir_name=task_id)
     now = datetime.now(timezone.utc).isoformat()
     with get_connection() as connection:
         for clip_id, start_time, end_time, confidence in [

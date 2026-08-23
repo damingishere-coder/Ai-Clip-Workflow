@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ from scripts.purge_deleted_task_media import apply_report, build_report
 
 
 @pytest.fixture
-def isolated_media_settings(tmp_path):
+def isolated_media_settings(tmp_path, monkeypatch):
     original_temp = tempfile.tempdir
     original_env = {name: os.environ.get(name) for name in ("TEMP", "TMP")}
 
@@ -68,6 +69,11 @@ def isolated_media_settings(tmp_path):
         for name, value in replacements.items():
             object.__setattr__(candidate, name, value)
     init_db()
+    monkeypatch.setattr(
+        task_lifecycle_service,
+        "preflight_media",
+        lambda *_args, **_kwargs: SimpleNamespace(to_dict=lambda: {"warnings": []}),
+    )
 
     try:
         yield replacements
@@ -91,6 +97,7 @@ def _create_managed_task(task_id: str, task_dir: Path, *, auto_mode: bool = Fals
         TaskCreate(
             task_name=task_id,
             source_type="upload",
+            selection_profile="general",
             original_video_path=str(source_path),
             auto_mode=auto_mode,
         ),
@@ -131,7 +138,7 @@ def test_large_multipart_upload_spools_in_e_drive(monkeypatch, isolated_media_se
     with TestClient(app) as client:
         response = client.post(
             "/api/tasks/upload",
-            data={"task_name": "large-upload-e-drive", "platform": "general"},
+            data={"task_name": "large-upload-e-drive", "platform": "general", "selection_profile": "general"},
             files={"video_file": ("source.mp4", b"V" * (2 * 1024 * 1024), "video/mp4")},
             headers=_headers(),
         )
@@ -160,7 +167,7 @@ def test_failed_upload_removes_partial_task_directory(monkeypatch, isolated_medi
     try:
         response = TestClient(app).post(
             "/api/tasks/upload",
-            data={"task_name": "failed-upload", "platform": "general"},
+            data={"task_name": "failed-upload", "platform": "general", "selection_profile": "general"},
             files={"video_file": ("source.mp4", b"V" * 2048, "video/mp4")},
             headers=_headers(),
         )
@@ -212,6 +219,7 @@ def test_delete_preserves_external_source(isolated_media_settings):
         TaskCreate(
             task_name=task_id,
             source_type="nas",
+            selection_profile="general",
             nas_file_path=str(external_source),
         ),
         task_id=task_id,

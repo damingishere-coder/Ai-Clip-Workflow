@@ -45,6 +45,7 @@ class TestCutRunVersioning:
             task_name=f"版本化测试-{task_id}",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=5,
             candidate_clip_count=5,
             ai_preference="",

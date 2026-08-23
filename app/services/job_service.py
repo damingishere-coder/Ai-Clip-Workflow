@@ -5,7 +5,7 @@
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import uuid4
 
@@ -17,6 +17,7 @@ JOB_TYPE_AI_ANALYSIS = "ai_analysis"
 JOB_TYPE_TRANSCRIPT = "transcript"
 JOB_TYPE_SUBTITLE = "subtitle"
 JOB_TYPE_PUBLISH = "publish"
+JOB_TYPE_AUTO_PIPELINE = "auto_pipeline"
 
 # ── job 状态枚举 ─────────────────────────────────────────────────
 JOB_STATUS_QUEUED = "queued"
@@ -39,6 +40,7 @@ JOB_TYPE_LABELS = {
     JOB_TYPE_TRANSCRIPT: "转写",
     JOB_TYPE_SUBTITLE: "字幕",
     JOB_TYPE_PUBLISH: "发布",
+    JOB_TYPE_AUTO_PIPELINE: "全自动流水线",
 }
 
 
@@ -49,7 +51,7 @@ def _now_iso() -> str:
 def _row_to_dict(row) -> dict:
     """将 sqlite3.Row 转为普通字典，并解析 JSON 字段"""
     job = dict(row)
-    for field in ("payload_json", "result_json"):
+    for field in ("payload_json", "result_json", "checkpoint_json"):
         raw = job.get(field)
         if isinstance(raw, str) and raw:
             try:
@@ -241,6 +243,160 @@ def mark_job_running(job_id: str) -> dict | None:
     return get_job(job_id)
 
 
+def claim_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> dict | None:
+    """原子领取一个排队任务，或接管 lease 已过期的运行任务。"""
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat(timespec="seconds")
+    lease_expires_at = (now + timedelta(seconds=max(30, lease_seconds))).isoformat(timespec="seconds")
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT status, lease_expires_at, cancel_requested, attempt_count, max_attempts FROM workflow_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        if not row:
+            connection.commit()
+            return None
+        expired = row["status"] == JOB_STATUS_RUNNING and (
+            not row["lease_expires_at"] or str(row["lease_expires_at"]) <= now_iso
+        )
+        claimable = row["status"] == JOB_STATUS_QUEUED or expired
+        if not claimable or int(row["cancel_requested"] or 0) or int(row["attempt_count"] or 0) >= int(row["max_attempts"] or 3):
+            connection.commit()
+            return None
+        connection.execute(
+            """
+            UPDATE workflow_jobs
+            SET status = ?, progress = CASE WHEN progress < 10 THEN 10 ELSE progress END,
+                message = '任务已开始执行', started_at = COALESCE(started_at, ?),
+                updated_at = ?, heartbeat_at = ?, lease_owner = ?, lease_expires_at = ?,
+                attempt_count = attempt_count + 1
+            WHERE id = ?
+            """,
+            (JOB_STATUS_RUNNING, now_iso, now_iso, now_iso, lease_owner, lease_expires_at, job_id),
+        )
+        connection.commit()
+    return get_job(job_id)
+
+
+def claim_next_job(lease_owner: str, lease_seconds: int = 120) -> dict | None:
+    """按创建时间领取一个重型任务，保证本地默认串行。"""
+    now = _now_iso()
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE workflow_jobs SET status = ?, error_message = '已达到最大尝试次数',
+                message = '任务失败：已达到最大尝试次数', finished_at = ?, updated_at = ?,
+                lease_owner = NULL, lease_expires_at = NULL
+            WHERE status IN (?, ?) AND attempt_count >= max_attempts
+            """,
+            (JOB_STATUS_FAILED, now, now, JOB_STATUS_QUEUED, JOB_STATUS_RUNNING),
+        )
+        connection.commit()
+        row = connection.execute(
+            """
+            SELECT id FROM workflow_jobs
+            WHERE cancel_requested = 0
+              AND attempt_count < max_attempts
+              AND (
+                (status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
+                OR (status = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
+              )
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (JOB_STATUS_QUEUED, now, JOB_STATUS_RUNNING, now),
+        ).fetchone()
+    return claim_job(row["id"], lease_owner, lease_seconds) if row else None
+
+
+def heartbeat_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> bool:
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat(timespec="seconds")
+    expires = (now + timedelta(seconds=max(30, lease_seconds))).isoformat(timespec="seconds")
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE workflow_jobs SET heartbeat_at = ?, lease_expires_at = ?, updated_at = ?
+            WHERE id = ? AND status = ? AND lease_owner = ?
+            """,
+            (now_iso, expires, now_iso, job_id, JOB_STATUS_RUNNING, lease_owner),
+        )
+        connection.commit()
+    return cursor.rowcount == 1
+
+
+def update_job_checkpoint(job_id: str, checkpoint: dict) -> dict | None:
+    now = _now_iso()
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE workflow_jobs SET checkpoint_json = ?, checkpoint_updated_at = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(checkpoint, ensure_ascii=False), now, now, job_id),
+        )
+        connection.commit()
+    return get_job(job_id)
+
+
+def request_job_cancel(job_id: str) -> dict | None:
+    now = _now_iso()
+    with get_connection() as connection:
+        row = connection.execute("SELECT status FROM workflow_jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            return None
+        if row["status"] == JOB_STATUS_QUEUED:
+            connection.execute(
+                """UPDATE workflow_jobs SET status = ?, cancel_requested = 1, message = '任务已取消',
+                   finished_at = ?, updated_at = ?, lease_owner = NULL, lease_expires_at = NULL WHERE id = ?""",
+                (JOB_STATUS_CANCELLED, now, now, job_id),
+            )
+        elif row["status"] == JOB_STATUS_RUNNING:
+            connection.execute(
+                "UPDATE workflow_jobs SET cancel_requested = 1, message = '正在停止任务', updated_at = ? WHERE id = ?",
+                (now, job_id),
+            )
+        connection.commit()
+    return get_job(job_id)
+
+
+def is_cancel_requested(job_id: str) -> bool:
+    job = get_job(job_id)
+    return bool(job and int(job.get("cancel_requested") or 0))
+
+
+def retry_job(job_id: str) -> dict | None:
+    now = _now_iso()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE workflow_jobs
+            SET status = ?, progress = 0, message = '任务已重新加入队列', error_message = NULL,
+                finished_at = NULL, next_attempt_at = ?, cancel_requested = 0,
+                lease_owner = NULL, lease_expires_at = NULL, heartbeat_at = NULL,
+                attempt_count = 0, updated_at = ?
+            WHERE id = ? AND status IN (?, ?)
+            """,
+            (JOB_STATUS_QUEUED, now, now, job_id, JOB_STATUS_FAILED, JOB_STATUS_CANCELLED),
+        )
+        connection.commit()
+    return get_job(job_id) if cursor.rowcount else None
+
+
+def release_job_lease(job_id: str, lease_owner: str) -> bool:
+    """Web 正常停止时释放子进程 Job，供新进程立即恢复。"""
+    now = _now_iso()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE workflow_jobs SET status = ?, message = '应用停止，等待新 worker 恢复',
+                lease_owner = NULL, lease_expires_at = NULL, heartbeat_at = NULL, updated_at = ?
+            WHERE id = ? AND status = ? AND lease_owner = ?
+            """,
+            (JOB_STATUS_QUEUED, now, job_id, JOB_STATUS_RUNNING, lease_owner),
+        )
+        connection.commit()
+    return cursor.rowcount == 1
+
+
 def update_job_progress(job_id: str, progress: int, message: Optional[str] = None) -> dict | None:
     """更新 job 进度（0-100）和消息"""
     now = _now_iso()
@@ -271,7 +427,7 @@ def mark_job_completed(job_id: str, result: Optional[dict] = None) -> dict | Non
             UPDATE workflow_jobs
             SET status = ?, progress = 100,
                 message = '任务已完成', result_json = ?,
-                finished_at = ?, updated_at = ?
+                finished_at = ?, updated_at = ?, lease_owner = NULL, lease_expires_at = NULL
             WHERE id = ?
             """,
             (JOB_STATUS_COMPLETED, result_json, now, now, job_id),
@@ -291,7 +447,7 @@ def mark_job_failed(job_id: str, error_message: str) -> dict | None:
             """
             UPDATE workflow_jobs
             SET status = ?, error_message = ?, message = ?,
-                finished_at = ?, updated_at = ?
+                finished_at = ?, updated_at = ?, lease_owner = NULL, lease_expires_at = NULL
             WHERE id = ?
             """,
             (JOB_STATUS_FAILED, error_message, f"任务失败：{error_message}", now, now, job_id),
@@ -301,3 +457,18 @@ def mark_job_failed(job_id: str, error_message: str) -> dict | None:
     if cursor.rowcount == 0:
         return None
     return get_job(job_id)
+
+
+def mark_job_cancelled(job_id: str, message: str = "任务已取消") -> dict | None:
+    now = _now_iso()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE workflow_jobs SET status = ?, message = ?, finished_at = ?, updated_at = ?,
+                lease_owner = NULL, lease_expires_at = NULL
+            WHERE id = ?
+            """,
+            (JOB_STATUS_CANCELLED, message, now, now, job_id),
+        )
+        connection.commit()
+    return get_job(job_id) if cursor.rowcount else None

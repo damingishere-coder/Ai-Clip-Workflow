@@ -1,5 +1,15 @@
 # 数据库结构说明
 
+## 2026-08-23：长直播基础设施迁移
+
+- `tasks` 增加 `highlight_density_per_hour INTEGER NOT NULL DEFAULT 4` 与 `highlight_total_limit INTEGER NOT NULL DEFAULT 30`；历史任务模式和值不改写。
+- `selection_profile` 合法值扩展为 `general / variety_comedy / long_live_talk`，数据库继续保留 `DEFAULT 'general'` 兼容旧数据。
+- `workflow_jobs` 增加尝试、退避时间、lease、heartbeat、取消和 checkpoint 字段。
+- 新增 `transcription_runs`，按任务、源指纹、Provider、模型、设备、计算类型和分块参数标识一次转写。
+- 新增 `transcription_chunks`，逐块保存毫秒边界、状态、尝试次数、结构化 JSON、SHA-256 校验和与错误。
+- 新索引覆盖 Job 领取、任务类型状态、活跃转写 run 与转写块状态。
+- 已存在数据库缺少新结构时，迁移前使用 SQLite Online Backup API 写入 `data/backups/workflow-before-long-live-foundation-*.sqlite3`，通过 `PRAGMA quick_check` 后才执行幂等增量迁移。
+
 ## 2026-08-01：康熙笑点优先 V2 兼容迁移
 
 - `tasks` 新增 `selection_profile TEXT NOT NULL DEFAULT 'general'` 与 `final_clip_target INTEGER NOT NULL DEFAULT 5`。历史任务自动保持 `general`，不会改变原有分析行为。

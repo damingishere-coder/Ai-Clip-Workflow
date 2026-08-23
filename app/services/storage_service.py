@@ -605,6 +605,7 @@ def browse_video_directory(path_value: str | None) -> dict:
 
     return {
         "path": str(base_path),
+        "parent_path": str(base_path.parent) if _is_path_within_roots(base_path.parent, roots=allowed_roots) else "",
         "exists": True,
         "directories": directories,
         "files": files,

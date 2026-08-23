@@ -30,11 +30,14 @@
 
     <fieldset>
       <legend>视频来源</legend>
-      <input name="source_type" type="hidden" value="upload">
-      <div class="upload-card">
+      <div class="segmented-control" role="radiogroup" aria-label="视频来源">
+        <label><input name="source_type" type="radio" value="upload" checked> 上传本机视频</label>
+        <label><input name="source_type" type="radio" value="nas"> 选择本地 / NAS 已有文件</label>
+      </div>
+      <div class="upload-card" id="upload-source-panel">
         <div>
           <strong>上传本机视频</strong>
-          <span>选择视频后，会直接写入 E 盘任务的 source 目录；上传临时文件也在 E 盘。</span>
+          <span>默认最大 4 GB。更大的直播录像请使用“已有文件”，避免浏览器上传中断。</span>
         </div>
         <label class="file-upload-button" for="video-file-input">
           <span class="file-upload-icon" aria-hidden="true"></span>
@@ -43,6 +46,19 @@
         <input class="visually-hidden-file" id="video-file-input" name="video_file" type="file" accept="video/*">
       </div>
       <p class="form-hint" id="video-file-name">尚未选择视频文件。</p>
+      <div class="stacked-form" id="existing-source-panel" hidden>
+        <label>
+          <span>已有文件路径</span>
+          <input id="nas-file-path" name="nas_file_path" type="text" autocomplete="off" placeholder="从下方浏览器选择，或粘贴允许目录中的完整路径">
+        </label>
+        <div class="button-row">
+          <button class="secondary-button" id="browse-parent-button" type="button">上一级</button>
+          <button class="secondary-button" id="browse-refresh-button" type="button">刷新目录</button>
+        </div>
+        <p class="form-hint" id="browse-current-path">尚未加载目录。</p>
+        <div class="file-browser-list" id="video-file-browser" aria-live="polite"></div>
+        <p class="form-hint">系统只读取已有文件，不会复制或删除外部唯一原片。</p>
+      </div>
     </fieldset>
 
     <label>
@@ -56,9 +72,31 @@
 
     <label>
       <span>选片模式</span>
-      <input type="hidden" name="selection_profile" value="variety_comedy">
-      <span class="form-hint"><strong>康熙笑点选片模式</strong>：使用重叠召回、完整段落扩展、音频反应复核和 A/B 质量分级。</span>
+      <select id="selection-profile" name="selection_profile" required>
+        <option value="" selected disabled>请选择选片模式</option>
+        <option value="general">通用内容价值</option>
+        <option value="variety_comedy">康熙笑点选片模式</option>
+        <option value="long_live_talk">长直播高光（语言类）</option>
+      </select>
+      <span class="form-hint" id="selection-profile-hint">必须明确选择。长直播模式第一版面向最长 6 小时的语言内容。</span>
     </label>
+
+    <div class="form-row" id="long-live-settings" hidden>
+      <label>
+        <span>每小时高光密度</span>
+        <span class="unit-input">
+          <input name="highlight_density_per_hour" type="number" min="1" max="10" step="1" value="4">
+          <small>条 / 小时</small>
+        </span>
+      </label>
+      <label>
+        <span>候选总上限</span>
+        <span class="unit-input">
+          <input name="highlight_total_limit" type="number" min="1" max="50" step="1" value="30">
+          <small>条</small>
+        </span>
+      </label>
+    </div>
 
     <div class="form-row">
       <label>
@@ -94,7 +132,7 @@
         <input name="auto_mode" type="checkbox" value="true">
         <span>新建后自动跑完整流水线</span>
       </label>
-      <p class="form-hint">开启后，系统按“最终启用目标”生成切片；康熙笑点选片模式只自动处理达到 A 级质量门槛的片段。</p>
+      <p class="form-hint">开启后会按所选模式执行；长直播高光的分层选片将在下一阶段接入。</p>
     </fieldset>
 
     <div class="button-row align-end">
@@ -123,7 +161,7 @@
   </section>
   <section class="panel soft-tip">
     <p class="eyebrow">小贴士</p>
-    <p>本任务固定使用康熙笑点选片模式。候选池默认最多 12 条，真正进入切片队列的 A 级片段默认不超过 5 条。</p>
+    <p>请选择与素材相符的模式。数小时直播优先使用“已有文件”，创建前会检查音轨、编码、可解码性和剩余空间。</p>
   </section>
   </aside>
 </section>

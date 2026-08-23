@@ -494,10 +494,14 @@ def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
         "progress": progress,
         "candidate_count": task.get("candidate_clip_count") or 0,
         "selection_profile": task.get("selection_profile") or "general",
-        "selection_profile_label": (
-            "康熙笑点选片模式" if task.get("selection_profile") == "variety_comedy" else "通用模式（历史任务）"
-        ),
+        "selection_profile_label": {
+            "general": "通用内容价值",
+            "variety_comedy": "康熙笑点选片模式",
+            "long_live_talk": "长直播高光（语言类）",
+        }.get(task.get("selection_profile") or "general", "通用内容价值"),
         "final_clip_target": int(task.get("final_clip_target") or 5),
+        "highlight_density_per_hour": int(task.get("highlight_density_per_hour") or 4),
+        "highlight_total_limit": int(task.get("highlight_total_limit") or 30),
         "duration": video_meta["duration"],
         "video_size": video_meta["video_size"],
         "owner": "本地用户",
@@ -536,6 +540,7 @@ def list_tasks(include_deleted: bool = False) -> list[dict]:
             SELECT
                 id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path,
                 max_clip_duration, candidate_clip_count, selection_profile, final_clip_target,
+                highlight_density_per_hour, highlight_total_limit,
                 ai_preference, ai_prompt_preset_id, auto_mode,
                 auto_config_json, status, progress, error_message, last_error,
                 is_deleted, deleted_at, created_at, updated_at
@@ -572,6 +577,7 @@ def get_task(task_id: str, include_video_probe: bool = True) -> dict | None:
             SELECT
                 id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path,
                 max_clip_duration, candidate_clip_count, selection_profile, final_clip_target,
+                highlight_density_per_hour, highlight_total_limit,
                 ai_preference, ai_prompt_preset_id, auto_mode,
                 auto_config_json, status, progress, error_message, last_error,
                 is_deleted, deleted_at, created_at, updated_at
