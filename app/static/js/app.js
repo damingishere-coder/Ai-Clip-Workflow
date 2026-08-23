@@ -615,7 +615,7 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
     if (!aiAnalysisForm) return;
     const originalText = button.textContent;
     const taskId = aiAnalysisForm.dataset.taskId;
-    const provider = button.dataset.provider || "remote";
+    const provider = button.dataset.provider || "codex";
     const selectedCard = getSelectedPromptPresetCard();
     const selectedPrompt = selectedCard?.querySelector("textarea")?.value.trim() || "";
     const selectedName = selectedCard?.querySelector("input[type='text']")?.value.trim() || "当前方案";
@@ -623,7 +623,10 @@ document.querySelectorAll(".js-ai-process-action").forEach((button) => {
       if (aiProcessResult) aiProcessResult.textContent = "请先填写当前选中的 AI Prompt 方案。";
       return;
     }
-    if (provider === "remote") {
+    if (provider === "codex") {
+      const confirmed = window.confirm(`确认使用“${selectedName}”发起 Codex CLI 分析吗？\n\n这会消耗当前 Codex 套餐额度，并覆盖现有 AI 候选结果。`);
+      if (!confirmed) return;
+    } else if (provider === "remote") {
       const confirmed = window.confirm(`确认使用“${selectedName}”发起远程 AI 分析吗？\n\n这会重新生成候选片段，并覆盖当前已有的 AI 候选结果。`);
       if (!confirmed) return;
     }
@@ -2183,6 +2186,7 @@ if (aiConfigForm) {
     const formData = new FormData(aiConfigForm);
     const payload = Object.fromEntries(formData.entries());
     payload.ai_request_timeout_seconds = Number(payload.ai_request_timeout_seconds || 120);
+    payload.ai_codex_timeout_seconds = Number(payload.ai_codex_timeout_seconds || 300);
     payload.volcengine_asr_timeout_seconds = Number(payload.volcengine_asr_timeout_seconds || 300);
     payload.ai_analysis_request_timeout_seconds = Number(payload.ai_analysis_request_timeout_seconds || 120);
     payload.ai_publish_request_timeout_seconds = Number(payload.ai_publish_request_timeout_seconds || 120);

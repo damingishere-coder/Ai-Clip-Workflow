@@ -265,7 +265,7 @@ async def cancel_transcript(task_id: str) -> dict:
 @router.post("/{task_id}/process/ai")
 async def process_ai_analysis(
     task_id: str,
-    provider: str | None = Query(default=None, pattern="^(remote|local)$"),
+    provider: str | None = Query(default=None, pattern="^(codex|remote|local)$"),
 ) -> dict:
     try:
         return await run_in_threadpool(task_service.process_task_ai_analysis, task_id, provider=provider)

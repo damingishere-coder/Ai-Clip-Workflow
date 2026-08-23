@@ -1048,3 +1048,10 @@
 - 隔离端口 `18001` 使用在线 SQLite 快照完成 `/health`、首页、任务、片段和发送中心冒烟，均为 HTTP 200；正式原生 `8001` 的相同页面和调度器健康检查通过，Windows Worker 状态正常。
 - 当前 Web 进程由 Alter 以 `Niuma-Studio` 托管并启用崩溃自动重启；发布 Worker 仍是本项目的 Windows 原生进程。
 - 专项测试 `11 passed`，Windows PowerShell 5.1 与 PowerShell 7 三个脚本均为 0 个解析错误；未触发任何真实投稿。
+
+## 2026-08-22 Codex CLI 替代 DeepSeek 文本调用
+
+- 新增隔离的 Codex CLI JSON Provider，统一供文字稿分析、综艺分析和发送中心发布文案使用；Prompt 只通过 stdin 传入，一次性目录使用只读 sandbox 和 ephemeral 会话。
+- 系统状态页新增 Codex 路径、模型、超时和版本检查；分析与发布文案分别选择 Provider，默认均为 Codex，远程 DeepSeek 与本地 Ollama 继续作为人工回退。
+- 任务详情页把 Codex CLI 分析作为主按钮，发起前明确提示会消耗 Codex 套餐额度；转写 Provider 仍只允许火山/本地，不与文本 AI Provider 混用。
+- 本机 `.env` 仅把非敏感 Provider 配置切换到 Codex，未读取、输出或改动已有 API Key；未执行真实 AI、发布或投递。

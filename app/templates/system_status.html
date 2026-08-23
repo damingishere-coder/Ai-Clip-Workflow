@@ -123,6 +123,7 @@
         <label>
           <span>默认分析方式</span>
           <select name="ai_default_provider">
+            <option value="codex" {{ "selected" if ai_config['values']['AI_DEFAULT_PROVIDER'] == "codex" else "" }}>Codex CLI（复用 ChatGPT 登录）</option>
             <option value="remote" {{ "selected" if ai_config['values']['AI_DEFAULT_PROVIDER'] == "remote" else "" }}>远程 AI</option>
             <option value="local" {{ "selected" if ai_config['values']['AI_DEFAULT_PROVIDER'] == "local" else "" }}>本地模型</option>
           </select>
@@ -132,6 +133,13 @@
           <input name="ai_request_timeout_seconds" type="number" min="10" max="600" value="{{ ai_config['values']['AI_REQUEST_TIMEOUT_SECONDS'] }}">
         </label>
       </div>
+      <div class="form-row">
+        <label><span>Codex 可执行文件</span><input name="ai_codex_path" value="{{ ai_config['values']['AI_CODEX_PATH'] }}"></label>
+        <label><span>Codex 模型</span><input name="ai_codex_model" value="{{ ai_config['values']['AI_CODEX_MODEL'] }}"></label>
+        <label><span>Codex 超时（秒）</span><input name="ai_codex_timeout_seconds" type="number" min="10" max="1800" value="{{ ai_config['values']['AI_CODEX_TIMEOUT_SECONDS'] }}"></label>
+      </div>
+      <input name="ai_codex_home" type="hidden" value="{{ ai_config['values']['AI_CODEX_HOME'] }}">
+      <p class="form-hint">状态：{{ ai_config['codex_status']['detail'] }}{% if ai_config['codex_status']['version'] %}（{{ ai_config['codex_status']['version'] }}）{% endif %}。Codex 模式不使用这里保存的远程 API Key。</p>
     </div>
 
     <div class="ai-interface-grid">
@@ -190,6 +198,14 @@
 
       <div class="settings-section ai-interface-section">
         <h3>3. 发送中心生成发布文案</h3>
+        <label>
+          <span>发布文案方式</span>
+          <select name="ai_publish_provider">
+            <option value="codex" {{ "selected" if ai_config['values']['AI_PUBLISH_PROVIDER'] == "codex" else "" }}>Codex CLI（推荐）</option>
+            <option value="remote" {{ "selected" if ai_config['values']['AI_PUBLISH_PROVIDER'] == "remote" else "" }}>远程 AI</option>
+            <option value="local" {{ "selected" if ai_config['values']['AI_PUBLISH_PROVIDER'] == "local" else "" }}>本地模型</option>
+          </select>
+        </label>
         <label><span>Base URL</span><input name="ai_publish_remote_base_url" value="{{ ai_config['values']['AI_PUBLISH_REMOTE_BASE_URL'] }}"></label>
         <label><span>API Key</span><input name="ai_publish_remote_api_key" type="text" value="{{ ai_config['values']['AI_PUBLISH_REMOTE_API_KEY'] }}"></label>
         <div class="form-row">

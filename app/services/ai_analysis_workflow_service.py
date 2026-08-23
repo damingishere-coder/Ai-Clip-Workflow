@@ -30,6 +30,8 @@ AI_CLIP_MIN_RECOMMENDED_SECONDS = 45
 # ---------- AI Provider 辅助 ----------
 
 def _ai_model_name(provider_name: str) -> str:
+    if provider_name == "codex":
+        return settings.ai_codex_model
     if provider_name == "local":
         return settings.ai_local_model
     if provider_name == "remote":
@@ -38,6 +40,8 @@ def _ai_model_name(provider_name: str) -> str:
 
 
 def _ai_provider_label(provider_name: str) -> str:
+    if provider_name == "codex":
+        return "Codex CLI"
     if provider_name == "local":
         return "本地 Ollama"
     if provider_name == "remote":

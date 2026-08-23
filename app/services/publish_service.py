@@ -29,7 +29,7 @@ from app.models.task import (
     PublishPlatformConfigUpdate,
     PublishSendJobUpdate,
 )
-from app.services.ai.ai_clip_analyzer import build_remote_provider
+from app.services.ai.ai_clip_analyzer import build_provider
 from app.services.ai.base import AIProviderError
 from app.services.database_backup_service import create_publish_migration_backup
 from app.services.publish_copy_rules import (
@@ -1368,9 +1368,16 @@ def generate_publish_metadata(item: dict, use_ai: bool = False, *, platform: str
         return metadata
 
     try:
-        publish_model = settings.ai_publish_remote_model or "deepseek-v4-flash"
-        provider = build_remote_provider(publish_model, purpose="publish")
+        provider = build_provider(settings.ai_publish_provider, purpose="publish")
         parsed = json.loads(provider.generate_json(_metadata_prompt(item, platform)))
+        provider_name = getattr(provider, "name", settings.ai_publish_provider)
+        publish_model = (
+            settings.ai_codex_model
+            if provider_name == "codex"
+            else settings.ai_local_model
+            if provider_name == "local"
+            else settings.ai_publish_remote_model
+        )
         safe_content = _sanitize_publish_content(
             parsed.get("title") or fallback_title,
             parsed.get("tags") or fallback_tags,
@@ -1385,7 +1392,7 @@ def generate_publish_metadata(item: dict, use_ai: bool = False, *, platform: str
             "title": safe_content["title"],
             "tags": safe_content["tags"],
             "description": safe_content["description"],
-            "source": f"ai:remote-publish:{publish_model}",
+            "source": f"ai:{provider_name}-publish:{publish_model}",
             "error": "",
             "policy_version": PUBLISH_COPY_RULE_VERSION if platform == "douyin" else 0,
         }
