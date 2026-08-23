@@ -30,6 +30,7 @@ def auto_pipeline_db_cleanup(monkeypatch):
     )
     init_db()
     with get_connection() as connection:
+        connection.execute("DELETE FROM ai_analysis_windows WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM publish_jobs WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM subtitle_jobs WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM output_clip WHERE task_id LIKE 'test-auto-%'")
@@ -40,6 +41,7 @@ def auto_pipeline_db_cleanup(monkeypatch):
         connection.commit()
     yield
     with get_connection() as connection:
+        connection.execute("DELETE FROM ai_analysis_windows WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM publish_jobs WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM subtitle_jobs WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM output_clip WHERE task_id LIKE 'test-auto-%'")

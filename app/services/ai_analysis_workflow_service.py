@@ -19,6 +19,12 @@ from app.services.ai.ai_clip_analyzer import (
     result_to_jsonable,
 )
 from app.services.ai.variety_comedy_analyzer import ComedyAnalysisRequest, analyze_variety_comedy
+from app.services.ai.long_live_talk_analyzer import (
+    LongLiveAnalysisOutcome,
+    LongLiveAnalysisRequest,
+    analyze_long_live_talk,
+    get_latest_long_live_window_status,
+)
 from app.services.ai.diagnostics import ensure_local_ai_ready
 from app.services.ai_prompt_preset_service import get_task_ai_prompt_preset
 from app.services.storage_service import get_artifact_paths
@@ -73,6 +79,11 @@ def _read_analysis_meta(task_id: str) -> dict:
     return payload.get("analysis_meta") or {}
 
 
+def get_task_ai_analysis_meta(task_id: str) -> dict:
+    """读取当前生效分析的元数据，供长直播覆盖率门禁复用。"""
+    return dict(_read_analysis_meta(task_id))
+
+
 def _read_latest_ai_provider_from_log(task_id: str) -> str:
     paths = get_artifact_paths(task_id)
     if not paths["log_path"].exists():
@@ -114,14 +125,24 @@ def get_task_ai_analysis_status(task_id: str) -> dict:
     log_lines = read_task_log_tail(task_id)
     is_running = task.get("status") == TaskStatus.ai_analyzing.value
     has_analysis = paths["analysis_path"].exists()
+    window_status = (
+        get_latest_long_live_window_status(task_id)
+        if task.get("selection_profile") == "long_live_talk"
+        else {}
+    )
 
     percent = 0
     message = "等待开始 AI 分析"
     status = "idle"
     if is_running:
         status = "running"
-        percent = 48
-        message = "AI 正在分析转写文本，请保持页面打开。"
+        percent = int(window_status.get("percent") or 0) or 1
+        message = (
+            f"长直播 AI 正在处理窗口：已完成 {window_status.get('completed_window_count', 0)}"
+            f"/{window_status.get('window_count', 0)}。"
+            if window_status
+            else "AI 正在分析转写文本，请保持页面打开。"
+        )
         if any("将使用分段分析" in line for line in log_lines):
             percent = 62
             message = "AI 已读取 Prompt 和转写文本，正在分段生成候选片段。"
@@ -129,9 +150,15 @@ def get_task_ai_analysis_status(task_id: str) -> dict:
             percent = 72
             message = "远程 AI 分析接口暂不可用，已暂停等待你确认下一步。"
     elif task.get("status") == TaskStatus.pending_review.value and has_analysis:
-        status = "completed"
-        percent = 100
-        message = "AI 分析完成，候选片段已生成，可检查后直接生成切片。"
+        meta = _read_analysis_meta(task_id)
+        status = "incomplete" if meta.get("analysis_incomplete") else "completed"
+        percent = int(float(meta.get("coverage_percent") or 100))
+        message = (
+            f"长直播分析覆盖 {float(meta.get('coverage_percent') or 0):.2f}%，"
+            "仍有窗口失败；请重试 AI 分析补齐窗口。"
+            if meta.get("analysis_incomplete")
+            else "AI 分析完成，候选片段已生成，可检查后直接生成切片。"
+        )
     elif task.get("status") == TaskStatus.failed.value and any("AI 分析失败" in line for line in log_lines):
         status = "failed"
         percent = 100
@@ -153,6 +180,7 @@ def get_task_ai_analysis_status(task_id: str) -> dict:
         "log_path": str(paths["log_path"]),
         "log_lines": log_lines,
         "error_message": task.get("error_message") or "",
+        "window_status": window_status,
     }
 
 
@@ -266,6 +294,7 @@ def _analysis_run_row_to_dict(row: Row, include_payload: bool = False) -> dict:
             payload = {}
 
     clips = payload.get("clips") or []
+    analysis_meta = payload.get("analysis_meta") or {}
     return {
         "id": run.get("id"),
         "task_id": run.get("task_id"),
@@ -285,6 +314,9 @@ def _analysis_run_row_to_dict(row: Row, include_payload: bool = False) -> dict:
         "review_url": f"/tasks/{run.get('task_id')}/clips/review",
         "clips": clips if include_payload else [],
         "clip_summaries": _summarize_analysis_clips(clips) if include_payload else [],
+        "analysis_meta": analysis_meta if include_payload else {},
+        "analysis_incomplete": bool(analysis_meta.get("analysis_incomplete")),
+        "coverage_ratio": float(analysis_meta.get("coverage_ratio") or 0),
     }
 
 
@@ -573,6 +605,37 @@ def _analyze_with_provider(task_id: str, task: dict, paths: dict[str, Path], pro
             )
         )
 
+    if task.get("selection_profile") == "long_live_talk":
+        density = max(1, min(10, int(task.get("highlight_density_per_hour") or 4)))
+        total_limit = max(1, min(50, int(task.get("highlight_total_limit") or 30)))
+        append_task_log(
+            task_id,
+            "长直播高光：使用约 5 分钟、重叠 60 秒的可恢复窗口；"
+            f"每小时最多 {density} 条，总计最多 {total_limit} 条。",
+        )
+
+        def report_progress(progress: dict) -> None:
+            window_index = int(progress.get("window_index") or 0)
+            window_count = int(progress.get("window_count") or 0)
+            status = str(progress.get("status") or "")
+            if status in {"failed", "reused"} or window_index in {1, window_count} or window_index % 10 == 0:
+                label = {"failed": "失败", "reused": "复用", "completed": "完成"}.get(status, status)
+                append_task_log(task_id, f"长直播 AI 窗口 {window_index}/{window_count}：{label}")
+
+        return analyze_long_live_talk(
+            LongLiveAnalysisRequest(
+                task_id=task_id,
+                transcript_path=paths["transcript_path"],
+                provider_name=provider_name,
+                model_name=_ai_model_name(provider_name),
+                density_per_hour=density,
+                total_limit=total_limit,
+                ai_preference=task.get("ai_preference") or "",
+                prompt_template=prompt_template,
+            ),
+            progress_callback=report_progress,
+        )
+
     request = AnalysisRequest(
         task_id=task_id,
         transcript_path=paths["transcript_path"],
@@ -655,6 +718,10 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
                     f"{provider_error}。如需使用本地模型，请点击\"本地 AI 分析\"。"
                 ) from provider_exc
             raise
+        long_live_meta = {}
+        if isinstance(analysis, LongLiveAnalysisOutcome):
+            long_live_meta = analysis.meta
+            analysis = analysis.result
         analysis_payload = result_to_jsonable(analysis)
         analysis_payload["analysis_meta"] = {
             "provider": used_provider,
@@ -663,6 +730,7 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             "selection_profile": task.get("selection_profile") or "general",
             "final_clip_target": int(task.get("final_clip_target") or 5),
             "generated_at": _now_iso(),
+            **long_live_meta,
         }
         prompt_preset = get_task_ai_prompt_preset(task_id)
         provider_label = _ai_provider_label(used_provider)
@@ -678,7 +746,11 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             model=model_name,
             fallback_notice=fallback_notice,
             prompt_preset=prompt_preset,
-            requested_clip_count=int(task["candidate_clip_count"]),
+            requested_clip_count=(
+                int(task.get("highlight_total_limit") or 30)
+                if task.get("selection_profile") == "long_live_talk"
+                else int(task["candidate_clip_count"])
+            ),
         )
         _append_ai_clip_quality_warnings(task_id, analysis_payload["clips"])
     except (AIAnalysisError, Exception) as exc:
@@ -689,8 +761,20 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
         raise ValueError(user_error) from exc
 
     update_task_status(task_id, TaskStatus.pending_review)
-    append_task_log(task_id, f"AI 分析完成，Provider：{used_provider}，生成候选片段：{len(analysis_payload['clips'])} 条")
-    message = f"AI 分析完成，已生成 {len(analysis_payload['clips'])} 条可直接切片的候选片段，可进入片段审核检查或直接生成切片。"
+    incomplete = bool(analysis_payload.get("analysis_meta", {}).get("analysis_incomplete"))
+    if incomplete:
+        coverage = float(analysis_payload["analysis_meta"].get("coverage_percent") or 0)
+        append_task_log(
+            task_id,
+            f"长直播 AI 分析不完整：覆盖率 {coverage:.2f}%，已保留成功窗口，自动切片已锁定。",
+        )
+        message = (
+            f"长直播分析覆盖率为 {coverage:.2f}%，低于 90%。"
+            "成功窗口已保存，请重试 AI 分析补齐缺失窗口；补齐前不能进入自动切片。"
+        )
+    else:
+        append_task_log(task_id, f"AI 分析完成，Provider：{used_provider}，生成候选片段：{len(analysis_payload['clips'])} 条")
+        message = f"AI 分析完成，已生成 {len(analysis_payload['clips'])} 条可直接切片的候选片段，可进入片段审核检查或直接生成切片。"
     if fallback_notice:
         message = f"{fallback_notice} {message}"
     return {

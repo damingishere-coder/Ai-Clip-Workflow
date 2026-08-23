@@ -225,11 +225,23 @@ class PipelineEngine:
         result = task_service.process_task_ai_analysis(task_id)
         clip_count = len(result.get("clips") or [])
         append_task_log(task_id, f"全自动 AI 分析完成，候选片段：{clip_count} 条")
-        return {"clip_count": clip_count, "analysis_path": result.get("analysis_path") or ""}
+        return {
+            "clip_count": clip_count,
+            "analysis_path": result.get("analysis_path") or "",
+            "analysis_meta": (result.get("analysis_run") or {}).get("analysis_meta") or {},
+        }
 
     def _select_clips(self, task_id: str, context: dict) -> dict:
         task = self._get_task(task_id)
         config = context["config"]
+        if task.get("selection_profile") == "long_live_talk":
+            meta = task_service.get_task_ai_analysis_meta(task_id)
+            if meta.get("analysis_incomplete") or float(meta.get("coverage_ratio") or 0) < 0.90:
+                coverage = float(meta.get("coverage_percent") or 0)
+                raise ValueError(
+                    f"长直播分析覆盖率仅 {coverage:.2f}%，低于 90%；"
+                    "请重试 AI 分析补齐缺失窗口，当前不会进入自动切片或发送中心。"
+                )
         candidates = self._list_raw_candidates(task_id)
         if not candidates:
             latest_run = task_service.get_latest_ai_analysis_run(task_id)
@@ -404,6 +416,8 @@ class PipelineEngine:
     def _resolve_target_count(self, task: dict, config: dict) -> int:
         if task.get("selection_profile") == "variety_comedy":
             return max(1, min(12, int(task.get("final_clip_target") or 5)))
+        if task.get("selection_profile") == "long_live_talk":
+            return max(1, min(50, int(task.get("highlight_total_limit") or 30)))
         return max(1, min(50, int(task.get("candidate_clip_count") or 12)))
 
     def _update_selected_clips(self, task_id: str, selected_ids: set[str]) -> None:

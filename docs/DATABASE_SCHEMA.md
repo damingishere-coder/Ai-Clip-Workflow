@@ -1,5 +1,24 @@
 # 数据库结构说明
 
+## 2026-08-23：长直播 AI 窗口 checkpoint
+
+新增 `ai_analysis_windows`：
+
+| 字段 | 说明 |
+| --- | --- |
+| `task_id` | 所属任务 |
+| `transcript_fingerprint` | 完整转写内容 SHA-256；内容变化后不会复用旧窗口 |
+| `provider` / `model` | Provider 与模型隔离键 |
+| `window_index` | 当前窗口序号 |
+| `start_seconds` / `end_seconds` | 原片主时间轴范围 |
+| `status` | `queued / running / completed / failed` |
+| `attempt_count` | 累计真实请求次数 |
+| `result_json` / `result_checksum` | 成功结果与 SHA-256 校验和 |
+| `error_message` / `next_retry_at` | 最后错误与退避时间 |
+| `created_at / updated_at / completed_at` | 生命周期时间 |
+
+唯一键由任务、转写指纹、Provider、模型、窗口序号和起止时间组成。迁移使用 `CREATE TABLE/INDEX IF NOT EXISTS`，已有数据库在变更前继续执行 SQLite 在线备份。
+
 ## 2026-08-23：长直播基础设施迁移
 
 - `tasks` 增加 `highlight_density_per_hour INTEGER NOT NULL DEFAULT 4` 与 `highlight_total_limit INTEGER NOT NULL DEFAULT 30`；历史任务模式和值不改写。

@@ -32,6 +32,7 @@ from app.services.ai_analysis_workflow_service import (
     _write_analysis_payload,
     get_ai_analysis_run,
     get_latest_ai_analysis_run,
+    get_task_ai_analysis_meta,
     get_task_ai_analysis_status,
     get_task_ai_source_label,
     list_ai_analysis_runs,

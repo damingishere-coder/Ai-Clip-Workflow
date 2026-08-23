@@ -369,6 +369,31 @@ def init_db() -> None:
                 FOREIGN KEY(task_id) REFERENCES tasks(id)
             );
 
+            CREATE TABLE IF NOT EXISTS ai_analysis_windows (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                transcript_fingerprint TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL DEFAULT '',
+                window_index INTEGER NOT NULL,
+                start_seconds INTEGER NOT NULL,
+                end_seconds INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                result_json TEXT,
+                result_checksum TEXT,
+                error_message TEXT,
+                next_retry_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                UNIQUE(
+                    task_id, transcript_fingerprint, provider, model,
+                    window_index, start_seconds, end_seconds
+                ),
+                FOREIGN KEY(task_id) REFERENCES tasks(id)
+            );
+
             CREATE TABLE IF NOT EXISTS cut_runs (
                 id TEXT PRIMARY KEY,
                 task_id TEXT NOT NULL,
@@ -413,6 +438,7 @@ def init_db() -> None:
         _restore_legacy_user_cancelled_publish_jobs(connection)
         _migrate_workflow_jobs_table(connection)
         _migrate_transcription_tables(connection)
+        _migrate_ai_analysis_windows_table(connection)
         _migrate_cut_runs_table(connection)
         _seed_ai_prompt_presets(connection)
         _seed_subtitle_style_preset(connection)
@@ -438,6 +464,7 @@ def _requires_long_live_schema_migration(database_path) -> bool:
         or "lease_owner" not in job_columns
         or "transcription_runs" not in table_names
         or "transcription_chunks" not in table_names
+        or "ai_analysis_windows" not in table_names
     )
 
 
@@ -476,6 +503,7 @@ def _create_indexes(connection: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_workflow_jobs_task_type_status ON workflow_jobs(task_id, job_type, status)",
         "CREATE INDEX IF NOT EXISTS idx_transcription_runs_task_active ON transcription_runs(task_id, is_active, updated_at)",
         "CREATE INDEX IF NOT EXISTS idx_transcription_chunks_run_status ON transcription_chunks(run_id, status, chunk_index)",
+        "CREATE INDEX IF NOT EXISTS idx_ai_analysis_windows_resume ON ai_analysis_windows(task_id, transcript_fingerprint, provider, model, status, window_index)",
         """CREATE UNIQUE INDEX IF NOT EXISTS uq_publish_jobs_active_clip_platform_mode
            ON publish_jobs(output_clip_id, platform, publish_mode)
            WHERE status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'PUBLISHING', 'NEED_REVIEW')
@@ -1257,6 +1285,28 @@ def _migrate_transcription_tables(connection: sqlite3.Connection) -> None:
             result_json TEXT, result_checksum TEXT, error_message TEXT, created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL, UNIQUE(run_id, chunk_index),
             FOREIGN KEY(run_id) REFERENCES transcription_runs(id) ON DELETE CASCADE,
+            FOREIGN KEY(task_id) REFERENCES tasks(id)
+        );
+        """
+    )
+
+
+def _migrate_ai_analysis_windows_table(connection: sqlite3.Connection) -> None:
+    """创建长直播 AI 窗口 checkpoint 表；成功窗口可跨进程复用。"""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ai_analysis_windows (
+            id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
+            transcript_fingerprint TEXT NOT NULL, provider TEXT NOT NULL,
+            model TEXT NOT NULL DEFAULT '', window_index INTEGER NOT NULL,
+            start_seconds INTEGER NOT NULL, end_seconds INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued', attempt_count INTEGER NOT NULL DEFAULT 0,
+            result_json TEXT, result_checksum TEXT, error_message TEXT, next_retry_at TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT,
+            UNIQUE(
+                task_id, transcript_fingerprint, provider, model,
+                window_index, start_seconds, end_seconds
+            ),
             FOREIGN KEY(task_id) REFERENCES tasks(id)
         );
         """

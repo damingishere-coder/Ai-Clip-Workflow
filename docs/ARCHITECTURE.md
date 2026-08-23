@@ -1,5 +1,23 @@
 # 系统架构
 
+## 2026-08-23：长直播选片层
+
+`long_live_talk` 使用独立的 `long_live_talk_analyzer`：
+
+```text
+结构化转写
+→ 300 秒窗口（60 秒重叠）
+→ 每窗口独立 AI 召回与 SQLite checkpoint
+→ 成功窗口时间轴并集 / 完整转写时间轴 = coverage_ratio
+→ 时间重叠 + 语义相似去重
+→ 每小时密度筛选
+→ 跨小时轮询合并
+→ 总量上限
+→ analysis.json + ai_analysis_runs + clip_candidates
+```
+
+自动流水线在 `CLIP_SELECTING` 入口读取当前 `analysis_meta`。`analysis_incomplete=true` 或 `coverage_ratio < 0.90` 会直接中断，所以后续 `VIDEO_CUTTING`、内容准备和发送任务创建均不会执行。手动切片入口使用相同门禁。
+
 ## 2026-08-23：长直播基础层
 
 - 新建任务必须显式选择 `general`、`variety_comedy` 或 `long_live_talk`；数据库的 `general` 默认值只用于旧数据兼容。
