@@ -1,5 +1,21 @@
 # 系统架构
 
+## 2026-08-23：统一字幕架构
+
+```text
+转写 checkpoint / 旧 transcript.md
+            ↓
+source subtitle_track → immutable subtitle_revision → subtitle_cues(ms)
+            ↓ 按 output_clip 原片边界快照截取
+clip subtitle_track   → immutable subtitle_revision → SRT/VTT/ASS/编辑器
+```
+
+- `subtitle_data_service.py` 是字幕数据事实入口，负责轨、版本、cue、同步、导入导出、质量检查和服务端波形 peaks。
+- 原片轨只保存一条 active track；内容变化产生新 revision。切片轨记录来源 track/revision，未人工编辑时可同步，人工编辑后只进入 `pending_sync`。
+- revision 内容不可原地更新；审核只改变 revision 状态，渲染必须固定引用 revision id，避免编辑过程中改变已排队输出。
+- `pysubs2` 负责字幕格式与 ASS，不再手写固定分辨率 ASS。`wavesurfer.js` 仅消费服务端 peaks 与媒体流，不读取六小时完整音频到浏览器内存。
+- 当前同步 FFmpeg 烧录仅作为旧 API 兼容；持久化渲染队列、取消、重试、NVENC 回退与发送中心门禁在 PR 4 接入。
+
 ## 2026-08-23：长直播选片层
 
 `long_live_talk` 使用独立的 `long_live_talk_analyzer`：

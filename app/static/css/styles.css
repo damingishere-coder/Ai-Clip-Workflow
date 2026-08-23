@@ -5764,3 +5764,196 @@ td a,
   .publish-history-view-switch .secondary-button { flex: 1; }
   .publish-history-toolbar-actions .compact-filter { width: 100%; }
 }
+
+/* ── Subtitle editor v2: 原片主时间轴 + 切片继承 ── */
+.subtitle-editor {
+  margin-bottom: 24px;
+  overflow: hidden;
+}
+.subtitle-editor-heading,
+.subtitle-editor-trackbar,
+.subtitle-editor-toolbar,
+.subtitle-waveform-toolbar,
+.subtitle-editor-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.subtitle-editor-heading { align-items: flex-start; }
+.subtitle-editor-heading > div:first-child { flex: 1; }
+.subtitle-editor-heading h2 { margin-bottom: 5px; }
+.subtitle-editor-heading p:last-child { margin: 0; color: var(--muted); }
+.subtitle-editor-state { justify-content: flex-end; flex-wrap: wrap; }
+.subtitle-editor-trackbar {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin: 18px 0 14px;
+  padding: 13px 14px;
+  border: 1px solid rgba(126, 151, 187, 0.2);
+  border-radius: 15px;
+  background: rgba(245, 249, 255, 0.78);
+}
+.subtitle-editor-trackbar > label { display: grid; gap: 5px; min-width: min(380px, 100%); }
+.subtitle-editor-trackbar > label > span,
+.subtitle-editor-toolbar label > span,
+.subtitle-cue-time-inputs span,
+.subtitle-speaker span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+.subtitle-editor-revision-meta { flex: 1; min-width: 230px; color: var(--muted); font-size: 0.82rem; }
+.subtitle-import-button { cursor: pointer; }
+.subtitle-editor-media-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.72fr) minmax(420px, 1.28fr);
+  gap: 14px;
+}
+.subtitle-video-stage,
+.subtitle-waveform-card {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  border: 1px solid rgba(126, 151, 187, 0.22);
+  border-radius: 16px;
+  background: #101521;
+}
+.subtitle-video-stage {
+  display: grid;
+  place-items: center;
+  min-height: 248px;
+}
+.subtitle-video-stage video { width: 100%; max-height: 390px; background: #080b12; }
+.subtitle-video-overlay {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  bottom: 6%;
+  min-height: 1.4em;
+  color: #fff;
+  font-size: clamp(16px, 2vw, 28px);
+  font-weight: 800;
+  line-height: 1.35;
+  text-align: center;
+  white-space: pre-line;
+  text-shadow: 0 2px 4px #000, 1px 0 2px #000, -1px 0 2px #000;
+  pointer-events: none;
+}
+.subtitle-waveform-card { align-self: stretch; padding: 14px; color: #d9e8ff; background: linear-gradient(145deg, #111a2a, #192842); }
+.subtitle-waveform-toolbar { justify-content: space-between; margin-bottom: 13px; font-size: 0.78rem; }
+.subtitle-waveform-toolbar span { color: #9bb6da; }
+#subtitle-waveform { min-height: 92px; border-radius: 10px; background: rgba(255, 255, 255, 0.045); }
+#subtitle-timeline { min-height: 24px; color: #b7cae6; }
+.subtitle-editor-toolbar {
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin: 14px 0 12px;
+  padding: 13px;
+  border-radius: 15px;
+  background: #f4f7fb;
+}
+.subtitle-search-field { display: grid; flex: 1 1 170px; gap: 5px; }
+.subtitle-shift-field { display: grid; flex: 0 1 125px; gap: 5px; }
+.subtitle-editor-toolbar .control { min-height: 36px; }
+.subtitle-quality-summary {
+  margin-bottom: 10px;
+  padding: 10px 13px;
+  border: 1px solid rgba(38, 118, 255, 0.18);
+  border-radius: 12px;
+  color: #355274;
+  background: #eef6ff;
+  font-size: 0.82rem;
+}
+.subtitle-quality-summary.has-errors { color: #a72530; border-color: rgba(199, 50, 63, 0.24); background: #fff0f1; }
+.subtitle-quality-summary.has-warnings { color: #765307; border-color: rgba(213, 151, 20, 0.25); background: #fff8e5; }
+.subtitle-quality-summary.is-clean { color: #146840; border-color: rgba(24, 146, 89, 0.2); background: #ecfaf3; }
+.subtitle-cue-list {
+  position: relative;
+  height: min(640px, 64vh);
+  overflow: auto;
+  border: 1px solid rgba(126, 151, 187, 0.22);
+  border-radius: 16px;
+  background: #f8fafc;
+  contain: strict;
+}
+.subtitle-cue-spacer { width: 1px; opacity: 0; }
+.subtitle-cue-viewport { position: absolute; inset: 0 0 auto 0; }
+.subtitle-cue-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: 42px 106px 160px minmax(260px, 1fr) 126px;
+  grid-template-rows: 83px 31px;
+  gap: 7px 10px;
+  height: 124px;
+  margin: 4px 8px;
+  padding: 10px;
+  border: 1px solid rgba(126, 151, 187, 0.18);
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 5px 15px rgba(33, 62, 97, 0.04);
+  box-sizing: border-box;
+}
+.subtitle-cue-row.is-selected { border-color: rgba(38, 118, 255, 0.55); background: #f4f8ff; }
+.subtitle-cue-row.is-current { box-shadow: inset 4px 0 0 var(--blue), 0 7px 20px rgba(38, 118, 255, 0.12); }
+.subtitle-cue-check { display: grid; grid-template-rows: 26px auto; place-items: center; color: var(--muted); font-weight: 750; }
+.subtitle-cue-time {
+  align-self: center;
+  padding: 8px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--blue);
+  background: #edf5ff;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 780;
+  cursor: pointer;
+}
+.subtitle-cue-time-inputs { display: grid; grid-template-columns: 1fr; gap: 5px; }
+.subtitle-cue-time-inputs label,
+.subtitle-speaker { display: grid; gap: 3px; }
+.subtitle-cue-time-inputs input,
+.subtitle-speaker input,
+.subtitle-cue-row textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(126, 151, 187, 0.3);
+  border-radius: 8px;
+  color: var(--text);
+  background: #fff;
+  font: inherit;
+  box-sizing: border-box;
+}
+.subtitle-cue-row textarea { resize: none; line-height: 1.45; }
+.subtitle-cue-issues {
+  grid-column: 2 / -1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subtitle-cue-empty { padding: 50px 20px; color: var(--muted); text-align: center; }
+
+@media (max-width: 1080px) {
+  .subtitle-editor-media-grid { grid-template-columns: 1fr; }
+  .subtitle-cue-row { grid-template-columns: 38px 100px 150px minmax(220px, 1fr); }
+  .subtitle-speaker { display: none; }
+}
+
+@media (max-width: 760px) {
+  .subtitle-editor-heading,
+  .subtitle-editor-trackbar,
+  .subtitle-editor-state { align-items: stretch; flex-direction: column; }
+  .subtitle-editor-trackbar .button-row { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .subtitle-cue-row {
+    grid-template-columns: 34px 96px minmax(185px, 1fr);
+    grid-template-rows: 83px 31px;
+    min-width: 560px;
+  }
+  .subtitle-cue-time-inputs { display: none; }
+  .subtitle-cue-issues { grid-column: 2 / -1; }
+}

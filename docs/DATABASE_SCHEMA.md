@@ -1,5 +1,14 @@
 # 数据库结构说明
 
+## 2026-08-23：字幕 revision 数据结构
+
+- `output_clip` 新增 `source_start_ms / source_end_ms / source_duration_ms / source_fingerprint / snapshot_source`。新切片使用 `cut_commit`，旧切片第一次使用时可从候选边界生成 `legacy_inferred`；之后候选修改不会漂移已保存边界。
+- `subtitle_tracks`：任务级原片轨或切片轨，记录 `source_track_id / source_revision_id / active_revision_id / sync_status / has_manual_edits`。
+- `subtitle_revisions`：不可变内容版本，记录来源 `asr / markdown / source_sync / manual / import / ai_suggestion`、父版本、状态、cue 数和 checksum。
+- `subtitle_cues`：毫秒级 `start_ms / end_ms`、文字、置信度、手工说话人和 `source_cue_id`；按 revision 和时间查询。
+- `subtitle_jobs.revision_id` 固定渲染使用的版本；样式表新增描边宽度、阴影深度、安全区百分比与说话人样式 JSON。
+- 启动迁移保持幂等；已有数据库缺少上述结构时先通过 SQLite 在线 backup 创建 `subtitle-editor-rebuild` 迁移前快照，不删除旧字幕 job 或历史切片。
+
 ## 2026-08-23：长直播 AI 窗口 checkpoint
 
 新增 `ai_analysis_windows`：

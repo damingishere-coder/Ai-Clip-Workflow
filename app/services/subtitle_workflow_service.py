@@ -3,6 +3,7 @@
 从 task_service 中拆分出来的字幕样式、ASS 渲染和字幕烧录函数。
 """
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,7 +11,6 @@ from typing import Any
 from uuid import uuid4
 
 from app.services.storage_service import get_artifact_paths, resolve_video_file_path
-from app.services.transcript_service import read_transcript_range
 
 # ---------- 字幕字体常量 ----------
 
@@ -30,6 +30,10 @@ SUBTITLE_STATUS_LABELS = {
     "processing": "字幕生成中",
     "completed": "已加字幕",
     "failed": "字幕失败",
+}
+DEFAULT_SPEAKER_STYLES = {
+    "主播": {"font_color": "#ffffff"},
+    "嘉宾": {"font_color": "#ffd60a"},
 }
 
 
@@ -58,9 +62,19 @@ def get_default_subtitle_style() -> dict:
             "font_color": "#ffffff",
             "stroke_color": "#111827",
             "shadow_enabled": True,
+            "outline_width": 3,
+            "shadow_depth": 1,
+            "safe_area_percent": 5,
+            "speaker_styles": DEFAULT_SPEAKER_STYLES,
         }
     style = dict(row)
     style["shadow_enabled"] = bool(style.get("shadow_enabled"))
+    try:
+        style["speaker_styles"] = json.loads(style.get("speaker_styles_json") or "{}")
+    except json.JSONDecodeError:
+        style["speaker_styles"] = {}
+    if not style["speaker_styles"]:
+        style["speaker_styles"] = DEFAULT_SPEAKER_STYLES
     return style
 
 
@@ -79,7 +93,9 @@ def update_default_subtitle_style(payload) -> dict:
                 """
                 UPDATE subtitle_style_presets
                 SET font_family = ?, font_size = ?, position = ?, font_color = ?,
-                    stroke_color = ?, shadow_enabled = ?, updated_at = ?
+                    stroke_color = ?, shadow_enabled = ?, outline_width = ?,
+                    shadow_depth = ?, safe_area_percent = ?, speaker_styles_json = ?,
+                    updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -89,6 +105,10 @@ def update_default_subtitle_style(payload) -> dict:
                     payload.font_color,
                     payload.stroke_color,
                     1 if payload.shadow_enabled else 0,
+                    payload.outline_width,
+                    payload.shadow_depth,
+                    payload.safe_area_percent,
+                    json.dumps(payload.speaker_styles, ensure_ascii=False, separators=(",", ":")),
                     now,
                     "default",
                 ),
@@ -98,9 +118,11 @@ def update_default_subtitle_style(payload) -> dict:
                 """
                 INSERT INTO subtitle_style_presets (
                     id, name, font_family, font_size, position, font_color,
-                    stroke_color, shadow_enabled, is_default, created_at, updated_at
+                    stroke_color, shadow_enabled, outline_width, shadow_depth,
+                    safe_area_percent, speaker_styles_json,
+                    is_default, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     "default",
@@ -111,6 +133,10 @@ def update_default_subtitle_style(payload) -> dict:
                     payload.font_color,
                     payload.stroke_color,
                     1 if payload.shadow_enabled else 0,
+                    payload.outline_width,
+                    payload.shadow_depth,
+                    payload.safe_area_percent,
+                    json.dumps(payload.speaker_styles, ensure_ascii=False, separators=(",", ":")),
                     1,
                     now,
                     now,
@@ -159,6 +185,7 @@ def _create_subtitle_job(
     output_file_path: str = "",
     error_message: str = "",
     is_active: int = 0,
+    revision_id: str | None = None,
 ) -> dict:
     """创建新的字幕任务记录（不再 upsert，每次生成都创建新记录）"""
     from app.db.database import get_connection
@@ -170,16 +197,17 @@ def _create_subtitle_job(
         connection.execute(
             """
             INSERT INTO subtitle_jobs (
-                id, task_id, output_clip_id, style_preset_id, status,
+                id, task_id, output_clip_id, revision_id, style_preset_id, status,
                 subtitle_file_path, output_file_path, error_message,
                 is_active, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
                 task_id,
                 output_clip_id,
+                revision_id,
                 "default",
                 status,
                 subtitle_file_path,
@@ -191,7 +219,8 @@ def _create_subtitle_job(
             ),
         )
         connection.commit()
-    return {"id": job_id, "task_id": task_id, "output_clip_id": output_clip_id, "status": status,
+    return {"id": job_id, "task_id": task_id, "output_clip_id": output_clip_id,
+            "revision_id": revision_id, "status": status,
             "subtitle_file_path": subtitle_file_path, "output_file_path": output_file_path,
             "error_message": error_message, "is_active": is_active}
 
@@ -274,63 +303,40 @@ def _resolve_subtitle_font_family(requested_font_family: str | None) -> str:
 
 
 def _build_subtitle_rows(task_id: str, output_clip: dict) -> tuple[int, list[dict[str, Any]]]:
-    from app.services.task_service import _parse_time_to_seconds, get_clip_candidate  # noqa: F811
+    """旧调用方兼容导出；数据来自统一 revision，不再读取并截断 Markdown。"""
+    from app.services.subtitle_data_service import ensure_clip_track, get_revision
 
-    clip = get_clip_candidate(task_id, output_clip["clip_candidate_id"]) if output_clip.get("clip_candidate_id") else None
-    if not clip:
-        return 0, [{"start_seconds": 0, "end_seconds": 3, "text": output_clip.get("output_file_name") or "精彩片段"}]
-
-    clip_start = int(clip["start_seconds"])
-    clip_end = int(clip["end_seconds"])
-    rows = read_transcript_range(get_artifact_paths(task_id)["transcript_path"], clip_start, clip_end, max_rows=120)
-    subtitle_rows = []
-    for row in rows:
-        row_start = _parse_time_to_seconds(row["start_time"])
-        row_end = _parse_time_to_seconds(row["end_time"])
-        start_seconds = max(0, row_start - clip_start)
-        end_seconds = max(start_seconds + 1, min(clip_end, row_end) - clip_start)
-        subtitle_rows.append({"start_seconds": start_seconds, "end_seconds": end_seconds, "text": row["text"]})
-    if subtitle_rows:
-        return clip_start, subtitle_rows
-
-    fallback_text = clip.get("summary") or clip.get("title") or "精彩片段"
-    return clip_start, [{"start_seconds": 0, "end_seconds": min(5, max(3, clip_end - clip_start)), "text": fallback_text}]
+    track = ensure_clip_track(task_id, output_clip["id"])
+    revision = get_revision(track["active_revision_id"], include_cues=True)
+    source_start_ms = int(track.get("source_start_ms") or 0)
+    rows = [
+        {
+            "start_seconds": int(cue["start_ms"]) / 1000,
+            "end_seconds": int(cue["end_ms"]) / 1000,
+            "text": cue["text"],
+        }
+        for cue in revision["cues"]
+    ]
+    return round(source_start_ms / 1000), rows
 
 
-def _write_ass_file(task_id: str, output_clip: dict, style: dict) -> Path:
+def _write_ass_file(
+    task_id: str,
+    output_clip: dict,
+    style: dict,
+    *,
+    revision_id: str | None = None,
+) -> Path:
+    from app.services.subtitle_data_service import ensure_clip_track, serialize_revision_to_ass
+
     paths = get_artifact_paths(task_id)
     paths["subtitled_dir"].mkdir(parents=True, exist_ok=True)
     subtitle_path = paths["subtitled_dir"] / f"{Path(output_clip.get('output_file_name') or output_clip['id']).stem}.ass"
-    _, rows = _build_subtitle_rows(task_id, output_clip)
-
-    alignment = "8" if style.get("position") == "top_center" else "2"
-    margin_v = "92" if style.get("position") == "bottom_center" else "190"
-    if style.get("position") == "top_center":
-        margin_v = "70"
-    outline = "3" if style.get("shadow_enabled") else "1"
-    shadow = "1" if style.get("shadow_enabled") else "0"
-    font_family = _resolve_subtitle_font_family(style.get("font_family"))
-    font_size = int(style.get("font_size") or 42)
-    primary_color = _hex_to_ass_color(style.get("font_color") or "#ffffff")
-    outline_color = _hex_to_ass_color(style.get("stroke_color") or "#111827")
-    events = "\n".join(
-        f"Dialogue: 0,{_ass_time(row['start_seconds'])},{_ass_time(row['end_seconds'])},Default,,0,0,0,,{_escape_ass_text(row['text'])}"
-        for row in rows
-    )
-    content = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
-ScaledBorderAndShadow: yes
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_family},{font_size},{primary_color},&H000000FF,{outline_color},&H7F000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},60,60,{margin_v},1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-{events}
-"""
+    track = ensure_clip_track(task_id, output_clip["id"])
+    selected_revision_id = revision_id or track.get("active_revision_id")
+    if not selected_revision_id:
+        raise ValueError("切片字幕轨没有可渲染的 revision")
+    content = serialize_revision_to_ass(track["id"], selected_revision_id)
     subtitle_path.write_text(content, encoding="utf-8")
     return subtitle_path
 
@@ -365,17 +371,34 @@ def render_subtitles_for_output_clip(task_id: str, output_clip_id: str) -> dict:
     if not shutil.which("ffmpeg"):
         raise RuntimeError("FFmpeg 不可用，无法生成字幕视频")
 
+    from app.services.subtitle_data_service import ensure_clip_track
+
     style = get_default_subtitle_style()
+    track = ensure_clip_track(task_id, output_clip_id)
+    revision_id = track.get("active_revision_id")
+    if not revision_id:
+        raise ValueError("切片字幕轨没有可渲染的 revision")
     paths = get_artifact_paths(task_id)
     paths["subtitled_dir"].mkdir(parents=True, exist_ok=True)
     output_path = paths["subtitled_dir"] / f"{input_path.stem}_subtitled.mp4"
 
     # === 版本化：创建新的字幕 job，不覆盖旧的 ===
-    job = _create_subtitle_job(task_id, output_clip_id, "processing", is_active=0)
+    job = _create_subtitle_job(
+        task_id,
+        output_clip_id,
+        "processing",
+        is_active=0,
+        revision_id=revision_id,
+    )
     append_task_log(task_id, f"开始自动加字幕：{input_path.name}")
 
     try:
-        subtitle_path = _write_ass_file(task_id, output_clip, style)
+        subtitle_path = _write_ass_file(
+            task_id,
+            output_clip,
+            style,
+            revision_id=revision_id,
+        )
         command = [
             "ffmpeg",
             "-y",

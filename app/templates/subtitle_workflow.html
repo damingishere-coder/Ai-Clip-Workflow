@@ -38,6 +38,84 @@
   {% endfor %}
 </section>
 
+<section class="panel subtitle-editor" id="subtitle-editor" data-task-id="{{ task.id }}">
+  <div class="panel-header subtitle-editor-heading">
+    <div>
+      <p class="eyebrow">Professional Subtitle Editor</p>
+      <h2>原片主时间轴 · 切片继承编辑器</h2>
+      <p>先在原片修正统一字幕，再按切片边界自动继承；已经人工编辑的切片不会被覆盖。</p>
+    </div>
+    <div class="subtitle-editor-state">
+      <span class="status-pill tone-blue" id="subtitle-save-state">正在载入字幕轨…</span>
+      <button class="primary-button compact-button" id="subtitle-approve" type="button" disabled>审核当前版本</button>
+    </div>
+  </div>
+
+  <div class="subtitle-editor-trackbar">
+    <label>
+      <span>字幕轨</span>
+      <select class="control" id="subtitle-track-select" disabled></select>
+    </label>
+    <div class="subtitle-editor-revision-meta" id="subtitle-revision-meta">尚未载入 revision</div>
+    <div class="button-row">
+      <label class="secondary-button compact-button subtitle-import-button">
+        导入 SRT / VTT / ASS
+        <input id="subtitle-import-file" type="file" accept=".srt,.vtt,.ass,text/vtt,text/plain" hidden>
+      </label>
+      <button class="secondary-button compact-button" id="subtitle-export-srt" type="button" disabled>导出 SRT</button>
+      <button class="secondary-button compact-button" id="subtitle-export-vtt" type="button" disabled>导出 VTT</button>
+      <button class="secondary-button compact-button" id="subtitle-export-ass" type="button" disabled>导出 ASS</button>
+    </div>
+  </div>
+
+  <div class="subtitle-editor-media-grid">
+    <div class="subtitle-video-stage">
+      <video id="subtitle-editor-video" controls preload="metadata"></video>
+      <div class="subtitle-video-overlay" id="subtitle-video-overlay" aria-live="polite"></div>
+    </div>
+    <div class="subtitle-waveform-card">
+      <div class="subtitle-waveform-toolbar">
+        <strong>服务端预计算波形</strong>
+        <span id="subtitle-waveform-status">等待载入</span>
+      </div>
+      <div id="subtitle-waveform" aria-label="字幕波形编辑时间轴"></div>
+      <div id="subtitle-timeline"></div>
+    </div>
+  </div>
+
+  <div class="subtitle-editor-toolbar" aria-label="字幕编辑工具栏">
+    <label class="subtitle-search-field">
+      <span>搜索</span>
+      <input class="control" id="subtitle-search" type="search" placeholder="搜索字幕文字">
+    </label>
+    <label class="subtitle-search-field">
+      <span>替换为</span>
+      <input class="control" id="subtitle-replacement" type="text" placeholder="替换文字">
+    </label>
+    <button class="secondary-button compact-button" id="subtitle-replace-all" type="button">全部替换</button>
+    <button class="secondary-button compact-button" id="subtitle-add" type="button">新增</button>
+    <button class="secondary-button compact-button" id="subtitle-split" type="button">拆分当前行</button>
+    <button class="secondary-button compact-button" id="subtitle-merge" type="button">合并选中</button>
+    <button class="secondary-button compact-button danger" id="subtitle-delete" type="button">删除选中</button>
+    <label class="subtitle-shift-field">
+      <span>批量位移 ms</span>
+      <input class="control" id="subtitle-shift-ms" type="number" value="0" step="10">
+    </label>
+    <button class="secondary-button compact-button" id="subtitle-shift" type="button">执行位移</button>
+    <button class="secondary-button compact-button" id="subtitle-undo" type="button" disabled>撤销</button>
+    <button class="secondary-button compact-button" id="subtitle-redo" type="button" disabled>重做</button>
+    <button class="primary-button compact-button" id="subtitle-save-now" type="button" disabled>立即保存</button>
+  </div>
+
+  <div class="subtitle-quality-summary" id="subtitle-quality-summary" aria-live="polite">
+    质量检查会提示重叠、间隔、时长、行数与中文阅读速度，但不会自动改字。
+  </div>
+  <div class="subtitle-cue-list" id="subtitle-cue-list" role="listbox" aria-label="字幕 cue 虚拟列表">
+    <div class="subtitle-cue-spacer" id="subtitle-cue-spacer"></div>
+    <div class="subtitle-cue-viewport" id="subtitle-cue-viewport"></div>
+  </div>
+</section>
+
 <section class="subtitle-workflow-grid">
   <div class="subtitle-queue">
     <section class="panel">
@@ -164,6 +242,30 @@
           <input type="checkbox" name="shadow_enabled" {% if subtitle_style.shadow_enabled %}checked{% endif %}>
           <span>启用阴影和描边，适合短视频平台观看</span>
         </label>
+        <div class="form-row">
+          <label>
+            <span>描边宽度</span>
+            <input type="number" name="outline_width" value="{{ subtitle_style.outline_width or 3 }}" min="0" max="20" step="0.5">
+          </label>
+          <label>
+            <span>阴影深度</span>
+            <input type="number" name="shadow_depth" value="{{ subtitle_style.shadow_depth or 1 }}" min="0" max="20" step="0.5">
+          </label>
+        </div>
+        <label>
+          <span>安全区（画面高度百分比）</span>
+          <input type="number" name="safe_area_percent" value="{{ subtitle_style.safe_area_percent or 5 }}" min="0" max="25" step="0.5">
+        </label>
+        <div class="form-row">
+          <label>
+            <span>主播字幕颜色</span>
+            <input type="color" name="speaker_host_color" value="{{ subtitle_style.speaker_styles.get('主播', {}).get('font_color', '#ffffff') }}">
+          </label>
+          <label>
+            <span>嘉宾字幕颜色</span>
+            <input type="color" name="speaker_guest_color" value="{{ subtitle_style.speaker_styles.get('嘉宾', {}).get('font_color', '#ffd60a') }}">
+          </label>
+        </div>
         <button class="primary-button" type="submit">保存字幕样式</button>
         <p class="form-hint" id="subtitle-style-result">样式会保存到 SQLite，后续自动加字幕会使用这套模板。</p>
       </form>
@@ -304,4 +406,10 @@
 {% endblock %}
 {% block extra_scripts %}
 <script src="{{ url_for('static', path='vendor/nouislider/nouislider.min.js') }}?v=15.8.1"></script>
+{% if subtitle_task_mode %}
+<script src="{{ url_for('static', path='vendor/wavesurfer/wavesurfer.min.js') }}?v=7.12.11"></script>
+<script src="{{ url_for('static', path='vendor/wavesurfer/regions.min.js') }}?v=7.12.11"></script>
+<script src="{{ url_for('static', path='vendor/wavesurfer/timeline.min.js') }}?v=7.12.11"></script>
+<script src="{{ url_for('static', path='js/subtitle-editor.js') }}?v=20260823-pr3"></script>
+{% endif %}
 {% endblock %}

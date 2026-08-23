@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.models.task import TaskStatus
 from app.services.storage_service import get_artifact_paths, get_source_video_path, validate_source_video_path
 from app.services.task_log_service import append_task_log
-from app.services.video_cut_service import CutResult, cut_clips
+from app.services.video_cut_service import CutResult, cut_clips, parse_time_to_seconds
 
 
 # ---------- Cut Run 数据库操作 ----------
@@ -87,19 +87,38 @@ def _fail_cut_run(run_id: str, error_message: str = "") -> None:
 
 # ---------- Output Clip 数据库操作 ----------
 
-def _insert_output_clip_record(task_id: str, cut_run_id: str, result: CutResult) -> None:
+def _insert_output_clip_record(
+    task_id: str,
+    cut_run_id: str,
+    result: CutResult,
+    *,
+    source_fingerprint: str = "",
+) -> None:
     from app.db.database import get_connection
     from app.services.task_service import _now_iso
 
     now = _now_iso()
     with get_connection() as connection:
+        candidate = connection.execute(
+            "SELECT start_time, end_time FROM clip_candidates WHERE id = ? AND task_id = ?",
+            (result.clip_candidate_id, task_id),
+        ).fetchone()
+        source_start_ms = None
+        source_end_ms = None
+        snapshot_source = "legacy_inferred"
+        if candidate:
+            source_start_ms = round(parse_time_to_seconds(candidate["start_time"]) * 1000)
+            source_end_ms = round(parse_time_to_seconds(candidate["end_time"]) * 1000)
+            snapshot_source = "cut_commit"
         connection.execute(
             """
             INSERT INTO output_clip (
                 id, task_id, clip_candidate_id, output_file_path, output_file_name,
-                status, error_message, cut_run_id, is_active, created_at, updated_at
+                status, error_message, cut_run_id, is_active,
+                source_start_ms, source_end_ms, source_duration_ms,
+                source_fingerprint, snapshot_source, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 uuid4().hex[:12],
@@ -110,6 +129,11 @@ def _insert_output_clip_record(task_id: str, cut_run_id: str, result: CutResult)
                 result.status,
                 result.error_message,
                 cut_run_id,
+                source_start_ms,
+                source_end_ms,
+                source_end_ms - source_start_ms if source_start_ms is not None and source_end_ms is not None else None,
+                source_fingerprint,
+                snapshot_source,
                 now,
                 now,
             ),
@@ -204,6 +228,9 @@ def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> 
     append_task_log(task_id, f"创建切割批次：第 {cut_run['run_number']} 次切割")
 
     try:
+        from app.services.transcription_checkpoint_service import fingerprint_file
+
+        source_fingerprint = fingerprint_file(source_path)
         results = cut_clips(
             source_video=source_path,
             clips=enabled_clips,
@@ -220,7 +247,12 @@ def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> 
 
     # 插入新 output_clip 记录，关联到当前 cut_run
     for result in results:
-        _insert_output_clip_record(task_id, cut_run_id, result)
+        _insert_output_clip_record(
+            task_id,
+            cut_run_id,
+            result,
+            source_fingerprint=source_fingerprint,
+        )
         if result.status == "completed":
             append_task_log(task_id, f"切片完成：{result.output_file_name}")
         else:

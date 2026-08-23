@@ -38,6 +38,12 @@ def init_db() -> None:
             settings.data_dir / "backups",
             "long-live-foundation",
         )
+    if _requires_subtitle_editor_schema_migration(settings.database_path):
+        create_schema_migration_backup(
+            settings.database_path,
+            settings.data_dir / "backups",
+            "subtitle-editor-rebuild",
+        )
 
     with get_connection() as connection:
         connection.executescript(
@@ -113,6 +119,11 @@ def init_db() -> None:
                 output_file_name TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 error_message TEXT,
+                source_start_ms INTEGER,
+                source_end_ms INTEGER,
+                source_duration_ms INTEGER,
+                source_fingerprint TEXT,
+                snapshot_source TEXT NOT NULL DEFAULT 'legacy_inferred',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(task_id) REFERENCES tasks(id),
@@ -156,6 +167,10 @@ def init_db() -> None:
                 font_color TEXT NOT NULL DEFAULT '#ffffff',
                 stroke_color TEXT NOT NULL DEFAULT '#111827',
                 shadow_enabled INTEGER NOT NULL DEFAULT 1,
+                outline_width REAL NOT NULL DEFAULT 3,
+                shadow_depth REAL NOT NULL DEFAULT 1,
+                safe_area_percent REAL NOT NULL DEFAULT 5,
+                speaker_styles_json TEXT NOT NULL DEFAULT '{}',
                 is_default INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -165,16 +180,73 @@ def init_db() -> None:
                 id TEXT PRIMARY KEY,
                 task_id TEXT NOT NULL,
                 output_clip_id TEXT NOT NULL,
+                revision_id TEXT,
                 style_preset_id TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 subtitle_file_path TEXT,
                 output_file_path TEXT,
                 error_message TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(task_id) REFERENCES tasks(id),
                 FOREIGN KEY(output_clip_id) REFERENCES output_clip(id),
+                FOREIGN KEY(revision_id) REFERENCES subtitle_revisions(id),
                 FOREIGN KEY(style_preset_id) REFERENCES subtitle_style_presets(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS subtitle_tracks (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                track_type TEXT NOT NULL,
+                output_clip_id TEXT,
+                name TEXT NOT NULL,
+                language TEXT NOT NULL DEFAULT 'zh-CN',
+                source_track_id TEXT,
+                source_revision_id TEXT,
+                source_fingerprint TEXT NOT NULL DEFAULT '',
+                active_revision_id TEXT,
+                sync_status TEXT NOT NULL DEFAULT 'up_to_date',
+                has_manual_edits INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(task_id, track_type, output_clip_id),
+                FOREIGN KEY(task_id) REFERENCES tasks(id),
+                FOREIGN KEY(output_clip_id) REFERENCES output_clip(id),
+                FOREIGN KEY(source_track_id) REFERENCES subtitle_tracks(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS subtitle_revisions (
+                id TEXT PRIMARY KEY,
+                track_id TEXT NOT NULL,
+                revision_number INTEGER NOT NULL,
+                origin TEXT NOT NULL,
+                parent_revision_id TEXT,
+                status TEXT NOT NULL DEFAULT 'draft',
+                note TEXT,
+                cue_count INTEGER NOT NULL DEFAULT 0,
+                checksum TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                approved_at TEXT,
+                UNIQUE(track_id, revision_number),
+                FOREIGN KEY(track_id) REFERENCES subtitle_tracks(id) ON DELETE CASCADE,
+                FOREIGN KEY(parent_revision_id) REFERENCES subtitle_revisions(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS subtitle_cues (
+                id TEXT PRIMARY KEY,
+                revision_id TEXT NOT NULL,
+                cue_index INTEGER NOT NULL,
+                start_ms INTEGER NOT NULL,
+                end_ms INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                confidence REAL,
+                speaker TEXT NOT NULL DEFAULT '',
+                source_cue_id TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(revision_id, cue_index),
+                FOREIGN KEY(revision_id) REFERENCES subtitle_revisions(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS publish_platform_configs (
@@ -431,6 +503,7 @@ def init_db() -> None:
         _migrate_ai_analysis_runs_table(connection)
         _migrate_subtitle_style_presets_table(connection)
         _migrate_subtitle_jobs_table(connection)
+        _migrate_subtitle_editor_tables(connection)
         _migrate_publish_platform_configs_table(connection)
         _migrate_publish_accounts_table(connection)
         _migrate_publish_jobs_table(connection)
@@ -468,6 +541,26 @@ def _requires_long_live_schema_migration(database_path) -> bool:
     )
 
 
+def _requires_subtitle_editor_schema_migration(database_path) -> bool:
+    """已有数据库缺少字幕 revision 结构时，先做在线备份。"""
+    if not database_path.exists() or database_path.stat().st_size == 0:
+        return False
+    connection = None
+    try:
+        connection = sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+        output_columns = {row[1] for row in connection.execute("PRAGMA table_info(output_clip)").fetchall()}
+        job_columns = {row[1] for row in connection.execute("PRAGMA table_info(subtitle_jobs)").fetchall()}
+        table_names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    finally:
+        if connection:
+            connection.close()
+    return (
+        "source_start_ms" not in output_columns
+        or "revision_id" not in job_columns
+        or not {"subtitle_tracks", "subtitle_revisions", "subtitle_cues"} <= table_names
+    )
+
+
 def _get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
     rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row["name"] for row in rows}
@@ -491,6 +584,10 @@ def _create_indexes(connection: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_clip_feedback_task_clip ON clip_feedback(task_id, clip_candidate_id)",
         # 字幕任务（按任务、输出切片、状态）
         "CREATE INDEX IF NOT EXISTS idx_subtitle_jobs_task_output_status ON subtitle_jobs(task_id, output_clip_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_subtitle_tracks_task_type ON subtitle_tracks(task_id, track_type, is_active)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_subtitle_tracks_active_source ON subtitle_tracks(task_id) WHERE track_type = 'source' AND is_active = 1",
+        "CREATE INDEX IF NOT EXISTS idx_subtitle_revisions_track_created ON subtitle_revisions(track_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_subtitle_cues_revision_time ON subtitle_cues(revision_id, start_ms, cue_index)",
         # 发布任务（按状态、平台、时间；按任务、输出切片）
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_status_platform_created ON publish_jobs(status, platform, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_publish_jobs_task_output ON publish_jobs(task_id, output_clip_id)",
@@ -705,6 +802,11 @@ def _migrate_output_clip_table(connection: sqlite3.Connection) -> None:
         "updated_at": "ALTER TABLE output_clip ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
         "cut_run_id": "ALTER TABLE output_clip ADD COLUMN cut_run_id TEXT",
         "is_active": "ALTER TABLE output_clip ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
+        "source_start_ms": "ALTER TABLE output_clip ADD COLUMN source_start_ms INTEGER",
+        "source_end_ms": "ALTER TABLE output_clip ADD COLUMN source_end_ms INTEGER",
+        "source_duration_ms": "ALTER TABLE output_clip ADD COLUMN source_duration_ms INTEGER",
+        "source_fingerprint": "ALTER TABLE output_clip ADD COLUMN source_fingerprint TEXT",
+        "snapshot_source": "ALTER TABLE output_clip ADD COLUMN snapshot_source TEXT NOT NULL DEFAULT 'legacy_inferred'",
     }
 
     for column, statement in migrations.items():
@@ -777,6 +879,10 @@ def _migrate_subtitle_style_presets_table(connection: sqlite3.Connection) -> Non
         "font_color": "ALTER TABLE subtitle_style_presets ADD COLUMN font_color TEXT NOT NULL DEFAULT '#ffffff'",
         "stroke_color": "ALTER TABLE subtitle_style_presets ADD COLUMN stroke_color TEXT NOT NULL DEFAULT '#111827'",
         "shadow_enabled": "ALTER TABLE subtitle_style_presets ADD COLUMN shadow_enabled INTEGER NOT NULL DEFAULT 1",
+        "outline_width": "ALTER TABLE subtitle_style_presets ADD COLUMN outline_width REAL NOT NULL DEFAULT 3",
+        "shadow_depth": "ALTER TABLE subtitle_style_presets ADD COLUMN shadow_depth REAL NOT NULL DEFAULT 1",
+        "safe_area_percent": "ALTER TABLE subtitle_style_presets ADD COLUMN safe_area_percent REAL NOT NULL DEFAULT 5",
+        "speaker_styles_json": "ALTER TABLE subtitle_style_presets ADD COLUMN speaker_styles_json TEXT NOT NULL DEFAULT '{}'",
         "is_default": "ALTER TABLE subtitle_style_presets ADD COLUMN is_default INTEGER NOT NULL DEFAULT 1",
         "created_at": "ALTER TABLE subtitle_style_presets ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         "updated_at": "ALTER TABLE subtitle_style_presets ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
@@ -794,6 +900,7 @@ def _migrate_subtitle_jobs_table(connection: sqlite3.Connection) -> None:
     migrations = {
         "task_id": "ALTER TABLE subtitle_jobs ADD COLUMN task_id TEXT",
         "output_clip_id": "ALTER TABLE subtitle_jobs ADD COLUMN output_clip_id TEXT",
+        "revision_id": "ALTER TABLE subtitle_jobs ADD COLUMN revision_id TEXT",
         "style_preset_id": "ALTER TABLE subtitle_jobs ADD COLUMN style_preset_id TEXT",
         "status": "ALTER TABLE subtitle_jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'",
         "subtitle_file_path": "ALTER TABLE subtitle_jobs ADD COLUMN subtitle_file_path TEXT",
@@ -811,6 +918,48 @@ def _migrate_subtitle_jobs_table(connection: sqlite3.Connection) -> None:
     columns = _get_table_columns(connection, "subtitle_jobs")
     if "is_active" in columns:
         connection.execute("UPDATE subtitle_jobs SET is_active = 1 WHERE is_active IS NULL")
+
+
+def _migrate_subtitle_editor_tables(connection: sqlite3.Connection) -> None:
+    """创建不可变字幕轨、revision 与 cue 数据层。"""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS subtitle_tracks (
+            id TEXT PRIMARY KEY, task_id TEXT NOT NULL, track_type TEXT NOT NULL,
+            output_clip_id TEXT, name TEXT NOT NULL, language TEXT NOT NULL DEFAULT 'zh-CN',
+            source_track_id TEXT, source_revision_id TEXT, source_fingerprint TEXT NOT NULL DEFAULT '',
+            active_revision_id TEXT,
+            sync_status TEXT NOT NULL DEFAULT 'up_to_date',
+            has_manual_edits INTEGER NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            UNIQUE(task_id, track_type, output_clip_id),
+            FOREIGN KEY(task_id) REFERENCES tasks(id),
+            FOREIGN KEY(output_clip_id) REFERENCES output_clip(id),
+            FOREIGN KEY(source_track_id) REFERENCES subtitle_tracks(id)
+        );
+        CREATE TABLE IF NOT EXISTS subtitle_revisions (
+            id TEXT PRIMARY KEY, track_id TEXT NOT NULL, revision_number INTEGER NOT NULL,
+            origin TEXT NOT NULL, parent_revision_id TEXT, status TEXT NOT NULL DEFAULT 'draft',
+            note TEXT, cue_count INTEGER NOT NULL DEFAULT 0, checksum TEXT NOT NULL,
+            created_at TEXT NOT NULL, approved_at TEXT,
+            UNIQUE(track_id, revision_number),
+            FOREIGN KEY(track_id) REFERENCES subtitle_tracks(id) ON DELETE CASCADE,
+            FOREIGN KEY(parent_revision_id) REFERENCES subtitle_revisions(id)
+        );
+        CREATE TABLE IF NOT EXISTS subtitle_cues (
+            id TEXT PRIMARY KEY, revision_id TEXT NOT NULL, cue_index INTEGER NOT NULL,
+            start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, text TEXT NOT NULL,
+            confidence REAL, speaker TEXT NOT NULL DEFAULT '', source_cue_id TEXT,
+            created_at TEXT NOT NULL, UNIQUE(revision_id, cue_index),
+            FOREIGN KEY(revision_id) REFERENCES subtitle_revisions(id) ON DELETE CASCADE
+        );
+        """
+    )
+    track_columns = _get_table_columns(connection, "subtitle_tracks")
+    if "source_fingerprint" not in track_columns:
+        connection.execute(
+            "ALTER TABLE subtitle_tracks ADD COLUMN source_fingerprint TEXT NOT NULL DEFAULT ''"
+        )
 
 
 def _migrate_publish_platform_configs_table(connection: sqlite3.Connection) -> None:

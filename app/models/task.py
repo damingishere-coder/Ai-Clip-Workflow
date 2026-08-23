@@ -136,6 +136,10 @@ class SubtitleStyleUpdate(BaseModel):
     font_color: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
     stroke_color: str = Field(default="#111827", pattern=r"^#[0-9a-fA-F]{6}$")
     shadow_enabled: bool = True
+    outline_width: float = Field(default=3, ge=0, le=20)
+    shadow_depth: float = Field(default=1, ge=0, le=20)
+    safe_area_percent: float = Field(default=5, ge=0, le=25)
+    speaker_styles: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class PublishPlatformConfigUpdate(BaseModel):

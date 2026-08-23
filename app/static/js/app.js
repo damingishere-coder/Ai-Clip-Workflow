@@ -1789,6 +1789,15 @@ if (subtitleStyleForm) {
     const formData = new FormData(subtitleStyleForm);
     const payload = Object.fromEntries(formData.entries());
     payload.font_size = Number(payload.font_size || 42);
+    payload.outline_width = Number(payload.outline_width || 3);
+    payload.shadow_depth = Number(payload.shadow_depth || 1);
+    payload.safe_area_percent = Number(payload.safe_area_percent || 5);
+    payload.speaker_styles = {
+      主播: { font_color: payload.speaker_host_color || "#ffffff" },
+      嘉宾: { font_color: payload.speaker_guest_color || "#ffd60a" },
+    };
+    delete payload.speaker_host_color;
+    delete payload.speaker_guest_color;
     payload.shadow_enabled = Boolean(subtitleStyleForm.elements.shadow_enabled?.checked);
     if (submitButton) submitButton.disabled = true;
     if (subtitleStyleResult) subtitleStyleResult.textContent = "正在保存字幕样式...";
