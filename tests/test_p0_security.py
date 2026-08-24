@@ -45,13 +45,12 @@ class TestPathTraversal:
         assert not valid
         assert "不安全" in msg or "跳转" in msg
 
-    def test_reject_double_dot_in_browse(self, tmp_path, monkeypatch):
-        """browse_video_directory 拒绝包含 .. 的路径"""
+    def test_directory_browse_capability_is_removed(self, tmp_path, monkeypatch):
+        """上传单入口下不再暴露目录浏览服务。"""
         _reload_storage_service(tmp_path, monkeypatch)
-        from app.services.storage_service import browse_video_directory
+        from app.services import storage_service
 
-        result = browse_video_directory("E:\\..\\Windows")
-        assert "不安全" in result.get("error", "") or not result.get("exists", True)
+        assert not hasattr(storage_service, "browse_video_directory")
 
     def test_reject_path_outside_roots(self, tmp_path, monkeypatch):
         """validate 拒绝不在允许根目录下的文件"""

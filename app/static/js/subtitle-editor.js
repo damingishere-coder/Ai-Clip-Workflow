@@ -751,11 +751,11 @@
   });
 
   batch.skip?.addEventListener("click", async () => {
-    if (!window.confirm("确认跳过字幕并使用原片继续吗？该选择会写入发布任务，不能静默改回字幕版。")) return;
+    if (!window.confirm("确认跳过字幕并进入片段审核吗？审核保存后才会同步发送中心。")) return;
     batch.skip.disabled = true;
     try {
-      await api(`/api/subtitles/tasks/${encodeURIComponent(state.taskId)}/skip-and-resume`, { method: "POST" });
-      window.location.href = `/tasks/${encodeURIComponent(state.taskId)}`;
+      const payload = await api(`/api/subtitles/tasks/${encodeURIComponent(state.taskId)}/skip-to-review`, { method: "POST" });
+      window.location.href = payload.review_url || `/tasks/${encodeURIComponent(state.taskId)}/clips/review`;
     } catch (error) {
       batch.message.textContent = `跳过字幕失败：${error.message}`;
       batch.panel.hidden = false;

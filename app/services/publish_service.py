@@ -645,11 +645,7 @@ def _format_task_created_at(value: str | None) -> str:
 
 
 def _task_source_file_name(job: dict) -> str:
-    source_path = (
-        job.get("task_nas_file_path")
-        if job.get("task_source_type") == "nas"
-        else job.get("task_original_video_path")
-    )
+    source_path = job.get("task_original_video_path")
     source_text = str(source_path or "").strip()
     if not source_text:
         return "未记录原视频文件名"
@@ -2084,7 +2080,7 @@ def sync_task_publish_jobs(
     if not task:
         raise ValueError("任务不存在")
     if bool(task["auto_mode"]) and task["status"] == TaskStatus.PENDING_SUBTITLE_REVIEW.value:
-        raise ValueError("自动流水线正在等待字幕审核，请先批量烧录或明确跳过字幕，再进入发送中心")
+        raise ValueError("自动流水线正在等待字幕审核，请先批量烧录，或明确跳过字幕并完成片段审核")
     items = _list_completed_publish_clips(task_id)
     if not items:
         raise ValueError("当前任务还没有可同步的激活切片")

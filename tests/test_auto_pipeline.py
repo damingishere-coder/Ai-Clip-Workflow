@@ -15,6 +15,7 @@ from app.db.database import get_connection, init_db
 from app.main import app
 from app.models.task import TaskCreate, TaskStatus
 from app.services.auto_publish_service import create_auto_publish_jobs
+from app.services import job_service
 from app.services.pipeline_engine import PipelineEngine, build_schedule_times
 from app.services.storage_service import get_artifact_paths
 from app.services.task_lifecycle_service import create_task_record, update_task_status
@@ -74,6 +75,55 @@ def _headers() -> dict[str, str]:
     return {}
 
 
+def test_manual_ai_endpoint_returns_409_while_auto_pipeline_is_active(monkeypatch):
+    task_id = "test-auto-ai-job-guard"
+    create_task_record(
+        TaskCreate(task_name="自动流水线 AI 重入保护", selection_profile="general", auto_mode=True),
+        task_id=task_id,
+    )
+    update_task_status(task_id, TaskStatus.pending_ai)
+    job_service.create_job(task_id, job_service.JOB_TYPE_AUTO_PIPELINE)
+    monkeypatch.setattr(
+        "app.services.ai_analysis_workflow_service._analyze_with_provider",
+        lambda *_args, **_kwargs: pytest.fail("冲突请求不应调用 AI Provider"),
+    )
+
+    response = TestClient(app).post(f"/api/tasks/{task_id}/process/ai", headers=_headers())
+
+    assert response.status_code == 409
+    assert "全自动流水线正在处理" in response.json()["detail"]
+    assert get_task(task_id, include_video_probe=False)["status"] == TaskStatus.pending_ai.value
+
+
+def test_manual_ai_endpoint_returns_409_after_clips_are_materialized(monkeypatch):
+    task_id = "test-auto-ai-output-guard"
+    create_task_record(TaskCreate(task_name="切片后 AI 重入保护", selection_profile="general"), task_id=task_id)
+    update_task_status(task_id, TaskStatus.completed)
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO output_clip (
+                id, task_id, output_file_path, output_file_name,
+                status, is_active, created_at, updated_at
+            ) VALUES (?, ?, 'clip.mp4', 'clip.mp4', 'completed', 1, 'now', 'now')
+            """,
+            (f"{task_id}-output", task_id),
+        )
+        connection.commit()
+    monkeypatch.setattr(
+        "app.services.ai_analysis_workflow_service._analyze_with_provider",
+        lambda *_args, **_kwargs: pytest.fail("冲突请求不应调用 AI Provider"),
+    )
+
+    response = TestClient(app).post(f"/api/tasks/{task_id}/process/ai", headers=_headers())
+
+    assert response.status_code == 409
+    assert "已经生成切片" in response.json()["detail"]
+    task = get_task(task_id, include_video_probe=False)
+    assert task["status"] == TaskStatus.completed.value
+    assert not task["error_message"]
+
+
 def _fake_video(name: str = "source.mp4") -> Path:
     path = settings.tasks_dir / "_test_inputs" / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,17 +167,20 @@ def test_clip_candidates_schema_has_nullable_cover_time():
 def test_auto_mode_false_does_not_start_pipeline(monkeypatch):
     starter = Mock(return_value={"status": "started"})
     monkeypatch.setattr("app.routers.tasks.start_auto_pipeline", starter)
-    video = _fake_video("manual.mp4")
+    monkeypatch.setattr("app.routers.tasks.uuid4", lambda: SimpleNamespace(hex="test-auto-m1-upload"))
     payload = {
         "task_name": "test-auto-manual",
-        "source_type": "upload",
         "platform": "general",
         "selection_profile": "general",
-        "original_video_path": str(video),
-        "auto_mode": False,
+        "auto_mode": "false",
     }
     with TestClient(app) as client:
-        response = client.post("/api/tasks", json=payload, headers=_headers())
+        response = client.post(
+            "/api/tasks/upload",
+            data=payload,
+            files={"video_file": ("manual.mp4", b"fake mp4", "video/mp4")},
+            headers=_headers(),
+        )
     assert response.status_code == 200
     starter.assert_not_called()
 
@@ -135,19 +188,35 @@ def test_auto_mode_false_does_not_start_pipeline(monkeypatch):
 def test_auto_mode_true_starts_pipeline(monkeypatch):
     starter = Mock(return_value={"status": "started"})
     monkeypatch.setattr("app.routers.tasks.start_auto_pipeline", starter)
-    video = _fake_video("auto.mp4")
+    monkeypatch.setattr("app.routers.tasks.uuid4", lambda: SimpleNamespace(hex="test-auto-a1-upload"))
     payload = {
         "task_name": "test-auto-start",
-        "source_type": "upload",
         "platform": "general",
         "selection_profile": "general",
-        "original_video_path": str(video),
-        "auto_mode": True,
+        "auto_mode": "true",
     }
     with TestClient(app) as client:
-        response = client.post("/api/tasks", json=payload, headers=_headers())
+        response = client.post(
+            "/api/tasks/upload",
+            data=payload,
+            files={"video_file": ("auto.mp4", b"fake mp4", "video/mp4")},
+            headers=_headers(),
+        )
     assert response.status_code == 200
     starter.assert_called_once()
+
+
+def test_json_task_creation_route_is_removed():
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/tasks",
+            json={"task_name": "不允许的已有文件任务", "source_type": "nas"},
+            headers=_headers(),
+        )
+        browse = client.get("/api/files/browse", headers=_headers())
+    assert response.status_code == 405
+    assert browse.status_code == 404
+    assert "/api/files/browse" not in app.openapi()["paths"]
 
 
 def test_existing_transcript_skips_transcription(monkeypatch):

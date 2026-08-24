@@ -6,8 +6,9 @@
 2. “审核并批量烧录”对 active revision 运行质量检查；字幕重叠属于阻断错误，其他中文质量项保持告警。审核后创建 `subtitle` 类型的持久化 Job。
 3. 字幕 Job 按固定 revision 串行处理切片，每条成功后写 checkpoint。失败或重启只重跑未验证条目；取消会终止 FFmpeg 进程树并保留旧 active 成片。
 4. 全部输出经 FFprobe 验证后创建从 `metadata_generating` 开始的恢复 Job；发送任务固定为 `subtitled` 来源。
-5. “跳过字幕”必须由用户在暂停状态明确操作，写入 `original` 决定后同样从元数据步骤恢复。运行中的字幕 Job 未停止前不允许跳过。
-6. 发送准备检查再次验证交付决定、revision 审核状态、渲染验证状态和文件存在性；任何证据缺失都不会进入实际发布。
+5. “跳过字幕”必须由用户在暂停状态明确操作；`POST /api/subtitles/tasks/{task_id}/skip-to-review` 写入 `original` 决定并进入 `pending_review`，不创建自动恢复 Job。旧 `skip-and-resume` 暂时保留为同语义兼容入口。
+6. 用户在片段审核页保存后才同步发送中心；完整关联时任务进入 `completed`，关联失败或缺失时保留 `pending_review` 并展示错误，不把整个任务误标为失败。
+7. 发送准备检查再次验证交付决定、revision 审核状态、渲染验证状态和文件存在性；任何证据缺失都不会进入实际发布。
 
 新增主任务状态：`subtitle_drafting`、`pending_subtitle_review`、`failed_subtitle_drafting`。暂停状态不是失败，也不会每 3 秒继续轮询；页面提供字幕审核和显式跳过操作。
 
@@ -30,7 +31,7 @@
 
 ## 2026-08-23：长直播基础流程
 
-`明确选择模式 → 上传或引用已有文件 → 媒体/磁盘预检 → SQLite Job 排队 → 音频提取 → 分块转写 checkpoint → transcript.md 兼容导出`。
+`明确选择模式 → 上传本机视频 → 媒体/磁盘预检 → SQLite Job 排队 → 音频提取 → 分块转写 checkpoint → transcript.md 兼容导出`。
 
 - 同一源指纹和转写配置下，重试只处理缺失或失败块；成功块通过 SHA-256 校验后复用。
 - 源内容或 Provider、模型、设备、分块参数改变时创建新的 run，旧 run 保留但不复用。

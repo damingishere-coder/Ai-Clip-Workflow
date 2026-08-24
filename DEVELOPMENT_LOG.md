@@ -1,5 +1,17 @@
 # Development Log
 
+## 2026-08-25 任务 20 状态恢复与新建流程精简
+
+- 已确认任务 `20 - E1829 110128 舒淇,安以轩P29-29` 的第 2 次切片批次、12 条 active 成片和发送中心 12/12 关联完整，原“失败”来自完成后重复触发 AI 分析并尝试删除仍被切片引用的候选记录。
+- 修复前 SQLite Online Backup 为 `backups/workflow-before-task20-repair-20260824-233721.sqlite3`；只把任务 `3210d91ee1fb` 恢复为 `completed / 100%` 并清空误报错误，候选、切片、Workflow Job、AI run 和发布任务 ID 前后完全一致，修复依据已写入任务日志。
+- 手动 AI 入口新增原子重入保护：活跃全自动 Job、已有 active 切片或已有发送中心记录时返回 HTTP 409；候选替换在同一事务内先检查 `output_clip` 引用，改为可理解的业务冲突，不再暴露 SQLite 外键错误，也不会把已完成任务降级为失败。
+- 新建任务只保留本机视频上传；任务名称历史候选最多显示最近 5 个未删除且去重后的名称，JSON 已有文件创建入口、目录浏览 API 和 NAS 页面能力已移除。
+- `source_type`、`nas_file_path` 物理列继续保留兼容；账本迁移 `20260824_02_task_upload_only` 在写入前创建 SQLite Online Backup，将旧来源归一到 `original_video_path + upload`，不删除外部视频。
+- “每小时高光密度”和候选总上限仅在长直播高光模式显示和提交；通用与康熙模式不读取页面参数，服务端固定使用兼容默认值。
+- 新增 `POST /api/subtitles/tasks/{task_id}/skip-to-review`；明确跳过字幕后进入片段审核，不再自动续跑文案和发送中心。审核保存并完整关联后才标记完成；关联不完整时保留审核状态与错误。
+- 本轮未修改 AI Provider、Prompt、模型、候选算法或真实发布逻辑，也没有重跑任务 20 的 AI、切片或发布任务。
+- 活动库迁移备份为 `data/backups/workflow-before-task-upload-only-20260825-000702-586803-d14c09b5.sqlite3`；迁移后旧来源记录为 0，`integrity_check=ok`、`foreign_key_check=0`。完整测试 `672 passed`，Ruff、Python Compileall、JavaScript 语法和浏览器烟测通过；8001、Scheduler 与 8765 Windows Worker 健康。
+
 ## 2026-08-24 稳定 V1 P1.3c 数据库迁移账本与唯一索引 Fail-Closed
 
 - 新增 `schema_migrations` 账本；每条正式新迁移记录稳定 version、name、checksum 和完成时间，同版本定义漂移时拒绝启动。

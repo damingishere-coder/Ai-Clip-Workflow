@@ -27,6 +27,7 @@ from app.services.subtitle_auto_workflow_service import (
     execute_subtitle_render_job,
     prepare_task_subtitle_review,
     skip_task_subtitles_and_resume,
+    skip_task_subtitles_to_review,
 )
 from app.services.subtitle_data_service import (
     accept_suggestion_revision,
@@ -273,16 +274,27 @@ def test_skip_api_persists_original_delivery_decision(tmp_path: Path):
     prepare_task_subtitle_review(task_id)
     with TestClient(app) as client:
         response = client.post(
-            f"/api/subtitles/tasks/{task_id}/skip-and-resume",
+            f"/api/subtitles/tasks/{task_id}/skip-to-review",
             headers=_headers(),
         )
     assert response.status_code == 200, response.text
+    assert response.json()["status"] == TaskStatus.pending_review.value
+    assert response.json()["review_url"] == f"/tasks/{task_id}/clips/review"
     with get_connection() as connection:
         raw_config = connection.execute(
             "SELECT auto_config_json FROM tasks WHERE id = ?",
             (task_id,),
         ).fetchone()[0]
+        active_resume_jobs = connection.execute(
+            """
+            SELECT COUNT(*) FROM workflow_jobs
+            WHERE task_id = ? AND job_type = ? AND status IN ('queued', 'running')
+            """,
+            (task_id, job_service.JOB_TYPE_AUTO_PIPELINE),
+        ).fetchone()[0]
     assert json.loads(raw_config)["subtitle_delivery_mode"] == "original"
+    assert get_task(task_id, include_video_probe=False)["status"] == TaskStatus.pending_review.value
+    assert active_resume_jobs == 0
 
 
 def test_pipeline_stops_before_metadata_and_publish(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -324,15 +336,28 @@ def test_batch_approval_pins_revisions_and_records_delivery_mode(tmp_path: Path)
     assert config["subtitle_delivery_mode"] == "subtitled"
 
 
-def test_skip_is_explicit_and_queues_metadata_resume(tmp_path: Path):
+def test_skip_is_explicit_and_enters_clip_review_without_resume_job(tmp_path: Path):
+    task_id, _, _ = _create_task(tmp_path)
+    prepare_task_subtitle_review(task_id)
+    result = skip_task_subtitles_to_review(task_id)
+    with get_connection() as connection:
+        config = json.loads(connection.execute("SELECT auto_config_json FROM tasks WHERE id = ?", (task_id,)).fetchone()[0])
+        resume_jobs = connection.execute(
+            "SELECT COUNT(*) FROM workflow_jobs WHERE task_id = ? AND job_type = ?",
+            (task_id, job_service.JOB_TYPE_AUTO_PIPELINE),
+        ).fetchone()[0]
+    assert config["subtitle_delivery_mode"] == "original"
+    assert result["status"] == TaskStatus.pending_review.value
+    assert result["review_url"] == f"/tasks/{task_id}/clips/review"
+    assert resume_jobs == 0
+
+
+def test_legacy_skip_endpoint_uses_new_review_semantics(tmp_path: Path):
     task_id, _, _ = _create_task(tmp_path)
     prepare_task_subtitle_review(task_id)
     result = skip_task_subtitles_and_resume(task_id)
-    with get_connection() as connection:
-        config = json.loads(connection.execute("SELECT auto_config_json FROM tasks WHERE id = ?", (task_id,)).fetchone()[0])
-    assert config["subtitle_delivery_mode"] == "original"
-    assert result["job"]["job_type"] == job_service.JOB_TYPE_AUTO_PIPELINE
-    assert result["job"]["payload_json"]["start_step"] == TaskStatus.METADATA_GENERATING.value
+    assert result["status"] == TaskStatus.pending_review.value
+    assert result["review_url"].endswith("/clips/review")
 
 
 def test_skip_rejects_active_subtitle_job(tmp_path: Path):

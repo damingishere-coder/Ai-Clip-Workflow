@@ -19,6 +19,7 @@ from app.services.subtitle_auto_workflow_service import (
     enqueue_task_subtitle_render,
     prepare_task_subtitle_review,
     skip_task_subtitles_and_resume,
+    skip_task_subtitles_to_review,
 )
 from app.services.subtitle_data_service import (
     SubtitleRevisionConflict,
@@ -70,6 +71,11 @@ def approve_and_render(task_id: str, payload: SubtitleTaskRenderRequest) -> dict
 @router.post("/tasks/{task_id}/skip-and-resume")
 def skip_and_resume(task_id: str) -> dict:
     return _call(lambda: skip_task_subtitles_and_resume(task_id))
+
+
+@router.post("/tasks/{task_id}/skip-to-review")
+def skip_to_review(task_id: str) -> dict:
+    return _call(lambda: skip_task_subtitles_to_review(task_id))
 
 
 @router.get("/tasks/{task_id}/jobs")

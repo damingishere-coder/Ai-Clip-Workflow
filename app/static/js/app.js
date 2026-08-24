@@ -34,13 +34,8 @@ window.apiFetch = apiFetch;
 const newTaskForm = document.querySelector("#new-task-form");
 const newTaskAutoMode = newTaskForm?.querySelector("input[name='auto_mode']");
 const newTaskSubmitButton = document.querySelector("#new-task-submit-button");
-const newTaskSourceInputs = newTaskForm?.querySelectorAll("input[name='source_type']") || [];
-const uploadSourcePanel = document.querySelector("#upload-source-panel");
-const existingSourcePanel = document.querySelector("#existing-source-panel");
-const nasFilePathInput = document.querySelector("#nas-file-path");
 const selectionProfileInput = document.querySelector("#selection-profile");
 const longLiveSettings = document.querySelector("#long-live-settings");
-let currentBrowseParentPath = "";
 
 function updateNewTaskSubmitLabel() {
   if (!newTaskSubmitButton) return;
@@ -52,25 +47,6 @@ if (newTaskAutoMode) {
   updateNewTaskSubmitLabel();
 }
 
-function selectedNewTaskSource() {
-  return newTaskForm?.querySelector("input[name='source_type']:checked")?.value || "upload";
-}
-
-function updateNewTaskSourcePanels() {
-  const useExisting = selectedNewTaskSource() === "nas";
-  if (uploadSourcePanel) uploadSourcePanel.hidden = useExisting;
-  if (existingSourcePanel) existingSourcePanel.hidden = !useExisting;
-  const videoFileInput = document.querySelector("#video-file-input");
-  if (videoFileInput) videoFileInput.required = !useExisting;
-  if (nasFilePathInput) nasFilePathInput.required = useExisting;
-  if (useExisting && !document.querySelector("#browse-current-path")?.dataset.loaded) {
-    browseVideoDirectory("");
-  }
-}
-
-newTaskSourceInputs.forEach((input) => input.addEventListener("change", updateNewTaskSourcePanels));
-updateNewTaskSourcePanels();
-
 if (selectionProfileInput && longLiveSettings) {
   const updateLongLiveSettings = () => {
     longLiveSettings.hidden = selectionProfileInput.value !== "long_live_talk";
@@ -78,58 +54,6 @@ if (selectionProfileInput && longLiveSettings) {
   selectionProfileInput.addEventListener("change", updateLongLiveSettings);
   updateLongLiveSettings();
 }
-
-async function browseVideoDirectory(path = "") {
-  const browser = document.querySelector("#video-file-browser");
-  const currentPath = document.querySelector("#browse-current-path");
-  if (!browser || !currentPath) return;
-  browser.textContent = "正在读取目录...";
-  try {
-    const suffix = path ? `?path=${encodeURIComponent(path)}` : "";
-    const data = await apiFetch(`/api/files/browse${suffix}`);
-    currentPath.textContent = `当前目录：${data.path || "不可用"}`;
-    currentPath.dataset.loaded = "true";
-    currentBrowseParentPath = data.parent_path || "";
-    browser.replaceChildren();
-    if (data.error) {
-      const error = document.createElement("p");
-      error.className = "form-hint error-text";
-      error.textContent = data.error;
-      browser.append(error);
-    }
-    for (const directory of data.directories || []) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "file-browser-item directory-item";
-      button.textContent = `📁 ${directory.name}`;
-      button.addEventListener("click", () => browseVideoDirectory(directory.path));
-      browser.append(button);
-    }
-    for (const file of data.files || []) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "file-browser-item video-item";
-      button.textContent = `🎬 ${file.name} · ${(Number(file.size || 0) / (1024 ** 3)).toFixed(2)} GB`;
-      button.addEventListener("click", () => {
-        nasFilePathInput.value = file.path;
-        browser.querySelectorAll(".is-selected").forEach((item) => item.classList.remove("is-selected"));
-        button.classList.add("is-selected");
-      });
-      browser.append(button);
-    }
-    if (!(data.directories || []).length && !(data.files || []).length && !data.error) {
-      browser.textContent = "此目录下没有可用的视频文件。";
-    }
-  } catch (error) {
-    browser.textContent = `目录读取失败：${error.message}`;
-  }
-}
-
-document.querySelector("#browse-refresh-button")?.addEventListener("click", () => {
-  const current = document.querySelector("#browse-current-path")?.textContent?.replace("当前目录：", "") || "";
-  browseVideoDirectory(current);
-});
-document.querySelector("#browse-parent-button")?.addEventListener("click", () => browseVideoDirectory(currentBrowseParentPath));
 
 if (newTaskForm) {
   newTaskForm.addEventListener("submit", async (event) => {
@@ -145,38 +69,21 @@ if (newTaskForm) {
 
     try {
       if (!payload.selection_profile) throw new Error("请选择选片模式");
-      let data;
-      if (selectedNewTaskSource() === "upload") {
-        if (!videoFileInput.files.length) throw new Error("请选择要上传的视频文件");
-        const uploadData = new FormData();
-        for (const key of [
-          "task_name", "platform", "max_clip_duration", "candidate_clip_count",
-          "selection_profile", "final_clip_target", "highlight_density_per_hour", "highlight_total_limit",
-        ]) uploadData.append(key, payload[key] || "");
-        uploadData.append("ai_preference", "");
-        uploadData.append("auto_mode", payload.auto_mode === "true" ? "true" : "false");
-        uploadData.append("auto_metadata_use_ai", "false");
-        uploadData.append("video_file", videoFileInput.files[0]);
-        data = await apiFetch("/api/tasks/upload", { method: "POST", body: uploadData });
-      } else {
-        if (!payload.nas_file_path) throw new Error("请选择本地或 NAS 中的已有视频文件");
-        data = await apiFetch("/api/tasks", {
-          method: "POST",
-          body: JSON.stringify({
-            task_name: payload.task_name,
-            source_type: "nas",
-            platform: payload.platform || "general",
-            nas_file_path: payload.nas_file_path,
-            max_clip_duration: Number(payload.max_clip_duration || 10),
-            candidate_clip_count: Number(payload.candidate_clip_count || 12),
-            selection_profile: payload.selection_profile,
-            final_clip_target: Number(payload.final_clip_target || 5),
-            highlight_density_per_hour: Number(payload.highlight_density_per_hour || 4),
-            highlight_total_limit: Number(payload.highlight_total_limit || 30),
-            auto_mode: payload.auto_mode === "true",
-          }),
-        });
+      if (!videoFileInput.files.length) throw new Error("请选择要上传的视频文件");
+      const uploadData = new FormData();
+      for (const key of [
+        "task_name", "platform", "max_clip_duration", "candidate_clip_count",
+        "selection_profile", "final_clip_target",
+      ]) uploadData.append(key, payload[key] || "");
+      if (payload.selection_profile === "long_live_talk") {
+        uploadData.append("highlight_density_per_hour", payload.highlight_density_per_hour || "4");
+        uploadData.append("highlight_total_limit", payload.highlight_total_limit || "30");
       }
+      uploadData.append("ai_preference", "");
+      uploadData.append("auto_mode", payload.auto_mode === "true" ? "true" : "false");
+      uploadData.append("auto_metadata_use_ai", "false");
+      uploadData.append("video_file", videoFileInput.files[0]);
+      const data = await apiFetch("/api/tasks/upload", { method: "POST", body: uploadData });
       result.textContent = `${data.message}${payload.auto_mode === "true" ? " 全自动流水线已启动。" : ""} 正在进入详情页...`;
       window.location.href = data.detail_url;
     } catch (error) {
@@ -1677,15 +1584,18 @@ async function saveTaskSelectionSettings() {
   if (!Number.isInteger(finalTarget) || finalTarget < 1 || finalTarget > 12) {
     throw new Error("最终启用目标必须是 1 到 12 之间的整数。");
   }
+  const settingsPayload = {
+    selection_profile: aiSelectionProfile,
+    final_clip_target: finalTarget,
+  };
+  if (aiSelectionProfile === "long_live_talk") {
+    settingsPayload.highlight_density_per_hour = Number(aiHighlightDensity?.value || 4);
+    settingsPayload.highlight_total_limit = Number(aiHighlightTotalLimit?.value || 30);
+  }
   const response = await fetch(`/api/tasks/${aiAnalysisForm.dataset.taskId}/selection-settings`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      selection_profile: aiSelectionProfile,
-      final_clip_target: finalTarget,
-      highlight_density_per_hour: Number(aiHighlightDensity?.value || 4),
-      highlight_total_limit: Number(aiHighlightTotalLimit?.value || 30),
-    }),
+    body: JSON.stringify(settingsPayload),
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.detail || "选片设置保存失败");
@@ -1754,7 +1664,7 @@ document.querySelectorAll("[data-sync-publish-task]").forEach((button) => {
 document.querySelectorAll(".js-hide-task").forEach((button) => {
   button.addEventListener("click", async () => {
     const taskTitle = button.dataset.taskTitle || "这条任务";
-    const confirmed = window.confirm(`确认永久删除“${taskTitle}”吗？\n\n系统会永久删除 E 盘任务目录内的原片副本、音频、转写、切片、字幕、封面和发布包，删除后无法恢复。\n\nNAS 或任务目录外的原始视频不会被删除。`);
+    const confirmed = window.confirm(`确认永久删除“${taskTitle}”吗？\n\n系统会永久删除 E 盘任务目录内的原片副本、音频、转写、切片、字幕、封面和发布包，删除后无法恢复。\n\n任务目录外的原始视频不会被删除。`);
     if (!confirmed) return;
 
     const originalText = button.textContent;
@@ -2067,17 +1977,17 @@ async function pollSubtitleWorkflowJob(jobId, statusNode, messageNode) {
 
 document.querySelectorAll("[data-live-subtitle-skip]").forEach((button) => {
   button.addEventListener("click", async () => {
-    if (!window.confirm("确认跳过字幕吗？后续发送中心将明确使用原片切片。")) return;
+    if (!window.confirm("确认跳过字幕并进入片段审核吗？审核保存后才会同步发送中心。")) return;
     const taskId = button.dataset.taskId;
     button.disabled = true;
     const originalText = button.textContent;
-    button.textContent = "正在恢复流水线...";
+    button.textContent = "正在进入审核...";
     try {
-      const data = await apiFetch(`/api/subtitles/tasks/${encodeURIComponent(taskId)}/skip-and-resume`, {
+      const data = await apiFetch(`/api/subtitles/tasks/${encodeURIComponent(taskId)}/skip-to-review`, {
         method: "POST",
       });
-      if (taskLiveNote) taskLiveNote.textContent = data.message || "已跳过字幕并恢复流水线";
-      startTaskLiveStatusPolling(true);
+      if (taskLiveNote) taskLiveNote.textContent = data.message || "已跳过字幕，正在进入片段审核";
+      window.location.href = data.review_url || `/tasks/${encodeURIComponent(taskId)}/clips/review`;
     } catch (error) {
       window.alert(`跳过字幕失败：${summarizeErrorMessage(error.message)}`);
       button.disabled = false;

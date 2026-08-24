@@ -33,6 +33,10 @@ from app.services.task_log_service import append_task_log, read_task_log_tail
 AI_CLIP_MIN_RECOMMENDED_SECONDS = 45
 
 
+class AIAnalysisConflictError(ValueError):
+    """当前任务已有执行中或下游结果，拒绝破坏性 AI 重入。"""
+
+
 # ---------- AI Provider 辅助 ----------
 
 def _ai_model_name(provider_name: str) -> str:
@@ -260,8 +264,182 @@ def _replace_clip_candidates(task_id: str, clips: list[dict]) -> None:
 
     now = _now_iso()
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        referenced = connection.execute(
+            """
+            SELECT 1
+            FROM output_clip
+            WHERE task_id = ? AND clip_candidate_id IS NOT NULL
+            LIMIT 1
+            """,
+            (task_id,),
+        ).fetchone()
+        if referenced:
+            connection.rollback()
+            raise AIAnalysisConflictError(
+                "任务已有切片引用当前候选结果，不能直接覆盖 AI 分析；"
+                "请在片段审核页修改现有候选并重新切片。"
+            )
         connection.execute("DELETE FROM clip_candidates WHERE task_id = ?", (task_id,))
         _insert_clip_candidates_with_connection(connection, task_id, clips, now)
+        connection.commit()
+
+
+def _pipeline_lease_belongs_to_task(task_id: str) -> bool:
+    from app.services import job_service
+
+    active_lease = job_service.current_job_lease()
+    if not active_lease:
+        return False
+    if not job_service.validate_job_lease(active_lease[0], active_lease[1], active_lease[2]):
+        return False
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM workflow_jobs
+            WHERE id = ? AND task_id = ? AND job_type = ? AND status = ?
+              AND lease_owner = ? AND lease_token = ?
+            """,
+            (
+                active_lease[0],
+                task_id,
+                job_service.JOB_TYPE_AUTO_PIPELINE,
+                job_service.JOB_STATUS_RUNNING,
+                active_lease[1],
+                active_lease[2],
+            ),
+        ).fetchone()
+    return row is not None
+
+
+def _claim_ai_analysis(task_id: str, task: dict) -> bool:
+    """自动流水线沿用租约；手动请求则原子校验并占用 ai_analyzing 状态。"""
+    from app.services import job_service
+    from app.services.task_service import STATUS_PROGRESS, _now_iso
+
+    if _pipeline_lease_belongs_to_task(task_id):
+        return False
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        current = connection.execute(
+            "SELECT status FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (task_id,),
+        ).fetchone()
+        if not current:
+            connection.rollback()
+            raise AIAnalysisConflictError("任务不存在或已被删除，不能启动 AI 分析。")
+        active_pipeline = connection.execute(
+            """
+            SELECT 1
+            FROM workflow_jobs
+            WHERE task_id = ? AND job_type = ? AND status IN (?, ?)
+            LIMIT 1
+            """,
+            (
+                task_id,
+                job_service.JOB_TYPE_AUTO_PIPELINE,
+                job_service.JOB_STATUS_QUEUED,
+                job_service.JOB_STATUS_RUNNING,
+            ),
+        ).fetchone()
+        materialized = connection.execute(
+            """
+            SELECT 1
+            WHERE EXISTS (
+                SELECT 1 FROM output_clip
+                WHERE task_id = ? AND COALESCE(is_active, 1) = 1
+            ) OR EXISTS (
+                SELECT 1 FROM publish_jobs WHERE task_id = ?
+            )
+            """,
+            (task_id, task_id),
+        ).fetchone()
+        current_status = str(current["status"] or "")
+        if active_pipeline:
+            connection.rollback()
+            raise AIAnalysisConflictError("全自动流水线正在处理此任务，请等待当前流程完成，不要重复启动 AI 分析。")
+        if materialized:
+            connection.rollback()
+            raise AIAnalysisConflictError(
+                "任务已经生成切片或进入发送中心，不能覆盖 AI 候选；请在片段审核页修改后重新切片。"
+            )
+        if current_status in {TaskStatus.ai_analyzing.value, TaskStatus.AI_ANALYZING.value}:
+            connection.rollback()
+            raise AIAnalysisConflictError("AI 分析已经在运行，请等待当前分析完成。")
+        if current_status != str(task.get("status") or ""):
+            connection.rollback()
+            raise AIAnalysisConflictError("任务状态刚刚发生变化，请刷新页面后再决定是否重新分析。")
+        if current_status not in {
+            TaskStatus.pending_ai.value,
+            TaskStatus.pending_review.value,
+            TaskStatus.failed.value,
+        }:
+            connection.rollback()
+            raise AIAnalysisConflictError("当前任务阶段不允许手动启动 AI 分析，请从任务详情继续正确流程。")
+        connection.execute(
+            """
+            UPDATE tasks
+            SET status = ?, progress = ?, error_message = NULL, last_error = NULL, updated_at = ?
+            WHERE id = ? AND status = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (
+                TaskStatus.ai_analyzing.value,
+                STATUS_PROGRESS[TaskStatus.ai_analyzing.value],
+                _now_iso(),
+                task_id,
+                current_status,
+            ),
+        )
+        connection.commit()
+    return True
+
+
+def _restore_task_after_ai_conflict(task_id: str, previous_task: dict) -> None:
+    """只回滚仍停留在本次 ai_analyzing 的状态，避免覆盖其他流程的新状态。"""
+    from app.services.task_service import _now_iso
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE tasks
+            SET status = ?, progress = ?, error_message = ?, last_error = ?, updated_at = ?
+            WHERE id = ? AND status = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (
+                previous_task.get("status") or TaskStatus.pending_review.value,
+                int(previous_task.get("progress") or 0),
+                previous_task.get("error_message") or None,
+                previous_task.get("last_error") or None,
+                _now_iso(),
+                task_id,
+                TaskStatus.ai_analyzing.value,
+            ),
+        )
+        connection.commit()
+
+
+def _mark_ai_failed_if_still_running(task_id: str, error_message: str) -> None:
+    """AI 失败只能结束自己仍持有的可见状态，不能降级已完成任务。"""
+    from app.services.task_service import STATUS_PROGRESS, _now_iso
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE tasks
+            SET status = ?, progress = ?, error_message = ?, last_error = ?, updated_at = ?
+            WHERE id = ? AND status = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (
+                TaskStatus.failed.value,
+                STATUS_PROGRESS[TaskStatus.failed.value],
+                error_message,
+                error_message,
+                _now_iso(),
+                task_id,
+                TaskStatus.ai_analyzing.value,
+            ),
+        )
         connection.commit()
 
 
@@ -693,6 +871,7 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
     task = get_task(task_id, include_video_probe=False)
     if not task:
         raise ValueError("任务不存在")
+    manual_claimed = _claim_ai_analysis(task_id, task)
 
     paths = get_artifact_paths(task_id)
     if not paths["transcript_path"].exists():
@@ -702,7 +881,8 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
         raise ValueError(error)
 
     provider_name = (provider or settings.ai_default_provider).lower()
-    update_task_status(task_id, TaskStatus.ai_analyzing)
+    if not manual_claimed:
+        update_task_status(task_id, TaskStatus.ai_analyzing)
     append_task_log(task_id, f"开始 AI 片段分析，Provider：{provider_name}")
 
     used_provider = provider_name
@@ -753,10 +933,14 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             ),
         )
         _append_ai_clip_quality_warnings(task_id, analysis_payload["clips"])
-    except (AIAnalysisError, Exception) as exc:
+    except AIAnalysisConflictError:
+        _restore_task_after_ai_conflict(task_id, task)
+        append_task_log(task_id, "AI 分析已停止：任务已有下游切片引用，原任务状态和数据保持不变")
+        raise
+    except Exception as exc:
         error = str(exc)
         user_error = _summarize_ai_error(error)
-        update_task_status(task_id, TaskStatus.failed, user_error)
+        _mark_ai_failed_if_still_running(task_id, user_error)
         append_task_log(task_id, f"AI 分析失败：{error}")
         raise ValueError(user_error) from exc
 

@@ -123,34 +123,80 @@ def enqueue_task_subtitle_render(
     }
 
 
-def skip_task_subtitles_and_resume(task_id: str) -> dict[str, Any]:
+def skip_task_subtitles_to_review(task_id: str) -> dict[str, Any]:
     from app.services import task_service
 
-    task = task_service.get_task(task_id, include_video_probe=False)
-    if not task:
-        raise ValueError("任务不存在")
-    if not task.get("auto_mode"):
-        raise ValueError("只有全自动任务需要执行字幕跳过决策")
-    if task.get("status") != TaskStatus.PENDING_SUBTITLE_REVIEW.value:
-        raise ValueError("当前任务不在字幕审核暂停状态")
-    active_subtitle_jobs = [
-        job
-        for job in job_service.list_jobs(task_id=task_id)
-        if job.get("job_type") == job_service.JOB_TYPE_SUBTITLE
-        and job.get("status") in {job_service.JOB_STATUS_QUEUED, job_service.JOB_STATUS_RUNNING}
-    ]
-    if active_subtitle_jobs:
-        raise ValueError("字幕烧录仍在运行，请先取消并等待停止后再选择跳过字幕")
-    _set_subtitle_delivery_mode(task_id, "original")
-    job, created = _enqueue_pipeline_resume(task_id)
-    append_task_log(task_id, "用户已明确跳过字幕，后续发布内容将使用原片切片")
+    now = task_service._now_iso()
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        task = connection.execute(
+            """
+            SELECT auto_mode, status, auto_config_json
+            FROM tasks
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (task_id,),
+        ).fetchone()
+        if not task:
+            connection.rollback()
+            raise ValueError("任务不存在")
+        if not bool(task["auto_mode"]):
+            connection.rollback()
+            raise ValueError("只有全自动任务需要执行字幕跳过决策")
+        if task["status"] != TaskStatus.PENDING_SUBTITLE_REVIEW.value:
+            connection.rollback()
+            raise ValueError("当前任务不在字幕审核暂停状态")
+        active_subtitle_job = connection.execute(
+            """
+            SELECT 1 FROM workflow_jobs
+            WHERE task_id = ? AND job_type = ? AND status IN (?, ?)
+            LIMIT 1
+            """,
+            (
+                task_id,
+                job_service.JOB_TYPE_SUBTITLE,
+                job_service.JOB_STATUS_QUEUED,
+                job_service.JOB_STATUS_RUNNING,
+            ),
+        ).fetchone()
+        if active_subtitle_job:
+            connection.rollback()
+            raise ValueError("字幕烧录仍在运行，请先取消并等待停止后再选择跳过字幕")
+        try:
+            config = json.loads(task["auto_config_json"] or "{}")
+        except json.JSONDecodeError:
+            config = {}
+        config["subtitle_delivery_mode"] = "original"
+        config["subtitle_decided_at"] = now
+        connection.execute(
+            """
+            UPDATE tasks
+            SET auto_config_json = ?, status = ?, progress = ?,
+                error_message = NULL, last_error = NULL, updated_at = ?
+            WHERE id = ? AND status = ?
+            """,
+            (
+                json.dumps(config, ensure_ascii=False),
+                TaskStatus.pending_review.value,
+                task_service.STATUS_PROGRESS[TaskStatus.pending_review.value],
+                now,
+                task_id,
+                TaskStatus.PENDING_SUBTITLE_REVIEW.value,
+            ),
+        )
+        connection.commit()
+    review_url = f"/tasks/{task_id}/clips/review"
+    append_task_log(task_id, "用户已明确跳过字幕，已进入片段审核；后续发送中心使用原片切片")
     return {
-        "status": job["status"],
-        "message": "已明确跳过字幕，流水线恢复任务已加入队列" if created else "流水线恢复任务已经在队列中",
-        "job": job,
-        "job_id": job["id"],
-        "created": created,
+        "status": TaskStatus.pending_review.value,
+        "message": "已跳过字幕，请审核片段后再同步发送中心。",
+        "review_url": review_url,
     }
+
+
+def skip_task_subtitles_and_resume(task_id: str) -> dict[str, Any]:
+    """兼容旧页面缓存；行为已调整为跳过字幕后进入片段审核。"""
+    return skip_task_subtitles_to_review(task_id)
 
 
 def execute_subtitle_render_job(job_id: str, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:

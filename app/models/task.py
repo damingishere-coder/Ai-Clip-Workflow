@@ -43,10 +43,8 @@ class TaskStatus(str, Enum):
 
 class TaskCreate(BaseModel):
     task_name: str = Field(..., min_length=1, max_length=120)
-    source_type: Literal["upload", "nas"] = "upload"
     platform: Literal["douyin", "bilibili", "general"] = "general"
     original_video_path: Optional[str] = None
-    nas_file_path: Optional[str] = None
     max_clip_duration: int = Field(default=10, ge=1, le=60)
     candidate_clip_count: int = Field(default=12, ge=1, le=50)
     selection_profile: Literal["general", "variety_comedy", "long_live_talk"]

@@ -13,6 +13,7 @@ from app.db.database import get_connection
 from app.models.task import ClipCandidateBatchItem, ClipCandidateUpdate, TaskStatus
 from app.services.ai_analysis_workflow_service import (
     AI_CLIP_MIN_RECOMMENDED_SECONDS,
+    AIAnalysisConflictError,
     _ai_model_name,
     _ai_provider_label,
     _analysis_payload_to_preview,
@@ -240,7 +241,6 @@ PLATFORM_LABELS = {
 
 SOURCE_TYPE_LABELS = {
     "upload": "上传视频",
-    "nas": "选择 NAS / 本地文件",
 }
 
 OUTPUT_STATUS_LABELS = {
@@ -402,8 +402,6 @@ def get_platform_label(platform: str) -> str:
 
 
 def get_source_path(task: dict) -> str:
-    if task.get("source_type") == "nas":
-        return task.get("nas_file_path") or "尚未选择 NAS / 本地文件"
     return task.get("original_video_path") or "尚未上传视频"
 
 
@@ -585,7 +583,7 @@ def list_task_name_history() -> list[str]:
               AND TRIM(task_name) <> ''
             GROUP BY TRIM(task_name)
             ORDER BY latest_created_at DESC, task_name ASC
-            LIMIT 100
+            LIMIT 5
             """
         ).fetchall()
     return [str(row["task_name"]) for row in rows]
@@ -984,6 +982,22 @@ def sync_reviewed_clips_to_publish_center(
         )
         action_message = "已保存当前审核选择，现有切片与选择一致，无需重复生成。"
 
+    link_state = publish_sync.get("link_state") or {}
+    publish_sync_ok = (
+        publish_sync.get("status") == "ok"
+        and not (publish_sync.get("errors") or [])
+        and link_state.get("state") == "linked"
+        and int(link_state.get("missing_count") or 0) == 0
+    )
+    current_task = get_task(task_id, include_video_probe=False)
+    if publish_sync_ok and current_task and current_task.get("status") == TaskStatus.pending_review.value:
+        transition_task_status(task_id, TaskStatus.completed)
+    elif not publish_sync_ok and current_task and current_task.get("status") in {
+        TaskStatus.completed.value,
+        TaskStatus.completed_with_errors.value,
+    }:
+        update_task_status(task_id, TaskStatus.pending_review)
+
     return {
         "status": publish_sync.get("status") or "ok",
         "message": f"{action_message}{publish_sync.get('message') or '发送中心同步完成。'}",
@@ -993,7 +1007,7 @@ def sync_reviewed_clips_to_publish_center(
         "review_save": save_result,
         "cut_result": cut_result,
         "publish_sync": publish_sync,
-        "link_state": publish_sync.get("link_state") or {},
+        "link_state": link_state,
         "errors": publish_sync.get("errors") or [],
         "warnings": publish_sync.get("warnings") or [],
     }

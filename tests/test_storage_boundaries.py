@@ -173,8 +173,8 @@ def test_source_media_route_keeps_allowed_external_source(isolated_storage_bound
         lambda *_args, **_kwargs: {
             "id": "task-source",
             "task_dir_name": "task-source",
-            "source_type": "nas",
-            "nas_file_path": str(source_path),
+            "source_type": "upload",
+            "original_video_path": str(source_path),
         },
     )
 

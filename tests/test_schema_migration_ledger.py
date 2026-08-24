@@ -48,11 +48,16 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
         ).fetchall()
         indexes = _index_names(connection)
 
-    assert len(migrations) == 1
-    assert migrations[0]["version"] == database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_VERSION
-    assert migrations[0]["name"] == database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_NAME
-    assert migrations[0]["checksum"] == database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_CHECKSUM
-    assert migrations[0]["applied_at"]
+    assert len(migrations) == 2
+    migrations_by_version = {row["version"]: row for row in migrations}
+    publish_migration = migrations_by_version[database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_VERSION]
+    assert publish_migration["name"] == database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_NAME
+    assert publish_migration["checksum"] == database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_CHECKSUM
+    assert publish_migration["applied_at"]
+    upload_migration = migrations_by_version[database_module.TASK_UPLOAD_ONLY_MIGRATION_VERSION]
+    assert upload_migration["name"] == database_module.TASK_UPLOAD_ONLY_MIGRATION_NAME
+    assert upload_migration["checksum"] == database_module.TASK_UPLOAD_ONLY_MIGRATION_CHECKSUM
+    assert upload_migration["applied_at"]
     assert database_module.PUBLISH_ACTIVE_UNIQUE_INDEX_NAME in indexes
     assert database_module.PUBLISH_ACTIVE_UNIQUE_INDEX_LEGACY_NAME not in indexes
 
@@ -89,6 +94,46 @@ def test_existing_database_is_backed_up_before_publish_index_migration(isolated_
             "workflow-before-publish-active-unique-index-v2-*.sqlite3"
         )
     )
+    assert len(backups) == 1
+
+
+def test_legacy_nas_task_is_backed_up_and_normalized(isolated_database):
+    database_module.init_db()
+    legacy_path = r"E:\\历史原片\\source.mp4"
+    with _connect(isolated_database) as connection:
+        connection.execute(
+            "DELETE FROM schema_migrations WHERE version = ?",
+            (database_module.TASK_UPLOAD_ONLY_MIGRATION_VERSION,),
+        )
+        connection.execute(
+            """
+            INSERT INTO tasks (
+                id, task_name, source_type, nas_file_path, status, created_at, updated_at
+            ) VALUES ('legacy-nas-task', '历史 NAS 任务', 'nas', ?, 'completed', 'now', 'now')
+            """,
+            (legacy_path,),
+        )
+        connection.commit()
+
+    database_module.init_db()
+
+    with _connect(isolated_database) as connection:
+        task = connection.execute(
+            "SELECT source_type, original_video_path, nas_file_path FROM tasks WHERE id = 'legacy-nas-task'"
+        ).fetchone()
+        ledger_count = connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = ?",
+            (database_module.TASK_UPLOAD_ONLY_MIGRATION_VERSION,),
+        ).fetchone()[0]
+    backups = list(
+        (isolated_database.parent / "backups").glob("workflow-before-task-upload-only-*.sqlite3")
+    )
+    assert dict(task) == {
+        "source_type": "upload",
+        "original_video_path": legacy_path,
+        "nas_file_path": None,
+    }
+    assert ledger_count == 1
     assert len(backups) == 1
 
 

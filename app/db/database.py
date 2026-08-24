@@ -41,6 +41,27 @@ PUBLISH_ACTIVE_INDEX_MIGRATION_CHECKSUM = hashlib.sha256(
         f"DROP INDEX {PUBLISH_ACTIVE_UNIQUE_INDEX_LEGACY_NAME}"
     ).encode("utf-8")
 ).hexdigest()
+TASK_UPLOAD_ONLY_MIGRATION_VERSION = "20260824_02_task_upload_only"
+TASK_UPLOAD_ONLY_MIGRATION_NAME = "任务视频来源归一为本机上传"
+TASK_UPLOAD_ONLY_MIGRATION_SQL = """
+UPDATE tasks
+SET original_video_path = CASE
+        WHEN original_video_path IS NULL OR TRIM(original_video_path) = '' THEN nas_file_path
+        ELSE original_video_path
+    END,
+    source_type = 'upload',
+    nas_file_path = NULL
+WHERE source_type != 'upload'
+   OR source_type IS NULL
+   OR (nas_file_path IS NOT NULL AND TRIM(nas_file_path) != '')
+""".strip()
+TASK_UPLOAD_ONLY_MIGRATION_CHECKSUM = hashlib.sha256(
+    (
+        f"{TASK_UPLOAD_ONLY_MIGRATION_VERSION}\n"
+        f"{TASK_UPLOAD_ONLY_MIGRATION_NAME}\n"
+        f"{TASK_UPLOAD_ONLY_MIGRATION_SQL}"
+    ).encode("utf-8")
+).hexdigest()
 
 
 class SchemaMigrationError(RuntimeError):
@@ -79,6 +100,7 @@ def init_db() -> None:
     needs_subtitle_editor_backup = _requires_subtitle_editor_schema_migration(settings.database_path)
     needs_subtitle_auto_backup = _requires_subtitle_auto_schema_migration(settings.database_path)
     needs_publish_index_backup = _requires_publish_active_index_migration(settings.database_path)
+    needs_task_upload_only_backup = _requires_task_upload_only_migration(settings.database_path)
     if needs_long_live_backup:
         create_schema_migration_backup(
             settings.database_path,
@@ -115,6 +137,12 @@ def init_db() -> None:
             settings.database_path,
             settings.data_dir / "backups",
             "publish-active-unique-index-v2",
+        )
+    if needs_task_upload_only_backup:
+        create_schema_migration_backup(
+            settings.database_path,
+            settings.data_dir / "backups",
+            "task-upload-only",
         )
 
     with get_connection() as connection:
@@ -721,6 +749,31 @@ def _requires_publish_active_index_migration(database_path) -> bool:
             connection.close()
 
 
+def _requires_task_upload_only_migration(database_path) -> bool:
+    """只有确实存在旧 NAS 来源数据时才在归一化前备份。"""
+    if not database_path.exists() or database_path.stat().st_size == 0:
+        return False
+    connection = None
+    try:
+        connection = sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)").fetchall()}
+        if not {"source_type", "nas_file_path"} <= columns:
+            return False
+        row = connection.execute(
+            """
+            SELECT 1 FROM tasks
+            WHERE source_type != 'upload'
+               OR source_type IS NULL
+               OR (nas_file_path IS NOT NULL AND TRIM(nas_file_path) != '')
+            LIMIT 1
+            """
+        ).fetchone()
+        return row is not None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def _get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
     rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row["name"] for row in rows}
@@ -856,6 +909,24 @@ def _apply_publish_active_unique_index_migration(connection: sqlite3.Connection)
     connection.execute(f"DROP INDEX IF EXISTS {PUBLISH_ACTIVE_UNIQUE_INDEX_LEGACY_NAME}")
 
 
+def _apply_task_upload_only_migration(connection: sqlite3.Connection) -> None:
+    connection.execute(TASK_UPLOAD_ONLY_MIGRATION_SQL)
+
+
+def _verify_task_upload_only_migration(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        """
+        SELECT 1 FROM tasks
+        WHERE source_type != 'upload'
+           OR source_type IS NULL
+           OR (nas_file_path IS NOT NULL AND TRIM(nas_file_path) != '')
+        LIMIT 1
+        """
+    ).fetchone()
+    if row is not None:
+        raise SchemaMigrationError("仍存在未归一化的 NAS 视频来源记录")
+
+
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
     return (
         SchemaMigration(
@@ -864,6 +935,13 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             checksum=PUBLISH_ACTIVE_INDEX_MIGRATION_CHECKSUM,
             apply=_apply_publish_active_unique_index_migration,
             verify=_verify_publish_active_unique_index_migration,
+        ),
+        SchemaMigration(
+            version=TASK_UPLOAD_ONLY_MIGRATION_VERSION,
+            name=TASK_UPLOAD_ONLY_MIGRATION_NAME,
+            checksum=TASK_UPLOAD_ONLY_MIGRATION_CHECKSUM,
+            apply=_apply_task_upload_only_migration,
+            verify=_verify_task_upload_only_migration,
         ),
     )
 

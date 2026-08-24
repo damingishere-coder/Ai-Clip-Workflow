@@ -191,7 +191,7 @@ def write_transcript_markdown(
     checkpoint = None
     task_id = str(task.get("id") or "").strip()
     if task_id:
-        source_path = task.get("nas_file_path") or task.get("original_video_path") or audio_path
+        source_path = task.get("original_video_path") or audio_path
         checkpoint = TranscriptionCheckpoint(
             task_id=task_id,
             source_path=source_path,

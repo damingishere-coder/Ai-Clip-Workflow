@@ -37,17 +37,6 @@ async def list_tasks() -> list[dict]:
     return task_service.list_tasks()
 
 
-@router.post("")
-async def create_task(payload: TaskCreate, background_tasks: BackgroundTasks) -> dict:
-    try:
-        result = task_service.create_task_record(payload)
-        if payload.auto_mode:
-            result["auto_pipeline"] = start_auto_pipeline(result["id"], background_tasks=background_tasks)
-        return result
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
 @router.post("/upload")
 async def create_upload_task(
     background_tasks: BackgroundTasks,
@@ -87,15 +76,14 @@ async def create_upload_task(
         )
         payload = TaskCreate(
             task_name=task_name,
-            source_type="upload",
             platform=platform,
             original_video_path=str(saved_path),
             max_clip_duration=max_clip_duration,
             candidate_clip_count=candidate_clip_count,
             selection_profile=selection_profile,
             final_clip_target=final_clip_target,
-            highlight_density_per_hour=highlight_density_per_hour,
-            highlight_total_limit=highlight_total_limit,
+            highlight_density_per_hour=(highlight_density_per_hour if selection_profile == "long_live_talk" else 4),
+            highlight_total_limit=(highlight_total_limit if selection_profile == "long_live_talk" else 30),
             ai_preference=ai_preference,
             auto_mode=auto_mode,
             auto_clip_count=auto_clip_count,
@@ -297,6 +285,8 @@ async def process_ai_analysis(
 ) -> dict:
     try:
         return await run_in_threadpool(task_service.process_task_ai_analysis, task_id, provider=provider)
+    except task_service.AIAnalysisConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -317,6 +307,8 @@ async def get_ai_analysis_runs(task_id: str) -> dict:
 async def restore_ai_analysis_run(task_id: str, run_id: str) -> dict:
     try:
         return task_service.restore_ai_analysis_run(task_id, run_id)
+    except task_service.AIAnalysisConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

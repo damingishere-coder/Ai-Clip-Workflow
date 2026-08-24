@@ -19,7 +19,6 @@ from app.routers import tasks as tasks_router
 from app.services import job_service
 from app.services import task_lifecycle_service
 from app.services.storage_service import (
-    StorageSafetyError,
     build_task_media_cleanup_plan,
     configure_runtime_media_storage,
     save_uploaded_video,
@@ -49,6 +48,7 @@ def isolated_media_settings(tmp_path, monkeypatch):
         "tasks_dir": storage_root,
         "upload_temp_dir": storage_root / "_临时上传",
         "publish_scheduler_export_dir": storage_root / "_发布包",
+        "max_upload_size_bytes": 4 * 1024 * 1024 * 1024,
     }
     settings_objects = []
     seen_settings = set()
@@ -146,7 +146,7 @@ def test_large_multipart_upload_spools_in_e_drive(monkeypatch, isolated_media_se
             headers=_headers(),
         )
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     assert captured["rolled"] is True
     assert captured["tempdir"] == str(settings.upload_temp_dir.resolve())
     assert tempfile.tempdir == previous_temp
@@ -160,8 +160,10 @@ def test_large_multipart_upload_spools_in_e_drive(monkeypatch, isolated_media_se
 
 
 def test_failed_upload_removes_partial_task_directory(monkeypatch, isolated_media_settings):
-    original_limit = settings.max_upload_size_bytes
-    object.__setattr__(settings, "max_upload_size_bytes", 1024)
+    from app.services import storage_service
+
+    original_limit = storage_service.settings.max_upload_size_bytes
+    object.__setattr__(storage_service.settings, "max_upload_size_bytes", 1024)
     monkeypatch.setattr(
         tasks_router,
         "allocate_task_dir_name",
@@ -175,7 +177,7 @@ def test_failed_upload_removes_partial_task_directory(monkeypatch, isolated_medi
             headers=_headers(),
         )
     finally:
-        object.__setattr__(settings, "max_upload_size_bytes", original_limit)
+        object.__setattr__(storage_service.settings, "max_upload_size_bytes", original_limit)
 
     assert response.status_code == 400
     assert not (settings.tasks_dir / "failed-upload-directory").exists()
@@ -221,9 +223,8 @@ def test_delete_preserves_external_source(isolated_media_settings):
     create_task_record(
         TaskCreate(
             task_name=task_id,
-            source_type="nas",
             selection_profile="general",
-            nas_file_path=str(external_source),
+            original_video_path=str(external_source),
         ),
         task_id=task_id,
         task_dir_name=task_id,
@@ -283,6 +284,8 @@ def test_delete_failure_keeps_task_visible(monkeypatch, isolated_media_settings)
 
 
 def test_delete_rejects_path_traversal(isolated_media_settings):
+    from app.services import storage_service
+
     now = "2026-08-02T00:00:00+00:00"
     with get_connection() as connection:
         connection.execute(
@@ -294,7 +297,7 @@ def test_delete_rejects_path_traversal(isolated_media_settings):
         )
         connection.commit()
 
-    with pytest.raises(StorageSafetyError, match="不安全路径"):
+    with pytest.raises(storage_service.StorageSafetyError, match="不安全路径"):
         delete_task_permanently("unsafe-task")
 
 

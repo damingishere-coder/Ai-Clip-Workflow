@@ -484,8 +484,7 @@ def validate_source_video_path(path_value: str | None) -> tuple[bool, str]:
 
 
 def get_source_video_path(task: dict) -> Path | None:
-    source_path = task.get("nas_file_path") if task.get("source_type") == "nas" else task.get("original_video_path")
-    return resolve_video_file_path(source_path)
+    return resolve_video_file_path(task.get("original_video_path"))
 
 
 def save_uploaded_video(task_id: str, filename: str, file_object: BinaryIO, task_dir_name: str | None = None) -> Path:
@@ -852,49 +851,3 @@ def move_task_directory_to_trash(task_id: str, task_name: str, task_dir_name: st
     if source_dir.exists() and source_dir.resolve() != target_dir.resolve():
         shutil.move(str(source_dir), str(target_dir))
     return trash_dir_name, target_dir
-
-
-def browse_video_directory(path_value: str | None) -> dict:
-    allowed_roots = _collect_allowed_roots()
-
-    if path_value:
-        base_path = Path(path_value)
-        # 阻止路径遍历
-        path_str = str(base_path).replace("\\", "/")
-        if ".." in Path(path_str).parts:
-            return {"path": str(base_path), "exists": False, "directories": [], "files": [],
-                    "error": "路径包含不安全的跳转字符"}
-        if not _is_path_within_roots(base_path, roots=allowed_roots):
-            # 回退到 STORAGE_ROOT
-            base_path = settings.storage_root
-    else:
-        base_path = settings.storage_root
-
-    if not base_path.exists():
-        return {"path": str(base_path), "exists": False, "directories": [], "files": []}
-    if base_path.is_file():
-        base_path = base_path.parent
-
-    # 再次确认父目录在允许范围内
-    if not _is_path_within_roots(base_path, roots=allowed_roots):
-        base_path = settings.storage_root
-
-    directories = []
-    files = []
-    try:
-        for item in sorted(base_path.iterdir(), key=lambda value: (value.is_file(), value.name.lower())):
-            if item.is_dir():
-                directories.append({"name": item.name, "path": str(item)})
-            elif is_video_file(item):
-                files.append({"name": item.name, "path": str(item), "size": item.stat().st_size})
-    except PermissionError:
-        return {"path": str(base_path), "exists": True, "directories": [], "files": [],
-                "error": "没有权限浏览此目录"}
-
-    return {
-        "path": str(base_path),
-        "parent_path": str(base_path.parent) if _is_path_within_roots(base_path.parent, roots=allowed_roots) else "",
-        "exists": True,
-        "directories": directories,
-        "files": files,
-    }

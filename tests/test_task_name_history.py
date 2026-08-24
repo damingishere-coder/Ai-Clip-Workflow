@@ -139,13 +139,13 @@ def test_list_task_name_history_deduplicates_non_empty_names_and_limits_results(
 
     history = task_service.list_task_name_history()
 
-    assert len(history) == 100
+    assert len(history) == 5
     assert history[0] == "重复任务"
     assert history.count("重复任务") == 1
     assert "" not in history
     assert "   " not in history
-    assert history[-1] == "任务 006"
-    assert "任务 005" not in history
+    assert history[-1] == "任务 101"
+    assert "任务 100" not in history
 
 
 def test_new_task_page_renders_name_history_candidates(tmp_path, monkeypatch):
@@ -170,6 +170,10 @@ def test_new_task_page_renders_name_history_candidates(tmp_path, monkeypatch):
     assert 'name="task_name"' in response.text
     assert 'list="task-name-history"' in response.text
     assert 'autocomplete="off"' in response.text
+    assert "NAS" not in response.text
+    assert 'name="source_type"' not in response.text
+    assert 'name="video_file"' in response.text
+    assert 'id="long-live-settings" hidden' in response.text
     assert "九月的第二次综艺访谈精华回顾合集" in response.text
     assert "八月的第一次直播全程高光切片" in response.text
     newest_position = response.text.index("九月的第二次综艺访谈精华回顾合集")

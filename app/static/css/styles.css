@@ -765,6 +765,10 @@ dd {
   gap: 12px;
 }
 
+#long-live-settings[hidden] {
+  display: none;
+}
+
 .segmented label,
 .toggle-line,
 .inline-switch {

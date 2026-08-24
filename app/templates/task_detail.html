@@ -19,7 +19,7 @@
       <button class="primary-button js-process-action" type="button" data-live-primary-action="retry" data-endpoint="/api/tasks/{{ task.id }}/process/auto-retry" {% if not task.status.startswith("FAILED_") %}hidden{% endif %}>重试全自动流程</button>
       <button class="primary-button js-process-action" type="button" data-live-primary-action="resume" data-endpoint="/api/tasks/{{ task.id }}/process/auto-resume" {% if task.status not in ["pending_review", "completed_with_errors", "failed"] %}hidden{% endif %}>继续全自动流程</button>
       <a class="primary-button" data-live-primary-action="subtitle_review" href="/subtitles/{{ task.id }}" {% if task.status != "PENDING_SUBTITLE_REVIEW" %}hidden{% endif %}>前往字幕审核</a>
-      <button class="secondary-button" type="button" data-live-subtitle-skip data-task-id="{{ task.id }}" {% if task.status != "PENDING_SUBTITLE_REVIEW" %}hidden{% endif %}>跳过字幕，使用原片继续</button>
+      <button class="secondary-button" type="button" data-live-subtitle-skip data-task-id="{{ task.id }}" {% if task.status != "PENDING_SUBTITLE_REVIEW" %}hidden{% endif %}>跳过字幕，进入片段审核</button>
       <a class="primary-button" data-live-primary-action="publish" href="/publish?task_id={{ task.id }}&tab=content" {% if task.status not in ["READY_TO_PUBLISH", "COMPLETED", "completed"] %}hidden{% endif %}>前往发送中心</a>
       <button class="secondary-button" type="button" data-live-primary-action="processing" disabled {% if task.status.startswith("FAILED_") or task.status in ["pending_review", "PENDING_SUBTITLE_REVIEW", "completed", "completed_with_errors", "failed", "READY_TO_PUBLISH", "COMPLETED"] %}hidden{% endif %}>全自动处理中</button>
       <a class="secondary-button" data-live-review-action href="/tasks/{{ task.id }}/clips/review" {% if not task.analysis_exists %}hidden{% endif %}>检查候选片段</a>
@@ -53,7 +53,7 @@
   data-running="{{ 'true' if task.status in ['CREATED', 'PREPARING_SOURCE', 'TRANSCRIBING', 'AI_ANALYZING', 'CLIP_SELECTING', 'VIDEO_CUTTING', 'SUBTITLE_DRAFTING', 'METADATA_GENERATING', 'SCHEDULE_CREATING', 'PUBLISH_JOB_CREATING'] else 'false' }}"
 >
   <strong>全自动模式已接管这个任务。</strong>
-  <p>系统会自动推进音频提取、转写、AI 选片和视频切割；切片后会生成字幕草稿并暂停，只有你明确审核烧录或跳过字幕后才会进入发送中心。</p>
+  <p>系统会自动推进音频提取、转写、AI 选片和视频切割；切片后会生成字幕草稿并暂停。审核烧录可恢复后续流程；跳过字幕则先进入片段审核，保存确认后才同步发送中心。</p>
 </section>
 {% endif %}
 
@@ -67,7 +67,6 @@
     </div>
     <dl class="meta-grid">
       <div><dt>平台</dt><dd>{{ task.platform_label }}</dd></div>
-      <div><dt>视频来源</dt><dd>{{ task.source_type_label }}</dd></div>
       <div><dt>视频时长</dt><dd>{{ task.duration }}</dd></div>
       <div><dt>视频大小</dt><dd>{{ task.video_size }}</dd></div>
       <div><dt>候选片段</dt><dd data-task-live-candidate-count>{{ task.candidate_count }} 条</dd></div>
@@ -117,8 +116,10 @@
       <span class="status-pill" id="ai-candidate-count-pill">{{ task.candidate_count }} 条候选</span>
     </div>
     <form id="ai-analysis-form" class="settings-form ai-prompt-form" data-task-id="{{ task.id }}" data-selection-profile="{{ task.selection_profile }}">
+      {% if task.selection_profile == "long_live_talk" %}
       <input id="ai-highlight-density" type="hidden" value="{{ task.highlight_density_per_hour or 4 }}">
       <input id="ai-highlight-total-limit" type="hidden" value="{{ task.highlight_total_limit or 30 }}">
+      {% endif %}
       <div class="ai-analysis-controls">
         <label>
           <span>候选池上限</span>

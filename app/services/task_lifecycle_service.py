@@ -37,7 +37,12 @@ PUBLIC_TASK_STATUS_TRANSITIONS: dict[str, set[str]] = {
     TaskStatus.transcribing.value: {TaskStatus.pending_ai.value, TaskStatus.failed.value},
     TaskStatus.pending_ai.value: {TaskStatus.ai_analyzing.value, TaskStatus.failed.value},
     TaskStatus.ai_analyzing.value: {TaskStatus.pending_review.value, TaskStatus.failed.value},
-    TaskStatus.pending_review.value: {TaskStatus.ai_analyzing.value, TaskStatus.cutting.value},
+    TaskStatus.pending_review.value: {
+        TaskStatus.ai_analyzing.value,
+        TaskStatus.cutting.value,
+        TaskStatus.completed.value,
+        TaskStatus.completed_with_errors.value,
+    },
     TaskStatus.cutting.value: {
         TaskStatus.completed.value,
         TaskStatus.completed_with_errors.value,
@@ -137,7 +142,7 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
     resolved_task_id = task_id or uuid4().hex[:12]
     resolved_task_dir_name = task_dir_name
     now = _now_iso()
-    source_path = payload.nas_file_path if payload.source_type == "nas" else payload.original_video_path
+    source_path = payload.original_video_path
     has_source_file = bool(source_path)
     media_preflight = None
     if source_path:
@@ -182,10 +187,10 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
             "id": resolved_task_id,
             "task_name": payload.task_name,
             "task_dir_name": resolved_task_dir_name,
-            "source_type": payload.source_type,
+            "source_type": "upload",
             "platform": payload.platform,
             "original_video_path": payload.original_video_path,
-            "nas_file_path": payload.nas_file_path,
+            "nas_file_path": None,
             "max_clip_duration": payload.max_clip_duration,
             "candidate_clip_count": payload.candidate_clip_count,
             "selection_profile": payload.selection_profile,
@@ -209,7 +214,7 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
         if "title" in existing_columns:
             insert_data["title"] = payload.task_name
         if "source_path" in existing_columns:
-            insert_data["source_path"] = payload.nas_file_path or payload.original_video_path
+            insert_data["source_path"] = payload.original_video_path
         if "max_clip_minutes" in existing_columns:
             insert_data["max_clip_minutes"] = payload.max_clip_duration
         if "target_clip_count" in existing_columns:
@@ -372,10 +377,10 @@ def _validate_public_transition_preconditions(
 ) -> None:
     if status_value == TaskStatus.pending_processing.value:
         source = connection.execute(
-            "SELECT original_video_path, nas_file_path FROM tasks WHERE id = ?",
+            "SELECT original_video_path FROM tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
-        if not source or not str(source["nas_file_path"] or source["original_video_path"] or "").strip():
+        if not source or not str(source["original_video_path"] or "").strip():
             raise TaskStatusConflictError("任务尚未绑定源视频，不能进入待处理状态")
     elif status_value == TaskStatus.cutting.value:
         enabled = connection.execute(
@@ -474,6 +479,9 @@ def update_task_selection_settings(
         raise ValueError("选片模式只能是通用内容价值、康熙笑点选片模式或长直播高光")
     if final_clip_target < 1 or final_clip_target > 12:
         raise ValueError("最终启用目标必须在 1 到 12 条之间")
+    if selection_profile != "long_live_talk":
+        highlight_density_per_hour = 4
+        highlight_total_limit = 30
     if not 1 <= highlight_density_per_hour <= 10:
         raise ValueError("每小时高光密度必须在 1 到 10 条之间")
     if not 1 <= highlight_total_limit <= 50:

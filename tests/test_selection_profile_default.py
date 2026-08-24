@@ -45,10 +45,9 @@ def test_upload_form_rejects_missing_selection_profile():
     assert response.json()["detail"] == "请选择选片模式"
 
 
-def test_json_api_rejects_missing_selection_profile():
+def test_json_task_creation_api_is_removed():
     response = TestClient(app).post("/api/tasks", json={"task_name": "缺少模式"}, headers=_headers())
-    assert response.status_code == 422
-    assert response.json()["detail"] == "请选择有效的选片模式"
+    assert response.status_code == 405
 
 
 @pytest.mark.parametrize("profile", ["general", "variety_comedy", "long_live_talk"])
