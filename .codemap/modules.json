@@ -7,9 +7,9 @@
   "htmlPath": ".codemap/codemap.html",
   "mdPath": ".codemap/codemap.md",
   "spineDesc": "用户通过页面/API 创建素材任务，SQLite Job 驱动转写、AI 选片、审核切片和字幕，再由发送中心排期并交给 Windows Chrome Worker，所有状态与审计证据回写 SQLite。",
-  "tracked_loc": 48161,
+  "tracked_loc": 48305,
   "tracked_files": 132,
-  "rev": "4eb82c16ad9834d98b7f0808d89be6601968b07c"
+  "rev": "f5260c0873effaf0f69d4021dede6e6ba1992c0d"
  },
  "excludes": [
   ".venv/",
@@ -103,7 +103,7 @@
   ],
   [
    "测试已与活动数据隔离，但 Coverage 与真实故障闭环仍不足",
-   "512 项测试全部通过，Pytest 已强制使用进程级 sandbox；Coverage 尚未采集，真实 E2E、并发恢复和 Worker fencing 仍需补齐。"
+   "533 项测试全部通过，Pytest 已强制使用进程级 sandbox；Coverage 尚未采集，真实 E2E、并发恢复和 Worker fencing 仍需补齐。"
   ]
  ],
  "modules": [
@@ -213,10 +213,10 @@
     "tests/test_publish_api_flow.py",
     "tests/test_task_defaults.py"
    ],
-   "loc": 2713,
-   "contentHash": "20597a10925da6f5430298691ed2ace1ea04fa00fe4f94aeb75cc7701625eae9",
-   "score": 63,
-   "grade": "C",
+   "loc": 2742,
+   "contentHash": "2cd5688f73de37caf02e46701a5dd278934f5c22e137ec5296cff233bb96c249",
+   "score": 58,
+   "grade": "D",
    "tags": [
     "fallback",
     "legacy",
@@ -225,67 +225,69 @@
     "glue",
     "bloat",
     "god-component",
-    "placeholder",
     "silent-except",
-    "monkeypatch",
-    "over-fit",
     "any-escape"
    ],
    "findings": [
     {
-     "sev": "MED",
-     "loc": "app/main.py:97",
-     "text": "API 写保护仅在 LOCAL_ADMIN_TOKEN 非空时启用；默认 Token 为空。若端口可被局域网访问，写 API 默认无认证。"
+     "sev": "HIGH",
+     "loc": "app/routers/settings.py:10-12",
+     "text": "GET /api/settings/ai 无读取鉴权，直接返回 get_ai_config_context；该上下文的 values 包含 AI/ASR API Key 原始值，匿名读取请求即可获得本地配置密钥。"
+    },
+    {
+     "sev": "HIGH",
+     "loc": "app/routers/tasks.py:174-179",
+     "text": "PATCH /api/tasks/{task_id}/status 接受任意 TaskStatus 后直接调用 update_task_status；底层更新按 id 直接写入，没有检查当前状态、前置产物或合法状态转移，调用者可把空任务直接标记为 completed。"
     },
     {
      "sev": "MED",
-     "loc": "app/routers/tasks.py:220",
-     "text": "多个 async 路由直接调用同步 FFmpeg/文件长任务，可能阻塞 FastAPI 事件循环；项目另有持久化异步 Job 路径。"
+     "loc": "app/main.py:40-46,97-107",
+     "text": "写 API 仅在 LOCAL_ADMIN_TOKEN 非空时校验，默认配置为空；同时 localhost/127.0.0.1 任意端口均允许跨源请求。服务被 Docker、局域网或其他本地网页访问时，写操作可能缺少有效鉴权。"
     },
     {
      "sev": "MED",
-     "loc": "app/models/task.py:7",
-     "text": "TaskStatus 同时定义大写自动流水线与小写手动状态，API 可直接提交枚举状态但不表达合法状态迁移。"
+     "loc": "app/routers/tasks.py:128-133",
+     "text": "任务详情接口调用 get_task(task_id)，而查询 SQL 未过滤 is_deleted；已软删除任务仍可能从详情入口读取，并继续成为后续媒体或操作接口的上下文。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/routers/tasks.py:220-241",
+     "text": "多个 async 路由直接调用同步的音频提取、转写处理函数，另有 process_video_cuts 在 390-399 行直接调用同步切片；FFmpeg、网络或文件操作期间会阻塞 FastAPI 事件循环。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/models/task.py:7-40",
+     "text": "TaskStatus 同时定义大写自动流水线状态和小写手动状态，API 使用同一个枚举承载两套状态语义；结合无状态机校验，容易形成状态口径漂移和非预期跳转。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/routers/files.py:9-11",
+     "text": "媒体目录浏览接口为匿名 GET，虽然服务层限制了允许根目录，但仍会返回绝对路径、目录名和视频文件列表；非纯本机部署时会扩大本地文件布局泄露面。"
     },
     {
      "sev": "LOW",
-     "loc": "app/main.py:153",
-     "text": "/health 只证明进程可响应，不检查数据库、Job Runner、Scheduler、FFmpeg 或发布 Worker，就绪语义不足。"
+     "loc": "app/main.py:153-155",
+     "text": "/health 只返回进程级 status/app，不检查 SQLite、持久化 Job Runner、Scheduler、FFmpeg 或发布 Worker，就绪状态不足。"
     },
     {
      "sev": "LOW",
-     "loc": "app/core/config.py:80",
-     "text": "local_admin_token 重复定义；AI 新旧兼容配置与 TaskCreate/Settings 默认值存在重复和漂移。"
+     "loc": "app/routers/publish.py:63-71",
+     "text": "OAuth callback 捕获通用 Exception，并将原始异常字符串拼入 redirect query；错误细节可能进入浏览器地址栏、历史记录或 Referer。"
     },
     {
      "sev": "LOW",
-     "loc": "app/routers/pages.py:40",
-     "text": "页面 Router 直接组合多个领域 Service，页面数据变化跨层影响面较大。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "app/routers/publish.py:64",
-     "text": "OAuth callback 把通用异常字符串拼入 redirect query，可能进入地址栏、历史或 Referer。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "app/main.py:115",
-     "text": "所有静态资源都 no-store，适合开发但导致每次页面加载重复下载。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "tests/test_p0_security.py:352",
-     "text": "SQLite PRAGMA 安全测试只检查查询结果非空，没有断言实际开启值；关键 API 边界测试不足。"
+     "loc": "app/core/config.py:80,244-250",
+     "text": "local_admin_token 在 Settings 中重复定义，AI 新旧配置字段也并存并通过兼容 fallback 读取，配置所有权和运行时来源不够单一。"
     },
     {
      "sev": "LOW",
      "loc": "app/models/subtitle.py:86",
-     "text": "speaker_styles 使用 Any 嵌套字典，模型层无法保证渲染输入结构完整。"
+     "text": "speaker_styles 使用 Any 嵌套字典，API 模型层无法约束渲染输入结构，非法配置可能延迟到字幕渲染阶段才失败。"
     }
    ],
-   "auditedHash": "20597a10925da6f5430298691ed2ace1ea04fa00fe4f94aeb75cc7701625eae9",
+   "auditedHash": "2cd5688f73de37caf02e46701a5dd278934f5c22e137ec5296cff233bb96c249",
    "auditedAt": "2026-08-24",
-   "auditedRev": "38fd60386a609b6ea85a3eb511b83cb296f4d2a1"
+   "auditedRev": ""
   },
   {
    "id": "media_storage",
@@ -309,48 +311,42 @@
     "tests/test_path_resolution.py",
     "tests/test_long_live_foundation.py"
    ],
-   "loc": 1501,
-   "contentHash": "145e36626a35f468a0b6905a357f31de9caefa8cbb1b3081e81547880e44ebb7",
-   "score": 73,
-   "grade": "C",
+   "loc": 1614,
+   "contentHash": "fb413a03c88a24dabe2769ec3146d04f4f3909ccc492b43d5dc623bf9ac65c6e",
+   "score": 84,
+   "grade": "B",
    "tags": [
-    "fallback",
-    "silent-except",
     "legacy",
     "dual-format",
-    "bloat",
-    "glue"
+    "glue",
+    "fallback",
+    "silent-except"
    ],
    "findings": [
     {
-     "sev": "HIGH",
-     "loc": "app/services/storage_service.py:200",
-     "text": "核心任务目录读写仍未统一复用安全相对路径校验。"
-    },
-    {
-     "sev": "HIGH",
-     "loc": "app/services/storage_service.py:244",
-     "text": "任务目录名仍为非原子分配，并发请求可能冲突。"
-    },
-    {
-     "sev": "HIGH",
-     "loc": "app/services/storage_service.py:324",
-     "text": "媒体响应仍可能信任数据库中的根目录外路径。"
+     "sev": "MED",
+     "loc": "app/services/storage_service.py:840-846",
+     "text": "move_task_directory_to_trash 明确传入 reserve=False，仍采用查询后检查目录的非原子分配；当前无运行时调用，属于遗留兼容入口，但未来恢复调用时仍可能并发复用同一回收站目录。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/storage_service.py:219",
-     "text": "数据库目录查询异常仍静默回退。"
+     "loc": "app/services/storage_service.py:361-367",
+     "text": "通用 resolve_video_file_path 对已存在路径仍原样返回。媒体 HTTP 路由已增加任务边界，但 publish/auto-publish/subtitle/task 查询等非 HTTP 调用方仍可把数据库中的现有外部路径交给后续读取或上传逻辑。"
     },
     {
-     "sev": "MED",
-     "loc": "app/services/managed_process_service.py:18",
-     "text": "Windows 进程树终止仍未可靠确认完成。"
+     "sev": "LOW",
+     "loc": "tests/test_storage_boundaries.py:14-32",
+     "text": "新增边界测试没有覆盖任务目录数据库读取在 sqlite3.Error、锁定或损坏数据库下显式失败的回归；代码已有保护但证据不足。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/storage_service.py:257-300",
+     "text": "reserve=True 会在数据库任务记录写入前创建目录；进程在预占后崩溃可能留下无数据库记录的空目录，虽不会覆盖数据，但会造成孤儿目录累积。"
     }
    ],
-   "auditedHash": "145e36626a35f468a0b6905a357f31de9caefa8cbb1b3081e81547880e44ebb7",
+   "auditedHash": "fb413a03c88a24dabe2769ec3146d04f4f3909ccc492b43d5dc623bf9ac65c6e",
    "auditedAt": "2026-08-24",
-   "auditedRev": "4eb82c16ad9834d98b7f0808d89be6601968b07c"
+   "auditedRev": ""
   },
   {
    "id": "transcription",
@@ -590,9 +586,9 @@
     "tests/test_clip_review_publish_sync.py",
     "tests/test_versioning_rollback.py"
    ],
-   "loc": 2460,
-   "contentHash": "0c03c623704306716a44691b2dcda449c935f15f0e581822a2e5414c679e29f8",
-   "score": 65,
+   "loc": 2462,
+   "contentHash": "6122597a1799e3f9353e73d1b13507a3da8904a548dd2cd60baf37f3dd3f8f75",
+   "score": 60,
    "grade": "C",
    "tags": [
     "god-component",
@@ -607,33 +603,73 @@
    "findings": [
     {
      "sev": "HIGH",
-     "loc": "app/services/video_cut_workflow_service.py:248",
-     "text": "切片输出仍逐条独立提交，中途异常可留下半成功记录。"
+     "loc": "app/services/video_cut_workflow_service.py:248-255",
+     "text": "每个 CutResult 通过 _insert_output_clip_record 独立提交事务；中途插入异常时前面的 output_clip 已落库，cut_run 未被标记 failed，任务可能停留在 cutting 并同时暴露半批新结果。"
     },
     {
      "sev": "HIGH",
-     "loc": "app/services/task_lifecycle_service.py:154",
-     "text": "任务状态更新仍无合法迁移与产物前置校验。"
+     "loc": "app/services/task_lifecycle_service.py:156-180",
+     "text": "update_task_status 仍按 task_id 直接写入任意传入状态和进度，没有合法状态迁移、前置产物或并发条件；API 直接暴露 PATCH /status，可将空任务跳转为 completed。"
     },
     {
      "sev": "HIGH",
-     "loc": "app/services/task_service.py:451",
-     "text": "ffprobe 仍缺 timeout 和完整异常边界。"
+     "loc": "app/services/task_service.py:451-478",
+     "text": "_probe_video 调用 ffprobe 没有 timeout，也没有捕获 subprocess OSError、媒体读取异常或 stat 异常；get_task 默认 include_video_probe=True，损坏、卡死或不可达媒体可长期阻塞任务详情或直接 500。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/task_service.py:14",
-     "text": "task_service 仍跨越多项业务职责并与查询层反向依赖。"
+     "loc": "app/services/video_cut_workflow_service.py:18-45",
+     "text": "_next_cut_run_number 先 SELECT MAX(run_number)，随后由独立连接 INSERT，缺少事务序列化或唯一约束；并发重切可能产生重复 run_number。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/video_cut_workflow_service.py:18",
-     "text": "切片 run_number 仍先 MAX 后 INSERT，存在并发冲突。"
+     "loc": "app/services/task_lifecycle_service.py:66-71",
+     "text": "allocate_task_dir_name 会先原子预占目录，再由 create_task_directory 和数据库 INSERT 继续执行；后续目录初始化或数据库提交失败时没有统一释放已预占的空目录，可能累积孤儿目录并影响后续命名。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/task_service.py:14-96",
+     "text": "task_service 仍集中导入 AI、字幕、转写、存储、切片等大量私有服务函数，并与 task_lifecycle_service 形成动态反向依赖，职责边界复杂。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/task_query_service.py:89-172",
+     "text": "_batch_all_output_clips 复制 task_service.list_output_clips 的路径解析、字幕状态和发布就绪判断；两套口径未来可能分叉。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/task_service.py:587-603",
+     "text": "get_task 查询只按 id，不过滤 is_deleted；已永久删除且仅应保留历史的任务仍可被详情和后续动作读取。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/task_service.py:717-718",
+     "text": "list_clip_candidates 直接解析每条 start_time/end_time，单条历史脏时间格式可阻断整个审核页。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/video_cut_workflow_service.py:269-289",
+     "text": "切片成功后先把任务更新为完成，再同步发送中心；同步异常只返回 partial，主状态与发布关联可能不一致。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "tests/test_path_resolution.py:44-68",
+     "text": "目录唯一性单元测试为连续调用；并发线程回归由 tests/test_storage_boundaries.py 单独覆盖。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "tests/test_split_services.py:119-137",
+     "text": "测试将没有产物的任务直接更新为 completed 并断言成功，固化了任意状态跳跃行为。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "tests/test_versioning_rollback.py:163-178",
+     "text": "版本测试使用虚构输出路径，只验证数据库标记，没有覆盖真实 FFmpeg 输出、文件切换和恢复。"
     }
    ],
-   "auditedHash": "0c03c623704306716a44691b2dcda449c935f15f0e581822a2e5414c679e29f8",
+   "auditedHash": "6122597a1799e3f9353e73d1b13507a3da8904a548dd2cd60baf37f3dd3f8f75",
    "auditedAt": "2026-08-24",
-   "auditedRev": "4eb82c16ad9834d98b7f0808d89be6601968b07c"
+   "auditedRev": ""
   },
   {
    "id": "subtitle",

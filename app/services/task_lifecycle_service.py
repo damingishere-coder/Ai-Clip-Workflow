@@ -47,10 +47,7 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
     from app.services.task_service import _now_iso, get_status_label, STATUS_PROGRESS  # noqa: F811
 
     resolved_task_id = task_id or uuid4().hex[:12]
-    resolved_task_dir_name = task_dir_name or allocate_task_dir_name(
-        payload.task_name,
-        exclude_task_id=resolved_task_id,
-    )
+    resolved_task_dir_name = task_dir_name
     now = _now_iso()
     source_path = payload.nas_file_path if payload.source_type == "nas" else payload.original_video_path
     has_source_file = bool(source_path)
@@ -66,6 +63,11 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
         )
         media_preflight = preflight_media(source_path, total_output_limit=output_limit)
 
+    if not resolved_task_dir_name:
+        resolved_task_dir_name = allocate_task_dir_name(
+            payload.task_name,
+            exclude_task_id=resolved_task_id,
+        )
     create_task_directory(resolved_task_id, resolved_task_dir_name)
 
     initial_status = TaskStatus.CREATED.value if payload.auto_mode else (

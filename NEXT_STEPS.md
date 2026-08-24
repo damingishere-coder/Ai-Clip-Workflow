@@ -6,7 +6,7 @@
 - [x] P0.2：修复活动库 17 条孤儿外键；以 8 个不可见 tombstone 保留发布、字幕和人工复核历史，最终 `foreign_key_check=0`。
 - [x] P0.3：永久删除改为“同卷隔离暂存 → 数据库提交 → 最终清理”，提交失败可恢复，最终清理失败可重试。
 - [x] P0.4：SQLite Online Backup 固定为不依赖 WAL/SHM 的单文件快照。
-- [ ] P1.1：收紧媒体读取与任务目录边界，补齐核心读写路径的 traversal / arbitrary-file 回归测试。
+- [x] P1.1：收紧媒体读取与任务目录边界，补齐核心读写路径的 traversal / arbitrary-file 回归测试；并补充同名目录原子预占和进程树退出确认。
 - [ ] P1.2：为 Workflow Job 和 Publish Job 增加 lease owner / execution generation fencing，阻止旧 Worker 回写新执行。
 - [ ] P1.3：补齐任务状态转移约束、批处理原子性、取消/重启恢复和明确失败状态。
 - [ ] P1.4：统一第三方 AI/FFmpeg 超时、错误 JSON、429/5xx 与重试幂等边界，并避免重复计费。
@@ -27,8 +27,8 @@
 1. **P0.1 测试数据库保护**：让 pytest 只能使用唯一临时库，发现活动库路径立即拒绝启动。
 2. **P0.2 数据一致性**：先做 WAL-aware 备份和 dry-run，再逐条处理活动库 17 条外键违规；修复前不要手工删记录。
 3. **P0.3 可恢复删除**：把“直接删文件后提交数据库”改成带隔离区和 manifest 的两阶段删除。
-4. **P1.1 Secret 与本地鉴权**：读取接口不再返回原始 API Key/OAuth Token；非 loopback 部署要求明确保护。
-5. **P1.2 路径边界**：统一任务目录、媒体响应和 Worker execution/account id 的允许根与字符校验。
+4. **P1.1 Secret 与本地鉴权**：读取接口不再返回原始 API Key/OAuth Token；非 loopback 部署要求明确保护（尚未开始）。
+5. **P1.2 路径边界**：任务目录与媒体响应边界已完成；Worker execution/account id 的字符校验保留到发布 fencing 同轮处理。
 6. **P1.3 Job/Publish fencing**：旧 Worker/旧 execution 不得覆盖新 attempt，重复 execution id 不得再次投稿。
 7. **P1.4 状态与部分成功**：逐步封住任务状态跳跃、切片/字幕批次半提交、转写旧结果复用和 AI partial 成本边界。
 8. P0/P1 稳定后，再补 Coverage、真实故障测试、readiness/日志，然后渐进拆分 `publish_service.py` 与前端大脚本。

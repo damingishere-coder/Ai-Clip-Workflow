@@ -7,15 +7,15 @@
 
 > **Interactive view:** [`.codemap/codemap.html`](codemap.html) — per-module scores, findings, LoC, and the dependency graph. This file is the written report.
 
-**Generated:** 2026-08-24 · **Modules:** 13 · **Size:** 48161 tracked LoC across 132 files
+**Generated:** 2026-08-24 · **Modules:** 13 · **Size:** 48305 tracked LoC across 132 files
 
 ## Health by layer
 
 | Layer | Modules | Avg score |
 |---|--:|--:|
-| 界面 · API | 2 | 64 |
-| 业务编排 | 3 | 58 |
-| 媒体与 AI 处理 | 4 | 66 |
+| 界面 · API | 2 | 62 |
+| 业务编排 | 3 | 57 |
+| 媒体与 AI 处理 | 4 | 69 |
 | 外部执行边界 | 2 | 62 |
 | 持久化与运维 | 2 | 70 |
 
@@ -28,14 +28,14 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 | Module | LoC | Score | Tags |
 |---|--:|:--|:--|
 | Frontend UI | 13,840 | 65 C | god-component, bloat, glue, duplication, legacy |
-| API & Runtime | 2,713 | 63 C | fallback, legacy, dual-format, duplication, glue, bloat, god-component, placeholder, silent-except, monkeypatch, over-fit, any-escape |
+| API & Runtime | 2,742 | 58 D | fallback, legacy, dual-format, duplication, glue, bloat, god-component, silent-except, any-escape |
 
 ### 业务编排
 
 | Module | LoC | Score | Tags |
 |---|--:|:--|:--|
 | Publish Center | 5,561 | 52 D | god-component, bloat, legacy, dual-format, fallback, silent-except, placeholder, duplication |
-| Task Review & Cut | 2,460 | 65 C | god-component, glue, duplication, dual-format, fallback, legacy, over-fit, silent-except |
+| Task Review & Cut | 2,462 | 60 C | god-component, glue, duplication, dual-format, fallback, legacy, over-fit, silent-except |
 | Pipeline & Job Queue | 1,745 | 58 D | fallback, silent-except, legacy, dual-format, stub, god-component, glue, over-fit |
 
 ### 媒体与 AI 处理
@@ -45,7 +45,7 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 | AI Selection | 4,420 | 63 C | fallback, silent-except, legacy, dual-format, stub, fake-output, bloat, duplication, god-component |
 | Subtitle | 2,391 | 70 C | fallback, silent-except, legacy, bloat, god-component, monkeypatch |
 | Transcription | 1,930 | 58 D | over-fit, fallback, fake-output, dual-format, silent-except, duplication, god-component, glue |
-| Media & Storage | 1,501 | 73 C | fallback, silent-except, legacy, dual-format, bloat, glue |
+| Media & Storage | 1,614 | 84 B | legacy, dual-format, glue, fallback, silent-except |
 
 ### 外部执行边界
 
@@ -64,32 +64,31 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 ## Worst offenders
 
 - **Publish Center (52/D)** — app/services/publish_service.py:564: 配置/账号归一化仅新增 masked 字段却保留原始 Secret/Token，GET 接口直接返回。
+- **API & Runtime (58/D)** — app/routers/settings.py:10-12: GET /api/settings/ai 无读取鉴权，直接返回 get_ai_config_context；该上下文的 values 包含 AI/ASR API Key 原始值，匿名读取请求即可获得本地配置密钥。
 - **Transcription (58/D)** — app/services/transcription_checkpoint_service.py:22: 文件指纹只哈希大小与首尾各 1MiB；大文件中部变化但首尾/大小不变会错误复用旧转写 checkpoint。
 - **Pipeline & Job Queue (58/D)** — app/services/job_service.py:329: checkpoint、progress 与终态更新只按 job_id，不校验 lease_owner/status；旧 worker 可覆盖新 attempt。
+- **Task Review & Cut (60/C)** — app/services/video_cut_workflow_service.py:248-255: 每个 CutResult 通过 _insert_output_clip_record 独立提交事务；中途插入异常时前面的 output_clip 已落库，cut_run 未被标记 failed，任务可能停留在 cutting 并同时暴露半批新结果。
 - **Publish Scheduler (62/C)** — app/services/publish_repository.py:54: 发布结果只按 job_id 写回，无 execution/worker/claim 代际条件；旧执行可覆盖新 claim 终态。
 - **Publishers & Worker (62/C)** — scripts/publish_host_worker.py:74: execution_id 直接拼 journal 路径且仅限长度，../、分隔符或盘符可逃逸 Worker 状态目录，读写异常 JSON。
-- **API & Runtime (63/C)** — app/main.py:97: API 写保护仅在 LOCAL_ADMIN_TOKEN 非空时启用；默认 Token 为空。若端口可被局域网访问，写 API 默认无认证。
 - **AI Selection (63/C)** — app/services/ai_config_service.py:318: get_ai_config_context 返回含 AI/ASR Key 的完整 values，GET /api/settings/ai 无读取鉴权，页面也复用该上下文。
 - **Frontend UI (65/C)** — app/static/js/app.js:211: 多个写请求绕过统一 apiFetch；启用 LOCAL_ADMIN_TOKEN 时可能缺失 Authorization 并被 API 拒绝。
-- **Task Review & Cut (65/C)** — app/services/video_cut_workflow_service.py:248: 切片输出仍逐条独立提交，中途异常可留下半成功记录。
 - **Ops & Delivery (68/C)** — scripts/migrate_task_dirs_to_project_names.py:211: 任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。
 
 ## All findings
 
-### HIGH (23)
+### HIGH (22)
 
 - **Frontend UI** · `app/static/js/app.js:211` — 多个写请求绕过统一 apiFetch；启用 LOCAL_ADMIN_TOKEN 时可能缺失 Authorization 并被 API 拒绝。
 - **Frontend UI** · `app/static/js/app.js:1729` — 接口或任务数据直接拼接到 innerHTML；publish-center.js:2152 有同类路径，存在本地 DOM XSS/页面结构破坏风险。
-- **Media & Storage** · `app/services/storage_service.py:200` — 核心任务目录读写仍未统一复用安全相对路径校验。
-- **Media & Storage** · `app/services/storage_service.py:244` — 任务目录名仍为非原子分配，并发请求可能冲突。
-- **Media & Storage** · `app/services/storage_service.py:324` — 媒体响应仍可能信任数据库中的根目录外路径。
+- **API & Runtime** · `app/routers/settings.py:10-12` — GET /api/settings/ai 无读取鉴权，直接返回 get_ai_config_context；该上下文的 values 包含 AI/ASR API Key 原始值，匿名读取请求即可获得本地配置密钥。
+- **API & Runtime** · `app/routers/tasks.py:174-179` — PATCH /api/tasks/{task_id}/status 接受任意 TaskStatus 后直接调用 update_task_status；底层更新按 id 直接写入，没有检查当前状态、前置产物或合法状态转移，调用者可把空任务直接标记为 completed。
 - **Transcription** · `app/services/transcription_checkpoint_service.py:22` — 文件指纹只哈希大小与首尾各 1MiB；大文件中部变化但首尾/大小不变会错误复用旧转写 checkpoint。
 - **Transcription** · `app/services/transcript_service.py:260` — 捕获所有 Exception 会把 TranscriptCancelledError 包成 RuntimeError，取消可能被标记 failed 而非 cancelled。
 - **Transcription** · `app/services/transcript_workflow_service.py:318` — transcript.md 存在即返回 completed，不校验源指纹或最近生成是否成功；失败后旧转写可能被误当当前结果。
 - **AI Selection** · `app/services/ai_config_service.py:318` — get_ai_config_context 返回含 AI/ASR Key 的完整 values，GET /api/settings/ai 无读取鉴权，页面也复用该上下文。
-- **Task Review & Cut** · `app/services/video_cut_workflow_service.py:248` — 切片输出仍逐条独立提交，中途异常可留下半成功记录。
-- **Task Review & Cut** · `app/services/task_lifecycle_service.py:154` — 任务状态更新仍无合法迁移与产物前置校验。
-- **Task Review & Cut** · `app/services/task_service.py:451` — ffprobe 仍缺 timeout 和完整异常边界。
+- **Task Review & Cut** · `app/services/video_cut_workflow_service.py:248-255` — 每个 CutResult 通过 _insert_output_clip_record 独立提交事务；中途插入异常时前面的 output_clip 已落库，cut_run 未被标记 failed，任务可能停留在 cutting 并同时暴露半批新结果。
+- **Task Review & Cut** · `app/services/task_lifecycle_service.py:156-180` — update_task_status 仍按 task_id 直接写入任意传入状态和进度，没有合法状态迁移、前置产物或并发条件；API 直接暴露 PATCH /status，可将空任务跳转为 completed。
+- **Task Review & Cut** · `app/services/task_service.py:451-478` — _probe_video 调用 ffprobe 没有 timeout，也没有捕获 subprocess OSError、媒体读取异常或 stat 异常；get_task 默认 include_video_probe=True，损坏、卡死或不可达媒体可长期阻塞任务详情或直接 500。
 - **Pipeline & Job Queue** · `app/services/job_service.py:329` — checkpoint、progress 与终态更新只按 job_id，不校验 lease_owner/status；旧 worker 可覆盖新 attempt。
 - **Pipeline & Job Queue** · `app/services/job_worker.py:38` — already_claimed 跳过 claim 且不核对当前 owner，已被接管的旧子进程仍可继续执行写结果。
 - **Pipeline & Job Queue** · `app/services/job_service.py:287` — claim_next_job 可把达到 max_attempts 的 running 任务直接失败而不要求 lease 过期，慢 worker 可能被误判。
@@ -102,17 +101,19 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Publishers & Worker** · `scripts/publish_host_worker.py:264` — 同 execution_id 不检查既有终态即重新发布；实例内锁无法协调同 ID 并发/重放，可能重复投稿。
 - **Ops & Delivery** · `scripts/migrate_task_dirs_to_project_names.py:211` — 任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。
 
-### MED (71)
+### MED (78)
 
 - **Frontend UI** · `app/templates/system_status.html:98` — 配置/API Key 字段进入 DOM，base.html:11 还承载本地管理 Token；需确认全链路始终掩码。
 - **Frontend UI** · `app/static/css/styles.css:870` — 使用多个未在 :root 定义的 CSS 自定义属性，相关声明可能失效。
 - **Frontend UI** · `app/static/js/app.js:1` — 任务、转写、AI、审核、切片、字幕和配置行为集中在超大全局脚本，回归半径较大。
 - **Frontend UI** · `tests/test_publish_center_browser.py:16` — Playwright 缺失时核心浏览器测试可静默跳过，字幕交互与鉴权失败路径覆盖不足。
-- **API & Runtime** · `app/main.py:97` — API 写保护仅在 LOCAL_ADMIN_TOKEN 非空时启用；默认 Token 为空。若端口可被局域网访问，写 API 默认无认证。
-- **API & Runtime** · `app/routers/tasks.py:220` — 多个 async 路由直接调用同步 FFmpeg/文件长任务，可能阻塞 FastAPI 事件循环；项目另有持久化异步 Job 路径。
-- **API & Runtime** · `app/models/task.py:7` — TaskStatus 同时定义大写自动流水线与小写手动状态，API 可直接提交枚举状态但不表达合法状态迁移。
-- **Media & Storage** · `app/services/storage_service.py:219` — 数据库目录查询异常仍静默回退。
-- **Media & Storage** · `app/services/managed_process_service.py:18` — Windows 进程树终止仍未可靠确认完成。
+- **API & Runtime** · `app/main.py:40-46,97-107` — 写 API 仅在 LOCAL_ADMIN_TOKEN 非空时校验，默认配置为空；同时 localhost/127.0.0.1 任意端口均允许跨源请求。服务被 Docker、局域网或其他本地网页访问时，写操作可能缺少有效鉴权。
+- **API & Runtime** · `app/routers/tasks.py:128-133` — 任务详情接口调用 get_task(task_id)，而查询 SQL 未过滤 is_deleted；已软删除任务仍可能从详情入口读取，并继续成为后续媒体或操作接口的上下文。
+- **API & Runtime** · `app/routers/tasks.py:220-241` — 多个 async 路由直接调用同步的音频提取、转写处理函数，另有 process_video_cuts 在 390-399 行直接调用同步切片；FFmpeg、网络或文件操作期间会阻塞 FastAPI 事件循环。
+- **API & Runtime** · `app/models/task.py:7-40` — TaskStatus 同时定义大写自动流水线状态和小写手动状态，API 使用同一个枚举承载两套状态语义；结合无状态机校验，容易形成状态口径漂移和非预期跳转。
+- **API & Runtime** · `app/routers/files.py:9-11` — 媒体目录浏览接口为匿名 GET，虽然服务层限制了允许根目录，但仍会返回绝对路径、目录名和视频文件列表；非纯本机部署时会扩大本地文件布局泄露面。
+- **Media & Storage** · `app/services/storage_service.py:840-846` — move_task_directory_to_trash 明确传入 reserve=False，仍采用查询后检查目录的非原子分配；当前无运行时调用，属于遗留兼容入口，但未来恢复调用时仍可能并发复用同一回收站目录。
+- **Media & Storage** · `app/services/storage_service.py:361-367` — 通用 resolve_video_file_path 对已存在路径仍原样返回。媒体 HTTP 路由已增加任务边界，但 publish/auto-publish/subtitle/task 查询等非 HTTP 调用方仍可把数据库中的现有外部路径交给后续读取或上传逻辑。
 - **Transcription** · `app/services/transcript_service.py:552` — 远程响应无 utterances 时把 text/message 包成 0-1 秒片段，错误 message 可能被当成转写正文。
 - **Transcription** · `app/services/transcript_workflow_service.py:25` — 运行/取消状态仅用进程级集合且 check-then-add 非原子，多进程或重启可能重复转写且取消失联。
 - **Transcription** · `app/services/transcript_service.py:831` — 进度文件读失败/JSON 损坏时静默返回空字典，隐藏损坏并可能触发重跑。
@@ -130,8 +131,13 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **AI Selection** · `app/services/ai/ai_clip_analyzer.py:252` — 多个分析器重复偏好摘要、时间转换、默认字段和 AI 输出解析逻辑。
 - **AI Selection** · `tests/test_split_services.py:200` — 缺少真实 Provider 成功路径、文件写入失败一致性、并发运行和旧 checkpoint 覆盖测试。
 - **AI Selection** · `tests/test_codex_cli_provider.py:12` — Provider 测试主要 monkeypatch，缺少 HTTP 429/500/超时和协议 fallback 重复调用边界。
-- **Task Review & Cut** · `app/services/task_service.py:14` — task_service 仍跨越多项业务职责并与查询层反向依赖。
-- **Task Review & Cut** · `app/services/video_cut_workflow_service.py:18` — 切片 run_number 仍先 MAX 后 INSERT，存在并发冲突。
+- **Task Review & Cut** · `app/services/video_cut_workflow_service.py:18-45` — _next_cut_run_number 先 SELECT MAX(run_number)，随后由独立连接 INSERT，缺少事务序列化或唯一约束；并发重切可能产生重复 run_number。
+- **Task Review & Cut** · `app/services/task_lifecycle_service.py:66-71` — allocate_task_dir_name 会先原子预占目录，再由 create_task_directory 和数据库 INSERT 继续执行；后续目录初始化或数据库提交失败时没有统一释放已预占的空目录，可能累积孤儿目录并影响后续命名。
+- **Task Review & Cut** · `app/services/task_service.py:14-96` — task_service 仍集中导入 AI、字幕、转写、存储、切片等大量私有服务函数，并与 task_lifecycle_service 形成动态反向依赖，职责边界复杂。
+- **Task Review & Cut** · `app/services/task_query_service.py:89-172` — _batch_all_output_clips 复制 task_service.list_output_clips 的路径解析、字幕状态和发布就绪判断；两套口径未来可能分叉。
+- **Task Review & Cut** · `app/services/task_service.py:587-603` — get_task 查询只按 id，不过滤 is_deleted；已永久删除且仅应保留历史的任务仍可被详情和后续动作读取。
+- **Task Review & Cut** · `app/services/task_service.py:717-718` — list_clip_candidates 直接解析每条 start_time/end_time，单条历史脏时间格式可阻断整个审核页。
+- **Task Review & Cut** · `app/services/video_cut_workflow_service.py:269-289` — 切片成功后先把任务更新为完成，再同步发送中心；同步异常只返回 partial，主状态与发布关联可能不一致。
 - **Subtitle** · `app/services/subtitle_data_service.py:352` — 手工 revision 的 active/base 检查在事务外，并发编辑可同时通过并让后提交者覆盖 active 选择。
 - **Subtitle** · `app/services/subtitle_data_service.py:489` — 批准 revision 在事务外校验，后续按 id 无条件批准激活；并发/重放旧请求可回退 active 版本。
 - **Subtitle** · `app/services/subtitle_data_service.py:135` — source/clip track 均先查后插；NULL output_clip_id 唯一约束不足，并发可能重复源轨或 500。
@@ -176,21 +182,23 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Ops & Delivery** · `tests/test_native_scripts.py:11` — 启停测试主要是源码字符串断言，Windows smoke 不做实际 restore/冲突/清理失败与恢复后健康验证。
 - **Ops & Delivery** · `scripts/seed_demo_data.py:32` — 缺 FFmpeg 时仍插入无媒体路径 Demo 数据并成功退出，数量检查通过但媒体 smoke 不可信。
 
-### LOW (32)
+### LOW (34)
 
 - **Frontend UI** · `app/static/js/subtitle-editor.js:171` — 字幕编辑器已有 escapeHtml、虚拟列表、竞态 token 与自动保存版本控制，是可保留的正向实现。
 - **Frontend UI** · `app/static/js/publish-center.js:4` — 前端明确只创建抖音任务，B站保留后端兼容；这是当前产品边界而非应机械删除的代码。
-- **API & Runtime** · `app/main.py:153` — /health 只证明进程可响应，不检查数据库、Job Runner、Scheduler、FFmpeg 或发布 Worker，就绪语义不足。
-- **API & Runtime** · `app/core/config.py:80` — local_admin_token 重复定义；AI 新旧兼容配置与 TaskCreate/Settings 默认值存在重复和漂移。
-- **API & Runtime** · `app/routers/pages.py:40` — 页面 Router 直接组合多个领域 Service，页面数据变化跨层影响面较大。
-- **API & Runtime** · `app/routers/publish.py:64` — OAuth callback 把通用异常字符串拼入 redirect query，可能进入地址栏、历史或 Referer。
-- **API & Runtime** · `app/main.py:115` — 所有静态资源都 no-store，适合开发但导致每次页面加载重复下载。
-- **API & Runtime** · `tests/test_p0_security.py:352` — SQLite PRAGMA 安全测试只检查查询结果非空，没有断言实际开启值；关键 API 边界测试不足。
-- **API & Runtime** · `app/models/subtitle.py:86` — speaker_styles 使用 Any 嵌套字典，模型层无法保证渲染输入结构完整。
+- **API & Runtime** · `app/main.py:153-155` — /health 只返回进程级 status/app，不检查 SQLite、持久化 Job Runner、Scheduler、FFmpeg 或发布 Worker，就绪状态不足。
+- **API & Runtime** · `app/routers/publish.py:63-71` — OAuth callback 捕获通用 Exception，并将原始异常字符串拼入 redirect query；错误细节可能进入浏览器地址栏、历史记录或 Referer。
+- **API & Runtime** · `app/core/config.py:80,244-250` — local_admin_token 在 Settings 中重复定义，AI 新旧配置字段也并存并通过兼容 fallback 读取，配置所有权和运行时来源不够单一。
+- **API & Runtime** · `app/models/subtitle.py:86` — speaker_styles 使用 Any 嵌套字典，API 模型层无法约束渲染输入结构，非法配置可能延迟到字幕渲染阶段才失败。
+- **Media & Storage** · `tests/test_storage_boundaries.py:14-32` — 新增边界测试没有覆盖任务目录数据库读取在 sqlite3.Error、锁定或损坏数据库下显式失败的回归；代码已有保护但证据不足。
+- **Media & Storage** · `app/services/storage_service.py:257-300` — reserve=True 会在数据库任务记录写入前创建目录；进程在预占后崩溃可能留下无数据库记录的空目录，虽不会覆盖数据，但会造成孤儿目录累积。
 - **Transcription** · `tests/test_long_live_foundation.py:65` — 未覆盖取消异常传播、损坏进度、并发转写、大文件中部变更、真实响应错误和 FFmpeg/网络恢复。
 - **AI Selection** · `app/services/ai/ai_clip_analyzer.py:456` — 输出归一化同时接受多组历史字段并填大量默认值，兼容有效但维护成本高。
 - **AI Selection** · `app/services/ai_config_service.py:55` — 旧 AI_REMOTE 与新分析/发布配置并存，运行时还改写全局 settings，形成双路径。
 - **AI Selection** · `tests/test_variety_comedy_selection.py:291` — 算法分支覆盖较好，但真实三阶段 Provider、资源消耗和全局评审降级未由集成测试锁定。
+- **Task Review & Cut** · `tests/test_path_resolution.py:44-68` — 目录唯一性单元测试为连续调用；并发线程回归由 tests/test_storage_boundaries.py 单独覆盖。
+- **Task Review & Cut** · `tests/test_split_services.py:119-137` — 测试将没有产物的任务直接更新为 completed 并断言成功，固化了任意状态跳跃行为。
+- **Task Review & Cut** · `tests/test_versioning_rollback.py:163-178` — 版本测试使用虚构输出路径，只验证数据库标记，没有覆盖真实 FFmpeg 输出、文件切换和恢复。
 - **Subtitle** · `app/services/subtitle_auto_workflow_service.py:273` — auto_config_json 损坏时静默降为空并写回 delivery mode，可能丢弃其余配置。
 - **Subtitle** · `app/services/subtitle_workflow_service.py:312` — 统一 revision 之外仍保留旧调用方导出适配，存在历史漂移成本。
 - **Subtitle** · `tests/test_subtitle_auto_workflow.py:172` — FFmpeg/FFprobe 缺失会跳过，AI Provider 测试固定合法 JSON，真实异常路径不足。
@@ -219,4 +227,4 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **可用性 fallback 正在掩盖降级结果.** AI 部分窗口、转写旧产物、损坏 JSON、封面生成、批量发布和风险字段多处静默继续，用户不一定能区分完整成功、部分成功和旧结果。
 - **发布与配置读取是主要安全边界.** Publish Center、AI Config、Frontend 和 Worker 共同存在原始 Secret 响应、可选写鉴权、DOM XSS、路径字符和 journal 脱敏缺口。
 - **复杂度集中而非全项目平均恶化.** publish_service.py、publish-center.js、app.js、publish_scheduler.py、subtitle_data_service.py 和 transcript_service.py 是主要 God Component；应按业务边界渐进拆分。
-- **测试已与活动数据隔离，但 Coverage 与真实故障闭环仍不足.** 512 项测试全部通过，Pytest 已强制使用进程级 sandbox；Coverage 尚未采集，真实 E2E、并发恢复和 Worker fencing 仍需补齐。
+- **测试已与活动数据隔离，但 Coverage 与真实故障闭环仍不足.** 533 项测试全部通过，Pytest 已强制使用进程级 sandbox；Coverage 尚未采集，真实 E2E、并发恢复和 Worker fencing 仍需补齐。

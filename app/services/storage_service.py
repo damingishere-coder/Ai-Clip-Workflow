@@ -16,6 +16,7 @@ from app.core.config import EXTERNAL_STORAGE_ROOT, settings
 TASK_SUBDIRECTORIES = ("source", "audio", "transcripts", "analysis", "clips", "05_clips", "06_subtitled", "07_covers", "logs")
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".flv", ".webm", ".m4v", ".ts"}
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".aac", ".flac", ".ogg", ".wma", ".m4a"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 TRASH_DIR_NAME = "_回收站"
 DELETE_STAGING_DIR_NAME = ".niuma-delete-staging"
 _WINDOWS_FORBIDDEN_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -28,8 +29,9 @@ _WINDOWS_RESERVED_NAMES = {
     *(f"LPT{index}" for index in range(1, 10)),
 }
 
-# 路径遍历攻击的标记
-_PATH_TRAVERSAL_MARKERS = ("..", "~")
+# 路径遍历攻击的标记。普通文件名中的 ``~`` 不会被 pathlib 自动展开，
+# 因此只拒绝真正会改变父目录的 ``..``。
+_PATH_TRAVERSAL_MARKERS = ("..",)
 
 
 class StorageSafetyError(RuntimeError):
@@ -197,12 +199,22 @@ def ensure_tasks_root() -> Path:
     return settings.tasks_dir
 
 
-def _storage_relative_parts(task_dir_name: str) -> tuple[str, ...]:
-    return tuple(part for part in PureWindowsPath(task_dir_name).parts if part not in {"", "."})
+def _storage_relative_parts(task_dir_name: str, label: str = "任务目录名") -> tuple[str, ...]:
+    windows_path = PureWindowsPath(str(task_dir_name or "").strip())
+    parts = tuple(part for part in windows_path.parts if part not in {"", "."})
+    if (
+        not parts
+        or windows_path.is_absolute()
+        or bool(windows_path.drive)
+        or any(part in _PATH_TRAVERSAL_MARKERS for part in parts)
+    ):
+        raise StorageSafetyError(f"{label}包含不安全路径：{task_dir_name}")
+    return parts
 
 
 def _storage_path_from_dir_name(task_dir_name: str) -> Path:
-    return settings.tasks_dir.joinpath(*_storage_relative_parts(task_dir_name))
+    parts = _storage_relative_parts(task_dir_name)
+    return _safe_managed_child(settings.tasks_dir, parts, "任务目录")
 
 
 def sanitize_task_dir_name(task_name: str | None, fallback: str = "untitled") -> str:
@@ -236,8 +248,8 @@ def _get_existing_task_dir_names(include_deleted: bool = True, exclude_task_id: 
                 f"SELECT task_dir_name FROM tasks WHERE {' AND '.join(where_parts)}",
                 params,
             ).fetchall()
-    except sqlite3.Error:
-        return set()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"读取已有任务目录失败：{exc}") from exc
     return {str(row["task_dir_name"]).lower() for row in rows}
 
 
@@ -245,22 +257,48 @@ def allocate_task_dir_name(
     task_name: str | None,
     parent_dir_name: str | None = None,
     exclude_task_id: str | None = None,
+    *,
+    reserve: bool = True,
 ) -> str:
     base_name = sanitize_task_dir_name(task_name, fallback=exclude_task_id or "untitled")
-    parent_parts = _storage_relative_parts(parent_dir_name or "")
+    parent_parts = _storage_relative_parts(parent_dir_name, "父目录名") if parent_dir_name else ()
     existing_names = _get_existing_task_dir_names(exclude_task_id=exclude_task_id)
-    root = ensure_tasks_root().joinpath(*parent_parts)
+    tasks_root = ensure_tasks_root()
+    root = _safe_managed_child(tasks_root, parent_parts, "父目录") if parent_parts else tasks_root
     root.mkdir(parents=True, exist_ok=True)
 
     for index in range(1, 1000):
         candidate_name = base_name if index == 1 else f"{base_name} ({index})"
         candidate_parts = (*parent_parts, candidate_name)
         relative_name = str(PureWindowsPath(*candidate_parts))
-        candidate_path = ensure_tasks_root().joinpath(*candidate_parts)
-        if relative_name.lower() not in existing_names and not candidate_path.exists():
+        if relative_name.lower() in existing_names:
+            continue
+        candidate_path = _safe_managed_child(tasks_root, candidate_parts, "任务目录")
+        if reserve:
+            try:
+                candidate_path.mkdir(parents=False, exist_ok=False)
+            except FileExistsError:
+                continue
+            return relative_name
+        if not candidate_path.exists():
             return relative_name
 
-    return str(PureWindowsPath(*parent_parts, f"{base_name}-{uuid4().hex[:6]}"))
+    for _attempt in range(100):
+        relative_name = str(PureWindowsPath(*parent_parts, f"{base_name}-{uuid4().hex[:8]}"))
+        candidate_path = _safe_managed_child(
+            tasks_root,
+            _storage_relative_parts(relative_name),
+            "任务目录",
+        )
+        if reserve:
+            try:
+                candidate_path.mkdir(parents=False, exist_ok=False)
+            except FileExistsError:
+                continue
+        elif candidate_path.exists():
+            continue
+        return relative_name
+    raise StorageSafetyError("无法分配唯一任务目录，请稍后重试")
 
 
 def _fetch_task_dir_name(task_id: str) -> str | None:
@@ -273,8 +311,8 @@ def _fetch_task_dir_name(task_id: str) -> str | None:
             if "task_dir_name" not in columns:
                 return None
             row = connection.execute("SELECT task_dir_name FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    except sqlite3.Error:
-        return None
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"读取任务目录映射失败：{exc}") from exc
     if not row:
         return None
     return row["task_dir_name"] or None
@@ -338,7 +376,11 @@ def resolve_video_file_path(path_value: str | None) -> Path | None:
         if task_dir_name and task_dir_name != first_part:
             task_dir_posix = task_dir_name.replace("\\", "/")
             relative_value = f"{task_dir_posix}{separator}{rest}" if rest else task_dir_name
-        return settings.tasks_dir.joinpath(*PureWindowsPath(relative_value).parts)
+        return _safe_managed_child(
+            settings.tasks_dir,
+            _storage_relative_parts(relative_value, "容器媒体路径"),
+            "容器媒体路径",
+        )
 
     windows_storage_root = str(settings.storage_root)
     raw_value = path_value.replace("/", "\\")
@@ -350,7 +392,11 @@ def resolve_video_file_path(path_value: str | None) -> Path | None:
         if task_dir_name and task_dir_name != first_part:
             rest_parts = PureWindowsPath(relative_value).parts[1:]
             relative_value = str(PureWindowsPath(task_dir_name, *rest_parts))
-        return settings.storage_root.joinpath(*PureWindowsPath(relative_value).parts)
+        return _safe_managed_child(
+            settings.storage_root,
+            _storage_relative_parts(relative_value, "旧版媒体路径"),
+            "旧版媒体路径",
+        )
 
     if windows_storage_root:
         normalized_root = windows_storage_root.replace("/", "\\")
@@ -361,15 +407,60 @@ def resolve_video_file_path(path_value: str | None) -> Path | None:
             if task_dir_name and task_dir_name != first_part:
                 rest_parts = PureWindowsPath(relative_value).parts[1:]
                 relative_value = str(PureWindowsPath(task_dir_name, *rest_parts))
-            return settings.storage_root.joinpath(*PureWindowsPath(relative_value).parts)
+            return _safe_managed_child(
+                settings.storage_root,
+                _storage_relative_parts(relative_value, "媒体路径"),
+                "媒体路径",
+            )
 
     return path
+
+
+def resolve_task_media_file_path(
+    path_value: str | None,
+    *,
+    task_id: str,
+    task_dir_name: str | None,
+    allowed_subdirectories: tuple[str, ...],
+    allowed_extensions: set[str] | frozenset[str] = VIDEO_EXTENSIONS,
+) -> Path | None:
+    """解析任务产物，并确认它只能落在当前任务的受控子目录内。"""
+    if not path_value or not allowed_subdirectories:
+        return None
+    try:
+        resolved_path = resolve_video_file_path(path_value)
+        if resolved_path is None or resolved_path.suffix.lower() not in allowed_extensions:
+            return None
+        task_root = get_task_directory(task_id, task_dir_name)
+        roots = [task_root]
+
+        legacy_root = settings.project_root / "tasks"
+        task_id_parts = _safe_relative_parts(task_id, "任务 ID")
+        if len(task_id_parts) == 1:
+            roots.append(_safe_managed_child(legacy_root, task_id_parts, "旧版任务目录"))
+        dir_parts = _safe_relative_parts(task_dir_name or task_id, "任务目录名")
+        if len(dir_parts) == 1 and (task_dir_name or task_id).lower() != task_id.lower():
+            roots.append(_safe_managed_child(legacy_root, dir_parts, "旧版任务目录"))
+    except (OSError, ValueError, StorageSafetyError):
+        return None
+
+    for root in roots:
+        for subdirectory in allowed_subdirectories:
+            allowed_root = root / subdirectory
+            if resolved_path.resolve(strict=False) == allowed_root.resolve(strict=False):
+                continue
+            if _path_is_within(resolved_path, allowed_root):
+                return resolved_path
+    return None
 
 
 def validate_source_video_path(path_value: str | None) -> tuple[bool, str]:
     if not path_value:
         return False, "尚未选择视频文件"
-    path = resolve_video_file_path(path_value)
+    try:
+        path = resolve_video_file_path(path_value)
+    except StorageSafetyError:
+        return False, "视频路径包含不安全的路径跳转字符"
     if path is None:
         return False, "尚未选择视频文件"
 
@@ -449,16 +540,7 @@ def remove_failed_task_directory(task_id: str, task_dir_name: str) -> None:
 
 
 def _safe_relative_parts(value: str, label: str) -> tuple[str, ...]:
-    windows_path = PureWindowsPath(str(value or "").strip())
-    parts = tuple(part for part in windows_path.parts if part not in {"", "."})
-    if (
-        not parts
-        or windows_path.is_absolute()
-        or windows_path.drive
-        or any(part in _PATH_TRAVERSAL_MARKERS for part in parts)
-    ):
-        raise StorageSafetyError(f"{label}包含不安全路径：{value}")
-    return parts
+    return _storage_relative_parts(value, label)
 
 
 def _safe_managed_child(root: Path, parts: tuple[str, ...], label: str) -> Path:
@@ -470,7 +552,7 @@ def _safe_managed_child(root: Path, parts: tuple[str, ...], label: str) -> Path:
     except AttributeError:  # pragma: no cover - Python 3.8 兼容
         within_root = str(resolved_candidate).lower().startswith(str(resolved_root).lower() + os.sep)
     if resolved_candidate == resolved_root or not within_root or candidate.is_symlink():
-        raise StorageSafetyError(f"拒绝删除不安全的{label}：{candidate}")
+        raise StorageSafetyError(f"拒绝访问不安全的{label}：{candidate}")
     return candidate
 
 
@@ -758,7 +840,12 @@ def apply_task_media_cleanup_plan(plan: TaskMediaCleanupPlan) -> TaskMediaCleanu
 def move_task_directory_to_trash(task_id: str, task_name: str, task_dir_name: str | None = None) -> tuple[str, Path]:
     current_dir_name = resolve_task_dir_name(task_id, task_dir_name)
     source_dir = get_task_directory(task_id, current_dir_name)
-    trash_dir_name = allocate_task_dir_name(task_name, parent_dir_name=TRASH_DIR_NAME, exclude_task_id=task_id)
+    trash_dir_name = allocate_task_dir_name(
+        task_name,
+        parent_dir_name=TRASH_DIR_NAME,
+        exclude_task_id=task_id,
+        reserve=False,
+    )
     target_dir = _storage_path_from_dir_name(trash_dir_name)
     target_dir.parent.mkdir(parents=True, exist_ok=True)
 
