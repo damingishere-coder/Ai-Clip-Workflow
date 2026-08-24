@@ -1,0 +1,8 @@
+{
+  "lang": "zh",
+  "project": "NiuMa Studio",
+  "subtitle": "牛马片场 · 本地 AI 高光生产后台工程体检",
+  "outputDir": ".codemap",
+  "htmlFile": "codemap.html",
+  "mdFile": "codemap.md"
+}

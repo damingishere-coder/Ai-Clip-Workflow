@@ -48,3 +48,9 @@ tasks/*
 
 .DS_Store
 Thumbs.db
+
+# 本地工程审计产物
+.scannerwork/
+.coverage
+coverage.xml
+test-results.xml

@@ -20,6 +20,21 @@
 3. 若未来永久删除返回 `cleanup_pending`，不要手工移动隔离目录；保留返回信息和 manifest，使用后续安全清理入口重试。
 4. 修复前数据库备份位于 `data/backups/workflow-before-foreign-key-repair-20260824-130321-535723-35a0f972.sqlite3`，只有活动库无法通过完整性检查时才考虑恢复，不要直接覆盖当前数据库。
 
+## 2026-08-24 工程体检确认的原始整改顺序
+
+本轮审计已经完成，用户已确认按以下顺序逐轮整改；不要一次性全面重构：
+
+1. **P0.1 测试数据库保护**：让 pytest 只能使用唯一临时库，发现活动库路径立即拒绝启动。
+2. **P0.2 数据一致性**：先做 WAL-aware 备份和 dry-run，再逐条处理活动库 17 条外键违规；修复前不要手工删记录。
+3. **P0.3 可恢复删除**：把“直接删文件后提交数据库”改成带隔离区和 manifest 的两阶段删除。
+4. **P1.1 Secret 与本地鉴权**：读取接口不再返回原始 API Key/OAuth Token；非 loopback 部署要求明确保护。
+5. **P1.2 路径边界**：统一任务目录、媒体响应和 Worker execution/account id 的允许根与字符校验。
+6. **P1.3 Job/Publish fencing**：旧 Worker/旧 execution 不得覆盖新 attempt，重复 execution id 不得再次投稿。
+7. **P1.4 状态与部分成功**：逐步封住任务状态跳跃、切片/字幕批次半提交、转写旧结果复用和 AI partial 成本边界。
+8. P0/P1 稳定后，再补 Coverage、真实故障测试、readiness/日志，然后渐进拆分 `publish_service.py` 与前端大脚本。
+
+整改期间继续遵守：每轮范围有限、独立测试、独立提交、可回滚；不更换 SQLite、不引入微服务/React/Vue、不删除历史 Publisher、不改掉 `NEED_REVIEW` 人工复核。
+
 ## 2026-08-23 长直播四阶段进度
 
 - [x] PR 1：模式必选、已有文件入口、媒体/磁盘预检、持久化重型 Job、转写断点与词级时间戳。
