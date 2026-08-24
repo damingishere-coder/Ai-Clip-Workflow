@@ -46,6 +46,16 @@ class BackupCleanupResult:
     released_bytes: int
 
 
+def _finalize_portable_backup(connection: sqlite3.Connection) -> None:
+    """把 Online Backup 结果固定为无需 WAL/SHM sidecar 的单文件快照。"""
+    connection.commit()
+    row = connection.execute("PRAGMA journal_mode = DELETE").fetchone()
+    journal_mode = str(row[0]).lower() if row else ""
+    if journal_mode != "delete":
+        raise BackupSafetyError(f"备份无法切换为单文件 journal_mode：{journal_mode or 'unknown'}")
+    connection.commit()
+
+
 def sqlite_quick_check(database_path: Path) -> str:
     path = database_path.resolve()
     if not path.is_file():
@@ -235,6 +245,7 @@ def create_publish_migration_backup(
         )
         backup_connection = sqlite3.connect(str(temporary_path), timeout=10)
         source_connection.backup(backup_connection)
+        _finalize_portable_backup(backup_connection)
         backup_connection.close()
         backup_connection = None
         source_connection.close()
@@ -280,6 +291,7 @@ def create_schema_migration_backup(database_path: Path, backup_dir: Path, label:
         source_connection = sqlite3.connect(f"{database_path.as_uri()}?mode=ro", uri=True, timeout=10)
         backup_connection = sqlite3.connect(str(temporary_path), timeout=10)
         source_connection.backup(backup_connection)
+        _finalize_portable_backup(backup_connection)
         backup_connection.close()
         backup_connection = None
         source_connection.close()
@@ -329,6 +341,7 @@ def create_media_cleanup_backup(
         )
         backup_connection = sqlite3.connect(str(temporary_path), timeout=10)
         source_connection.backup(backup_connection)
+        _finalize_portable_backup(backup_connection)
         backup_connection.close()
         backup_connection = None
         source_connection.close()

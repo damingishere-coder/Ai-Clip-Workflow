@@ -10,11 +10,14 @@
 """
 
 from datetime import datetime, timezone
+import os
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from app.db.database import get_connection, init_db
+from app.core.config import settings
 from app.services.task_query_service import (
     get_clips_overview_context,
     get_dashboard_context,
@@ -173,6 +176,21 @@ def _insert_test_subtitle_job(
 
 
 def _clean_test_data() -> None:
+    sandbox_value = os.environ.get("NIUMA_PYTEST_SANDBOX_ROOT", "").strip()
+    if not sandbox_value:
+        raise RuntimeError("拒绝清理测试数据：缺少 NIUMA_PYTEST_SANDBOX_ROOT")
+    sandbox_root = Path(sandbox_value).resolve()
+    database_path = Path(settings.database_path).resolve()
+    try:
+        is_in_sandbox = database_path.is_relative_to(sandbox_root)
+    except AttributeError:  # pragma: no cover - Python 3.8 兼容
+        is_in_sandbox = str(database_path).lower().startswith(str(sandbox_root).lower() + os.sep)
+    if not is_in_sandbox or database_path.name != "test_workflow.sqlite3":
+        raise RuntimeError(
+            "拒绝清理测试数据：数据库不在 pytest sandbox 内或文件名异常；"
+            f"database={database_path}, sandbox={sandbox_root}"
+        )
+
     with get_connection() as connection:
         connection.execute("DELETE FROM publish_jobs")
         connection.execute("DELETE FROM subtitle_jobs")
@@ -183,6 +201,21 @@ def _clean_test_data() -> None:
         connection.execute("DELETE FROM clip_candidates")
         connection.execute("DELETE FROM tasks")
         connection.commit()
+
+
+def test_clean_test_data_refuses_database_outside_pytest_sandbox():
+    """危险整表清理在路径异常时必须先中止，不能连接活动库。"""
+    original_database_path = settings.database_path
+    try:
+        object.__setattr__(
+            settings,
+            "database_path",
+            Path(__file__).resolve().parents[1] / "data" / "workflow.sqlite3",
+        )
+        with pytest.raises(RuntimeError, match="拒绝清理测试数据"):
+            _clean_test_data()
+    finally:
+        object.__setattr__(settings, "database_path", original_database_path)
 
 
 @pytest.fixture(autouse=True)

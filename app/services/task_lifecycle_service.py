@@ -9,10 +9,12 @@ from uuid import uuid4
 from app.db.database import get_connection
 from app.models.task import TaskCreate, TaskStatus
 from app.services.storage_service import (
-    apply_task_media_cleanup_plan,
     allocate_task_dir_name,
     build_task_media_cleanup_plan,
     create_task_directory,
+    finalize_staged_task_media_cleanup,
+    rollback_staged_task_media_cleanup,
+    stage_task_media_cleanup_plan,
     validate_source_video_path,
 )
 from app.services.task_log_service import append_task_log
@@ -296,6 +298,7 @@ def delete_task_permanently(task_id: str) -> dict:
     cleanup_plan = build_task_media_cleanup_plan(task)
     existing_target_count = len(cleanup_plan.existing_targets)
     now = _now_iso()
+    staged_cleanup = None
     with get_connection() as connection:
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -338,7 +341,7 @@ def delete_task_permanently(task_id: str) -> dict:
             if publishing_job:
                 raise TaskDeletionConflictError("任务正在向平台发送视频，请等待发送结束后再删除。")
 
-            cleanup_result = apply_task_media_cleanup_plan(cleanup_plan)
+            staged_cleanup = stage_task_media_cleanup_plan(cleanup_plan)
             connection.execute(
                 """
                 UPDATE workflow_jobs
@@ -370,13 +373,32 @@ def delete_task_permanently(task_id: str) -> dict:
                 (now, now, task_id),
             )
             connection.commit()
-        except Exception:
-            connection.rollback()
+        except Exception as exc:
+            try:
+                connection.rollback()
+            finally:
+                if staged_cleanup is not None:
+                    try:
+                        rollback_staged_task_media_cleanup(staged_cleanup)
+                    except Exception as rollback_exc:
+                        raise RuntimeError(
+                            "数据库删除状态提交失败，且媒体自动恢复未完成；"
+                            f"请保留隔离清单并人工恢复。原错误：{exc}；恢复错误：{rollback_exc}"
+                        ) from exc
             raise
 
-    status = "already_deleted" if task.get("is_deleted") and existing_target_count == 0 else "deleted"
+    cleanup_result = finalize_staged_task_media_cleanup(staged_cleanup)
+    if cleanup_result.cleanup_pending:
+        status = "cleanup_pending"
+    else:
+        status = "already_deleted" if task.get("is_deleted") and existing_target_count == 0 else "deleted"
     freed_mb = cleanup_result.freed_bytes / (1024 * 1024)
-    if status == "already_deleted":
+    if status == "cleanup_pending":
+        message = (
+            "任务已从系统中永久隐藏，但隔离区文件暂时无法清除；"
+            "清单已保留，可安全重试清理。"
+        )
+    elif status == "already_deleted":
         message = "任务已经永久删除，当前没有残留的任务视频文件。"
     else:
         message = f"任务已永久删除，共释放约 {freed_mb:.1f} MB；数据库历史记录已隐藏保留。"
@@ -386,6 +408,8 @@ def delete_task_permanently(task_id: str) -> dict:
         "freed_bytes": cleanup_result.freed_bytes,
         "external_source_preserved": cleanup_result.external_source_preserved,
         "deleted_paths": list(cleanup_result.deleted_paths),
+        "cleanup_pending": cleanup_result.cleanup_pending,
+        "staged_paths": list(cleanup_result.staged_paths),
         "message": message,
     }
 

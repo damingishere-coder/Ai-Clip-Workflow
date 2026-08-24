@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
+import json
 import os
 import re
 import sqlite3
@@ -15,6 +17,7 @@ TASK_SUBDIRECTORIES = ("source", "audio", "transcripts", "analysis", "clips", "0
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".flv", ".webm", ".m4v", ".ts"}
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".aac", ".flac", ".ogg", ".wma", ".m4a"}
 TRASH_DIR_NAME = "_回收站"
+DELETE_STAGING_DIR_NAME = ".niuma-delete-staging"
 _WINDOWS_FORBIDDEN_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WINDOWS_RESERVED_NAMES = {
     "CON",
@@ -55,6 +58,29 @@ class TaskMediaCleanupResult:
     deleted_paths: tuple[str, ...]
     freed_bytes: int
     external_source_preserved: bool
+    cleanup_pending: bool = False
+    staged_paths: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class StagedMediaTarget:
+    label: str
+    original_path: Path
+    staged_path: Path
+    size_bytes: int
+
+
+@dataclass(frozen=True)
+class StagedTaskMediaCleanup:
+    task_id: str
+    stage_id: str
+    targets: tuple[StagedMediaTarget, ...]
+    manifest_roots: tuple[Path, ...]
+    external_source_preserved: bool
+
+    @property
+    def freed_bytes(self) -> int:
+        return sum(target.size_bytes for target in self.targets)
 
 
 def _ensure_writable_directory(path: Path, label: str) -> Path:
@@ -530,28 +556,203 @@ def task_media_cleanup_plan_size(plan: TaskMediaCleanupPlan) -> int:
     )
 
 
-def apply_task_media_cleanup_plan(plan: TaskMediaCleanupPlan) -> TaskMediaCleanupResult:
-    deleted_paths: list[str] = []
-    freed_bytes = 0
-    for target in plan.targets:
+def _cleanup_manifest_payload(
+    staged: StagedTaskMediaCleanup,
+    *,
+    status: str,
+    moved_paths: tuple[str, ...] = (),
+) -> dict:
+    return {
+        "version": 1,
+        "task_id": staged.task_id,
+        "stage_id": staged.stage_id,
+        "status": status,
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "moved_paths": list(moved_paths),
+        "targets": [
+            {
+                "label": target.label,
+                "original_path": str(target.original_path),
+                "staged_path": str(target.staged_path),
+                "size_bytes": target.size_bytes,
+            }
+            for target in staged.targets
+        ],
+    }
+
+
+def _write_cleanup_manifests(
+    staged: StagedTaskMediaCleanup,
+    *,
+    status: str,
+    moved_paths: tuple[str, ...] = (),
+) -> None:
+    payload = _cleanup_manifest_payload(staged, status=status, moved_paths=moved_paths)
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    for root in staged.manifest_roots:
+        root.mkdir(parents=True, exist_ok=True)
+        manifest_path = root / "manifest.json"
+        temporary_path = root / f"manifest.json.tmp-{uuid4().hex}"
+        temporary_path.write_text(serialized, encoding="utf-8")
+        os.replace(temporary_path, manifest_path)
+
+
+def _cleanup_stage_roots(staged: StagedTaskMediaCleanup) -> tuple[str, ...]:
+    pending: list[str] = []
+    for root in staged.manifest_roots:
+        if not root.exists():
+            continue
+        try:
+            shutil.rmtree(root)
+        except OSError:
+            pending.append(str(root))
+    return tuple(pending)
+
+
+def stage_task_media_cleanup_plan(plan: TaskMediaCleanupPlan) -> StagedTaskMediaCleanup:
+    """把托管媒体原子移动到同卷隔离区，尚不执行永久删除。"""
+    stage_id = f"{plan.task_id}-{uuid4().hex}"
+    staged_targets: list[StagedMediaTarget] = []
+    manifest_roots: list[Path] = []
+    for index, target in enumerate(plan.targets):
         path = target.path
         if not path.exists():
             continue
         if path.is_symlink() or not path.is_dir():
-            raise StorageSafetyError(f"拒绝删除异常的{target.label}：{path}")
-        size = _directory_size_bytes(path)
-        try:
-            shutil.rmtree(path)
-        except OSError as exc:
-            raise RuntimeError(f"删除{target.label}失败：{path}；原因：{exc}") from exc
-        freed_bytes += size
-        deleted_paths.append(str(path))
+            raise StorageSafetyError(f"拒绝暂存异常的{target.label}：{path}")
 
-    return TaskMediaCleanupResult(
-        deleted_paths=tuple(deleted_paths),
-        freed_bytes=freed_bytes,
+        stage_root = _safe_managed_child(
+            path.parent,
+            (DELETE_STAGING_DIR_NAME, stage_id),
+            f"{target.label}删除隔离区",
+        )
+        staged_path = _safe_managed_child(
+            stage_root,
+            (f"{index:02d}-{path.name}",),
+            f"{target.label}删除暂存目录",
+        )
+        staged_targets.append(
+            StagedMediaTarget(
+                label=target.label,
+                original_path=path,
+                staged_path=staged_path,
+                size_bytes=_directory_size_bytes(path),
+            )
+        )
+        if stage_root not in manifest_roots:
+            manifest_roots.append(stage_root)
+
+    staged = StagedTaskMediaCleanup(
+        task_id=plan.task_id,
+        stage_id=stage_id,
+        targets=tuple(staged_targets),
+        manifest_roots=tuple(manifest_roots),
         external_source_preserved=plan.external_source_path is not None,
     )
+    if not staged.targets:
+        return staged
+
+    _write_cleanup_manifests(staged, status="prepared")
+    moved_paths: list[str] = []
+    try:
+        for target in staged.targets:
+            target.staged_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(target.original_path), str(target.staged_path))
+            if target.original_path.exists() or not target.staged_path.exists():
+                raise RuntimeError(f"暂存{target.label}后路径状态异常：{target.original_path}")
+            moved_paths.append(str(target.original_path))
+            _write_cleanup_manifests(
+                staged,
+                status="staging",
+                moved_paths=tuple(moved_paths),
+            )
+        _write_cleanup_manifests(
+            staged,
+            status="staged",
+            moved_paths=tuple(moved_paths),
+        )
+        return staged
+    except Exception as exc:
+        try:
+            rollback_staged_task_media_cleanup(staged)
+        except Exception as rollback_exc:
+            raise RuntimeError(
+                f"暂存任务媒体失败且自动恢复未完成：{exc}；恢复错误：{rollback_exc}"
+            ) from exc
+        raise RuntimeError(f"暂存任务媒体失败，已恢复原目录：{exc}") from exc
+
+
+def rollback_staged_task_media_cleanup(staged: StagedTaskMediaCleanup) -> None:
+    """数据库提交前失败时，把已经暂存的目录恢复到原路径。"""
+    if not staged.targets:
+        return
+    try:
+        _write_cleanup_manifests(staged, status="rolling_back")
+    except OSError:
+        pass
+
+    errors: list[str] = []
+    for target in reversed(staged.targets):
+        source = target.staged_path
+        destination = target.original_path
+        if source.exists():
+            if destination.exists():
+                errors.append(f"原路径已被占用：{destination}")
+                continue
+            try:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(source), str(destination))
+            except OSError as exc:
+                errors.append(f"恢复{target.label}失败：{exc}")
+        elif not destination.exists():
+            errors.append(f"原路径与暂存路径都不存在：{destination}")
+
+    if errors:
+        try:
+            _write_cleanup_manifests(staged, status="recovery_required")
+        except OSError:
+            pass
+        raise RuntimeError("；".join(errors))
+
+    try:
+        _write_cleanup_manifests(staged, status="rolled_back")
+    except OSError:
+        pass
+    _cleanup_stage_roots(staged)
+
+
+def finalize_staged_task_media_cleanup(staged: StagedTaskMediaCleanup) -> TaskMediaCleanupResult:
+    """数据库已提交后清除隔离目录；失败时保留清单供安全重试。"""
+    if staged.targets:
+        try:
+            _write_cleanup_manifests(
+                staged,
+                status="committed",
+                moved_paths=tuple(str(target.original_path) for target in staged.targets),
+            )
+        except OSError:
+            return TaskMediaCleanupResult(
+                deleted_paths=tuple(str(target.original_path) for target in staged.targets),
+                freed_bytes=staged.freed_bytes,
+                external_source_preserved=staged.external_source_preserved,
+                cleanup_pending=True,
+                staged_paths=tuple(str(root) for root in staged.manifest_roots if root.exists()),
+            )
+
+    pending = _cleanup_stage_roots(staged)
+    return TaskMediaCleanupResult(
+        deleted_paths=tuple(str(target.original_path) for target in staged.targets),
+        freed_bytes=staged.freed_bytes,
+        external_source_preserved=staged.external_source_preserved,
+        cleanup_pending=bool(pending),
+        staged_paths=pending,
+    )
+
+
+def apply_task_media_cleanup_plan(plan: TaskMediaCleanupPlan) -> TaskMediaCleanupResult:
+    """兼容入口：先暂存，再完成清理；需要数据库原子性的调用方应分阶段调用。"""
+    staged = stage_task_media_cleanup_plan(plan)
+    return finalize_staged_task_media_cleanup(staged)
 
 
 def move_task_directory_to_trash(task_id: str, task_name: str, task_dir_name: str | None = None) -> tuple[str, Path]:

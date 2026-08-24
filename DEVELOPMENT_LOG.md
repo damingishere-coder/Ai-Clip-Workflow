@@ -1,5 +1,17 @@
 # Development Log
 
+## 2026-08-24 稳定 V1 P0 数据安全整改
+
+- Pytest 启动时改用每进程独立的系统临时 sandbox，并无条件隔离数据库、任务目录、上传临时目录和发布包目录；即使外部 `DATABASE_PATH` 指向活动库，测试也不会连接或清理真实数据。
+- `test_task_query_service` 的整表清理增加第二道 fail-closed 路径校验：数据库不在本次 pytest sandbox 或文件名不是 `test_workflow.sqlite3` 时立即中止。
+- 任务永久删除改为两阶段：托管媒体先原子移动到同卷隔离区并写 manifest，数据库提交失败时逆序恢复；数据库成功后才最终清除，清除失败返回 `cleanup_pending` 并保留恢复证据。外部唯一原片继续不移动、不删除。
+- 新增默认 dry-run 的 `scripts/repair_foreign_key_integrity.py`。活动库预演确认 17 条异常来自 8 个历史缺失的 `output_clip` 父记录；修复只新增 8 个 `is_active=0`、无媒体路径的 tombstone，保留 589 条发布任务、4 条字幕任务、28 条 `NEED_REVIEW` 及发布事件历史。
+- 修复前备份为 `data/backups/workflow-before-foreign-key-repair-20260824-130321-535723-35a0f972.sqlite3`；备份 `quick_check=ok` 并保留修复前 17 条外键异常，活动库修复后 `quick_check=ok`、`foreign_key_check=0`。
+- 三类 SQLite Online Backup 统一转换为 `journal_mode=DELETE` 的便携单文件快照，避免迁移、媒体清理和外键修复备份依赖 WAL/SHM sidecar。
+- 新增测试覆盖恶意活动库环境变量、清理 guard、第二个目录移动失败、数据库提交失败、最终清理失败、外键 dry-run/备份/tombstone/拒绝路径和单文件备份。
+- Windows Web 由 Alter 托管并会自动重启，未停止 Alter；数据库修复在 `BEGIN IMMEDIATE` 锁内完成备份和写入。修复后 `8001 /health=ok`，Scheduler `running=true`、`consecutive_failures=0`，Windows Worker `8765 /health=ok`；未触发真实投稿。
+- 最终验证通过：P0 定向测试 `42 passed`、完整测试 `512 passed`、Ruff、Python 编译与 Git 空白检查全部成功。全量测试故意继承活动库路径后仍使用临时 sandbox；正式 Scheduler 同期持续运行，因此活动库 mtime 会变化，但数据库大小稳定且 `foreign_key_check` 始终为 0。
+
 ## 2026-08-24 字幕审核、异步渲染与自动流水线整合（PR 4）
 
 - 全自动流水线在切片后创建原片/切片字幕草稿，并停在 `pending_subtitle_review`；不会继续生成文案或发送任务。
