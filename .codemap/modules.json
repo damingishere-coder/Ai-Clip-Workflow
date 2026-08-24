@@ -7,9 +7,9 @@
   "htmlPath": ".codemap/codemap.html",
   "mdPath": ".codemap/codemap.md",
   "spineDesc": "用户通过页面/API 创建素材任务，SQLite Job 驱动转写、AI 选片、审核切片和字幕，再由发送中心排期并交给 Windows Chrome Worker，所有状态与审计证据回写 SQLite。",
-  "tracked_loc": 51786,
+  "tracked_loc": 52028,
   "tracked_files": 132,
-  "rev": "a01f103c43916d25310254f6f8389e9fc9e52521"
+  "rev": "1689d59b1a28ea86a53aad31598bd5c5a213b95e"
  },
  "excludes": [
   ".venv/",
@@ -1022,42 +1022,42 @@
     "tests/test_database_backup_service.py",
     "tests/test_p1_1_db_performance.py"
    ],
-   "loc": 3436,
-   "contentHash": "11881e23de872fd56070da719c9ca72f8e8f23e1dead1b32b099f7a56adfbdcf",
-   "score": 64,
+   "loc": 3678,
+   "contentHash": "a287698b7e6863a8ed1ac68f163cb1dd8cf2969fb12d571b336fd39ca194e7ce",
+   "score": 73,
    "grade": "C",
    "tags": [
-    "silent-except",
     "legacy",
     "dual-format",
     "bloat",
-    "god-component"
+    "god-component",
+    "glue"
    ],
    "findings": [
     {
-     "sev": "HIGH",
-     "loc": "app/db/database.py:628-671",
-     "text": "_create_indexes 先删除 uq_publish_jobs_active_clip_platform_mode，随后对所有索引创建统一捕获 sqlite3.Error 并静默忽略；唯一部分索引创建失败时，旧索引已删除且无告警，活动发布任务可能失去唯一约束并产生重复记录。"
+     "sev": "MED",
+     "loc": "app/db/database.py:607-608",
+     "text": "schema_migrations 账本迁移在旧版兼容迁移和多处 executescript（996、1071、1155、1231、1754、1780）完成并提交后才执行；若历史 helper 或账本迁移失败，前面的 Schema/DML 已持久化而账本事务回滚，init_db 仍存在可重试但非原子的半迁移边界。"
     },
     {
      "sev": "MED",
-     "loc": "app/db/database.py:31-617",
-     "text": "数据库初始化依赖多个结构探针和缺列即 ALTER TABLE，没有 PRAGMA user_version、schema_migrations 或可追踪迁移版本；历史数据库的实际结构只能由当前代码反推。"
+     "loc": "scripts/backup_restore.py:305-383",
+     "text": "备份包验证只检查 manifest、哈希、quick_check 和表计数，没有验证 PRAGMA foreign_key_check、schema_migrations 记录或关键 v2 唯一索引定义；结构上可读但业务约束不完整的备份仍可能被接受，恢复后才在启动阶段失败或触发迁移。"
     },
     {
      "sev": "MED",
-     "loc": "app/db/database.py:754,1162",
-     "text": "多个迁移函数使用 executescript，发布表迁移还会在数据规范化前提交新增列；后续失败时可能已持久化部分结构，init_db 不是原子升级。"
+     "loc": "scripts/backup_restore.py:529-634",
+     "text": "restore_backup_bundle 在替换 SQLite 文件前没有应用进程锁或活动连接闸门；服务仍运行时可原子替换数据库路径，现有连接可能继续指向旧 inode，而新连接指向恢复文件，形成恢复期间的双数据库视图。"
     },
     {
      "sev": "LOW",
-     "loc": "app/db/database.py:656-657",
-     "text": "workflow job claim 索引未覆盖 lease_expires_at；队列规模增大或过期任务集中时可能读取更多候选行，属于性能退化而非当前正确性故障。"
+     "loc": "app/db/database.py:758",
+     "text": "workflow_jobs 认领索引仍只有 status、next_attempt_at、created_at，没有包含 lease_expires_at；过期接管查询在队列增长或大量过期任务时可能扫描更多候选行，属于性能退化而非当前正确性故障。"
     }
    ],
-   "auditedHash": "11881e23de872fd56070da719c9ca72f8e8f23e1dead1b32b099f7a56adfbdcf",
+   "auditedHash": "a287698b7e6863a8ed1ac68f163cb1dd8cf2969fb12d571b336fd39ca194e7ce",
    "auditedAt": "2026-08-24",
-   "auditedRev": ""
+   "auditedRev": "1689d59b1a28ea86a53aad31598bd5c5a213b95e"
   },
   {
    "id": "ops_delivery",

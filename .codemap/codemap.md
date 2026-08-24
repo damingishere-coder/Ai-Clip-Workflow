@@ -7,7 +7,7 @@
 
 > **Interactive view:** [`.codemap/codemap.html`](codemap.html) — per-module scores, findings, LoC, and the dependency graph. This file is the written report.
 
-**Generated:** 2026-08-24 · **Modules:** 13 · **Size:** 51786 tracked LoC across 132 files
+**Generated:** 2026-08-24 · **Modules:** 13 · **Size:** 52028 tracked LoC across 132 files
 
 ## Health by layer
 
@@ -17,7 +17,7 @@
 | 业务编排 | 3 | 73 |
 | 媒体与 AI 处理 | 4 | 69 |
 | 外部执行边界 | 2 | 74 |
-| 持久化与运维 | 2 | 66 |
+| 持久化与运维 | 2 | 70 |
 
 ## Per-module lines of code & score
 
@@ -59,7 +59,7 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 | Module | LoC | Score | Tags |
 |---|--:|:--|:--|
 | Ops & Delivery | 4,347 | 68 C | fallback, legacy, dual-format, duplication, bloat, glue, silent-except, monkeypatch |
-| SQLite Persistence | 3,436 | 64 C | silent-except, legacy, dual-format, bloat, god-component |
+| SQLite Persistence | 3,678 | 73 C | legacy, dual-format, bloat, god-component, glue |
 
 ## Worst offenders
 
@@ -67,16 +67,16 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Publish Center (52/D)** — app/services/publish_service.py:570: _normalize_config/_normalize_account 仅新增 *_masked 字段，却保留 client_secret、access_token、refresh_token 原字段；GET /api/publish/platforms、/accounts 及保存配置/账号响应直接返回这些原始密钥，存在敏感凭据泄漏风险。
 - **Transcription (59/D)** — app/services/transcript_workflow_service.py:317: transcript Markdown 存在即返回 completed，未校验源指纹、Provider、进度状态或文件完整性。
 - **AI Selection (63/C)** — app/services/ai_config_service.py:318: get_ai_config_context 返回含 AI/ASR Key 的完整 values，GET /api/settings/ai 无读取鉴权，页面也复用该上下文。
-- **SQLite Persistence (64/C)** — app/db/database.py:628-671: _create_indexes 先删除 uq_publish_jobs_active_clip_platform_mode，随后对所有索引创建统一捕获 sqlite3.Error 并静默忽略；唯一部分索引创建失败时，旧索引已删除且无告警，活动发布任务可能失去唯一约束并产生重复记录。
 - **Frontend UI (65/C)** — app/static/js/app.js:211: 多个写请求绕过统一 apiFetch；启用 LOCAL_ADMIN_TOKEN 时可能缺失 Authorization 并被 API 拒绝。
 - **Ops & Delivery (68/C)** — scripts/migrate_task_dirs_to_project_names.py:211: 任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。
 - **Subtitle (70/C)** — app/services/subtitle_data_service.py:352: 手工 revision 的 active/base 检查在事务外，并发编辑可覆盖 active 选择。
 - **Publish Scheduler (71/C)** — app/services/publish_scheduler.py:756-785: recover_interrupted_jobs 每轮加载全部 PUBLISHING 任务，并对每个任务串行查询 Worker，没有批量上限、并发控制或退避；Worker 不可用或卡住任务较多时，单轮耗时按任务数乘以网络超时增长，会延迟后续排期处理。
+- **SQLite Persistence (73/C)** — app/db/database.py:607-608: schema_migrations 账本迁移在旧版兼容迁移和多处 executescript（996、1071、1155、1231、1754、1780）完成并提交后才执行；若历史 helper 或账本迁移失败，前面的 Schema/DML 已持久化而账本事务回滚，init_db 仍存在可重试但非原子的半迁移边界。
 - **Publishers & Worker (76/B)** — scripts/publish_host_worker.py:321: _prior_job_execution_requires_review 扫描旧 execution journal 时，若 journal 缺少 identity 或已损坏，直接 continue；跨 execution 无法确认其 job_id 时不会阻断新 execution。旧 Worker 在上传后崩溃并留下无身份/损坏日志时，仍存在重复投稿边界。
 
 ## All findings
 
-### HIGH (14)
+### HIGH (13)
 
 - **Frontend UI** · `app/static/js/app.js:211` — 多个写请求绕过统一 apiFetch；启用 LOCAL_ADMIN_TOKEN 时可能缺失 Authorization 并被 API 拒绝。
 - **Frontend UI** · `app/static/js/app.js:1729` — 接口或任务数据直接拼接到 innerHTML；publish-center.js:2152 有同类路径，存在本地 DOM XSS/页面结构破坏风险。
@@ -90,10 +90,9 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **AI Selection** · `app/services/ai_config_service.py:318` — get_ai_config_context 返回含 AI/ASR Key 的完整 values，GET /api/settings/ai 无读取鉴权，页面也复用该上下文。
 - **Task Review & Cut** · `app/services/task_service.py:458-485,594-616` — 任务详情默认执行无 timeout 的 ffprobe，且未捕获 OSError/Path.stat 异常；NAS、损坏或卡死媒体可能阻塞详情请求或返回 500。明确延期至 P1.4。
 - **Publish Center** · `app/services/publish_service.py:570` — _normalize_config/_normalize_account 仅新增 *_masked 字段，却保留 client_secret、access_token、refresh_token 原字段；GET /api/publish/platforms、/accounts 及保存配置/账号响应直接返回这些原始密钥，存在敏感凭据泄漏风险。
-- **SQLite Persistence** · `app/db/database.py:628-671` — _create_indexes 先删除 uq_publish_jobs_active_clip_platform_mode，随后对所有索引创建统一捕获 sqlite3.Error 并静默忽略；唯一部分索引创建失败时，旧索引已删除且无告警，活动发布任务可能失去唯一约束并产生重复记录。
 - **Ops & Delivery** · `scripts/migrate_task_dirs_to_project_names.py:211` — 任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。
 
-### MED (59)
+### MED (60)
 
 - **Frontend UI** · `app/templates/system_status.html:98` — 配置/API Key 字段进入 DOM，base.html:11 还承载本地管理 Token；需确认全链路始终掩码。
 - **Frontend UI** · `app/static/css/styles.css:870` — 使用多个未在 :root 定义的 CSS 自定义属性，相关声明可能失效。
@@ -144,8 +143,9 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Publish Scheduler** · `app/services/publish_scheduler.py:281-302` — list_due_jobs 每轮 SELECT 全部 SCHEDULED 记录，再逐条在 Python 中解析时间；虽已有状态/排期索引，但没有 SQL due 条件、分页或批量上限，排期量增长后会增加扫描内存和调度延迟。
 - **Publish Scheduler** · `app/services/publish_scheduler.py:133-1788` — PublishScheduler 约 1891 行、42 个方法，同时承担排期计算、任务领取、执行结果写回、Worker 恢复、重试修复、人工复核、批量排期和旧版兼容；职责边界过宽，修改任一状态路径的回归半径较大。
 - **Publishers & Worker** · `scripts/publish_host_worker.py:321` — _prior_job_execution_requires_review 扫描旧 execution journal 时，若 journal 缺少 identity 或已损坏，直接 continue；跨 execution 无法确认其 job_id 时不会阻断新 execution。旧 Worker 在上传后崩溃并留下无身份/损坏日志时，仍存在重复投稿边界。
-- **SQLite Persistence** · `app/db/database.py:31-617` — 数据库初始化依赖多个结构探针和缺列即 ALTER TABLE，没有 PRAGMA user_version、schema_migrations 或可追踪迁移版本；历史数据库的实际结构只能由当前代码反推。
-- **SQLite Persistence** · `app/db/database.py:754,1162` — 多个迁移函数使用 executescript，发布表迁移还会在数据规范化前提交新增列；后续失败时可能已持久化部分结构，init_db 不是原子升级。
+- **SQLite Persistence** · `app/db/database.py:607-608` — schema_migrations 账本迁移在旧版兼容迁移和多处 executescript（996、1071、1155、1231、1754、1780）完成并提交后才执行；若历史 helper 或账本迁移失败，前面的 Schema/DML 已持久化而账本事务回滚，init_db 仍存在可重试但非原子的半迁移边界。
+- **SQLite Persistence** · `scripts/backup_restore.py:305-383` — 备份包验证只检查 manifest、哈希、quick_check 和表计数，没有验证 PRAGMA foreign_key_check、schema_migrations 记录或关键 v2 唯一索引定义；结构上可读但业务约束不完整的备份仍可能被接受，恢复后才在启动阶段失败或触发迁移。
+- **SQLite Persistence** · `scripts/backup_restore.py:529-634` — restore_backup_bundle 在替换 SQLite 文件前没有应用进程锁或活动连接闸门；服务仍运行时可原子替换数据库路径，现有连接可能继续指向旧 inode，而新连接指向恢复文件，形成恢复期间的双数据库视图。
 - **Ops & Delivery** · `.github/workflows/ci.yml:3` — CI 仅监听 master push/PR；feature/docs 直接 push 不即时验证，问题延迟到开 PR。
 - **Ops & Delivery** · `scripts/start_docker_opencli.ps1:24` — 健康检查异常只警告不返回非零，服务失败也可能被调用方视为启动成功。
 - **Ops & Delivery** · `scripts/start.ps1:30` — Demo 覆盖生效前先对正式 E 盘配置运行 doctor，新机/迁移机的隔离 Demo 可能被旧路径阻断。
@@ -182,7 +182,7 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Publishers & Worker** · `app/services/publishers/browser_runtime.py:315` — screenshot 捕获裸 Exception 后返回空字符串，截图失败不会进入发布结果或健康信号；发布可以继续但缺少关键诊断证据。
 - **Publishers & Worker** · `scripts/opencli_host_bridge.py:74` — 旧 OpenCLIHostBridgeHandler 的 /run 处理器本身没有 Bearer Token 校验；当前 main 已转调受保护的 publish_host_worker，默认入口不再使用它，但保留的可直接实例化旧处理器仍会造成安全边界误解。
 - **Publishers & Worker** · `tests/test_publish_worker_client.py:155` — 当前测试已覆盖双进程锁竞争、死进程锁回收和常规 execution fencing，但仍未覆盖无身份/损坏旧 journal 被跨 execution 扫描跳过、screenshot 失败信号及旧 bridge 处理器被直接启动时的鉴权边界。
-- **SQLite Persistence** · `app/db/database.py:656-657` — workflow job claim 索引未覆盖 lease_expires_at；队列规模增大或过期任务集中时可能读取更多候选行，属于性能退化而非当前正确性故障。
+- **SQLite Persistence** · `app/db/database.py:758` — workflow_jobs 认领索引仍只有 status、next_attempt_at、created_at，没有包含 lease_expires_at；过期接管查询在队列增长或大量过期任务时可能扫描更多候选行，属于性能退化而非当前正确性故障。
 - **Ops & Delivery** · `scripts/acceptance.ps1:115` — 验收递归扫描正式任务目录，媒体量大/锁文件会显著拖慢或阻断 release gate。
 - **Ops & Delivery** · `scripts/backup_restore_runtime.py:142` — import 时 monkeypatch backup core，全局行为依赖导入顺序。
 - **Ops & Delivery** · `docs/PORTABLE_SETUP.md:127` — 文档描述与当前 start.ps1 实现不符，旧 Next Steps 又保留兼容入口，启动排障认知漂移。

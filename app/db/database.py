@@ -1,8 +1,10 @@
+import hashlib
 import json
 import sqlite3
 from datetime import datetime
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 from app.core.config import settings
 from app.services.database_backup_service import create_publish_migration_backup, create_schema_migration_backup
@@ -12,6 +14,46 @@ DEFAULT_AI_PROMPT_PRESET_ID = "preset_001"
 DEFAULT_AI_PROMPT_PATH = settings.project_root / "prompts" / "default_ai_prompt_preset_001.txt"
 VARIETY_AI_PROMPT_PATH = settings.project_root / "prompts" / "variety_interview_prompt_preset_002.txt"
 COMEDY_V2_AI_PROMPT_PATH = settings.project_root / "prompts" / "variety_comedy_v2_prompt.txt"
+
+PUBLISH_ACTIVE_UNIQUE_INDEX_LEGACY_NAME = "uq_publish_jobs_active_clip_platform_mode"
+PUBLISH_ACTIVE_UNIQUE_INDEX_NAME = "uq_publish_jobs_active_clip_platform_mode_v2"
+PUBLISH_UNIQUE_ACTIVE_STATUSES = (
+    "DRAFT",
+    "WAITING",
+    "SCHEDULED",
+    "PUBLISHING",
+    "NEED_REVIEW",
+)
+PUBLISH_UNIQUE_ACTIVE_STATUS_SQL = ", ".join(f"'{status}'" for status in PUBLISH_UNIQUE_ACTIVE_STATUSES)
+PUBLISH_ACTIVE_UNIQUE_INDEX_SQL = f"""
+CREATE UNIQUE INDEX IF NOT EXISTS {PUBLISH_ACTIVE_UNIQUE_INDEX_NAME}
+ON publish_jobs(output_clip_id, platform, publish_mode)
+WHERE status IN ({PUBLISH_UNIQUE_ACTIVE_STATUS_SQL})
+  AND output_clip_id IS NOT NULL AND output_clip_id <> ''
+""".strip()
+PUBLISH_ACTIVE_INDEX_MIGRATION_VERSION = "20260824_01_publish_active_unique_index_v2"
+PUBLISH_ACTIVE_INDEX_MIGRATION_NAME = "发布活动任务唯一索引安全切换"
+PUBLISH_ACTIVE_INDEX_MIGRATION_CHECKSUM = hashlib.sha256(
+    (
+        f"{PUBLISH_ACTIVE_INDEX_MIGRATION_VERSION}\n"
+        f"{PUBLISH_ACTIVE_INDEX_MIGRATION_NAME}\n"
+        f"{PUBLISH_ACTIVE_UNIQUE_INDEX_SQL}\n"
+        f"DROP INDEX {PUBLISH_ACTIVE_UNIQUE_INDEX_LEGACY_NAME}"
+    ).encode("utf-8")
+).hexdigest()
+
+
+class SchemaMigrationError(RuntimeError):
+    """数据库结构迁移或不变量验证失败。"""
+
+
+@dataclass(frozen=True)
+class SchemaMigration:
+    version: str
+    name: str
+    checksum: str
+    apply: Callable[[sqlite3.Connection], None]
+    verify: Callable[[sqlite3.Connection], None]
 
 
 @contextmanager
@@ -34,6 +76,9 @@ def init_db() -> None:
 
     needs_long_live_backup = _requires_long_live_schema_migration(settings.database_path)
     needs_workflow_fencing_backup = _requires_workflow_job_fencing_migration(settings.database_path)
+    needs_subtitle_editor_backup = _requires_subtitle_editor_schema_migration(settings.database_path)
+    needs_subtitle_auto_backup = _requires_subtitle_auto_schema_migration(settings.database_path)
+    needs_publish_index_backup = _requires_publish_active_index_migration(settings.database_path)
     if needs_long_live_backup:
         create_schema_migration_backup(
             settings.database_path,
@@ -46,17 +91,30 @@ def init_db() -> None:
             settings.data_dir / "backups",
             "workflow-job-fencing",
         )
-    if _requires_subtitle_editor_schema_migration(settings.database_path):
+    if needs_subtitle_editor_backup:
         create_schema_migration_backup(
             settings.database_path,
             settings.data_dir / "backups",
             "subtitle-editor-rebuild",
         )
-    if _requires_subtitle_auto_schema_migration(settings.database_path):
+    if needs_subtitle_auto_backup:
         create_schema_migration_backup(
             settings.database_path,
             settings.data_dir / "backups",
             "subtitle-auto-workflow",
+        )
+    if needs_publish_index_backup and not any(
+        (
+            needs_long_live_backup,
+            needs_workflow_fencing_backup,
+            needs_subtitle_editor_backup,
+            needs_subtitle_auto_backup,
+        )
+    ):
+        create_schema_migration_backup(
+            settings.database_path,
+            settings.data_dir / "backups",
+            "publish-active-unique-index-v2",
         )
 
     with get_connection() as connection:
@@ -88,6 +146,13 @@ def init_db() -> None:
                 deleted_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                checksum TEXT NOT NULL,
+                applied_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS clip_candidates (
@@ -540,6 +605,7 @@ def init_db() -> None:
         _seed_publish_platform_configs(connection)
         _create_indexes(connection)
         connection.commit()
+        _run_schema_migrations(connection)
 
 
 def _requires_long_live_schema_migration(database_path) -> bool:
@@ -617,6 +683,44 @@ def _requires_subtitle_auto_schema_migration(database_path) -> bool:
     } <= columns
 
 
+def _requires_publish_active_index_migration(database_path) -> bool:
+    """已有发布表尚未完成 P1.3c 迁移时，启动写入前先做可移植备份。"""
+    if not database_path.exists() or database_path.stat().st_size == 0:
+        return False
+    connection = None
+    try:
+        connection = sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+        publish_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'publish_jobs'"
+        ).fetchone()
+        if publish_table is None:
+            return False
+        index_row = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?",
+            (PUBLISH_ACTIVE_UNIQUE_INDEX_NAME,),
+        ).fetchone()
+        ledger_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
+        ).fetchone()
+        ledger_row = None
+        if ledger_table is not None:
+            try:
+                ledger_row = connection.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version = ? AND checksum = ?",
+                    (
+                        PUBLISH_ACTIVE_INDEX_MIGRATION_VERSION,
+                        PUBLISH_ACTIVE_INDEX_MIGRATION_CHECKSUM,
+                    ),
+                ).fetchone()
+            except sqlite3.Error:
+                # 异常账本同样属于迁移风险：先要求备份，后续由结构验证给出明确错误。
+                return True
+        return index_row is None or ledger_row is None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def _get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
     rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row["name"] for row in rows}
@@ -624,8 +728,6 @@ def _get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[s
 
 def _create_indexes(connection: sqlite3.Connection) -> None:
     """创建常用查询索引（IF NOT EXISTS 语法兼容 SQLite 3.27+）。"""
-    # v1.4 的索引把 FAILED 也视为活动任务，导致无法为失败记录创建新的重试任务。
-    connection.execute("DROP INDEX IF EXISTS uq_publish_jobs_active_clip_platform_mode")
     indexes = [
         # 任务列表与状态筛选
         "CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at)",
@@ -658,18 +760,158 @@ def _create_indexes(connection: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_transcription_runs_task_active ON transcription_runs(task_id, is_active, updated_at)",
         "CREATE INDEX IF NOT EXISTS idx_transcription_chunks_run_status ON transcription_chunks(run_id, status, chunk_index)",
         "CREATE INDEX IF NOT EXISTS idx_ai_analysis_windows_resume ON ai_analysis_windows(task_id, transcript_fingerprint, provider, model, status, window_index)",
-        """CREATE UNIQUE INDEX IF NOT EXISTS uq_publish_jobs_active_clip_platform_mode
-           ON publish_jobs(output_clip_id, platform, publish_mode)
-           WHERE status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'PUBLISHING', 'NEED_REVIEW')
-             AND output_clip_id IS NOT NULL AND output_clip_id <> ''""",
         # OAuth state 过期清理
         "CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at)",
     ]
     for sql in indexes:
+        connection.execute(sql)
+
+
+def _normalize_schema_sql(sql: str | None) -> str:
+    normalized = " ".join(str(sql or "").strip().rstrip(";").lower().split())
+    return normalized.replace(" if not exists ", " ")
+
+
+def _ensure_schema_migrations_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            checksum TEXT NOT NULL,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+    table_info = connection.execute("PRAGMA table_info(schema_migrations)").fetchall()
+    columns = {row[1] for row in table_info}
+    required_columns = {"version", "name", "checksum", "applied_at"}
+    missing_columns = sorted(required_columns - columns)
+    if missing_columns:
+        raise SchemaMigrationError(
+            "schema_migrations 账本结构不完整，缺少字段：" + ", ".join(missing_columns)
+        )
+    version_column = next(row for row in table_info if row[1] == "version")
+    if version_column[5] != 1:
+        raise SchemaMigrationError("schema_migrations.version 不是主键，已拒绝继续迁移")
+
+
+def _assert_no_duplicate_active_publish_jobs(connection: sqlite3.Connection) -> None:
+    rows = connection.execute(
+        f"""
+        SELECT output_clip_id, platform, publish_mode, COUNT(*) AS duplicate_count
+        FROM publish_jobs
+        WHERE status IN ({PUBLISH_UNIQUE_ACTIVE_STATUS_SQL})
+          AND output_clip_id IS NOT NULL AND output_clip_id <> ''
+        GROUP BY output_clip_id, platform, publish_mode
+        HAVING COUNT(*) > 1
+        ORDER BY output_clip_id, platform, publish_mode
+        LIMIT 5
+        """
+    ).fetchall()
+    if not rows:
+        return
+    samples = "; ".join(
+        f"{row['output_clip_id']}/{row['platform']}/{row['publish_mode']} x{row['duplicate_count']}"
+        for row in rows
+    )
+    raise SchemaMigrationError(
+        "检测到重复的活动发布任务，拒绝建立唯一索引；请先人工核对后再迁移。示例：" + samples
+    )
+
+
+def _verify_publish_active_unique_index(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+        (PUBLISH_ACTIVE_UNIQUE_INDEX_NAME,),
+    ).fetchone()
+    if row is None:
+        raise SchemaMigrationError(
+            f"关键唯一索引 {PUBLISH_ACTIVE_UNIQUE_INDEX_NAME} 不存在，已拒绝启动"
+        )
+    actual_sql = row["sql"] if isinstance(row, sqlite3.Row) else row[0]
+    if _normalize_schema_sql(actual_sql) != _normalize_schema_sql(PUBLISH_ACTIVE_UNIQUE_INDEX_SQL):
+        raise SchemaMigrationError(
+            f"关键唯一索引 {PUBLISH_ACTIVE_UNIQUE_INDEX_NAME} 定义发生漂移，已拒绝启动"
+        )
+
+
+def _verify_publish_active_unique_index_migration(connection: sqlite3.Connection) -> None:
+    _verify_publish_active_unique_index(connection)
+    legacy_row = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?",
+        (PUBLISH_ACTIVE_UNIQUE_INDEX_LEGACY_NAME,),
+    ).fetchone()
+    if legacy_row is not None:
+        raise SchemaMigrationError(
+            f"旧版唯一索引 {PUBLISH_ACTIVE_UNIQUE_INDEX_LEGACY_NAME} 仍存在，迁移未完整完成"
+        )
+
+
+def _apply_publish_active_unique_index_migration(connection: sqlite3.Connection) -> None:
+    # 先建立和验证新版索引；任一步失败时旧版索引仍保留在同一事务中。
+    _assert_no_duplicate_active_publish_jobs(connection)
+    connection.execute(PUBLISH_ACTIVE_UNIQUE_INDEX_SQL)
+    _verify_publish_active_unique_index(connection)
+    connection.execute(f"DROP INDEX IF EXISTS {PUBLISH_ACTIVE_UNIQUE_INDEX_LEGACY_NAME}")
+
+
+def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
+    return (
+        SchemaMigration(
+            version=PUBLISH_ACTIVE_INDEX_MIGRATION_VERSION,
+            name=PUBLISH_ACTIVE_INDEX_MIGRATION_NAME,
+            checksum=PUBLISH_ACTIVE_INDEX_MIGRATION_CHECKSUM,
+            apply=_apply_publish_active_unique_index_migration,
+            verify=_verify_publish_active_unique_index_migration,
+        ),
+    )
+
+
+def _run_schema_migrations(connection: sqlite3.Connection) -> None:
+    """串行执行有账本的新迁移；历史列探测迁移继续作为兼容层保留。"""
+    if connection.in_transaction:
+        raise SchemaMigrationError("执行账本迁移前存在未提交事务，已拒绝继续")
+
+    for migration in _registered_schema_migrations():
+        version = migration.version
         try:
-            connection.execute(sql)
-        except sqlite3.Error:
-            pass
+            connection.execute("BEGIN IMMEDIATE")
+            _ensure_schema_migrations_table(connection)
+            applied = connection.execute(
+                "SELECT name, checksum FROM schema_migrations WHERE version = ?",
+                (version,),
+            ).fetchone()
+            if applied is not None:
+                applied_checksum = applied["checksum"] if isinstance(applied, sqlite3.Row) else applied[1]
+                if applied_checksum != migration.checksum:
+                    raise SchemaMigrationError(
+                        f"迁移 {version} 的 checksum 与账本不一致，已拒绝启动"
+                    )
+                migration.verify(connection)
+                connection.commit()
+                continue
+
+            migration.apply(connection)
+            migration.verify(connection)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations (version, name, checksum, applied_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    version,
+                    migration.name,
+                    migration.checksum,
+                    datetime.now().astimezone().isoformat(timespec="seconds"),
+                ),
+            )
+            connection.commit()
+        except Exception as exc:
+            connection.rollback()
+            if isinstance(exc, SchemaMigrationError):
+                raise
+            raise SchemaMigrationError(f"数据库迁移 {version} 执行失败：{exc}") from exc
 
 
 def _migrate_tasks_table(connection: sqlite3.Connection) -> None:

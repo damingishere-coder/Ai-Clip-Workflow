@@ -96,6 +96,19 @@ Codemap 独立复评结果：`Publish Scheduler 62→71（C）`、`Publishers & 
 
 本轮没有新增数据库列、没有迁移活动库，也没有调用真实 AI、FFmpeg、Chrome、抖音或 B站。恢复语义是“有可验证证据时尽量避免重复”，不是跨 SQLite 与外部服务的严格 exactly-once：若 Provider 已计费但进程在任何 run/文件落盘前崩溃，系统无法证明该次结果，重试仍可能再次调用。数据库迁移 fail-open、第三方超时/429/错误 JSON、字幕批准批次和 Secret/本地管理接口仍属于 P1.3c～P1.5，因此项目成熟度继续维持 **可用 V1**，尚不提前改判为“稳定 V1”。
 
+## 0.6 P1.3c 数据库迁移可靠性状态（2026-08-24）
+
+| P1.3c 项目 | 结果 | 验证证据 |
+| --- | --- | --- |
+| 迁移账本 | 已封口 | `schema_migrations` 保存 version/name/checksum/applied_at；同版本 checksum 漂移、缺列或 version 非主键均拒绝继续。 |
+| 迁移事务 | 已封口（新迁移） | P1.3c 起每条注册迁移使用 `BEGIN IMMEDIATE`，Schema、验证和账本同事务提交；并发 runner 最终只有一条记录。 |
+| 唯一索引切换 | 已封口 | 先创建并验证 `_v2` 索引，再删除旧索引；失败回滚后旧索引仍在，不再出现无约束继续启动。 |
+| 重复与漂移 | 已封口 | 活动状态含 `NEED_REVIEW`；重复组不自动改写而是明确阻止迁移；索引缺失、错误定义和旧索引残留同样 fail closed。 |
+| 迁移前备份 | 已封口 | 已有数据库缺 ledger/v2 索引时，任何写入前先用 SQLite Online Backup 生成可移植快照；异常 ledger 也先备份再拒绝。 |
+| 活动库边界 | 未执行写入 | 只读预检显示 ledger 尚未落地、旧索引存在、活动重复组为 0；本轮没有重启正式服务或迁移正式库。 |
+
+Codemap 独立复评将 `SQLite Persistence` 从 **64/C 提升到 73/C**，原 HIGH“先删索引、重建失败静默吞掉”和 MED“没有迁移账本”均已移除。模块仍为 C：历史列探测和多处 `executescript` 继续属于 pre-ledger compatibility，不能保证整个旧库升级原子；备份恢复工具还缺 FK/ledger/关键索引验证与运行中服务闸门。P1.3c 已完成有限范围目标，但项目整体仍维持 **可用 V1**，下一轮按路线处理 P1.3d，而不是借机全面重写数据库层。
+
 ## 1. Executive Summary
 
 ### 结论
@@ -204,7 +217,7 @@ flowchart LR
 | Publish Center | 5,561 | Core | 52 | D | Secret 泄漏 + 最大 God Service + 多种隐式 partial |
 | Publish Scheduler | 1,754 | Core | 62 | C | 发布安全思想正确；execution fencing、后台 Task 和恢复竞态不足 |
 | Publisher Worker | 2,116 | High | 62 | C | 真实边界清楚；execution id 幂等/路径和 journal 脱敏不足 |
-| Persistence | 3,023 | Core | 63 | C | WAL/备份是优点；真实 FK 违规、迁移账本和索引错误处理是核心债 |
+| Persistence | 3,678 | Core | 73 | C | WAL/备份、迁移账本与关键索引 fail-closed 已具备；旧兼容迁移和恢复闸门仍是债务 |
 | Ops / Delivery | 4,347 | Medium | 68 | C | CI/脚本较完整；恢复、Demo fail-open、默认含 `.env` 和文档漂移 |
 
 Codemap 分数高于总健康度 59 分，是因为总健康度额外纳入了“活动数据库已经发生 FK 违规”和“测试误指真实库可整表删除”这两项运行态 P0 证据，而模块评分主要评价对应代码边界。
@@ -517,19 +530,19 @@ Sonar 官方说明：Python Coverage 需要先由外部测试工具生成报告�
 | Blast Radius | 任务详情、审核、字幕和发送中心页面。 |
 | 推荐方案 | 动态文本统一 `textContent/createElement`；需要 HTML 的内容只接受白名单模板；所有 API 请求走同一封装并加超时/错误规范化。 |
 
-#### P1-10 启动迁移无版本账本，唯一索引创建失败被静默吞掉
+#### P1-10 启动迁移核心 fail-open（P1.3c 已完成，保留历史兼容边界）
 
 | 字段 | 内容 |
 | --- | --- |
-| 文件 / 位置 | `app/db/database.py:31-532,601-648,654-965` |
+| 文件 / 位置 | `app/db/database.py`；`scripts/backup_restore.py:305-383,529-634` |
 | 模块 | Persistence |
 | 来源 | Code Overhaul + Codemap |
-| 原因 | 启动时通过表/列探测执行迁移，没有 `user_version`/ledger；部分 `executescript` 会改变事务语义；活动发布唯一索引先删除再创建，所有 `sqlite3.Error` 被 `pass`。 |
-| 实际影响 | 升级失败可留下半迁移；重复历史数据导致唯一索引重建失败时，应用仍启动且不告警，后续可继续产生重复活动发布任务。 |
-| 发生概率 | 新库低；历史库/异常数据升级时中等。 |
-| 修改收益 / 成本 / 风险 | 收益高；成本中到高；风险高，不能直接改生产 Schema。 |
-| Blast Radius | 整个数据库和应用启动。 |
-| 推荐方案 | 先只增加可审计 migration ledger 和 preflight；每个版本独立 backup/verify；索引失败必须阻止相关功能或显式 degraded，不能静默继续。 |
+| 原因 | P1.3c 已建立 ledger、备份和 v2 索引 fail-closed；剩余问题是早期列探测/`executescript` 仍先于账本迁移执行，恢复包也未验证 FK/ledger/关键索引或阻止运行中替换。 |
+| 实际影响 | 新迁移不会再静默丢唯一约束；但非常旧的 Schema 在兼容 helper 中途失败仍可能留下可重试的部分结构，运行中恢复还可能形成新旧连接视图分离。 |
+| 发生概率 | 正常新库低；跨多个历史版本升级或运行中恢复时低到中。 |
+| 修改收益 / 成本 / 风险 | 核心收益已取得；剩余改造收益中高、成本高、风险高，应拆成独立恢复/legacy migration 轮次。 |
+| Blast Radius | 历史数据库升级与整库恢复，不影响正常业务请求路径。 |
+| 推荐方案 | 后续新 Schema 全部走现有 ledger；独立增加 restore 离线闸门和 FK/ledger/index 校验，再按版本逐步收编旧 helper，不做一次性全面重写。 |
 
 ### P2：有限范围逐步偿还
 
@@ -803,7 +816,7 @@ Sonar 没有发现原始 Token 响应、DOM XSS 和目录拼接，说明静态�
 | P1.5 Task/Cut/Subtitle 状态与批次原子性 | 先合法转移表，再切片 run 和字幕批准批次；不改 UI 主流程 | 非法跳跃拒绝、并发 run、批次中途失败、旧 active 保留 | 每项独立提交；特性开关保留旧入口短期回退 |
 | P1.6 Transcription 正确性 | run/source 绑定、取消透传、损坏产物显式状态 | 大文件中部变化、旧文件、取消、进度 JSON 损坏、重启测试 | 旧 transcript 只降为历史，不删除 |
 | P1.7 AI 质量与成本门禁 | profile 覆盖率、partial 状态、错误分类、有限退避 | 429/500/超时/坏 JSON/部分窗口/重复调用次数测试 | 配置化门槛，可回滚到旧行为但保留日志 |
-| P1.8 Migration ledger 与索引不变量 | 只为未来迁移加版本账本/preflight；当前 Schema 不大改 | 旧库升级、半迁移、重复数据、索引失败应明确阻断 | 每版前备份；一个 migration 一次提交 |
+| P1.8 Migration ledger 与索引不变量（P1.3c 核心已完成） | 已为未来迁移增加版本/checksum 账本、备份和 v2 索引 preflight；旧 helper 暂留 | 重复数据、checksum/索引漂移、并发 runner 和失败回滚已覆盖 | 每版前备份；一个 migration 一次提交；旧 helper 后续逐条收编 |
 | P2.1 覆盖率与真实故障测试 | 加 Coverage；先锁 P0/P1 核心模块，不追漂亮总百分比 | CI 产 `coverage.xml`，Sonar 能导入；核心门槛不得下降 | 移除阈值不影响生产代码 |
 | P2.2 可观测性 | readiness、Job/Worker 错误码、受控 stderr、fallback 日志 | DB/Worker/FFmpeg 故障时状态明确且不泄密 | 回滚观测层，无数据迁移 |
 | P2.3 Publish Service 渐进拆分 | 先 Secret DTO/query，再内容准备，再 job，最后 legacy adapter | 每轮 API contract、发布状态机和浏览器测试全过 | 一轮一个提交，旧 facade 保持接口 |

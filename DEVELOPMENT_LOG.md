@@ -1,5 +1,17 @@
 # Development Log
 
+## 2026-08-24 稳定 V1 P1.3c 数据库迁移账本与唯一索引 Fail-Closed
+
+- 新增 `schema_migrations` 账本；每条正式新迁移记录稳定 version、name、checksum 和完成时间，同版本定义漂移时拒绝启动。
+- 迁移执行使用 `BEGIN IMMEDIATE`，Schema 修改、不变量验证和账本写入同事务提交；失败会回滚且不会伪造成功记录，两个初始化进程共享一条迁移记录。
+- 发布活动任务唯一约束迁移到版本化 `uq_publish_jobs_active_clip_platform_mode_v2`；先检查 `DRAFT/WAITING/SCHEDULED/PUBLISHING/NEED_REVIEW` 重复组，再创建并验证新版索引，最后才删除旧索引。
+- 唯一索引缺失、定义漂移、旧索引残留、重复活动记录或 SQLite 索引错误均明确阻止启动；不再执行 `except sqlite3.Error: pass` 后继续无约束运行。
+- 历史库执行 P1.3c 写入前先使用 SQLite Online Backup 创建可移植快照；异常/缺列账本也先进入备份路径，再由账本结构验证拒绝迁移。
+- 新增 12 个隔离回归，覆盖重复初始化、并发迁移、checksum/Schema 漂移、异常账本、备份、失败历史兼容、活动重复数据、旧索引回滚保护和普通索引错误传播。
+- 正式 `workflow.sqlite3` 本轮只读预检：尚无 ledger、旧唯一索引仍存在、活动重复组为 0；未重启服务、未写入正式库，也未调用 AI、FFmpeg、Chrome、抖音或 B站。
+- 最终完整隔离测试 `663 passed`，Ruff、Python Compileall 与 `git diff --check` 全部通过。Codemap 独立复评将 `SQLite Persistence` 从 `64/C` 提升到 `73/C`，原 HIGH fail-open 与无账本 finding 已移除。
+- 诚实边界：启动期旧版列探测/`executescript` 仍是 pre-ledger compatibility，不能把全部历史迁移宣称为原子；备份恢复包的 FK/ledger/关键索引校验和运行中恢复闸门留待独立后续轮次。
+
 ## 2026-08-24 稳定 V1 P1.3b 自动流水线断点恢复
 
 - 新增 `auto_pipeline_step_v1` 版本化 checkpoint；每一步记录 `running/succeeded/failed`、连续完成前缀、输入基线和紧凑产物证据，不保存 Secret、Prompt、完整 AI payload 或大对象。
