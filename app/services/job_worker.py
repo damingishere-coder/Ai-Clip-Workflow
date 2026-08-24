@@ -138,6 +138,9 @@ def _execute_auto_pipeline(job_id: str, task_id: str, payload: dict) -> None:
     if job_service.is_cancel_requested(job_id):
         job_service.mark_job_cancelled(job_id, "全自动流水线已取消")
         return
+    if result.get("status") == "cancelled":
+        job_service.mark_job_cancelled(job_id, "全自动流水线已取消")
+        return
     if result.get("status") == "failed":
         raise RuntimeError(str(result.get("last_error") or "全自动流水线失败"))
     job_service.mark_job_completed(job_id, result)
@@ -311,7 +314,14 @@ class WorkflowJobRunner:
             and final_job.get("lease_owner") == self.owner
             and final_job.get("lease_token") == lease_token
         )
-        if process.returncode != 0 and owns_final_lease:
+        if owns_final_lease and int(final_job.get("cancel_requested") or 0):
+            job_service.mark_job_cancelled(
+                job_id,
+                "任务已取消，子进程已退出",
+                lease_owner=self.owner,
+                lease_token=lease_token,
+            )
+        elif process.returncode != 0 and owns_final_lease:
             if final_job.get("job_type") == job_service.JOB_TYPE_SUBTITLE:
                 from app.services.subtitle_auto_workflow_service import cleanup_interrupted_subtitle_job
 

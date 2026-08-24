@@ -360,6 +360,17 @@ def claim_next_job(lease_owner: str, lease_seconds: int = 120) -> dict | None:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(
             """
+            UPDATE workflow_jobs
+            SET status = ?, message = '任务已取消，过期执行已回收',
+                finished_at = ?, updated_at = ?, lease_owner = NULL,
+                lease_token = NULL, lease_expires_at = NULL, heartbeat_at = NULL
+            WHERE status = ? AND cancel_requested = 1
+              AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+            """,
+            (JOB_STATUS_CANCELLED, now, now, JOB_STATUS_RUNNING, now),
+        )
+        connection.execute(
+            """
             UPDATE workflow_jobs SET status = ?, error_message = '已达到最大尝试次数',
                 message = '任务失败：已达到最大尝试次数', finished_at = ?, updated_at = ?,
                 lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
@@ -496,23 +507,153 @@ def update_job_checkpoint(
 def request_job_cancel(job_id: str) -> dict | None:
     now = _now_iso()
     with get_connection() as connection:
-        row = connection.execute("SELECT status FROM workflow_jobs WHERE id = ?", (job_id,)).fetchone()
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT status, job_type, task_id FROM workflow_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
         if not row:
+            connection.rollback()
             return None
         if row["status"] == JOB_STATUS_QUEUED:
-            connection.execute(
+            cursor = connection.execute(
                 """UPDATE workflow_jobs SET status = ?, cancel_requested = 1, message = '任务已取消',
                    finished_at = ?, updated_at = ?, lease_owner = NULL, lease_token = NULL,
-                   lease_expires_at = NULL WHERE id = ?""",
-                (JOB_STATUS_CANCELLED, now, now, job_id),
+                   lease_expires_at = NULL WHERE id = ? AND status = ?""",
+                (JOB_STATUS_CANCELLED, now, now, job_id, JOB_STATUS_QUEUED),
             )
         elif row["status"] == JOB_STATUS_RUNNING:
+            cursor = connection.execute(
+                """
+                UPDATE workflow_jobs
+                SET cancel_requested = 1, message = '正在停止任务', updated_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (now, job_id, JOB_STATUS_RUNNING),
+            )
+        else:
+            cursor = None
+        if cursor and cursor.rowcount == 1 and row["job_type"] == JOB_TYPE_AUTO_PIPELINE:
+            _cancel_linked_auto_publish_jobs(
+                connection,
+                task_id=str(row["task_id"] or ""),
+                workflow_job_ids=[job_id],
+                now=now,
+            )
             connection.execute(
-                "UPDATE workflow_jobs SET cancel_requested = 1, message = '正在停止任务', updated_at = ? WHERE id = ?",
-                (now, job_id),
+                """
+                UPDATE tasks
+                SET status = 'CANCELLED', progress = 0,
+                    error_message = '用户已取消全自动流水线',
+                    last_error = '用户已取消全自动流水线', updated_at = ?
+                WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+                """,
+                (now, str(row["task_id"] or "")),
             )
         connection.commit()
     return get_job(job_id)
+
+
+def cancel_active_auto_pipeline_jobs_for_task(
+    connection,
+    task_id: str,
+    *,
+    now: str,
+) -> int:
+    """在调用方事务中取消一个 Task 的活跃自动流水线及其未发布结果。"""
+    rows = connection.execute(
+        """
+        SELECT id, status
+        FROM workflow_jobs
+        WHERE task_id = ? AND job_type = ? AND status IN (?, ?)
+        """,
+        (task_id, JOB_TYPE_AUTO_PIPELINE, JOB_STATUS_QUEUED, JOB_STATUS_RUNNING),
+    ).fetchall()
+    if not rows:
+        return 0
+
+    queued_ids = [str(row["id"]) for row in rows if row["status"] == JOB_STATUS_QUEUED]
+    running_ids = [str(row["id"]) for row in rows if row["status"] == JOB_STATUS_RUNNING]
+    if queued_ids:
+        placeholders = ", ".join("?" for _ in queued_ids)
+        connection.execute(
+            f"""
+            UPDATE workflow_jobs
+            SET status = ?, cancel_requested = 1, message = '任务已取消',
+                finished_at = ?, updated_at = ?, lease_owner = NULL,
+                lease_token = NULL, lease_expires_at = NULL, heartbeat_at = NULL
+            WHERE id IN ({placeholders}) AND status = ?
+            """,
+            (JOB_STATUS_CANCELLED, now, now, *queued_ids, JOB_STATUS_QUEUED),
+        )
+    if running_ids:
+        placeholders = ", ".join("?" for _ in running_ids)
+        connection.execute(
+            f"""
+            UPDATE workflow_jobs
+            SET cancel_requested = 1, message = '正在停止任务', updated_at = ?
+            WHERE id IN ({placeholders}) AND status = ?
+            """,
+            (now, *running_ids, JOB_STATUS_RUNNING),
+        )
+    _cancel_linked_auto_publish_jobs(
+        connection,
+        task_id=task_id,
+        workflow_job_ids=[str(row["id"]) for row in rows],
+        now=now,
+    )
+    return len(rows)
+
+
+def _cancel_linked_auto_publish_jobs(
+    connection,
+    *,
+    task_id: str,
+    workflow_job_ids: list[str],
+    now: str,
+) -> int:
+    """只取消 provider_response 明确归属于指定流水线的未发布任务。"""
+    resolved_ids = [job_id for job_id in workflow_job_ids if job_id]
+    if not task_id or not resolved_ids:
+        return 0
+    candidates = connection.execute(
+        """
+        SELECT id, provider_response
+        FROM publish_jobs
+        WHERE task_id = ? AND status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'NEED_REVIEW')
+        """,
+        (task_id,),
+    ).fetchall()
+    linked_ids: list[str] = []
+    allowed_workflow_ids = set(resolved_ids)
+    for row in candidates:
+        try:
+            provider_response = json.loads(str(row["provider_response"] or "{}"))
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(provider_response, dict):
+            continue
+        if (
+            provider_response.get("source") == "auto_pipeline"
+            and str(provider_response.get("workflow_job_id") or "") in allowed_workflow_ids
+        ):
+            linked_ids.append(str(row["id"]))
+    if not linked_ids:
+        return 0
+    placeholders = ", ".join("?" for _ in linked_ids)
+    cursor = connection.execute(
+        f"""
+        UPDATE publish_jobs
+        SET status = 'CANCELLED', error_code = 'pipeline_cancelled',
+            error_message = '全自动流水线已取消', last_error = '全自动流水线已取消',
+            finished_at = ?, updated_at = ?
+        WHERE task_id = ?
+          AND status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'NEED_REVIEW')
+          AND id IN ({placeholders})
+        """,
+        (now, now, task_id, *linked_ids),
+    )
+    return cursor.rowcount
 
 
 def is_cancel_requested(job_id: str) -> bool:
@@ -603,7 +744,7 @@ def mark_job_completed(
                 message = '任务已完成', result_json = ?,
                 finished_at = ?, updated_at = ?, lease_owner = NULL,
                 lease_token = NULL, lease_expires_at = NULL, heartbeat_at = NULL
-            WHERE {condition}
+            WHERE {condition} AND cancel_requested = 0
             """,
             (JOB_STATUS_COMPLETED, result_json, now, now, job_id, *lease_params),
         )
@@ -632,7 +773,7 @@ def mark_job_failed(
             SET status = ?, error_message = ?, message = ?,
                 finished_at = ?, updated_at = ?, lease_owner = NULL,
                 lease_token = NULL, lease_expires_at = NULL, heartbeat_at = NULL
-            WHERE {condition}
+            WHERE {condition} AND cancel_requested = 0
             """,
             (
                 JOB_STATUS_FAILED,

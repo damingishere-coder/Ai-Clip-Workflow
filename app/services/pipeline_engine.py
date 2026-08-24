@@ -73,6 +73,10 @@ DEFAULT_AUTO_CONFIG = {
 }
 
 
+class PipelineCancelledError(RuntimeError):
+    """用户请求取消当前全自动流水线。"""
+
+
 class PipelineEngine:
     """只做流程调度，复用现有转写、AI、切片和发布任务服务。"""
 
@@ -101,7 +105,7 @@ class PipelineEngine:
         else:
             append_task_log(task_id, f"从失败步骤重试全自动流水线：{resolved_start_step.value}")
 
-        context: dict[str, Any] = {"config": config}
+        context: dict[str, Any] = {"config": config, "workflow_job_id": job_id or ""}
         steps = STEP_STATUSES[STEP_STATUSES.index(resolved_start_step) :]
         handlers = {
             TaskStatus.PREPARING_SOURCE: self._prepare_source,
@@ -118,8 +122,7 @@ class PipelineEngine:
         for step in steps:
             try:
                 if job_id:
-                    if job_service.is_cancel_requested(job_id):
-                        raise RuntimeError("用户已取消全自动流水线")
+                    self._raise_if_cancelled(job_id)
                     step_index = STEP_STATUSES.index(step)
                     job_service.update_job_progress(
                         job_id,
@@ -131,14 +134,21 @@ class PipelineEngine:
                 context[step.value] = handlers[step](task_id, context)
                 if job_id:
                     job_service.heartbeat_job(job_id)
+                    self._raise_if_cancelled(job_id)
                 if step == TaskStatus.SUBTITLE_DRAFTING:
-                    summary = self._write_task_summary(task_id, TaskStatus.PENDING_SUBTITLE_REVIEW.value, "")
+                    summary = self._safe_write_task_summary(
+                        task_id,
+                        TaskStatus.PENDING_SUBTITLE_REVIEW.value,
+                        "",
+                    )
                     return {
                         "status": "pending_subtitle_review",
                         "message": "字幕草稿已生成，等待人工审核后再继续。",
                         "summary_path": summary["summary_path"],
                         "task": task_service.get_task(task_id, include_video_probe=False),
                     }
+            except PipelineCancelledError as exc:
+                return self._cancel_pipeline(task_id, str(exc), context)
             except job_service.JobLeaseLostError:
                 raise
             except Exception as exc:
@@ -146,7 +156,7 @@ class PipelineEngine:
                 error = str(exc) or f"{step.value} 失败"
                 task_service.update_task_status(task_id, failed_status, error)
                 append_task_log(task_id, f"全自动流水线失败：{step.value}，原因：{error}")
-                summary = self._write_task_summary(task_id, "failed", error)
+                summary = self._safe_write_task_summary(task_id, "failed", error)
                 return {
                     "status": "failed",
                     "failed_step": step.value,
@@ -156,16 +166,146 @@ class PipelineEngine:
                     "task": task_service.get_task(task_id, include_video_probe=False),
                 }
 
-        task_service.update_task_status(task_id, TaskStatus.READY_TO_PUBLISH)
+        if job_id:
+            try:
+                self._raise_if_cancelled(job_id)
+            except PipelineCancelledError as exc:
+                return self._cancel_pipeline(task_id, str(exc), context)
+        if not self._mark_ready_to_publish(task_id, job_id):
+            return self._cancel_pipeline(task_id, "用户已取消全自动流水线", context)
         append_task_log(task_id, "发布任务已创建，进入待人工确认发布状态")
-        summary = self._write_task_summary(task_id, "ready_to_publish", "")
-        task_service.update_task_status(task_id, TaskStatus.COMPLETED)
-        append_task_log(task_id, "全自动流水线完成，发布内容已按用户确认的字幕交付方式创建。")
+        summary = self._safe_write_task_summary(task_id, "ready_to_publish", "")
+        append_task_log(task_id, "全自动流水线准备完成，发布内容等待人工确认。")
         return {
-            "status": "completed",
+            "status": "ready_to_publish",
             "summary_path": summary["summary_path"],
             "task": task_service.get_task(task_id, include_video_probe=False),
         }
+
+    def _raise_if_cancelled(self, job_id: str) -> None:
+        if job_service.is_cancel_requested(job_id):
+            raise PipelineCancelledError("用户已取消全自动流水线")
+
+    def _mark_ready_to_publish(self, task_id: str, job_id: str | None) -> bool:
+        if not job_id:
+            task_service.update_task_status(task_id, TaskStatus.READY_TO_PUBLISH)
+            return True
+
+        active_lease = job_service.current_job_lease()
+        if not active_lease or active_lease[0] != job_id:
+            raise job_service.JobLeaseLostError(
+                f"Workflow Job 没有当前执行代际，不能写入 READY：{job_id}"
+            )
+        _, lease_owner, lease_token = active_lease
+        with get_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            now = task_service._now_iso()
+            job = connection.execute(
+                """
+                SELECT status, cancel_requested, lease_owner, lease_token, lease_expires_at
+                FROM workflow_jobs WHERE id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+            if not job:
+                connection.rollback()
+                raise ValueError("全自动 Workflow Job 不存在")
+            if int(job["cancel_requested"] or 0) or job["status"] == job_service.JOB_STATUS_CANCELLED:
+                connection.rollback()
+                return False
+            if (
+                job["status"] != job_service.JOB_STATUS_RUNNING
+                or job["lease_owner"] != lease_owner
+                or job["lease_token"] != lease_token
+                or not job["lease_expires_at"]
+                or str(job["lease_expires_at"]) <= now
+            ):
+                connection.rollback()
+                raise job_service.JobLeaseLostError(f"Workflow Job 租约已失效，不能写入 READY：{job_id}")
+            final_now = task_service._now_iso()
+            cursor = connection.execute(
+                """
+                UPDATE tasks
+                SET status = ?, progress = 100, error_message = NULL,
+                    last_error = NULL, updated_at = ?
+                WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+                  AND EXISTS (
+                      SELECT 1 FROM workflow_jobs
+                      WHERE id = ? AND task_id = ? AND status = ?
+                        AND lease_owner = ? AND lease_token = ?
+                        AND lease_expires_at > ? AND cancel_requested = 0
+                  )
+                """,
+                (
+                    TaskStatus.READY_TO_PUBLISH.value,
+                    final_now,
+                    task_id,
+                    job_id,
+                    task_id,
+                    job_service.JOB_STATUS_RUNNING,
+                    lease_owner,
+                    lease_token,
+                    final_now,
+                ),
+            )
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise job_service.JobLeaseLostError(
+                    f"Workflow Job 租约已失效或任务不可写，不能写入 READY：{job_id}"
+                )
+            connection.commit()
+        return True
+
+    def _cancel_pipeline(self, task_id: str, message: str, context: dict | None = None) -> dict:
+        cancelled_publish_jobs = self._cancel_unpublished_auto_jobs(task_id, context or {})
+        task_service.update_task_status(task_id, TaskStatus.CANCELLED, message)
+        append_task_log(task_id, f"全自动流水线已取消：{message}")
+        summary = self._safe_write_task_summary(task_id, "cancelled", message)
+        return {
+            "status": "cancelled",
+            "last_error": message,
+            "cancelled_publish_jobs": cancelled_publish_jobs,
+            "summary_path": summary["summary_path"],
+            "task": task_service.get_task(task_id, include_video_probe=False),
+        }
+
+    def _cancel_unpublished_auto_jobs(self, task_id: str, context: dict) -> int:
+        publish_result = context.get(TaskStatus.PUBLISH_JOB_CREATING.value) or {}
+        created_ids = [
+            str(item.get("id") or "")
+            for item in publish_result.get("created") or []
+            if isinstance(item, dict) and item.get("id")
+        ]
+        if not created_ids:
+            return 0
+        placeholders = ", ".join("?" for _ in created_ids)
+        now = task_service._now_iso()
+        with get_connection() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE publish_jobs
+                SET status = 'CANCELLED', error_code = 'pipeline_cancelled',
+                    error_message = '全自动流水线已取消', last_error = '全自动流水线已取消',
+                    finished_at = ?, updated_at = ?
+                WHERE task_id = ? AND id IN ({placeholders})
+                  AND status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'NEED_REVIEW')
+                """,
+                (now, now, task_id, *created_ids),
+            )
+            connection.commit()
+        if cursor.rowcount:
+            append_task_log(task_id, f"已取消本轮新建但尚未发布的发送任务：{cursor.rowcount} 条")
+        return cursor.rowcount
+
+    def _safe_write_task_summary(self, task_id: str, status: str, error: str) -> dict:
+        try:
+            return self._write_task_summary(task_id, status, error)
+        except Exception as exc:
+            try:
+                append_task_log(task_id, f"任务汇总写入失败，但主流程状态已保留：{exc}")
+            except Exception:
+                pass
+            return {"summary_path": ""}
 
     def _get_task(self, task_id: str) -> dict:
         task = task_service.get_task(task_id, include_video_probe=False)
@@ -402,6 +542,7 @@ class PipelineEngine:
             task,
             scheduled_items,
             subtitle_delivery_mode=delivery_mode,
+            workflow_job_id=str(context.get("workflow_job_id") or "") or None,
         )
         append_task_log(
             task_id,

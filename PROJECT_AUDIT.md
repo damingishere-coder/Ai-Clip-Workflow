@@ -63,6 +63,23 @@ P1B.1 与 P1B.2 已把“旧 Worker/旧发布 execution 覆盖新执行”和“
 
 Codemap 独立复评结果：`Publish Scheduler 62→71（C）`、`Publishers & Worker 62→76（B）`；`Publish Center` 因 4750 行 God Service、原始 Secret 响应和旧 API Provider 风险仍维持 `52（D）`。复评未发现 Scheduler/Worker 新的 HIGH 问题；Worker 尚保留“升级前无 identity/损坏 journal 无法归属 job”的兼容边界，不能据此对历史不确定任务自动重投。
 
+## 0.4 P1.3a 任务状态与切片原子性状态（2026-08-24）
+
+| P1.3a 项目 | 结果 | 验证证据 |
+| --- | --- | --- |
+| 对外任务状态跳跃 | 已封口 | `PATCH /status` 使用显式允许转换表和同事务条件更新；空任务直接标记完成返回 409，已删除任务拒绝任何后续状态写入。 |
+| 取消后的明确终态 | 已封口 | 自动 Job 请求取消时任务进入 `CANCELLED`；流水线在步骤前、步骤后和 READY 前复核取消，不再把取消映射为失败或继续完成。 |
+| Task/Job 执行代际 | 已封口 | Task 步骤、切片提交和 READY 写回均校验当前 owner、token、未过期 lease 与取消标记；锁等待跨过租约时旧执行写回被拒。 |
+| 取消恢复与发布清理 | 已封口 | 公开取消会同步停止活跃自动 Job；子进程退出或租约过期可收敛为 cancelled；只清理本 workflow_job_id 关联且尚未发布的任务。 |
+| `READY_TO_PUBLISH` 瞬态 | 已封口 | 流水线成功后稳定保留 `READY_TO_PUBLISH`，Job 可以完成，但任务继续表示“等待人工确认发布”。 |
+| 切片半提交 | 已封口 | 一个批次的全部 output clip、旧 active 停用和新 active 激活在同一 `BEGIN IMMEDIATE` 事务提交；第二条插入失败时整批回滚。 |
+| 切片并发覆盖 | 已封口 | run number 在写锁内分配；每个 run 使用独立输出目录；较老 run 最后完成时不能覆盖任意已完成的较新 run。 |
+| Task 终态 CAS | 已封口 | cut_run 创建与 `cutting` 同事务；切片终态只从当前 `cutting` 写入，其他流程刚更新的状态不会被晚到批次覆盖。 |
+| 失败证据遮蔽 | 已封口 | summary 写入异常降级为日志和空路径，原始失败/取消状态与错误保持不变。 |
+| 隔离回归 | 通过 | 完整测试 `637 passed`，Ruff 与 Python Compileall 通过；未调用真实 AI、FFmpeg、Chrome 或平台投稿。 |
+
+本轮没有增加或迁移数据库列，也没有触碰活动数据、真实 AI 或真实投稿。Codemap 增量复评为 `Task Review & Cut 78/B`、`Pipeline & Job Queue 72/C`、`API & Runtime 48/D`、`SQLite Persistence 64/C`。后两项分数下降不是本轮状态修复回归，而是独立复评把原始 Secret 读取、可选鉴权、同步重任务阻塞 async 路由、唯一索引重建失败静默吞掉和无版本迁移重新按实际风险计分。P1.3a 解决的是“状态与切片提交能否可信”这一层；自动流水线的跨进程 step checkpoint、数据库迁移 fail-open、FFprobe/第三方错误边界和 Secret/本地管理员门禁仍按后续独立轮次处理。因此项目继续维持“可用 V1”，不能在剩余 P1 门禁完成前提前宣称“稳定 V1”。
+
 ## 1. Executive Summary
 
 ### 结论

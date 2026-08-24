@@ -173,7 +173,10 @@ async def delete_task(task_id: str) -> dict:
 
 @router.patch("/{task_id}/status")
 async def patch_task_status(task_id: str, payload: TaskStatusUpdate) -> dict:
-    task = task_service.update_task_status(task_id, payload.status, payload.error_message)
+    try:
+        task = task_service.transition_task_status(task_id, payload.status, payload.error_message)
+    except task_service.TaskStatusConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
     return task

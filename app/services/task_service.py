@@ -46,8 +46,10 @@ from app.services.storage_service import (
     resolve_video_file_path,
 )
 from app.services.task_lifecycle_service import (
+    TaskStatusConflictError,
     create_task_record,
     soft_delete_task,
+    transition_task_status,
     update_task_ai_preference,
     update_task_candidate_clip_count,
     update_task_selection_settings,
@@ -135,6 +137,7 @@ STATUS_LABELS = {
     TaskStatus.PUBLISH_JOB_CREATING.value: "创建发布任务中",
     TaskStatus.READY_TO_PUBLISH.value: "待人工确认发布",
     TaskStatus.COMPLETED.value: "全自动流程完成",
+    TaskStatus.CANCELLED.value: "已取消",
     TaskStatus.FAILED_PREPARING_SOURCE.value: "准备视频失败",
     TaskStatus.FAILED_TRANSCRIBING.value: "转写失败",
     TaskStatus.FAILED_AI_ANALYZING.value: "AI 分析失败",
@@ -171,6 +174,7 @@ STATUS_PROGRESS = {
     TaskStatus.PUBLISH_JOB_CREATING.value: 95,
     TaskStatus.READY_TO_PUBLISH.value: 100,
     TaskStatus.COMPLETED.value: 100,
+    TaskStatus.CANCELLED.value: 0,
     TaskStatus.FAILED_PREPARING_SOURCE.value: 8,
     TaskStatus.FAILED_TRANSCRIBING.value: 25,
     TaskStatus.FAILED_AI_ANALYZING.value: 45,
@@ -222,6 +226,7 @@ AUTO_PIPELINE_FAILED_STATUSES = {
 }
 
 AUTO_PIPELINE_RESUMABLE_STATUSES = {
+    TaskStatus.CANCELLED.value,
     TaskStatus.pending_review.value,
     TaskStatus.completed_with_errors.value,
     TaskStatus.failed.value,
@@ -270,6 +275,7 @@ def get_task_workflow_steps(task: dict) -> list[dict[str, str]]:
             TaskStatus.PUBLISH_JOB_CREATING.value: 10,
             TaskStatus.READY_TO_PUBLISH.value: 11,
             TaskStatus.COMPLETED.value: 11,
+            TaskStatus.CANCELLED.value: 1,
             TaskStatus.FAILED_PREPARING_SOURCE.value: 2,
             TaskStatus.FAILED_TRANSCRIBING.value: 3,
             TaskStatus.FAILED_AI_ANALYZING.value: 4,
@@ -296,6 +302,7 @@ def get_task_workflow_steps(task: dict) -> list[dict[str, str]]:
             TaskStatus.FAILED_PUBLISH_JOB_CREATING.value,
             TaskStatus.completed_with_errors.value,
             TaskStatus.failed.value,
+            TaskStatus.CANCELLED.value,
         }
         completed_statuses = {
             TaskStatus.READY_TO_PUBLISH.value,
@@ -584,10 +591,16 @@ def list_task_name_history() -> list[str]:
     return [str(row["task_name"]) for row in rows]
 
 
-def get_task(task_id: str, include_video_probe: bool = True) -> dict | None:
+def get_task(
+    task_id: str,
+    include_video_probe: bool = True,
+    *,
+    include_deleted: bool = False,
+) -> dict | None:
+    deleted_clause = "" if include_deleted else " AND COALESCE(is_deleted, 0) = 0"
     with get_connection() as connection:
         row = connection.execute(
-            """
+            f"""
             SELECT
                 id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path,
                 max_clip_duration, candidate_clip_count, selection_profile, final_clip_target,
@@ -596,7 +609,7 @@ def get_task(task_id: str, include_video_probe: bool = True) -> dict | None:
                 auto_config_json, status, progress, error_message, last_error,
                 is_deleted, deleted_at, created_at, updated_at
             FROM tasks
-            WHERE id = ?
+            WHERE id = ?{deleted_clause}
             """,
             (task_id,),
         ).fetchone()
@@ -611,7 +624,7 @@ def get_task_live_status(task_id: str) -> dict:
     status = task["status"]
     auto_mode = bool(task.get("auto_mode"))
     is_running = auto_mode and status in AUTO_PIPELINE_RUNNING_STATUSES
-    should_poll = is_running or (auto_mode and status == TaskStatus.READY_TO_PUBLISH.value)
+    should_poll = is_running
     candidate_count = count_clip_candidates(task_id)
     output_clip_count = int(task.get("output_clip_count") or 0)
 

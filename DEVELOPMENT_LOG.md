@@ -1,5 +1,22 @@
 # Development Log
 
+## 2026-08-24 稳定 V1 P1.3a 任务状态与切片原子性
+
+- `PATCH /api/tasks/{task_id}/status` 改为显式允许表 + `BEGIN IMMEDIATE` 条件更新；空任务不能直接标记完成，并发状态变化不会被旧请求覆盖。所有内部状态写入同时拒绝已永久删除任务。
+- 自动流水线在每个步骤开始前、处理完成后和最终 READY 写入前检查取消；取消后任务稳定进入 `CANCELLED`，Job 进入 `cancelled`，重试仍可从流水线起点恢复。
+- 自动流水线成功后稳定停在 `READY_TO_PUBLISH`，不再在同一次 run 内立刻覆盖为 `COMPLETED`；这表示内容已准备好，但仍等待用户在发送中心人工确认。
+- Task 步骤状态、切片批次和最终 READY 写回全部绑定当前 Workflow Job 的 owner、token、未过期 lease 与取消标记；旧 Worker 或锁等待期间过期的执行不能覆盖新状态。
+- 公开 Task 取消会在同一 SQLite 事务中请求活跃自动 Job 停止；READY 后取消只清理 `provider_response.workflow_job_id` 明确属于本轮且尚未发布的记录，不会误伤其他排期。
+- `running + cancel_requested` 在子进程退出或 lease 过期时会收敛为 `cancelled`，不再永久卡在运行态。
+- 任务汇总文件写入改为非遮蔽降级：磁盘或源文件异常只补充日志，不会覆盖原始业务失败或取消原因。
+- `cut_run` 编号分配放入 `BEGIN IMMEDIATE`；每个批次使用 `run_序号_id` 独立输出目录，避免并发/重试覆盖同名视频。
+- 一个批次的全部 `output_clip`、旧版本停用和新版本激活在同一个 SQLite 事务内提交；中途失败整批回滚并保留旧 active，较老批次即使最后完成也不能覆盖已完成的较新批次。
+- `cut_run` 创建与 Task=`cutting` 同事务，Task 终态只允许从当前 `cutting` CAS 写入；用户或其他流程刚更新的状态不会被晚到的切片结果覆盖。
+- Pytest 增加 session 级隔离数据库初始化，测试文件单独或换顺序执行时不再依赖其他文件先调用 `init_db()`。
+- 本轮不修改数据库 Schema、活动数据、AI Provider、FFmpeg 参数或真实发布流程；没有触发 AI、Chrome、抖音或 B站。
+- 最终隔离验收通过：完整测试 `637 passed`；Ruff 和 Python Compileall 全部通过，业务代码与文档的 whitespace 检查通过。Codemap 复评为 `Task Review & Cut 78/B`、`Pipeline & Job Queue 72/C`、`API & Runtime 48/D`、`SQLite Persistence 64/C`。
+- API/Persistence 分数下降不是本轮状态修复回归：独立复评删除了已修的状态跳跃/deleted 发现，同时把原始 Secret 读取、可选鉴权、同步重任务阻塞 async 路由、唯一索引重建失败静默吞掉和无版本迁移重新按 HIGH/MED 计分；这些保留到 P1.3b～P1.5。
+
 ## 2026-08-24 稳定 V1 P1B.2 发布执行代际与 Worker 幂等
 
 - Scheduler 每次领取发布任务都会保留唯一 `execution_id`；平台结果、阶段、成功、导出、失败、人工复核和安全重排队全部要求命中当前 `PUBLISHING + execution_id`。旧执行写回会返回 `skipped`，同一事务中的结果和事件一并回滚。

@@ -4,6 +4,7 @@
 """
 
 import json
+from sqlite3 import Connection
 from uuid import uuid4
 
 from app.db.database import get_connection
@@ -23,6 +24,93 @@ from app.services.media_preflight_service import preflight_media
 
 class TaskDeletionConflictError(RuntimeError):
     """任务仍在执行，暂时不能删除其媒体文件。"""
+
+
+class TaskStatusConflictError(RuntimeError):
+    """任务状态已变化、已删除，或请求的状态转换不被允许。"""
+
+
+PUBLIC_TASK_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    TaskStatus.pending_video.value: {TaskStatus.pending_processing.value},
+    TaskStatus.pending_processing.value: {TaskStatus.audio_extracting.value, TaskStatus.failed.value},
+    TaskStatus.audio_extracting.value: {TaskStatus.transcribing.value, TaskStatus.failed.value},
+    TaskStatus.transcribing.value: {TaskStatus.pending_ai.value, TaskStatus.failed.value},
+    TaskStatus.pending_ai.value: {TaskStatus.ai_analyzing.value, TaskStatus.failed.value},
+    TaskStatus.ai_analyzing.value: {TaskStatus.pending_review.value, TaskStatus.failed.value},
+    TaskStatus.pending_review.value: {TaskStatus.ai_analyzing.value, TaskStatus.cutting.value},
+    TaskStatus.cutting.value: {
+        TaskStatus.completed.value,
+        TaskStatus.completed_with_errors.value,
+        TaskStatus.failed.value,
+    },
+    TaskStatus.completed.value: {TaskStatus.cutting.value},
+    TaskStatus.completed_with_errors.value: {TaskStatus.cutting.value},
+    TaskStatus.failed.value: {
+        TaskStatus.pending_processing.value,
+        TaskStatus.audio_extracting.value,
+        TaskStatus.transcribing.value,
+        TaskStatus.pending_ai.value,
+        TaskStatus.ai_analyzing.value,
+        TaskStatus.cutting.value,
+    },
+    TaskStatus.CREATED.value: {TaskStatus.PREPARING_SOURCE.value},
+    TaskStatus.PREPARING_SOURCE.value: {
+        TaskStatus.TRANSCRIBING.value,
+        TaskStatus.FAILED_PREPARING_SOURCE.value,
+        TaskStatus.CANCELLED.value,
+    },
+    TaskStatus.TRANSCRIBING.value: {
+        TaskStatus.AI_ANALYZING.value,
+        TaskStatus.FAILED_TRANSCRIBING.value,
+        TaskStatus.CANCELLED.value,
+    },
+    TaskStatus.AI_ANALYZING.value: {
+        TaskStatus.CLIP_SELECTING.value,
+        TaskStatus.FAILED_AI_ANALYZING.value,
+        TaskStatus.CANCELLED.value,
+    },
+    TaskStatus.CLIP_SELECTING.value: {
+        TaskStatus.VIDEO_CUTTING.value,
+        TaskStatus.FAILED_CLIP_SELECTING.value,
+        TaskStatus.CANCELLED.value,
+    },
+    TaskStatus.VIDEO_CUTTING.value: {
+        TaskStatus.SUBTITLE_DRAFTING.value,
+        TaskStatus.FAILED_VIDEO_CUTTING.value,
+        TaskStatus.CANCELLED.value,
+    },
+    TaskStatus.SUBTITLE_DRAFTING.value: {
+        TaskStatus.PENDING_SUBTITLE_REVIEW.value,
+        TaskStatus.FAILED_SUBTITLE_DRAFTING.value,
+        TaskStatus.CANCELLED.value,
+    },
+    TaskStatus.PENDING_SUBTITLE_REVIEW.value: {TaskStatus.METADATA_GENERATING.value},
+    TaskStatus.METADATA_GENERATING.value: {
+        TaskStatus.SCHEDULE_CREATING.value,
+        TaskStatus.FAILED_METADATA_GENERATING.value,
+        TaskStatus.CANCELLED.value,
+    },
+    TaskStatus.SCHEDULE_CREATING.value: {
+        TaskStatus.PUBLISH_JOB_CREATING.value,
+        TaskStatus.FAILED_SCHEDULE_CREATING.value,
+        TaskStatus.CANCELLED.value,
+    },
+    TaskStatus.PUBLISH_JOB_CREATING.value: {
+        TaskStatus.READY_TO_PUBLISH.value,
+        TaskStatus.FAILED_PUBLISH_JOB_CREATING.value,
+        TaskStatus.CANCELLED.value,
+    },
+    TaskStatus.FAILED_PREPARING_SOURCE.value: {TaskStatus.PREPARING_SOURCE.value},
+    TaskStatus.FAILED_TRANSCRIBING.value: {TaskStatus.TRANSCRIBING.value},
+    TaskStatus.FAILED_AI_ANALYZING.value: {TaskStatus.AI_ANALYZING.value},
+    TaskStatus.FAILED_CLIP_SELECTING.value: {TaskStatus.CLIP_SELECTING.value},
+    TaskStatus.FAILED_VIDEO_CUTTING.value: {TaskStatus.VIDEO_CUTTING.value},
+    TaskStatus.FAILED_SUBTITLE_DRAFTING.value: {TaskStatus.SUBTITLE_DRAFTING.value},
+    TaskStatus.FAILED_METADATA_GENERATING.value: {TaskStatus.METADATA_GENERATING.value},
+    TaskStatus.FAILED_SCHEDULE_CREATING.value: {TaskStatus.SCHEDULE_CREATING.value},
+    TaskStatus.FAILED_PUBLISH_JOB_CREATING.value: {TaskStatus.PUBLISH_JOB_CREATING.value},
+    TaskStatus.CANCELLED.value: {TaskStatus.PREPARING_SOURCE.value},
+}
 
 
 ACTIVE_TASK_STATUSES = {
@@ -159,25 +247,158 @@ def update_task_status(
     error_message: str | None = None,
 ) -> dict | None:
     from app.services.task_service import _now_iso, get_task, STATUS_PROGRESS  # noqa: F811
+    from app.services import job_service
 
-    now = _now_iso()
     status_value = new_status.value
     progress = STATUS_PROGRESS.get(status_value, 0)
+    active_lease = job_service.current_job_lease()
 
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        now = _now_iso()
+        current = connection.execute(
+            "SELECT COALESCE(is_deleted, 0) AS is_deleted FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        if not current:
+            connection.rollback()
+            return None
+        if int(current["is_deleted"] or 0):
+            connection.rollback()
+            raise TaskStatusConflictError("任务已永久删除，不能再更新处理状态")
+
+        lease_condition = ""
+        lease_params: tuple[str, ...] = ()
+        if active_lease:
+            active_job_id, lease_owner, lease_token = active_lease
+            cancel_condition = "" if new_status == TaskStatus.CANCELLED else "AND cancel_requested = 0"
+            lease_condition = f"""
+                AND EXISTS (
+                    SELECT 1 FROM workflow_jobs
+                    WHERE id = ? AND task_id = ? AND status = ?
+                      AND lease_owner = ? AND lease_token = ?
+                      AND lease_expires_at > ? {cancel_condition}
+                )
+            """
+            lease_params = (
+                active_job_id,
+                task_id,
+                job_service.JOB_STATUS_RUNNING,
+                lease_owner,
+                lease_token,
+                now,
+            )
+        cursor = connection.execute(
+            f"""
+            UPDATE tasks
+            SET status = ?, progress = ?, error_message = ?, last_error = ?, updated_at = ?
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0 {lease_condition}
+            """,
+            (status_value, progress, error_message, error_message, now, task_id, *lease_params),
+        )
+        if cursor.rowcount == 0:
+            connection.rollback()
+            if active_lease:
+                raise job_service.JobLeaseLostError(
+                    f"Workflow Job 租约已失效，拒绝覆盖 Task 状态：{active_lease[0]}"
+                )
+            raise TaskStatusConflictError("任务状态更新失败，请刷新后重试")
+        connection.commit()
+
+    return get_task(task_id, include_video_probe=False)
+
+
+def transition_task_status(
+    task_id: str,
+    new_status: TaskStatus,
+    error_message: str | None = None,
+) -> dict | None:
+    """执行对外可见的受控状态转换，并避免覆盖并发产生的新状态。"""
+    from app.services.task_service import _now_iso, get_task, STATUS_PROGRESS  # noqa: F811
+
+    status_value = new_status.value
+    progress = STATUS_PROGRESS.get(status_value, 0)
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        now = _now_iso()
+        current = connection.execute(
+            "SELECT status, COALESCE(is_deleted, 0) AS is_deleted FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        if not current:
+            connection.rollback()
+            return None
+        if int(current["is_deleted"] or 0):
+            connection.rollback()
+            raise TaskStatusConflictError("任务已永久删除，不能再更新处理状态")
+
+        current_status = str(current["status"] or "")
+        allowed = PUBLIC_TASK_STATUS_TRANSITIONS.get(current_status, set())
+        if status_value != current_status and status_value not in allowed:
+            connection.rollback()
+            raise TaskStatusConflictError(
+                f"不允许从 {current_status or '未知状态'} 跳转到 {status_value}"
+            )
+        _validate_public_transition_preconditions(connection, task_id, status_value)
+        if status_value == TaskStatus.CANCELLED.value:
+            from app.services import job_service
+
+            job_service.cancel_active_auto_pipeline_jobs_for_task(
+                connection,
+                task_id,
+                now=now,
+            )
+            error_message = error_message or "用户已取消全自动流水线"
+
         cursor = connection.execute(
             """
             UPDATE tasks
             SET status = ?, progress = ?, error_message = ?, last_error = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = ? AND COALESCE(is_deleted, 0) = 0
             """,
-            (status_value, progress, error_message, error_message, now, task_id),
+            (status_value, progress, error_message, error_message, now, task_id, current_status),
         )
+        if cursor.rowcount != 1:
+            connection.rollback()
+            raise TaskStatusConflictError("任务状态已被其他流程更新，请刷新后重试")
         connection.commit()
+    return get_task(task_id, include_video_probe=False)
 
-    if cursor.rowcount == 0:
-        return None
-    return get_task(task_id)
+
+def _validate_public_transition_preconditions(
+    connection: Connection,
+    task_id: str,
+    status_value: str,
+) -> None:
+    if status_value == TaskStatus.pending_processing.value:
+        source = connection.execute(
+            "SELECT original_video_path, nas_file_path FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        if not source or not str(source["nas_file_path"] or source["original_video_path"] or "").strip():
+            raise TaskStatusConflictError("任务尚未绑定源视频，不能进入待处理状态")
+    elif status_value == TaskStatus.cutting.value:
+        enabled = connection.execute(
+            """
+            SELECT 1 FROM clip_candidates
+            WHERE task_id = ? AND enabled = 1 AND COALESCE(is_deleted, 0) = 0
+            LIMIT 1
+            """,
+            (task_id,),
+        ).fetchone()
+        if not enabled:
+            raise TaskStatusConflictError("任务没有已启用的候选片段，不能进入切割状态")
+    elif status_value in {TaskStatus.completed.value, TaskStatus.completed_with_errors.value}:
+        output = connection.execute(
+            """
+            SELECT 1 FROM output_clip
+            WHERE task_id = ? AND status = 'completed' AND COALESCE(is_active, 1) = 1
+            LIMIT 1
+            """,
+            (task_id,),
+        ).fetchone()
+        if not output:
+            raise TaskStatusConflictError("任务没有成功的活跃切片，不能标记完成")
 
 
 def update_task_ai_preference(task_id: str, ai_preference: str | None) -> dict:
@@ -294,7 +515,7 @@ def update_task_selection_settings(
 def delete_task_permanently(task_id: str) -> dict:
     from app.services.task_service import _now_iso, get_task  # noqa: F811
 
-    task = get_task(task_id, include_video_probe=False)
+    task = get_task(task_id, include_video_probe=False, include_deleted=True)
     if not task:
         raise ValueError("任务不存在")
     cleanup_plan = build_task_media_cleanup_plan(task)

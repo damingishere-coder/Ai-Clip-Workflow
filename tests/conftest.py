@@ -5,6 +5,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 # 让测试代码可以直接导入 app 模块
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -30,3 +32,12 @@ os.environ.update(
         "NIUMA_PYTEST_SANDBOX_ROOT": str(PYTEST_SANDBOX_ROOT),
     }
 )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def initialize_isolated_test_database():
+    """在任何测试访问服务层之前初始化本进程专属临时数据库。"""
+
+    from app.db.database import init_db
+
+    init_db()

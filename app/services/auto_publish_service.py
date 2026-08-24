@@ -24,6 +24,7 @@ def create_auto_publish_jobs(
     scheduled_items: list[dict],
     *,
     subtitle_delivery_mode: str,
+    workflow_job_id: str | None = None,
 ) -> dict:
     """为全自动流水线生成发布任务。
 
@@ -106,6 +107,7 @@ def create_auto_publish_jobs(
             job_id = uuid4().hex[:12]
             provider_response = {
                 "source": "auto_pipeline",
+                "workflow_job_id": workflow_job_id or "",
                 "target_platform": platform,
                 "metadata_source": metadata.get("source") or "",
                 "metadata_error": metadata.get("error") or "",

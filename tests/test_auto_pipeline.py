@@ -305,8 +305,14 @@ def test_create_auto_publish_job_records_scheduled_at():
             "scheduled_at": "2026-06-23T08:10:00+00:00",
         }
     ]
-    result = create_auto_publish_jobs(task, scheduled_items, subtitle_delivery_mode="original")
+    result = create_auto_publish_jobs(
+        task,
+        scheduled_items,
+        subtitle_delivery_mode="original",
+        workflow_job_id="test-auto-workflow-job",
+    )
     assert result["created_count"] == 1
+    assert result["created"][0]["provider_payload"]["workflow_job_id"] == "test-auto-workflow-job"
     with get_connection() as connection:
         row = connection.execute(
             "SELECT scheduled_at, status, video_source, cover_mode, cover_time_seconds, cover_file_path FROM publish_jobs WHERE task_id = ?",
