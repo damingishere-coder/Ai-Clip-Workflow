@@ -9,7 +9,7 @@ from typing import Any
 
 from app.db.database import get_connection
 from app.models.task import TaskStatus
-from app.services import task_service
+from app.services import job_service, task_service
 from app.services.auto_publish_service import create_auto_publish_jobs, platforms_for_task
 from app.services.metadata_generator import MetadataGenerator
 from app.services.publish_service import generate_publish_cover_for_item
@@ -118,7 +118,6 @@ class PipelineEngine:
         for step in steps:
             try:
                 if job_id:
-                    from app.services import job_service
                     if job_service.is_cancel_requested(job_id):
                         raise RuntimeError("用户已取消全自动流水线")
                     step_index = STEP_STATUSES.index(step)
@@ -127,11 +126,11 @@ class PipelineEngine:
                         5 + round(step_index / max(1, len(STEP_STATUSES)) * 90),
                         f"正在执行：{step.value}",
                     )
-                    job = job_service.get_job(job_id)
-                    if job and job.get("lease_owner"):
-                        job_service.heartbeat_job(job_id, str(job["lease_owner"]))
+                    job_service.heartbeat_job(job_id)
                 task_service.update_task_status(task_id, step)
                 context[step.value] = handlers[step](task_id, context)
+                if job_id:
+                    job_service.heartbeat_job(job_id)
                 if step == TaskStatus.SUBTITLE_DRAFTING:
                     summary = self._write_task_summary(task_id, TaskStatus.PENDING_SUBTITLE_REVIEW.value, "")
                     return {
@@ -140,6 +139,8 @@ class PipelineEngine:
                         "summary_path": summary["summary_path"],
                         "task": task_service.get_task(task_id, include_video_probe=False),
                     }
+            except job_service.JobLeaseLostError:
+                raise
             except Exception as exc:
                 failed_status = FAILED_BY_STEP[step]
                 error = str(exc) or f"{step.value} 失败"

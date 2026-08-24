@@ -5,6 +5,9 @@
 """
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import uuid4
@@ -42,6 +45,79 @@ JOB_TYPE_LABELS = {
     JOB_TYPE_PUBLISH: "发布",
     JOB_TYPE_AUTO_PIPELINE: "全自动流水线",
 }
+
+
+class JobLeaseLostError(RuntimeError):
+    """当前执行已失去 Workflow Job 的 claim 代际。"""
+
+
+_active_job_lease: ContextVar[tuple[str, str, str] | None] = ContextVar(
+    "active_workflow_job_lease",
+    default=None,
+)
+
+
+@contextmanager
+def job_lease_context(job_id: str, lease_owner: str, lease_token: str) -> Iterator[None]:
+    """让同一执行链中的深层进度/checkpoint 写回自动携带租约代际。"""
+    if not job_id or not lease_owner or not lease_token:
+        raise ValueError("Workflow Job 租约缺少 job_id、owner 或 token")
+    token = _active_job_lease.set((job_id, lease_owner, lease_token))
+    try:
+        yield
+    finally:
+        _active_job_lease.reset(token)
+
+
+def _resolve_job_lease(
+    lease_owner: str | None = None,
+    lease_token: str | None = None,
+) -> tuple[str, str] | None:
+    if lease_owner is not None or lease_token is not None:
+        if not lease_owner or not lease_token:
+            raise ValueError("Workflow Job 租约必须同时提供 owner 和 token")
+        return lease_owner, lease_token
+    active = _active_job_lease.get()
+    return (active[1], active[2]) if active else None
+
+
+def require_active_job_lease() -> tuple[str, str, str] | None:
+    """深层持久化副作用执行前确认当前 ContextVar 仍属于有效 claim。"""
+    active = _active_job_lease.get()
+    if active is None:
+        return None
+    job_id, lease_owner, lease_token = active
+    if not validate_job_lease(job_id, lease_owner, lease_token):
+        raise JobLeaseLostError(f"Workflow Job 租约已失效：{job_id}")
+    return active
+
+
+def current_job_lease() -> tuple[str, str, str] | None:
+    """供同一 SQLite 事务把业务写入与 Job claim 条件绑定。"""
+    return _active_job_lease.get()
+
+
+def _lease_write_condition(
+    lease_owner: str | None = None,
+    lease_token: str | None = None,
+) -> tuple[str, tuple[str, ...], bool]:
+    lease = _resolve_job_lease(lease_owner, lease_token)
+    if lease:
+        return (
+            "id = ? AND status = ? AND lease_owner = ? AND lease_token = ?",
+            (JOB_STATUS_RUNNING, lease[0], lease[1]),
+            True,
+        )
+    return (
+        "id = ? AND status = ? AND lease_owner IS NULL AND lease_token IS NULL",
+        (JOB_STATUS_RUNNING,),
+        False,
+    )
+
+
+def _raise_if_lease_lost(job_id: str, rowcount: int, fenced: bool) -> None:
+    if fenced and rowcount == 0:
+        raise JobLeaseLostError(f"Workflow Job 租约已失效：{job_id}")
 
 
 def _now_iso() -> str:
@@ -224,23 +300,8 @@ def list_jobs(task_id: Optional[str] = None, status: Optional[str] = None) -> li
 # ── 状态流转 ─────────────────────────────────────────────────────
 
 def mark_job_running(job_id: str) -> dict | None:
-    """将 job 标记为 running"""
-    now = _now_iso()
-    with get_connection() as connection:
-        cursor = connection.execute(
-            """
-            UPDATE workflow_jobs
-            SET status = ?, progress = 10, message = '任务已开始执行',
-                started_at = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (JOB_STATUS_RUNNING, now, now, job_id),
-        )
-        connection.commit()
-
-    if cursor.rowcount == 0:
-        return None
-    return get_job(job_id)
+    """兼容入口：仍通过正式 claim 生成 token，不再制造无代际 running job。"""
+    return claim_job(job_id, f"legacy:{uuid4().hex}")
 
 
 def claim_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> dict | None:
@@ -248,6 +309,7 @@ def claim_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> dict |
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat(timespec="seconds")
     lease_expires_at = (now + timedelta(seconds=max(30, lease_seconds))).isoformat(timespec="seconds")
+    lease_token = uuid4().hex
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
@@ -269,11 +331,20 @@ def claim_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> dict |
             UPDATE workflow_jobs
             SET status = ?, progress = CASE WHEN progress < 10 THEN 10 ELSE progress END,
                 message = '任务已开始执行', started_at = COALESCE(started_at, ?),
-                updated_at = ?, heartbeat_at = ?, lease_owner = ?, lease_expires_at = ?,
+                updated_at = ?, heartbeat_at = ?, lease_owner = ?, lease_token = ?, lease_expires_at = ?,
                 attempt_count = attempt_count + 1
             WHERE id = ?
             """,
-            (JOB_STATUS_RUNNING, now_iso, now_iso, now_iso, lease_owner, lease_expires_at, job_id),
+            (
+                JOB_STATUS_RUNNING,
+                now_iso,
+                now_iso,
+                now_iso,
+                lease_owner,
+                lease_token,
+                lease_expires_at,
+                job_id,
+            ),
         )
         connection.commit()
     return get_job(job_id)
@@ -281,18 +352,25 @@ def claim_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> dict |
 
 def claim_next_job(lease_owner: str, lease_seconds: int = 120) -> dict | None:
     """按创建时间领取一个重型任务，保证本地默认串行。"""
-    now = _now_iso()
+    now_value = datetime.now(timezone.utc)
+    now = now_value.isoformat(timespec="seconds")
+    lease_expires_at = (now_value + timedelta(seconds=max(30, lease_seconds))).isoformat(timespec="seconds")
+    lease_token = uuid4().hex
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         connection.execute(
             """
             UPDATE workflow_jobs SET status = ?, error_message = '已达到最大尝试次数',
                 message = '任务失败：已达到最大尝试次数', finished_at = ?, updated_at = ?,
-                lease_owner = NULL, lease_expires_at = NULL
-            WHERE status IN (?, ?) AND attempt_count >= max_attempts
+                lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
+            WHERE attempt_count >= max_attempts
+              AND (
+                status = ?
+                OR (status = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
+              )
             """,
-            (JOB_STATUS_FAILED, now, now, JOB_STATUS_QUEUED, JOB_STATUS_RUNNING),
+            (JOB_STATUS_FAILED, now, now, JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, now),
         )
-        connection.commit()
         row = connection.execute(
             """
             SELECT id FROM workflow_jobs
@@ -307,34 +385,112 @@ def claim_next_job(lease_owner: str, lease_seconds: int = 120) -> dict | None:
             """,
             (JOB_STATUS_QUEUED, now, JOB_STATUS_RUNNING, now),
         ).fetchone()
-    return claim_job(row["id"], lease_owner, lease_seconds) if row else None
+        if row:
+            cursor = connection.execute(
+                """
+                UPDATE workflow_jobs
+                SET status = ?, progress = CASE WHEN progress < 10 THEN 10 ELSE progress END,
+                    message = '任务已开始执行', started_at = COALESCE(started_at, ?),
+                    updated_at = ?, heartbeat_at = ?, lease_owner = ?, lease_token = ?,
+                    lease_expires_at = ?, attempt_count = attempt_count + 1
+                WHERE id = ? AND attempt_count < max_attempts AND cancel_requested = 0
+                  AND (
+                    status = ?
+                    OR (status = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
+                  )
+                """,
+                (
+                    JOB_STATUS_RUNNING,
+                    now,
+                    now,
+                    now,
+                    lease_owner,
+                    lease_token,
+                    lease_expires_at,
+                    row["id"],
+                    JOB_STATUS_QUEUED,
+                    JOB_STATUS_RUNNING,
+                    now,
+                ),
+            )
+            if cursor.rowcount != 1:
+                row = None
+        connection.commit()
+    return get_job(row["id"]) if row else None
 
 
-def heartbeat_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> bool:
+def validate_job_lease(
+    job_id: str,
+    lease_owner: str,
+    lease_token: str,
+    *,
+    require_unexpired: bool = True,
+) -> dict | None:
+    now = _now_iso()
+    expiry_clause = "AND lease_expires_at > ?" if require_unexpired else ""
+    params: tuple[str, ...] = (
+        job_id,
+        JOB_STATUS_RUNNING,
+        lease_owner,
+        lease_token,
+        *((now,) if require_unexpired else ()),
+    )
+    with get_connection() as connection:
+        row = connection.execute(
+            f"""
+            SELECT * FROM workflow_jobs
+            WHERE id = ? AND status = ? AND lease_owner = ? AND lease_token = ?
+              {expiry_clause}
+            """,
+            params,
+        ).fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def heartbeat_job(
+    job_id: str,
+    lease_owner: str | None = None,
+    lease_token: str | None = None,
+    lease_seconds: int = 120,
+) -> bool:
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat(timespec="seconds")
     expires = (now + timedelta(seconds=max(30, lease_seconds))).isoformat(timespec="seconds")
+    lease = _resolve_job_lease(lease_owner, lease_token)
+    if lease is None:
+        raise ValueError("heartbeat_job 需要有效的 Workflow Job 租约")
     with get_connection() as connection:
         cursor = connection.execute(
             """
             UPDATE workflow_jobs SET heartbeat_at = ?, lease_expires_at = ?, updated_at = ?
-            WHERE id = ? AND status = ? AND lease_owner = ?
+            WHERE id = ? AND status = ? AND lease_owner = ? AND lease_token = ?
+              AND lease_expires_at > ?
             """,
-            (now_iso, expires, now_iso, job_id, JOB_STATUS_RUNNING, lease_owner),
+            (now_iso, expires, now_iso, job_id, JOB_STATUS_RUNNING, lease[0], lease[1], now_iso),
         )
         connection.commit()
-    return cursor.rowcount == 1
+    if cursor.rowcount == 0:
+        raise JobLeaseLostError(f"Workflow Job 租约已失效：{job_id}")
+    return True
 
 
-def update_job_checkpoint(job_id: str, checkpoint: dict) -> dict | None:
+def update_job_checkpoint(
+    job_id: str,
+    checkpoint: dict,
+    *,
+    lease_owner: str | None = None,
+    lease_token: str | None = None,
+) -> dict | None:
     now = _now_iso()
+    condition, lease_params, fenced = _lease_write_condition(lease_owner, lease_token)
     with get_connection() as connection:
-        connection.execute(
-            "UPDATE workflow_jobs SET checkpoint_json = ?, checkpoint_updated_at = ?, updated_at = ? WHERE id = ?",
-            (json.dumps(checkpoint, ensure_ascii=False), now, now, job_id),
+        cursor = connection.execute(
+            f"UPDATE workflow_jobs SET checkpoint_json = ?, checkpoint_updated_at = ?, updated_at = ? WHERE {condition}",
+            (json.dumps(checkpoint, ensure_ascii=False), now, now, job_id, *lease_params),
         )
         connection.commit()
-    return get_job(job_id)
+    _raise_if_lease_lost(job_id, cursor.rowcount, fenced)
+    return get_job(job_id) if cursor.rowcount else None
 
 
 def request_job_cancel(job_id: str) -> dict | None:
@@ -346,7 +502,8 @@ def request_job_cancel(job_id: str) -> dict | None:
         if row["status"] == JOB_STATUS_QUEUED:
             connection.execute(
                 """UPDATE workflow_jobs SET status = ?, cancel_requested = 1, message = '任务已取消',
-                   finished_at = ?, updated_at = ?, lease_owner = NULL, lease_expires_at = NULL WHERE id = ?""",
+                   finished_at = ?, updated_at = ?, lease_owner = NULL, lease_token = NULL,
+                   lease_expires_at = NULL WHERE id = ?""",
                 (JOB_STATUS_CANCELLED, now, now, job_id),
             )
         elif row["status"] == JOB_STATUS_RUNNING:
@@ -371,7 +528,7 @@ def retry_job(job_id: str) -> dict | None:
             UPDATE workflow_jobs
             SET status = ?, progress = 0, message = '任务已重新加入队列', error_message = NULL,
                 finished_at = NULL, next_attempt_at = ?, cancel_requested = 0,
-                lease_owner = NULL, lease_expires_at = NULL, heartbeat_at = NULL,
+                lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, heartbeat_at = NULL,
                 attempt_count = 0, updated_at = ?
             WHERE id = ? AND status IN (?, ?)
             """,
@@ -381,94 +538,138 @@ def retry_job(job_id: str) -> dict | None:
     return get_job(job_id) if cursor.rowcount else None
 
 
-def release_job_lease(job_id: str, lease_owner: str) -> bool:
+def release_job_lease(job_id: str, lease_owner: str, lease_token: str) -> bool:
     """Web 正常停止时释放子进程 Job，供新进程立即恢复。"""
     now = _now_iso()
     with get_connection() as connection:
         cursor = connection.execute(
             """
             UPDATE workflow_jobs SET status = ?, message = '应用停止，等待新 worker 恢复',
-                lease_owner = NULL, lease_expires_at = NULL, heartbeat_at = NULL, updated_at = ?
-            WHERE id = ? AND status = ? AND lease_owner = ?
+                lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+                heartbeat_at = NULL, updated_at = ?
+            WHERE id = ? AND status = ? AND lease_owner = ? AND lease_token = ?
             """,
-            (JOB_STATUS_QUEUED, now, job_id, JOB_STATUS_RUNNING, lease_owner),
+            (JOB_STATUS_QUEUED, now, job_id, JOB_STATUS_RUNNING, lease_owner, lease_token),
         )
         connection.commit()
     return cursor.rowcount == 1
 
 
-def update_job_progress(job_id: str, progress: int, message: Optional[str] = None) -> dict | None:
+def update_job_progress(
+    job_id: str,
+    progress: int,
+    message: Optional[str] = None,
+    *,
+    lease_owner: str | None = None,
+    lease_token: str | None = None,
+) -> dict | None:
     """更新 job 进度（0-100）和消息"""
     now = _now_iso()
     clamped_progress = max(0, min(100, progress))
+    condition, lease_params, fenced = _lease_write_condition(lease_owner, lease_token)
     with get_connection() as connection:
         cursor = connection.execute(
-            """
+            f"""
             UPDATE workflow_jobs
             SET progress = ?, message = ?, updated_at = ?
-            WHERE id = ?
+            WHERE {condition}
             """,
-            (clamped_progress, message or "", now, job_id),
+            (clamped_progress, message or "", now, job_id, *lease_params),
         )
         connection.commit()
 
+    _raise_if_lease_lost(job_id, cursor.rowcount, fenced)
     if cursor.rowcount == 0:
         return None
     return get_job(job_id)
 
 
-def mark_job_completed(job_id: str, result: Optional[dict] = None) -> dict | None:
+def mark_job_completed(
+    job_id: str,
+    result: Optional[dict] = None,
+    *,
+    lease_owner: str | None = None,
+    lease_token: str | None = None,
+) -> dict | None:
     """将 job 标记为 completed，附带结果"""
     now = _now_iso()
     result_json = json.dumps(result or {}, ensure_ascii=False)
+    condition, lease_params, fenced = _lease_write_condition(lease_owner, lease_token)
     with get_connection() as connection:
         cursor = connection.execute(
-            """
+            f"""
             UPDATE workflow_jobs
             SET status = ?, progress = 100,
                 message = '任务已完成', result_json = ?,
-                finished_at = ?, updated_at = ?, lease_owner = NULL, lease_expires_at = NULL
-            WHERE id = ?
+                finished_at = ?, updated_at = ?, lease_owner = NULL,
+                lease_token = NULL, lease_expires_at = NULL, heartbeat_at = NULL
+            WHERE {condition}
             """,
-            (JOB_STATUS_COMPLETED, result_json, now, now, job_id),
+            (JOB_STATUS_COMPLETED, result_json, now, now, job_id, *lease_params),
         )
         connection.commit()
 
+    _raise_if_lease_lost(job_id, cursor.rowcount, fenced)
     if cursor.rowcount == 0:
         return None
     return get_job(job_id)
 
 
-def mark_job_failed(job_id: str, error_message: str) -> dict | None:
+def mark_job_failed(
+    job_id: str,
+    error_message: str,
+    *,
+    lease_owner: str | None = None,
+    lease_token: str | None = None,
+) -> dict | None:
     """将 job 标记为 failed，记录错误信息"""
     now = _now_iso()
+    condition, lease_params, fenced = _lease_write_condition(lease_owner, lease_token)
     with get_connection() as connection:
         cursor = connection.execute(
-            """
+            f"""
             UPDATE workflow_jobs
             SET status = ?, error_message = ?, message = ?,
-                finished_at = ?, updated_at = ?, lease_owner = NULL, lease_expires_at = NULL
-            WHERE id = ?
+                finished_at = ?, updated_at = ?, lease_owner = NULL,
+                lease_token = NULL, lease_expires_at = NULL, heartbeat_at = NULL
+            WHERE {condition}
             """,
-            (JOB_STATUS_FAILED, error_message, f"任务失败：{error_message}", now, now, job_id),
+            (
+                JOB_STATUS_FAILED,
+                error_message,
+                f"任务失败：{error_message}",
+                now,
+                now,
+                job_id,
+                *lease_params,
+            ),
         )
         connection.commit()
 
+    _raise_if_lease_lost(job_id, cursor.rowcount, fenced)
     if cursor.rowcount == 0:
         return None
     return get_job(job_id)
 
 
-def mark_job_cancelled(job_id: str, message: str = "任务已取消") -> dict | None:
+def mark_job_cancelled(
+    job_id: str,
+    message: str = "任务已取消",
+    *,
+    lease_owner: str | None = None,
+    lease_token: str | None = None,
+) -> dict | None:
     now = _now_iso()
+    condition, lease_params, fenced = _lease_write_condition(lease_owner, lease_token)
     with get_connection() as connection:
         cursor = connection.execute(
-            """
+            f"""
             UPDATE workflow_jobs SET status = ?, message = ?, finished_at = ?, updated_at = ?,
-                lease_owner = NULL, lease_expires_at = NULL
-            WHERE id = ?
+                lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, heartbeat_at = NULL
+            WHERE {condition}
             """,
-            (JOB_STATUS_CANCELLED, message, now, now, job_id),
+            (JOB_STATUS_CANCELLED, message, now, now, job_id, *lease_params),
         )
         connection.commit()
+    _raise_if_lease_lost(job_id, cursor.rowcount, fenced)
     return get_job(job_id) if cursor.rowcount else None

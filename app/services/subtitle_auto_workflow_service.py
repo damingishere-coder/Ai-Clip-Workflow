@@ -208,16 +208,31 @@ def execute_subtitle_render_job(job_id: str, task_id: str, payload: dict[str, An
     }
 
 
-def cleanup_interrupted_subtitle_job(workflow_job_id: str, *, status: str, message: str) -> None:
+def cleanup_interrupted_subtitle_job(
+    workflow_job_id: str,
+    *,
+    lease_owner: str,
+    lease_token: str,
+    status: str,
+    message: str,
+) -> bool:
     """父 Worker 强制终止子进程后，修正从属字幕记录并清理精确临时文件。"""
     from app.services.task_service import _now_iso
 
     now = _now_iso()
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
-            "SELECT task_id FROM workflow_jobs WHERE id = ?",
-            (workflow_job_id,),
+            """
+            SELECT task_id FROM workflow_jobs
+            WHERE id = ? AND status = 'running' AND lease_owner = ? AND lease_token = ?
+              AND lease_expires_at > ?
+            """,
+            (workflow_job_id, lease_owner, lease_token, now),
         ).fetchone()
+        if not row:
+            connection.rollback()
+            return False
         connection.execute(
             """
             UPDATE subtitle_jobs
@@ -226,14 +241,13 @@ def cleanup_interrupted_subtitle_job(workflow_job_id: str, *, status: str, messa
             """,
             (status, message, now, workflow_job_id),
         )
+        directory = get_artifact_paths(str(row["task_id"]))["subtitled_dir"]
+        if directory.exists():
+            for path in directory.glob(f"*.{workflow_job_id}.part.mp4"):
+                if path.is_file():
+                    path.unlink(missing_ok=True)
         connection.commit()
-    if not row:
-        return
-    directory = get_artifact_paths(str(row["task_id"]))["subtitled_dir"]
-    if directory.exists():
-        for path in directory.glob(f"*.{workflow_job_id}.part.mp4"):
-            if path.is_file():
-                path.unlink(missing_ok=True)
+    return True
 
 
 def _checkpoint_result_is_valid(

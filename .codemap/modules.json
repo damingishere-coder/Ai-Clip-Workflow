@@ -7,9 +7,9 @@
   "htmlPath": ".codemap/codemap.html",
   "mdPath": ".codemap/codemap.md",
   "spineDesc": "用户通过页面/API 创建素材任务，SQLite Job 驱动转写、AI 选片、审核切片和字幕，再由发送中心排期并交给 Windows Chrome Worker，所有状态与审计证据回写 SQLite。",
-  "tracked_loc": 48305,
+  "tracked_loc": 48709,
   "tracked_files": 132,
-  "rev": "f5260c0873effaf0f69d4021dede6e6ba1992c0d"
+  "rev": "9ae8440d80d0527c7dd296fe1331b63aac2818ea"
  },
  "excludes": [
   ".venv/",
@@ -103,7 +103,7 @@
   ],
   [
    "测试已与活动数据隔离，但 Coverage 与真实故障闭环仍不足",
-   "533 项测试全部通过，Pytest 已强制使用进程级 sandbox；Coverage 尚未采集，真实 E2E、并发恢复和 Worker fencing 仍需补齐。"
+   "546 项测试全部通过，Pytest 已强制使用进程级 sandbox；Coverage 尚未采集，真实 E2E、并发恢复和外部副作用幂等仍需补齐。"
   ]
  ],
  "modules": [
@@ -369,75 +369,79 @@
     "tests/test_auto_pipeline.py",
     "tests/test_long_live_foundation.py"
    ],
-   "loc": 1930,
-   "contentHash": "46138f9338e0b3092d14b63dd2b427abbe71e210b966ed7b136601e1ba192132",
-   "score": 58,
+   "loc": 1960,
+   "contentHash": "72e92444271e00caa714f2618b716378bda97039d6dae89f2058c1f048fdf336",
+   "score": 59,
    "grade": "D",
    "tags": [
-    "over-fit",
     "fallback",
-    "fake-output",
-    "dual-format",
     "silent-except",
+    "fake-output",
     "duplication",
     "god-component",
-    "glue"
+    "glue",
+    "over-fit"
    ],
    "findings": [
     {
      "sev": "HIGH",
-     "loc": "app/services/transcription_checkpoint_service.py:22",
-     "text": "文件指纹只哈希大小与首尾各 1MiB；大文件中部变化但首尾/大小不变会错误复用旧转写 checkpoint。"
+     "loc": "app/services/transcript_workflow_service.py:317",
+     "text": "transcript Markdown 存在即返回 completed，未校验源指纹、Provider、进度状态或文件完整性。"
     },
     {
      "sev": "HIGH",
-     "loc": "app/services/transcript_service.py:260",
-     "text": "捕获所有 Exception 会把 TranscriptCancelledError 包成 RuntimeError，取消可能被标记 failed 而非 cancelled。"
+     "loc": "app/services/transcript_service.py:265",
+     "text": "JobLeaseLostError 已显式透传，但 TranscriptCancelledError 仍会被统一包装为 RuntimeError，取消可能落成 failed。"
     },
     {
      "sev": "HIGH",
-     "loc": "app/services/transcript_workflow_service.py:318",
-     "text": "transcript.md 存在即返回 completed，不校验源指纹或最近生成是否成功；失败后旧转写可能被误当当前结果。"
+     "loc": "app/services/transcript_service.py:516",
+     "text": "远程分块请求每次使用随机 request id，缺少持久化幂等键和超时后结果确认，重试可能重复计费。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/transcript_service.py:552",
-     "text": "远程响应无 utterances 时把 text/message 包成 0-1 秒片段，错误 message 可能被当成转写正文。"
+     "loc": "app/services/transcript_service.py:516",
+     "text": "HTTP 429、Retry-After、网络瞬断和可恢复服务错误缺少专门退避策略。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/transcript_workflow_service.py:25",
-     "text": "运行/取消状态仅用进程级集合且 check-then-add 非原子，多进程或重启可能重复转写且取消失联。"
+     "loc": "app/services/transcript_service.py:556",
+     "text": "响应 result.message 可能被当作 0-1 秒转写正文写入结果。"
     },
     {
      "sev": "MED",
      "loc": "app/services/transcript_service.py:831",
-     "text": "进度文件读失败/JSON 损坏时静默返回空字典，隐藏损坏并可能触发重跑。"
+     "text": "进度文件 IO/JSON 损坏时静默返回空字典，可能隐藏故障并触发重复执行。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/transcript_service.py:316",
-     "text": "本地与火山转写各自复制分块、checkpoint、进度和错误循环，行为易漂移。"
+     "loc": "app/services/transcript_workflow_service.py:224",
+     "text": "运行和取消状态仍是进程内 set，多进程/重启时不能可靠去重或取消。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/transcript_service.py:325",
+     "text": "本地和远程转写复制分块、checkpoint、异常和进度循环，行为容易漂移。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/transcript_service.py:1088",
+     "text": "Provider/模型/设备为模块级可变全局，并发任务可能互相覆盖运行元数据。"
     },
     {
      "sev": "MED",
      "loc": "app/services/transcript_service.py:83",
-     "text": "单文件混合 FFmpeg、Provider、分块、checkpoint、导出与读取，职责和回归面过大。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/transcript_service.py:68",
-     "text": "活动 Provider/模型/设备为进程级可变全局，并发任务可能互相覆盖进度元数据。"
+     "text": "约 1300 行文件混合 FFmpeg、本地模型、远程 HTTP、checkpoint、进度和 Markdown，职责过大。"
     },
     {
      "sev": "LOW",
      "loc": "tests/test_long_live_foundation.py:65",
-     "text": "未覆盖取消异常传播、损坏进度、并发转写、大文件中部变更、真实响应错误和 FFmpeg/网络恢复。"
+     "text": "已覆盖失租 checkpoint 和异常透传，仍缺取消、429/坏响应、重复计费与真实 Markdown 闭环。"
     }
    ],
-   "auditedHash": "46138f9338e0b3092d14b63dd2b427abbe71e210b966ed7b136601e1ba192132",
+   "auditedHash": "72e92444271e00caa714f2618b716378bda97039d6dae89f2058c1f048fdf336",
    "auditedAt": "2026-08-24",
-   "auditedRev": "38fd60386a609b6ea85a3eb511b83cb296f4d2a1"
+   "auditedRev": "9ae8440d80d0527c7dd296fe1331b63aac2818ea"
   },
   {
    "id": "ai_selection",
@@ -691,8 +695,8 @@
     "tests/test_subtitle_editor.py",
     "tests/test_subtitle_auto_workflow.py"
    ],
-   "loc": 2391,
-   "contentHash": "3b08a6ef8c6419060117e04d8123f31d5dbe1aff8891da3274e2171d6356e3a5",
+   "loc": 2409,
+   "contentHash": "fb31a5d9516731fe561cbfdeaae24f92b052ca23194294b4972664716f93d32e",
    "score": 70,
    "grade": "C",
    "tags": [
@@ -707,72 +711,72 @@
     {
      "sev": "MED",
      "loc": "app/services/subtitle_data_service.py:352",
-     "text": "手工 revision 的 active/base 检查在事务外，并发编辑可同时通过并让后提交者覆盖 active 选择。"
+     "text": "手工 revision 的 active/base 检查在事务外，并发编辑可覆盖 active 选择。"
     },
     {
      "sev": "MED",
      "loc": "app/services/subtitle_data_service.py:489",
-     "text": "批准 revision 在事务外校验，后续按 id 无条件批准激活；并发/重放旧请求可回退 active 版本。"
+     "text": "批准 revision 在事务外校验，并发或重放旧请求可回退 active 版本。"
     },
     {
      "sev": "MED",
      "loc": "app/services/subtitle_data_service.py:135",
-     "text": "source/clip track 均先查后插；NULL output_clip_id 唯一约束不足，并发可能重复源轨或 500。"
+     "text": "source/clip track 先查后插，NULL output_clip_id 约束不足，并发可能重复源轨。"
     },
     {
      "sev": "MED",
      "loc": "app/services/subtitle_auto_workflow_service.py:87",
-     "text": "批量批准逐 clip 独立提交，统一 Job 后创建；中途失败会留下前项已批准但无队列的部分成功。"
+     "text": "批量批准逐 clip 独立提交，Job 后创建；中途失败会留下部分批准。"
     },
     {
      "sev": "MED",
      "loc": "app/services/subtitle_data_service.py:168",
-     "text": "source revision 提交后逐 clip 独立同步，任一异常形成 source 已更新而部分 clip 仍旧的混合状态。"
+     "text": "source revision 提交后逐 clip 独立同步，异常会形成混合版本。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/subtitle_workflow_service.py:472",
-     "text": "先标 completed 再单独激活，更新缺 expected status/revision/owner 条件；迟到 worker 可激活旧成片。"
+     "loc": "app/services/subtitle_workflow_service.py:475",
+     "text": "字幕 job 完成与激活分两次写入，迟到 worker 仍可能激活旧成片。"
     },
     {
      "sev": "LOW",
      "loc": "app/services/subtitle_auto_workflow_service.py:273",
-     "text": "auto_config_json 损坏时静默降为空并写回 delivery mode，可能丢弃其余配置。"
+     "text": "auto_config_json 损坏时静默降为空并写回，可能丢弃其他配置。"
     },
     {
      "sev": "MED",
      "loc": "app/services/subtitle_data_service.py:1045",
-     "text": "字幕数据与渲染服务分别聚合过多职责，修改与测试回归半径大。"
+     "text": "字幕数据服务聚合 track、revision、cue、导入导出、波形和渲染辅助，回归半径大。"
     },
     {
      "sev": "LOW",
      "loc": "app/services/subtitle_workflow_service.py:312",
-     "text": "统一 revision 之外仍保留旧调用方导出适配，存在历史漂移成本。"
+     "text": "统一 revision 外仍保留旧调用方适配，存在历史口径漂移成本。"
     },
     {
      "sev": "MED",
      "loc": "tests/test_subtitle_editor.py:189",
-     "text": "未覆盖并发 save/approve/ensure track 竞态和批量中途失败后的部分提交。"
+     "text": "缺并发 save/approve/ensure track 与批处理中途失败测试。"
     },
     {
      "sev": "LOW",
      "loc": "tests/test_subtitle_auto_workflow.py:172",
-     "text": "FFmpeg/FFprobe 缺失会跳过，AI Provider 测试固定合法 JSON，真实异常路径不足。"
+     "text": "核心真实渲染在 FFmpeg/FFprobe 缺失时会跳过，异常 Provider 证据不足。"
     },
     {
      "sev": "LOW",
      "loc": "app/services/subtitle_data_service.py:761",
-     "text": "波形先把完整 PCM 载入内存再降采样，超长媒体会产生时长线性内存峰值。"
+     "text": "波形处理把完整 PCM 捕获到内存，超长媒体存在时长线性内存峰值。"
     },
     {
      "sev": "LOW",
      "loc": "app/services/subtitle_data_service.py:1024",
-     "text": "导入 cue 仅校验非空，单 cue 可接近文件上限并放大渲染/导出/Prompt 资源消耗。"
+     "text": "单条字幕文本可接近文件上限，放大渲染、导出和 Prompt 资源消耗。"
     }
    ],
-   "auditedHash": "3b08a6ef8c6419060117e04d8123f31d5dbe1aff8891da3274e2171d6356e3a5",
+   "auditedHash": "fb31a5d9516731fe561cbfdeaae24f92b052ca23194294b4972664716f93d32e",
    "auditedAt": "2026-08-24",
-   "auditedRev": "38fd60386a609b6ea85a3eb511b83cb296f4d2a1"
+   "auditedRev": "9ae8440d80d0527c7dd296fe1331b63aac2818ea"
   },
   {
    "id": "pipeline_queue",
@@ -802,15 +806,14 @@
     "tests/test_job_queue.py",
     "tests/test_subtitle_auto_workflow.py"
    ],
-   "loc": 1745,
-   "contentHash": "006dbc8658a43c084fea542d3dbfa895af2cddf2b324b1f0b7c3ea13ae4baa0b",
-   "score": 58,
-   "grade": "D",
+   "loc": 2048,
+   "contentHash": "954a67ff0864dc491a4457f64a830e5ae6d876fde40ae22bd0c335661a9b9fa1",
+   "score": 74,
+   "grade": "C",
    "tags": [
     "fallback",
     "silent-except",
     "legacy",
-    "dual-format",
     "stub",
     "god-component",
     "glue",
@@ -819,78 +822,58 @@
    "findings": [
     {
      "sev": "HIGH",
-     "loc": "app/services/job_service.py:329",
-     "text": "checkpoint、progress 与终态更新只按 job_id，不校验 lease_owner/status；旧 worker 可覆盖新 attempt。"
-    },
-    {
-     "sev": "HIGH",
-     "loc": "app/services/job_worker.py:38",
-     "text": "already_claimed 跳过 claim 且不核对当前 owner，已被接管的旧子进程仍可继续执行写结果。"
-    },
-    {
-     "sev": "HIGH",
-     "loc": "app/services/job_service.py:287",
-     "text": "claim_next_job 可把达到 max_attempts 的 running 任务直接失败而不要求 lease 过期，慢 worker 可能被误判。"
-    },
-    {
-     "sev": "HIGH",
      "loc": "app/services/pipeline_engine.py:118",
-     "text": "取消只在 step 前检查，step 内不中断；取消后可能显示失败/完成且副作用无回滚。"
+     "text": "取消仍只在每个 step 开始前检查；step 执行期间及最后一步完成后缺少统一取消门禁，Workflow Job 与任务主状态仍可能分叉。"
     },
     {
      "sev": "HIGH",
      "loc": "app/services/pipeline_engine.py:158",
-     "text": "READY_TO_PUBLISH 写入后同一 run 立即写 COMPLETED，人工确认语义成为不可稳定观察的瞬态。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/job_service.py:51",
-     "text": "Job JSON 损坏时静默保留原字符串，执行器随后按 dict 使用并产生不明确错误。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/job_worker.py:175",
-     "text": "子进程 stdout/stderr 均丢弃，父进程只保留退出码，恢复与诊断证据不足。"
+     "text": "READY_TO_PUBLISH 在同一次 run 中立即转为 COMPLETED，待人工确认状态不可稳定观察。"
     },
     {
      "sev": "MED",
      "loc": "app/services/pipeline_engine.py:104",
-     "text": "run context 只在内存，无按 step 持久化副作用 checkpoint；崩溃重试可能重复 AI/封面/排期动作。"
+     "text": "Pipeline context 仍只保存在内存，缺少按 step 的可重放副作用 checkpoint；重启可能重复 AI、封面或排期动作。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/pipeline_engine.py:143",
-     "text": "异常后写 summary 仍读取源文件和多个产物，二次失败可遮蔽原始错误。"
+     "loc": "app/services/pipeline_engine.py:145",
+     "text": "普通 step 失败后写 summary 仍可能二次失败并遮蔽原始异常。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/job_service.py:226",
-     "text": "mark_job_running 无当前状态/owner 条件，已完成或已取消 Job 也可被内部调用重置。"
+     "loc": "app/services/job_worker.py:198",
+     "text": "子进程 stdout/stderr 仍丢弃，父进程只保留退出码，恢复与诊断证据不足。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/job_service.py:15",
-     "text": "声明 ai_analysis/publish Job 类型但 execute_job 未实现，属于可创建不可执行的 legacy/stub。"
+     "loc": "app/services/job_service.py:126",
+     "text": "Job JSON 损坏时静默保留原字符串，执行器可能产生不明确的数据错误。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/job_service.py:18",
+     "text": "ai_analysis 与 publish 类型仍可创建但 worker 未实现，属于可创建不可执行的 legacy/stub。"
     },
     {
      "sev": "LOW",
-     "loc": "tests/test_job_queue.py:154",
-     "text": "未覆盖旧 owner fencing、stale worker 更新拒绝、重启副作用去重或重复终态。"
+     "loc": "tests/test_job_fencing.py:59",
+     "text": "已覆盖 owner/token、迁移、转写 checkpoint 与字幕 cleanup fencing，但尚无真实父子进程重启中失租测试。"
     },
     {
      "sev": "LOW",
      "loc": "tests/test_auto_pipeline.py:204",
-     "text": "缺少 PipelineEngine 成功闭环、READY 状态可观察性、取消竞态、重启和真实子进程测试。"
+     "text": "仍缺稳定 READY 状态、最后一步取消和重启副作用去重测试。"
     },
     {
      "sev": "LOW",
-     "loc": "app/services/pipeline_engine.py:570",
-     "text": "JSON/时间配置损坏时静默回退默认排期，降低故障可见性并可能意外排期。"
+     "loc": "app/services/pipeline_engine.py:572",
+     "text": "JSON/时间配置损坏时静默回退默认排期，故障可见性不足。"
     }
    ],
-   "auditedHash": "006dbc8658a43c084fea542d3dbfa895af2cddf2b324b1f0b7c3ea13ae4baa0b",
+   "auditedHash": "954a67ff0864dc491a4457f64a830e5ae6d876fde40ae22bd0c335661a9b9fa1",
    "auditedAt": "2026-08-24",
-   "auditedRev": "38fd60386a609b6ea85a3eb511b83cb296f4d2a1"
+   "auditedRev": "9ae8440d80d0527c7dd296fe1331b63aac2818ea"
   },
   {
    "id": "publish_center",
@@ -1190,9 +1173,9 @@
     "tests/test_database_backup_service.py",
     "tests/test_p1_1_db_performance.py"
    ],
-   "loc": 3383,
-   "contentHash": "546767f4ebb2f0016e0ffd17d16572f14d85dc60f9ee94b378a5d3b60b7cb2f6",
-   "score": 71,
+   "loc": 3436,
+   "contentHash": "fe28b5f8835fb06486b9b9465f880bc872b6b6c95116d92c74c5ac8b442a08ae",
+   "score": 69,
    "grade": "C",
    "tags": [
     "silent-except",
@@ -1208,32 +1191,42 @@
     {
      "sev": "MED",
      "loc": "app/db/database.py:31",
-     "text": "启动迁移仍无 user_version 或 schema_migrations 账本。"
+     "text": "init_db 仍依赖结构探测执行启动迁移，没有 user_version 或 schema_migrations 账本。"
     },
     {
      "sev": "MED",
-     "loc": "app/db/database.py:601",
-     "text": "部分索引创建错误仍可能被静默忽略。"
+     "loc": "app/db/database.py:625",
+     "text": "索引创建捕获所有 sqlite3.Error 后静默继续，关键唯一索引失败可能无告警。"
     },
     {
      "sev": "MED",
-     "loc": "app/db/database.py:651",
-     "text": "旧库迁移不能系统修复缺失约束。"
+     "loc": "app/db/database.py:675",
+     "text": "历史表迁移主要补列，未系统重建或验证旧库 Foreign Key、UNIQUE、CHECK 约束。"
     },
     {
      "sev": "MED",
      "loc": "scripts/backup_restore.py:305",
-     "text": "备份包验证仍未覆盖外键、关键索引和迁移版本。"
+     "text": "备份验证未覆盖 foreign_key_check、关键索引和迁移版本。"
     },
     {
      "sev": "MED",
      "loc": "scripts/backup_restore.py:529",
-     "text": "直接恢复核心路径仍缺统一进程锁或活动连接门禁。"
+     "text": "直接恢复函数内部没有统一进程锁或活动连接门禁。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/db/database.py:656",
+     "text": "Workflow claim 索引未覆盖 lease_expires_at，队列规模增长后过期接管扫描可能退化。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "tests/test_job_fencing.py:206",
+     "text": "已覆盖并发补列和旧 running guard，仍缺完整启动链迁移失败回滚测试。"
     }
    ],
-   "auditedHash": "546767f4ebb2f0016e0ffd17d16572f14d85dc60f9ee94b378a5d3b60b7cb2f6",
+   "auditedHash": "fe28b5f8835fb06486b9b9465f880bc872b6b6c95116d92c74c5ac8b442a08ae",
    "auditedAt": "2026-08-24",
-   "auditedRev": "4eb82c16ad9834d98b7f0808d89be6601968b07c"
+   "auditedRev": "9ae8440d80d0527c7dd296fe1331b63aac2818ea"
   },
   {
    "id": "ops_delivery",

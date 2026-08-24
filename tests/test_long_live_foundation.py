@@ -146,9 +146,14 @@ def test_job_lease_takeover_cancel_and_retry():
             connection.commit()
         reclaimed = job_service.claim_job(job["id"], "worker-two")
         assert reclaimed["lease_owner"] == "worker-two"
+        assert reclaimed["lease_token"] != claimed["lease_token"]
         assert reclaimed["attempt_count"] == 2
         assert job_service.request_job_cancel(job["id"])["cancel_requested"] == 1
-        cancelled = job_service.mark_job_cancelled(job["id"])
+        cancelled = job_service.mark_job_cancelled(
+            job["id"],
+            lease_owner="worker-two",
+            lease_token=reclaimed["lease_token"],
+        )
         assert cancelled["status"] == job_service.JOB_STATUS_CANCELLED
         assert job_service.retry_job(job["id"])["status"] == job_service.JOB_STATUS_QUEUED
     finally:

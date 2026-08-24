@@ -9,6 +9,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.models.task import TaskStatus
+from app.services import job_service
 from app.services.storage_service import get_artifact_paths, get_source_video_path, validate_source_video_path
 from app.services.task_log_service import append_task_log
 from app.services.transcript_service import (
@@ -172,8 +173,6 @@ def process_task_audio(task_id: str, job_id: str | None = None) -> dict:
         cancel_check = None
         audio_progress_callback = None
         if job_id:
-            from app.services import job_service
-
             def cancel_check() -> bool:
                 return job_service.is_cancel_requested(job_id)
 
@@ -181,15 +180,15 @@ def process_task_audio(task_id: str, job_id: str | None = None) -> dict:
                 job_service.update_job_progress(
                     job_id, max(1, min(20, round(percent * 0.2))), f"正在提取音频：{percent}%"
                 )
-                job = job_service.get_job(job_id)
-                if job and job.get("lease_owner"):
-                    job_service.heartbeat_job(job_id, str(job["lease_owner"]))
+                job_service.heartbeat_job(job_id)
         result = run_ffmpeg_audio_extract(
             source_path,
             paths["audio_path"],
             cancel_check=cancel_check,
             progress_callback=audio_progress_callback,
         )
+    except job_service.JobLeaseLostError:
+        raise
     except Exception as exc:
         error = str(exc)
         update_task_status(task_id, TaskStatus.failed, error)
@@ -351,15 +350,12 @@ def _run_task_transcript_background(
 
     def progress_callback(progress: dict) -> None:
         if job_id:
-            from app.services import job_service
             if job_service.is_cancel_requested(job_id):
                 raise TranscriptCancelledError("用户已停止当前转写任务")
             percent = int(progress.get("percent") or 0)
             job_percent = 20 + round(max(0, min(100, percent)) * 0.79)
             job_service.update_job_progress(job_id, job_percent, str(progress.get("message") or "转写中"))
-            job = job_service.get_job(job_id)
-            if job and job.get("lease_owner"):
-                job_service.heartbeat_job(job_id, str(job["lease_owner"]))
+            job_service.heartbeat_job(job_id)
         if task_id in _CANCEL_TRANSCRIPT_TASKS:
             raise TranscriptCancelledError("用户已停止当前转写任务")
         message = progress.get("message") or "转写进度已更新"
@@ -381,6 +377,8 @@ def _run_task_transcript_background(
             progress_callback=progress_callback,
             provider=provider_name,
         )
+    except job_service.JobLeaseLostError:
+        raise
     except TranscriptCancelledError as exc:
         last_progress = read_transcript_progress(paths["transcript_path"])
         write_transcript_progress(

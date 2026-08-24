@@ -35,6 +35,19 @@ Codemap 独立增量复评只上调受本轮实际影响的模块：`Media & Sto
 
 Codemap 复评后 `Media & Storage` 为 **84/B**。`API & Runtime` 仍为 **58/D**、`Task Review & Cut` 为 **60/C**；后两者的低分来自尚未整改的 Secret 读取、状态跳跃、切片半提交和 FFprobe 超时，并非本轮路径改动回归。因此项目仍暂定“可用 V1”，待 Job/Publish fencing、状态原子性和本地安全门禁完成后再统一改判。
 
+## 0.2 P1B.1 Workflow Job fencing 状态（2026-08-24）
+
+| P1B.1 项目 | 结果 | 验证证据 |
+| --- | --- | --- |
+| Claim 代际 | 已封口 | `workflow_jobs.lease_token` 每次领取重新生成，不能用复用的 worker 名称冒充新 attempt。 |
+| 旧 Worker 写回 | 已封口 | progress、checkpoint、heartbeat、completed、failed、cancelled、release 均要求当前 `running + owner + token`；旧 token 回归测试全部被拒。 |
+| 子进程启动/退出竞态 | 已封口 | `already_claimed` 在业务副作用前验证未过期租约；父进程只处理自己捕获的 token，换代后终止旧子进程且不写失败终态。 |
+| 转写/字幕从属副作用 | 已封口 | 转写分块 checkpoint 与最终 Markdown 写入前复核 token；字幕 cleanup 在同一写锁内核对 token、更新从属记录并删除精确临时文件。 |
+| 最大尝试次数 | 已封口 | 有效租约即使达到上限也保持运行；只有 queued 或租约已过期的 running job 才会失败。 |
+| 回归验证 | 通过 | P1B.1 定向 `92 passed`，完整测试 `546 passed`，Ruff、Compileall、差异检查通过。 |
+
+本轮尚未在活动库执行加列迁移，也未进行正式服务重启；这是为了避免 P1B.2 尚未完成时反复触碰运行环境。Publish Scheduler/Windows Worker 仍缺 `execution_id` 写回 fencing 与重复 execution 幂等，所以项目成熟度继续保持“可用 V1”，不能只凭 Workflow Job 一侧完成就提前改判为“稳定 V1”。
+
 ## 1. Executive Summary
 
 ### 结论

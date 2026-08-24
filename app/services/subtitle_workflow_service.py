@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.config import settings
+from app.services import job_service
 from app.services.managed_process_service import popen_process_group, terminate_process_tree
 from app.services.storage_service import get_artifact_paths, resolve_video_file_path
 
@@ -449,6 +450,9 @@ def render_subtitles_for_output_clip(
             source_has_audio=bool(source_probe.get("has_audio")),
         )
         temporary_path.replace(output_path)
+    except job_service.JobLeaseLostError:
+        temporary_path.unlink(missing_ok=True)
+        raise
     except SubtitleRenderCancelled as exc:
         temporary_path.unlink(missing_ok=True)
         _update_subtitle_job_status(job["id"], "cancelled", error_message=str(exc))
@@ -603,7 +607,7 @@ def _render_with_fallback(
                 progress_end=progress_end,
             )
             return encoder, audio_mode
-        except SubtitleRenderCancelled:
+        except (SubtitleRenderCancelled, job_service.JobLeaseLostError):
             raise
         except RuntimeError as exc:
             errors.append(f"{encoder}/{audio_mode}：{exc}")

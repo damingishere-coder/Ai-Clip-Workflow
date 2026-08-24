@@ -13,10 +13,28 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.db.database import get_connection
+from app.services import job_service
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _assert_current_lease(connection) -> None:
+    active = job_service.current_job_lease()
+    if active is None:
+        return
+    job_id, lease_owner, lease_token = active
+    row = connection.execute(
+        """
+        SELECT 1 FROM workflow_jobs
+        WHERE id = ? AND status = 'running' AND lease_owner = ? AND lease_token = ?
+          AND lease_expires_at > ?
+        """,
+        (job_id, lease_owner, lease_token, _now_iso()),
+    ).fetchone()
+    if not row:
+        raise job_service.JobLeaseLostError(f"Workflow Job 租约已失效：{job_id}")
 
 
 def fingerprint_file(path_value: str | Path) -> str:
@@ -61,6 +79,7 @@ class TranscriptionCheckpoint:
         now = _now_iso()
         with get_connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            _assert_current_lease(connection)
             row = connection.execute(
                 """
                 SELECT id FROM transcription_runs
@@ -118,6 +137,7 @@ class TranscriptionCheckpoint:
 
     def load_completed(self, chunk_index: int, segment_factory) -> list | None:
         with get_connection() as connection:
+            _assert_current_lease(connection)
             row = connection.execute(
                 "SELECT result_json, result_checksum FROM transcription_chunks WHERE run_id = ? AND chunk_index = ? AND status = 'completed'",
                 (self.run_id, chunk_index),
@@ -136,6 +156,7 @@ class TranscriptionCheckpoint:
         checksum = hashlib.sha256(raw.encode("utf-8")).hexdigest()
         with get_connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            _assert_current_lease(connection)
             connection.execute(
                 """
                 UPDATE transcription_chunks
@@ -158,6 +179,8 @@ class TranscriptionCheckpoint:
     def save_failed(self, chunk_index: int, error: str) -> None:
         now = _now_iso()
         with get_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            _assert_current_lease(connection)
             connection.execute(
                 """UPDATE transcription_chunks SET status = 'failed', attempt_count = attempt_count + 1,
                    error_message = ?, updated_at = ? WHERE run_id = ? AND chunk_index = ?""",
@@ -172,6 +195,8 @@ class TranscriptionCheckpoint:
     def complete(self) -> None:
         now = _now_iso()
         with get_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            _assert_current_lease(connection)
             connection.execute(
                 """UPDATE transcription_runs SET status = 'completed', is_active = 1,
                    error_message = NULL, completed_at = ?, updated_at = ? WHERE id = ?""",

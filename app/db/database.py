@@ -32,11 +32,19 @@ def init_db() -> None:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.tasks_dir.mkdir(parents=True, exist_ok=True)
 
-    if _requires_long_live_schema_migration(settings.database_path):
+    needs_long_live_backup = _requires_long_live_schema_migration(settings.database_path)
+    needs_workflow_fencing_backup = _requires_workflow_job_fencing_migration(settings.database_path)
+    if needs_long_live_backup:
         create_schema_migration_backup(
             settings.database_path,
             settings.data_dir / "backups",
             "long-live-foundation",
+        )
+    if needs_workflow_fencing_backup and not needs_long_live_backup:
+        create_schema_migration_backup(
+            settings.database_path,
+            settings.data_dir / "backups",
+            "workflow-job-fencing",
         )
     if _requires_subtitle_editor_schema_migration(settings.database_path):
         create_schema_migration_backup(
@@ -405,6 +413,7 @@ def init_db() -> None:
                 max_attempts INTEGER NOT NULL DEFAULT 3,
                 next_attempt_at TEXT,
                 lease_owner TEXT,
+                lease_token TEXT,
                 lease_expires_at TEXT,
                 heartbeat_at TEXT,
                 cancel_requested INTEGER NOT NULL DEFAULT 0,
@@ -522,6 +531,7 @@ def init_db() -> None:
         _migrate_publish_job_events_table(connection)
         _restore_legacy_user_cancelled_publish_jobs(connection)
         _migrate_workflow_jobs_table(connection)
+        _guard_unfenced_running_workflow_jobs(connection)
         _migrate_transcription_tables(connection)
         _migrate_ai_analysis_windows_table(connection)
         _migrate_cut_runs_table(connection)
@@ -551,6 +561,20 @@ def _requires_long_live_schema_migration(database_path) -> bool:
         or "transcription_chunks" not in table_names
         or "ai_analysis_windows" not in table_names
     )
+
+
+def _requires_workflow_job_fencing_migration(database_path) -> bool:
+    """已有 Workflow Job 表缺少 claim 代际 token 时，先创建可移植备份。"""
+    if not database_path.exists() or database_path.stat().st_size == 0:
+        return False
+    connection = None
+    try:
+        connection = sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(workflow_jobs)").fetchall()}
+    finally:
+        if connection is not None:
+            connection.close()
+    return bool(columns) and "lease_token" not in columns
 
 
 def _requires_subtitle_editor_schema_migration(database_path) -> bool:
@@ -1443,6 +1467,7 @@ def _migrate_workflow_jobs_table(connection: sqlite3.Connection) -> None:
         "max_attempts": "ALTER TABLE workflow_jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3",
         "next_attempt_at": "ALTER TABLE workflow_jobs ADD COLUMN next_attempt_at TEXT",
         "lease_owner": "ALTER TABLE workflow_jobs ADD COLUMN lease_owner TEXT",
+        "lease_token": "ALTER TABLE workflow_jobs ADD COLUMN lease_token TEXT",
         "lease_expires_at": "ALTER TABLE workflow_jobs ADD COLUMN lease_expires_at TEXT",
         "heartbeat_at": "ALTER TABLE workflow_jobs ADD COLUMN heartbeat_at TEXT",
         "cancel_requested": "ALTER TABLE workflow_jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0",
@@ -1450,8 +1475,36 @@ def _migrate_workflow_jobs_table(connection: sqlite3.Connection) -> None:
         "checkpoint_updated_at": "ALTER TABLE workflow_jobs ADD COLUMN checkpoint_updated_at TEXT",
     }
     for column, statement in migrations.items():
-        if column not in columns:
+        if column in columns:
+            continue
+        try:
             connection.execute(statement)
+        except sqlite3.OperationalError:
+            # 两个本地进程可能同时初始化同一个旧库。另一个进程若已完成
+            # 同一 ADD COLUMN，本进程把它视为幂等成功；其他错误继续抛出。
+            if column not in _get_table_columns(connection, "workflow_jobs"):
+                raise
+        columns = _get_table_columns(connection, "workflow_jobs")
+
+
+def _guard_unfenced_running_workflow_jobs(connection: sqlite3.Connection) -> None:
+    """部署切换不完整时拒绝启动，避免旧 Worker 与新 Worker 重叠写入。"""
+    rows = connection.execute(
+        """
+        SELECT id
+        FROM workflow_jobs
+        WHERE status = 'running' AND (lease_token IS NULL OR lease_token = '')
+        ORDER BY created_at
+        LIMIT 10
+        """
+    ).fetchall()
+    if not rows:
+        return
+    job_ids = ", ".join(str(row["id"]) for row in rows)
+    raise RuntimeError(
+        "检测到未带 lease_token 的运行中 Workflow Job，已拒绝启动以防旧 Worker 覆盖新执行。"
+        f"请先停止旧版本服务并处理这些任务：{job_ids}"
+    )
 
 
 def _migrate_transcription_tables(connection: sqlite3.Connection) -> None:

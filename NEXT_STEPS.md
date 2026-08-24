@@ -7,7 +7,8 @@
 - [x] P0.3：永久删除改为“同卷隔离暂存 → 数据库提交 → 最终清理”，提交失败可恢复，最终清理失败可重试。
 - [x] P0.4：SQLite Online Backup 固定为不依赖 WAL/SHM 的单文件快照。
 - [x] P1.1：收紧媒体读取与任务目录边界，补齐核心读写路径的 traversal / arbitrary-file 回归测试；并补充同名目录原子预占和进程树退出确认。
-- [ ] P1.2：为 Workflow Job 和 Publish Job 增加 lease owner / execution generation fencing，阻止旧 Worker 回写新执行。
+- [x] P1.2a：Workflow Job 增加每次 claim 唯一的 `lease_token`，旧 Worker 的心跳、进度、checkpoint、终态和 release 均不能覆盖新执行。
+- [ ] P1.2b：Publish Job 使用现有 `execution_id` 完成所有写回 fencing，并让 Windows Publish Worker 对重复 execution 幂等。
 - [ ] P1.3：补齐任务状态转移约束、批处理原子性、取消/重启恢复和明确失败状态。
 - [ ] P1.4：统一第三方 AI/FFmpeg 超时、错误 JSON、429/5xx 与重试幂等边界，并避免重复计费。
 - [ ] P1.5：在不扩大个人本地项目范围的前提下处理密钥日志、输入校验和本地管理员接口门禁。
@@ -19,6 +20,7 @@
 2. 不需要点击“立即发送”；本轮没有执行真实投稿，也没有改变 28 条 `NEED_REVIEW` 的人工确认边界。
 3. 若未来永久删除返回 `cleanup_pending`，不要手工移动隔离目录；保留返回信息和 manifest，使用后续安全清理入口重试。
 4. 修复前数据库备份位于 `data/backups/workflow-before-foreign-key-repair-20260824-130321-535723-35a0f972.sqlite3`，只有活动库无法通过完整性检查时才考虑恢复，不要直接覆盖当前数据库。
+5. P1B.1 目前只通过隔离测试；活动库尚未增加 `workflow_jobs.lease_token`。完成 P1B.2 后会先检查没有活动 Workflow Job，再备份、迁移和重启烟测。
 
 ## 2026-08-24 工程体检确认的原始整改顺序
 

@@ -1,5 +1,17 @@
 # Development Log
 
+## 2026-08-24 稳定 V1 P1B.1 Workflow Job 执行代际隔离
+
+- `workflow_jobs` 新增可空 `lease_token`；每次领取任务都生成新的随机 token，并与 `lease_owner` 一起构成当前执行代际。旧数据库迁移前会先创建 SQLite Online Backup。
+- 进度、checkpoint、心跳、完成、失败、取消和释放租约全部增加 owner + token 条件；旧 Worker 在租约过期或任务被接管后写回会抛出 `JobLeaseLostError`，不能覆盖新执行。
+- 独立子进程启动前验证任务仍为 `running`、owner/token 一致且租约未过期；父 Worker 发现任务已换代时会终止旧子进程，旧子进程退出也不能把新执行标成失败。
+- `claim_next_job` 的选取和 claim 写入合并进同一个 `BEGIN IMMEDIATE` 事务；达到最大尝试次数但租约仍有效的任务不再被其他 Worker提前判为失败。
+- Pipeline、转写和字幕深层写回通过执行上下文继承领取时捕获的 token，不再重新从数据库读取“当前 owner”冒充旧执行身份。
+- 转写分块 checkpoint 的复用、成功、失败和完成写入，以及最终 `transcript.md` 原子替换，也会重新验证当前 Job token；远端请求返回时若任务已被接管，旧执行不能覆盖新 checkpoint 或 Markdown。
+- 字幕父进程清理临时文件时，在同一 `BEGIN IMMEDIATE` 内验证 owner/token、更新从属记录并删除精确 `.part` 文件；旧 token 不会改字幕记录或删除新执行文件。
+- 新增 `tests/test_job_fencing.py`，覆盖旧代 progress/checkpoint/heartbeat/终态/release 全部拒绝、过期子进程禁止启动、有效 max-attempt Worker 保持运行、过期上限失败和 retry token 失效。
+- 隔离验收通过：P1B.1 定向 `92 passed`，完整测试 `546 passed`；全项目 Ruff、Python Compileall 和差异检查通过。未迁移活动数据库、未调用真实 AI 或真实投稿；正式库应用迁移与真实重启烟测将在 P1B.2 完成后一并执行。
+
 ## 2026-08-24 稳定 V1 P0 数据安全整改
 
 - Pytest 启动时改用每进程独立的系统临时 sandbox，并无条件隔离数据库、任务目录、上传临时目录和发布包目录；即使外部 `DATABASE_PATH` 指向活动库，测试也不会连接或清理真实数据。

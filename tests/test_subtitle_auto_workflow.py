@@ -366,7 +366,9 @@ def test_batch_execution_checkpoints_and_queues_resume(tmp_path: Path, monkeypat
         "app.services.subtitle_auto_workflow_service.render_subtitles_for_output_clip",
         renderer,
     )
-    result = execute_subtitle_render_job(queued["job_id"], task_id, queued["job"]["payload_json"])
+    claimed = job_service.claim_job(queued["job_id"], "subtitle-test-worker")
+    with job_service.job_lease_context(queued["job_id"], "subtitle-test-worker", claimed["lease_token"]):
+        result = execute_subtitle_render_job(queued["job_id"], task_id, queued["job"]["payload_json"])
     checkpoint = job_service.get_job(queued["job_id"])["checkpoint_json"]
     assert result["completed_count"] == 1
     assert checkpoint["completed"][output_id]["revision_id"]
@@ -401,11 +403,29 @@ def test_cancel_cleanup_is_precise_and_retry_keeps_checkpoint(
     owned_temp.write_bytes(b"partial")
     unrelated_temp.write_bytes(b"keep")
 
-    cleanup_interrupted_subtitle_job(
+    stale_claim = job_service.claim_job(workflow_job_id, "cleanup-test-worker-old")
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE workflow_jobs SET lease_expires_at = '2000-01-01T00:00:00+00:00' WHERE id = ?",
+            (workflow_job_id,),
+        )
+        connection.commit()
+    claimed = job_service.claim_job(workflow_job_id, "cleanup-test-worker")
+    assert cleanup_interrupted_subtitle_job(
         workflow_job_id,
+        lease_owner="cleanup-test-worker-old",
+        lease_token=stale_claim["lease_token"],
+        status="cancelled",
+        message="旧 Worker 不得清理",
+    ) is False
+    assert owned_temp.exists() is True
+    assert cleanup_interrupted_subtitle_job(
+        workflow_job_id,
+        lease_owner="cleanup-test-worker",
+        lease_token=claimed["lease_token"],
         status="cancelled",
         message="用户已取消字幕烧录",
-    )
+    ) is True
     with get_connection() as connection:
         child_status = connection.execute(
             "SELECT status FROM subtitle_jobs WHERE id = ?",
@@ -416,8 +436,9 @@ def test_cancel_cleanup_is_precise_and_retry_keeps_checkpoint(
     assert unrelated_temp.exists() is True
 
     checkpoint = {"completed": {output_id: {"revision_id": revision_id}}}
-    job_service.update_job_checkpoint(workflow_job_id, checkpoint)
-    job_service.mark_job_cancelled(workflow_job_id)
+    with job_service.job_lease_context(workflow_job_id, claimed["lease_owner"], claimed["lease_token"]):
+        job_service.update_job_checkpoint(workflow_job_id, checkpoint)
+        job_service.mark_job_cancelled(workflow_job_id)
     retried = job_service.retry_job(workflow_job_id)
     assert retried["status"] == job_service.JOB_STATUS_QUEUED
     assert retried["checkpoint_json"] == checkpoint

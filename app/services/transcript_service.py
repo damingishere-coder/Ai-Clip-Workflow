@@ -16,8 +16,9 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from app.core.config import settings
-from app.services.transcription_checkpoint_service import TranscriptionCheckpoint
+from app.services import job_service
 from app.services.managed_process_service import popen_process_group, terminate_process_tree
+from app.services.transcription_checkpoint_service import TranscriptionCheckpoint
 
 
 TIME_TABLE_PATTERN = re.compile(
@@ -218,9 +219,11 @@ def write_transcript_markdown(
         provider=provider,
         checkpoint=checkpoint,
     )
+    job_service.require_active_job_lease()
     content = build_transcript_markdown(task, audio_path, segments)
     temp_path = transcript_path.with_name(f"{transcript_path.name}.tmp")
     temp_path.write_text(content, encoding="utf-8")
+    job_service.require_active_job_lease()
     temp_path.replace(transcript_path)
     final_progress = read_transcript_progress(transcript_path)
     total_chunks = int(final_progress.get("total_chunks") or 0)
@@ -257,6 +260,8 @@ def transcribe_audio_with_configured_provider(
         return transcribe_audio_with_provider(
             audio_path, working_dir, progress_path, provider, progress_callback, checkpoint=checkpoint
         )
+    except job_service.JobLeaseLostError:
+        raise
     except Exception as exc:
         if allow_fallback and fallback_provider and fallback_provider != provider:
             _emit_transcript_progress(
@@ -276,6 +281,8 @@ def transcribe_audio_with_configured_provider(
                     fallback_provider,
                     progress_callback,
                 )
+            except job_service.JobLeaseLostError:
+                raise
             except Exception as fallback_exc:
                 raise RuntimeError(
                     f"{_provider_label(provider)} 转写失败：{exc}；"
