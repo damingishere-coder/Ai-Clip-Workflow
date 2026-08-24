@@ -1,5 +1,17 @@
 # Development Log
 
+## 2026-08-24 全项目工程体检：Codemap + Code Overhaul + SonarQube
+
+- 按“只审计、不整改”边界完成 13 个功能模块的 Codemap 独立评分，并生成 `.codemap/modules.json`、`.codemap/codemap.html` 和 `.codemap/codemap.md`。
+- 完成架构、业务状态、数据库、并发恢复、AI/转写、发布安全、性能、测试和 Dead/Legacy 的 Code Overhaul 全量 Review。
+- 使用本机 SonarQube Community Build 26.8 和官方 Scanner 镜像实扫 `app/`、`scripts/`：38,963 ncloc，29 Bugs、2 Vulnerabilities、0 Hotspots、479 Code Smells、0.2% Duplication，维护性 A、可靠性 C、安全性 D，技术债估算约 58 小时。
+- Sonar Coverage 为 0% 是因为项目没有生成 `coverage.xml`；JUnit 已导入 500 项测试且成功率 100%，报告没有把“无覆盖率输入”误写成“代码没有测试”。
+- 隔离测试通过：`500 passed, 9 warnings`；Ruff、Python 编译、前端 JS 语法、PowerShell Parser、三组 Docker Compose 配置和 `pip check` 均通过。Ruff format check 显示 105 个文件会被重排，本轮没有格式化。
+- 只读核验当前原生服务与 Windows 发布 Worker 均在 `127.0.0.1` 健康；没有调用真实 AI、没有计费生成、没有真实投稿。
+- 发现并记录 P0：测试 fixture 在错误数据库环境下可整表删除、活动 SQLite 已有 17 条外键违规、永久删除的文件系统操作无法随数据库事务回滚。
+- 项目综合健康度定为 `59/100`，成熟度为“可用 V1”；完整证据、技术债 Top 10、删除候选、暂时不要动的区域和独立可回滚路线图见 `PROJECT_AUDIT.md`。
+- 本轮仅新增审计文档、Codemap 状态/可视化和 Sonar 本地扫描配置；没有修改生产业务代码、Schema、真实数据或发布流程。
+
 ## 2026-08-24 字幕审核、异步渲染与自动流水线整合（PR 4）
 
 - 全自动流水线在切片后创建原片/切片字幕草稿，并停在 `pending_subtitle_review`；不会继续生成文案或发送任务。
