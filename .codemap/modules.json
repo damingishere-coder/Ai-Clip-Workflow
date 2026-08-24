@@ -7,7 +7,7 @@
   "htmlPath": ".codemap/codemap.html",
   "mdPath": ".codemap/codemap.md",
   "spineDesc": "用户通过页面/API 创建素材任务，SQLite Job 驱动转写、AI 选片、审核切片和字幕，再由发送中心排期并交给 Windows Chrome Worker，所有状态与审计证据回写 SQLite。",
-  "tracked_loc": 50778,
+  "tracked_loc": 51786,
   "tracked_files": 132,
   "rev": "a01f103c43916d25310254f6f8389e9fc9e52521"
  },
@@ -740,52 +740,30 @@
     "tests/test_job_queue.py",
     "tests/test_subtitle_auto_workflow.py"
    ],
-   "loc": 2342,
-   "contentHash": "6c81ef8f8e0fb45e635df5c6facba8ed4366581b7aca28e6c1ab9fd1b070a8dc",
-   "score": 72,
-   "grade": "C",
+   "loc": 3350,
+   "contentHash": "79bcc0b7de14b28318a7578e71d5281909254180ff351895b72fb10cefb87c68",
+   "score": 88,
+   "grade": "B",
    "tags": [
-    "fallback",
-    "silent-except",
-    "legacy",
-    "stub",
     "god-component",
+    "bloat",
+    "legacy",
     "glue",
     "over-fit"
    ],
    "findings": [
     {
-     "sev": "MED",
-     "loc": "app/services/pipeline_engine.py:108,311-314; app/services/job_service.py:488-504",
-     "text": "自动流水线仅在内存 context 中保存步骤结果，虽有 update_job_checkpoint API，但 PipelineEngine 未持久化调用；重启后可能从 PREPARING_SOURCE 重新执行并重复 AI、封面和排期副作用。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/job_worker.py:198-202",
-     "text": "WorkflowJobRunner 将子进程 stdout/stderr 重定向到 DEVNULL，父进程通常只能记录退出码，重启恢复和人工诊断证据不足。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/job_service.py:127-139",
-     "text": "payload/result/checkpoint JSON 损坏时静默保留原字符串，执行器后续可能产生不明确的数据类型错误。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/job_service.py:19-23; app/services/job_worker.py:60-69",
-     "text": "ai_analysis 与 publish job 类型仍可创建，但 Worker 没有对应执行分支，最终统一失败，属于可创建但不可执行的 legacy/stub 入口。"
+     "sev": "LOW",
+     "loc": "app/services/pipeline_engine.py:977-1073",
+     "text": "PUBLISH_JOB_CREATING 尚无专用 reconcile 分支，恢复主要依赖重复创建的幂等去重。"
     },
     {
      "sev": "LOW",
-     "loc": "app/services/pipeline_engine.py:693-720",
-     "text": "产物 JSON 或排期时间配置损坏时静默回退默认值，故障可见性不足。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "app/services/job_worker.py:310-353",
-     "text": "父 Worker 在 lease 已过期但尚未被其他执行接管时仍可能写入 Job 终态；token 接管后会被拒绝，当前属于较低概率恢复边界。"
+     "loc": "tests/test_pipeline_checkpoint.py:358-625; tests/test_pipeline_state_stability.py:275-313",
+     "text": "仍缺真实进程重启、lease 过期边界及发布内容证据变更的进程级回归测试。"
     }
    ],
-   "auditedHash": "6c81ef8f8e0fb45e635df5c6facba8ed4366581b7aca28e6c1ab9fd1b070a8dc",
+   "auditedHash": "79bcc0b7de14b28318a7578e71d5281909254180ff351895b72fb10cefb87c68",
    "auditedAt": "2026-08-24",
    "auditedRev": ""
   },

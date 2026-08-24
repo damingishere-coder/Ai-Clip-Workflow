@@ -1,5 +1,19 @@
 # Development Log
 
+## 2026-08-24 稳定 V1 P1.3b 自动流水线断点恢复
+
+- 新增 `auto_pipeline_step_v1` 版本化 checkpoint；每一步记录 `running/succeeded/failed`、连续完成前缀、输入基线和紧凑产物证据，不保存 Secret、Prompt、完整 AI payload 或大对象。
+- checkpoint 写入继续使用 Workflow Job owner + lease token fencing；传入 `job_id` 却没有当前有效 lease 时，在状态更新、handler 和文件副作用之前直接拒绝执行。
+- Worker 重启/租约接管后会验证转写 Markdown、AI active run 与候选集合、选片 JSON、active cut run、字幕审核状态、文案/排期 JSON 和发布草稿，再从第一个未确认步骤继续。
+- AI、转写、切片、准备素材、字幕、文案和排期的 running 步骤支持产物 reconciliation；证据完整时补记成功，输入变化或证据不足时重做，不把旧产物当作新结果。
+- 切片恢复绑定 `cut_run_id`、启用候选、当前任务受控目录、非空文件、size 与首尾 fingerprint；空文件、错 run、路径越界或内容变化均 fail closed。
+- AI 恢复同时核对分析文件、数据库 `analysis_payload_json`、active run 和候选 `clip_key`；转写或候选输入变化时拒绝复用，避免恢复过期结果。
+- 发布草稿恢复绑定 schedule 的切片/平台、草稿字段、允许状态、视频路径/指纹和封面 hash；旧 Worker 取消本轮草稿时还必须满足当前 Job owner/token 的同事务 `EXISTS` 条件。
+- `/auto-retry` 现在在 `BEGIN IMMEDIATE` 中原位重排最新失败/取消 Job，保留其 checkpoint；不会另建空 Job 后重复调用 AI、FFmpeg 或发布草稿。直接 Job retry 仍保持同一语义。
+- 自动流水线 checkpoint 与字幕渲染 Job 的旧 `{completed: ...}` checkpoint 按 Job 类型隔离；没有修改数据库 Schema、活动库、AI/FFmpeg 参数或真实发布逻辑。
+- 定向回归覆盖崩溃后重领、失败 Job 原位重试、旧 token、无 lease、输入变化、损坏/未知 checkpoint、空切片/错 run、发布草稿篡改、取消竞态和测试清理隔离；最终完整测试 `651 passed`，Ruff 与 Python Compileall 全部通过。Codemap 独立复评将 `Pipeline & Job Queue` 从 `72/C` 提升到 `88/B`，剩余低风险项是发布创建步骤依赖幂等去重而非专用 reconcile，以及尚无真实进程重启级测试。
+- 诚实边界：Provider 返回前进程崩溃且没有落下可验证 run/文件时仍可能再次计费；SQLite 与外部 AI/FFmpeg 无法构成严格 exactly-once，后续 P1.4 继续处理超时与调用幂等。
+
 ## 2026-08-24 稳定 V1 P1.3a 任务状态与切片原子性
 
 - `PATCH /api/tasks/{task_id}/status` 改为显式允许表 + `BEGIN IMMEDIATE` 条件更新；空任务不能直接标记完成，并发状态变化不会被旧请求覆盖。所有内部状态写入同时拒绝已永久删除任务。

@@ -679,6 +679,65 @@ def retry_job(job_id: str) -> dict | None:
     return get_job(job_id) if cursor.rowcount else None
 
 
+def retry_latest_or_get_active_job(task_id: str, job_type: str) -> tuple[dict | None, bool]:
+    """Return the active job, or atomically requeue the latest retryable job.
+
+    Reusing the same row is important for auto-pipeline jobs because their
+    fenced step checkpoint belongs to that workflow_jobs.id.
+    """
+
+    now = _now_iso()
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        active = connection.execute(
+            """
+            SELECT id FROM workflow_jobs
+            WHERE task_id = ? AND job_type = ? AND status IN (?, ?)
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (task_id, job_type, JOB_STATUS_QUEUED, JOB_STATUS_RUNNING),
+        ).fetchone()
+        if active:
+            connection.commit()
+            return get_job(str(active["id"])), False
+
+        retryable = connection.execute(
+            """
+            SELECT id FROM workflow_jobs
+            WHERE task_id = ? AND job_type = ? AND status IN (?, ?)
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (task_id, job_type, JOB_STATUS_FAILED, JOB_STATUS_CANCELLED),
+        ).fetchone()
+        if not retryable:
+            connection.commit()
+            return None, False
+
+        cursor = connection.execute(
+            """
+            UPDATE workflow_jobs
+            SET status = ?, progress = 0, message = '任务已重新加入队列',
+                result_json = '{}', error_message = NULL, finished_at = NULL,
+                next_attempt_at = ?, cancel_requested = 0,
+                lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+                heartbeat_at = NULL, attempt_count = 0, updated_at = ?
+            WHERE id = ? AND status IN (?, ?)
+            """,
+            (
+                JOB_STATUS_QUEUED,
+                now,
+                now,
+                retryable["id"],
+                JOB_STATUS_FAILED,
+                JOB_STATUS_CANCELLED,
+            ),
+        )
+        connection.commit()
+    if cursor.rowcount != 1:
+        return None, False
+    return get_job(str(retryable["id"])), True
+
+
 def release_job_lease(job_id: str, lease_owner: str, lease_token: str) -> bool:
     """Web 正常停止时释放子进程 Job，供新进程立即恢复。"""
     now = _now_iso()

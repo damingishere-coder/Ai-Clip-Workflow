@@ -68,17 +68,24 @@ def test_cancel_after_step_does_not_write_ready(monkeypatch):
     job, _created = job_service.create_or_get_active_job(
         task_id=task["id"], job_type=job_service.JOB_TYPE_AUTO_PIPELINE
     )
+    claimed = job_service.claim_job(job["id"], "cancel-after-step-owner")
+    assert claimed is not None
     engine = _engine_for_last_step(monkeypatch, task["id"])
     cancelled = iter([False, True])
     monkeypatch.setattr(job_service, "is_cancel_requested", lambda _job_id: next(cancelled))
     monkeypatch.setattr(job_service, "update_job_progress", Mock())
     monkeypatch.setattr(job_service, "heartbeat_job", Mock())
 
-    result = engine.run(
-        task["id"],
-        start_step=TaskStatus.PUBLISH_JOB_CREATING,
-        job_id=job["id"],
-    )
+    with job_service.job_lease_context(
+        claimed["id"],
+        "cancel-after-step-owner",
+        claimed["lease_token"],
+    ):
+        result = engine.run(
+            task["id"],
+            start_step=TaskStatus.PUBLISH_JOB_CREATING,
+            job_id=job["id"],
+        )
 
     assert result["status"] == "cancelled"
     assert get_task(task["id"], include_video_probe=False)["status"] == TaskStatus.CANCELLED.value
@@ -151,6 +158,19 @@ def test_cancel_between_final_check_and_ready_write_wins(monkeypatch):
     engine = _engine_for_last_step(monkeypatch, task["id"])
     monkeypatch.setattr(job_service, "update_job_progress", Mock())
     monkeypatch.setattr(job_service, "heartbeat_job", Mock())
+    monkeypatch.setattr(
+        engine,
+        "_checkpoint_outputs",
+        Mock(
+            return_value={
+                "created_ids": ["checkpoint-publish"],
+                "skipped_ids": [],
+                "created_count": 1,
+                "skipped_count": 0,
+                "schedule_input": {"sha256": "test"},
+            }
+        ),
+    )
     checks = 0
 
     def cancel_after_final_check(_job_id):
@@ -238,6 +258,59 @@ def test_old_worker_cannot_write_ready_after_lease_takeover():
             PipelineEngine()._mark_ready_to_publish(task["id"], job["id"])
 
     assert get_task(task["id"], include_video_probe=False)["status"] == TaskStatus.CREATED.value
+
+
+def test_old_worker_cannot_cancel_publish_draft_after_lease_takeover():
+    task = _create_auto_task("test-pipeline-state-cancel-publish-fence")
+    job, _created = job_service.create_or_get_active_job(
+        task_id=task["id"], job_type=job_service.JOB_TYPE_AUTO_PIPELINE
+    )
+    old_claim = job_service.claim_job(job["id"], "old-cancel-owner")
+    assert old_claim is not None
+    now = task_service._now_iso()
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO output_clip (
+                id, task_id, output_file_path, output_file_name, status,
+                is_active, created_at, updated_at
+            ) VALUES ('pipeline-fenced-output', ?, '', 'clip.mp4', 'completed', 1, ?, ?)
+            """,
+            (task["id"], now, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO publish_jobs (
+                id, task_id, output_clip_id, platform, status, created_at, updated_at
+            ) VALUES ('pipeline-fenced-publish', ?, 'pipeline-fenced-output', 'douyin', 'WAITING', ?, ?)
+            """,
+            (task["id"], now, now),
+        )
+        connection.execute(
+            "UPDATE workflow_jobs SET lease_expires_at = '2000-01-01T00:00:00+00:00' WHERE id = ?",
+            (job["id"],),
+        )
+        connection.commit()
+    new_claim = job_service.claim_job(job["id"], "new-cancel-owner")
+    assert new_claim is not None
+
+    with job_service.job_lease_context(job["id"], "old-cancel-owner", old_claim["lease_token"]):
+        with pytest.raises(job_service.JobLeaseLostError):
+            PipelineEngine()._cancel_unpublished_auto_jobs(
+                task["id"],
+                {
+                    "workflow_job_id": job["id"],
+                    TaskStatus.PUBLISH_JOB_CREATING.value: {
+                        "created": [{"id": "pipeline-fenced-publish"}]
+                    },
+                },
+            )
+
+    with get_connection() as connection:
+        status = connection.execute(
+            "SELECT status FROM publish_jobs WHERE id = 'pipeline-fenced-publish'"
+        ).fetchone()["status"]
+    assert status == "WAITING"
 
 
 def test_expired_cancel_requested_job_is_recovered_as_cancelled():

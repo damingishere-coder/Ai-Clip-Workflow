@@ -7,14 +7,14 @@
 
 > **Interactive view:** [`.codemap/codemap.html`](codemap.html) — per-module scores, findings, LoC, and the dependency graph. This file is the written report.
 
-**Generated:** 2026-08-24 · **Modules:** 13 · **Size:** 50778 tracked LoC across 132 files
+**Generated:** 2026-08-24 · **Modules:** 13 · **Size:** 51786 tracked LoC across 132 files
 
 ## Health by layer
 
 | Layer | Modules | Avg score |
 |---|--:|--:|
 | 界面 · API | 2 | 56 |
-| 业务编排 | 3 | 67 |
+| 业务编排 | 3 | 73 |
 | 媒体与 AI 处理 | 4 | 69 |
 | 外部执行边界 | 2 | 74 |
 | 持久化与运维 | 2 | 66 |
@@ -35,8 +35,8 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 | Module | LoC | Score | Tags |
 |---|--:|:--|:--|
 | Publish Center | 5,593 | 52 D | god-component, bloat, legacy, dual-format, fallback, silent-except, placeholder, duplication |
+| Pipeline & Job Queue | 3,350 | 88 B | god-component, bloat, legacy, glue, over-fit |
 | Task Review & Cut | 3,036 | 78 B | god-component, glue, fallback, dual-format, legacy, over-fit |
-| Pipeline & Job Queue | 2,342 | 72 C | fallback, silent-except, legacy, stub, god-component, glue, over-fit |
 
 ### 媒体与 AI 处理
 
@@ -72,7 +72,7 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Ops & Delivery (68/C)** — scripts/migrate_task_dirs_to_project_names.py:211: 任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。
 - **Subtitle (70/C)** — app/services/subtitle_data_service.py:352: 手工 revision 的 active/base 检查在事务外，并发编辑可覆盖 active 选择。
 - **Publish Scheduler (71/C)** — app/services/publish_scheduler.py:756-785: recover_interrupted_jobs 每轮加载全部 PUBLISHING 任务，并对每个任务串行查询 Worker，没有批量上限、并发控制或退避；Worker 不可用或卡住任务较多时，单轮耗时按任务数乘以网络超时增长，会延迟后续排期处理。
-- **Pipeline & Job Queue (72/C)** — app/services/pipeline_engine.py:108,311-314; app/services/job_service.py:488-504: 自动流水线仅在内存 context 中保存步骤结果，虽有 update_job_checkpoint API，但 PipelineEngine 未持久化调用；重启后可能从 PREPARING_SOURCE 重新执行并重复 AI、封面和排期副作用。
+- **Publishers & Worker (76/B)** — scripts/publish_host_worker.py:321: _prior_job_execution_requires_review 扫描旧 execution journal 时，若 journal 缺少 identity 或已损坏，直接 continue；跨 execution 无法确认其 job_id 时不会阻断新 execution。旧 Worker 在上传后崩溃并留下无身份/损坏日志时，仍存在重复投稿边界。
 
 ## All findings
 
@@ -93,7 +93,7 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **SQLite Persistence** · `app/db/database.py:628-671` — _create_indexes 先删除 uq_publish_jobs_active_clip_platform_mode，随后对所有索引创建统一捕获 sqlite3.Error 并静默忽略；唯一部分索引创建失败时，旧索引已删除且无告警，活动发布任务可能失去唯一约束并产生重复记录。
 - **Ops & Delivery** · `scripts/migrate_task_dirs_to_project_names.py:211` — 任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。
 
-### MED (63)
+### MED (59)
 
 - **Frontend UI** · `app/templates/system_status.html:98` — 配置/API Key 字段进入 DOM，base.html:11 还承载本地管理 Token；需确认全链路始终掩码。
 - **Frontend UI** · `app/static/css/styles.css:870` — 使用多个未在 :root 定义的 CSS 自定义属性，相关声明可能失效。
@@ -133,10 +133,6 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Subtitle** · `app/services/subtitle_workflow_service.py:475` — 字幕 job 完成与激活分两次写入，迟到 worker 仍可能激活旧成片。
 - **Subtitle** · `app/services/subtitle_data_service.py:1045` — 字幕数据服务聚合 track、revision、cue、导入导出、波形和渲染辅助，回归半径大。
 - **Subtitle** · `tests/test_subtitle_editor.py:189` — 缺并发 save/approve/ensure track 与批处理中途失败测试。
-- **Pipeline & Job Queue** · `app/services/pipeline_engine.py:108,311-314; app/services/job_service.py:488-504` — 自动流水线仅在内存 context 中保存步骤结果，虽有 update_job_checkpoint API，但 PipelineEngine 未持久化调用；重启后可能从 PREPARING_SOURCE 重新执行并重复 AI、封面和排期副作用。
-- **Pipeline & Job Queue** · `app/services/job_worker.py:198-202` — WorkflowJobRunner 将子进程 stdout/stderr 重定向到 DEVNULL，父进程通常只能记录退出码，重启恢复和人工诊断证据不足。
-- **Pipeline & Job Queue** · `app/services/job_service.py:127-139` — payload/result/checkpoint JSON 损坏时静默保留原字符串，执行器后续可能产生不明确的数据类型错误。
-- **Pipeline & Job Queue** · `app/services/job_service.py:19-23; app/services/job_worker.py:60-69` — ai_analysis 与 publish job 类型仍可创建，但 Worker 没有对应执行分支，最终统一失败，属于可创建但不可执行的 legacy/stub 入口。
 - **Publish Center** · `app/services/publish_service.py:266` — publish_service.py 当前约4750行，混合配置/账号/OAuth、文案与封面、队列同步、历史、旧 OpenCLI 脚本、API Provider 和页面上下文，形成高耦合 God Component，任一发布流程改动的 blast radius 很大。
 - **Publish Center** · `app/services/publish_service.py:2941` — 历史查询 SQL 只按 PUBLISH_HISTORY_STATUSES 的大写值过滤，之后才调用 _normalize_publish_status；LEGACY_STATUS_MAP 支持旧小写状态但旧记录会在 SQL 层被提前排除，历史页可能漏数据。
 - **Publish Center** · `app/services/publish_service.py:2144` — sync_task_publish_jobs 封面生成失败时只把 {'cover_error': ...} 放入 item_covers，仍继续插入 WAITING 任务且不计入 errors；同步可能返回 ok，但生成的任务实际无法通过 local_browser readiness。
@@ -175,8 +171,8 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Subtitle** · `tests/test_subtitle_auto_workflow.py:172` — 核心真实渲染在 FFmpeg/FFprobe 缺失时会跳过，异常 Provider 证据不足。
 - **Subtitle** · `app/services/subtitle_data_service.py:761` — 波形处理把完整 PCM 捕获到内存，超长媒体存在时长线性内存峰值。
 - **Subtitle** · `app/services/subtitle_data_service.py:1024` — 单条字幕文本可接近文件上限，放大渲染、导出和 Prompt 资源消耗。
-- **Pipeline & Job Queue** · `app/services/pipeline_engine.py:693-720` — 产物 JSON 或排期时间配置损坏时静默回退默认值，故障可见性不足。
-- **Pipeline & Job Queue** · `app/services/job_worker.py:310-353` — 父 Worker 在 lease 已过期但尚未被其他执行接管时仍可能写入 Job 终态；token 接管后会被拒绝，当前属于较低概率恢复边界。
+- **Pipeline & Job Queue** · `app/services/pipeline_engine.py:977-1073` — PUBLISH_JOB_CREATING 尚无专用 reconcile 分支，恢复主要依赖重复创建的幂等去重。
+- **Pipeline & Job Queue** · `tests/test_pipeline_checkpoint.py:358-625; tests/test_pipeline_state_stability.py:275-313` — 仍缺真实进程重启、lease 过期边界及发布内容证据变更的进程级回归测试。
 - **Publish Center** · `app/services/publish_providers.py:204` — _post_multipart 先 file_path.read_bytes() 再 b''.join(chunks)，完整视频和完整 multipart body 同时驻留内存，大文件发布存在约双倍峰值。
 - **Publish Center** · `app/services/publish_service.py:1569` — _batch_find_publish_jobs 对每条记录直接调用 _normalize_job(row)，未传入预取 accounts；_normalize_job 会逐条触发 readiness/account 查询，发布中心批量切片时形成 N+1 查询。
 - **Publish Center** · `tests/test_publish_history.py:111` — 现有定向测试未覆盖原始 Secret/Token 响应、旧小写历史状态、同步封面 partial、批量无效 ID，以及 API 超时后已接收的重复投稿边界。

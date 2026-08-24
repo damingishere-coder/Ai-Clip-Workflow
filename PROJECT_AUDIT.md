@@ -80,6 +80,22 @@ Codemap 独立复评结果：`Publish Scheduler 62→71（C）`、`Publishers & 
 
 本轮没有增加或迁移数据库列，也没有触碰活动数据、真实 AI 或真实投稿。Codemap 增量复评为 `Task Review & Cut 78/B`、`Pipeline & Job Queue 72/C`、`API & Runtime 48/D`、`SQLite Persistence 64/C`。后两项分数下降不是本轮状态修复回归，而是独立复评把原始 Secret 读取、可选鉴权、同步重任务阻塞 async 路由、唯一索引重建失败静默吞掉和无版本迁移重新按实际风险计分。P1.3a 解决的是“状态与切片提交能否可信”这一层；自动流水线的跨进程 step checkpoint、数据库迁移 fail-open、FFprobe/第三方错误边界和 Secret/本地管理员门禁仍按后续独立轮次处理。因此项目继续维持“可用 V1”，不能在剩余 P1 门禁完成前提前宣称“稳定 V1”。
 
+## 0.5 P1.3b 自动流水线断点恢复状态（2026-08-24）
+
+| P1.3b 项目 | 结果 | 验证证据 |
+| --- | --- | --- |
+| 步骤持久化 | 已封口 | `auto_pipeline_step_v1` 保存连续步骤状态、输入基线和紧凑证据；未知版本、损坏 JSON、越序记录或输入配置变化均 fail closed。 |
+| 重启与重领 | 已封口 | 已完成步骤逐项复核；running 的转写、AI、选片、切片、字幕、文案和排期可从持久化产物 reconcile，证据不足才重做。 |
+| 失败后重试 | 已封口 | 自动重试在写锁中原位重排旧 Workflow Job 并保留 checkpoint；新 token 接管后可复用已验证副作用，不再创建丢失上下文的新 Job。 |
+| AI/切片证据 | 已封口 | AI 同时核对 transcript、分析文件、run payload 和候选集合；切片绑定 active run、候选、受控目录、非空文件、size 与 fingerprint。 |
+| 文案/排期/草稿 | 已封口 | 下游从 JSON 恢复内存 context；发布草稿绑定 schedule、草稿字段、允许状态、视频指纹和封面 hash，篡改或文件变化会停止恢复。 |
+| Lease 与取消 | 已封口 | `job_id` 无有效 lease 时不执行；旧 Worker 不能写 checkpoint，也不能在新 Worker 接管后取消本轮发布草稿。 |
+| 人工门禁 | 保持 | 字幕完成后仍稳定停在 `PENDING_SUBTITLE_REVIEW`；最终任务仍停在 `READY_TO_PUBLISH`，不会自动真实投稿。 |
+
+完整隔离回归为 `651 passed`，Ruff 与 Python Compileall 全部通过。Codemap 独立复评将 `Pipeline & Job Queue` 从 **72/C 提升到 88/B**；未再发现本轮新增 HIGH，保留的 LOW 是发布创建步骤主要依赖数据库幂等去重而非专用 reconcile，以及尚未进行真实进程重启级故障测试。
+
+本轮没有新增数据库列、没有迁移活动库，也没有调用真实 AI、FFmpeg、Chrome、抖音或 B站。恢复语义是“有可验证证据时尽量避免重复”，不是跨 SQLite 与外部服务的严格 exactly-once：若 Provider 已计费但进程在任何 run/文件落盘前崩溃，系统无法证明该次结果，重试仍可能再次调用。数据库迁移 fail-open、第三方超时/429/错误 JSON、字幕批准批次和 Secret/本地管理接口仍属于 P1.3c～P1.5，因此项目成熟度继续维持 **可用 V1**，尚不提前改判为“稳定 V1”。
+
 ## 1. Executive Summary
 
 ### 结论
