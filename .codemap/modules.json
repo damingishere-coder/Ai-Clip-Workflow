@@ -7,9 +7,9 @@
   "htmlPath": ".codemap/codemap.html",
   "mdPath": ".codemap/codemap.md",
   "spineDesc": "用户通过页面/API 创建素材任务，SQLite Job 驱动转写、AI 选片、审核切片和字幕，再由发送中心排期并交给 Windows Chrome Worker，所有状态与审计证据回写 SQLite。",
-  "tracked_loc": 47576,
-  "tracked_files": 131,
-  "rev": "38fd60386a609b6ea85a3eb511b83cb296f4d2a1"
+  "tracked_loc": 48161,
+  "tracked_files": 132,
+  "rev": "4eb82c16ad9834d98b7f0808d89be6601968b07c"
  },
  "excludes": [
   ".venv/",
@@ -82,8 +82,8 @@
    "FastAPI + SQLite WAL + 文件产物 + 持久化 Job + Windows Worker 与个人本机规模匹配；不需要微服务化，现有恢复骨架应保留。"
   ],
   [
-   "数据一致性是最高优先级",
-   "Persistence、Task/Review/Cut 和 Media Storage 共同暴露外键孤儿、迁移无账本、批次半提交与文件删除无法随数据库回滚。"
+   "P0 数据一致性边界已封口，事务型旧债仍需继续",
+   "活动库外键、测试误删和媒体删除回滚已修复；迁移无账本、切片批次半提交与并发版本号仍是下一阶段重点。"
   ],
   [
    "旧执行覆盖新执行是跨模块重复风险",
@@ -102,8 +102,8 @@
    "publish_service.py、publish-center.js、app.js、publish_scheduler.py、subtitle_data_service.py 和 transcript_service.py 是主要 God Component；应按业务边界渐进拆分。"
   ],
   [
-   "测试数量足够但故障隔离仍不安全",
-   "500 项测试全部通过，但 Coverage 未采集，真实 E2E 和并发恢复不足；一个 fixture 在数据库路径错误时还可能清空真实表。"
+   "测试已与活动数据隔离，但 Coverage 与真实故障闭环仍不足",
+   "512 项测试全部通过，Pytest 已强制使用进程级 sandbox；Coverage 尚未采集，真实 E2E、并发恢复和 Worker fencing 仍需补齐。"
   ]
  ],
  "modules": [
@@ -309,9 +309,9 @@
     "tests/test_path_resolution.py",
     "tests/test_long_live_foundation.py"
    ],
-   "loc": 1300,
-   "contentHash": "12bf70550a6f4ec8340b5b7145dfcaa0343b424c6ed451a1839ea37b810a6628",
-   "score": 69,
+   "loc": 1501,
+   "contentHash": "145e36626a35f468a0b6905a357f31de9caefa8cbb1b3081e81547880e44ebb7",
+   "score": 73,
    "grade": "C",
    "tags": [
     "fallback",
@@ -324,58 +324,33 @@
    "findings": [
     {
      "sev": "HIGH",
-     "loc": "app/services/storage_service.py:178",
-     "text": "_storage_path_from_dir_name 直接把 PureWindowsPath(task_dir_name) 的 parts 拼接到 tasks_dir，未复用 _safe_relative_parts；核心写入/读取原语缺少 traversal 覆盖。"
+     "loc": "app/services/storage_service.py:200",
+     "text": "核心任务目录读写仍未统一复用安全相对路径校验。"
     },
     {
      "sev": "HIGH",
-     "loc": "app/services/storage_service.py:218",
-     "text": "allocate_task_dir_name 采用查询数据库+检查目录+返回的非原子分配，且无明确唯一约束/独占创建；并发上传或重试可能获得同一目录名。"
+     "loc": "app/services/storage_service.py:244",
+     "text": "任务目录名仍为非原子分配，并发请求可能冲突。"
     },
     {
      "sev": "HIGH",
-     "loc": "app/services/storage_service.py:302",
-     "text": "resolve_video_file_path 对已存在路径直接原样返回；媒体接口只检查 exists/is_file 即 FileResponse，异常数据库路径可能暴露允许根目录外的本地文件。"
+     "loc": "app/services/storage_service.py:324",
+     "text": "媒体响应仍可能信任数据库中的根目录外路径。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/storage_service.py:213",
-     "text": "读取已有任务目录遇 sqlite3.Error 静默回空集合/None，数据库锁定或损坏会被伪装成无目录并走错误 fallback。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/storage_service.py:533",
-     "text": "清理计划逐个 rmtree，而调用方随后才更新数据库；后续失败时已删文件无法随数据库回滚，形成半删除。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/storage_service.py:557",
-     "text": "move_task_directory_to_trash 复用未校验的目录拼接；虽当前无运行调用，但保留未来误用风险。"
+     "loc": "app/services/storage_service.py:219",
+     "text": "数据库目录查询异常仍静默回退。"
     },
     {
      "sev": "MED",
      "loc": "app/services/managed_process_service.py:18",
-     "text": "Windows taskkill 返回码/超时异常被忽略，未确认进程树退出；上层可能释放租约但 FFmpeg 仍继续。"
-    },
-    {
-     "sev": "MED",
-     "loc": "tests/test_path_resolution.py:44",
-     "text": "所谓唯一命名测试未写数据库或制造同名目录，未验证并发/冲突核心行为。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "tests/test_path_resolution.py:142",
-     "text": "测试通过 reload 改写全局配置/模块状态且未恢复，顺序或并行执行可能泄漏临时路径。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "tests/test_p0_security.py:274",
-     "text": "子进程测试未覆盖 Windows taskkill 失败、超时和残留进程树，关键边界仍依赖人工验证。"
+     "text": "Windows 进程树终止仍未可靠确认完成。"
     }
    ],
-   "auditedHash": "12bf70550a6f4ec8340b5b7145dfcaa0343b424c6ed451a1839ea37b810a6628",
+   "auditedHash": "145e36626a35f468a0b6905a357f31de9caefa8cbb1b3081e81547880e44ebb7",
    "auditedAt": "2026-08-24",
-   "auditedRev": "38fd60386a609b6ea85a3eb511b83cb296f4d2a1"
+   "auditedRev": "4eb82c16ad9834d98b7f0808d89be6601968b07c"
   },
   {
    "id": "transcription",
@@ -615,9 +590,9 @@
     "tests/test_clip_review_publish_sync.py",
     "tests/test_versioning_rollback.py"
    ],
-   "loc": 2436,
-   "contentHash": "39fe8feac1c349c1e0bd2a893ea4abf5f544aca4e112149350a4ad06857bc440",
-   "score": 61,
+   "loc": 2460,
+   "contentHash": "0c03c623704306716a44691b2dcda449c935f15f0e581822a2e5414c679e29f8",
+   "score": 65,
    "grade": "C",
    "tags": [
     "god-component",
@@ -632,68 +607,33 @@
    "findings": [
     {
      "sev": "HIGH",
-     "loc": "tests/test_task_query_service.py:175",
-     "text": "测试清理函数无条件 DELETE 多张核心整表，fixture 每个用例前后执行；若继承真实数据库路径会清空真实任务与发布记录。"
-    },
-    {
-     "sev": "HIGH",
      "loc": "app/services/video_cut_workflow_service.py:248",
-     "text": "每个切片记录独立提交；中途异常时前项已提交但 cut_run 未失败，留下半成功状态。"
+     "text": "切片输出仍逐条独立提交，中途异常可留下半成功记录。"
     },
     {
      "sev": "HIGH",
-     "loc": "app/services/task_lifecycle_service.py:152",
-     "text": "状态更新无合法转移和产物前置条件校验，API 可把空任务直接标记完成。"
+     "loc": "app/services/task_lifecycle_service.py:154",
+     "text": "任务状态更新仍无合法迁移与产物前置校验。"
     },
     {
      "sev": "HIGH",
      "loc": "app/services/task_service.py:451",
-     "text": "ffprobe 调用无 timeout 且未完整捕获 IO 异常，NAS/损坏媒体可令详情请求阻塞或 500。"
+     "text": "ffprobe 仍缺 timeout 和完整异常边界。"
     },
     {
      "sev": "MED",
      "loc": "app/services/task_service.py:14",
-     "text": "task_service 集中导入多领域私有函数并与 task_query_service 反向依赖，职责重叠、回归半径大。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/task_query_service.py:134",
-     "text": "批量 output clip 逻辑复制 task_service 中的路径、字幕与发布就绪判断，口径易漂移。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/task_service.py:717",
-     "text": "单条候选异常时间格式即可让整个候选列表抛错，缺少逐条坏数据隔离。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/task_service.py:587",
-     "text": "get_task 不过滤 is_deleted，已删除但保留历史的任务仍可被详情和动作接口读取。"
+     "text": "task_service 仍跨越多项业务职责并与查询层反向依赖。"
     },
     {
      "sev": "MED",
      "loc": "app/services/video_cut_workflow_service.py:18",
-     "text": "MAX(run_number) 与 INSERT 分离且无唯一约束，并发重切可分配重复版本号。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/video_cut_workflow_service.py:274",
-     "text": "发布同步异常返回 partial，但任务主状态已先标完成，恢复含义分散。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "tests/test_split_services.py:119",
-     "text": "测试直接把无产物任务设为 completed，固化了任意状态跳跃。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "tests/test_versioning_rollback.py:163",
-     "text": "版本测试使用虚构媒体路径，仅验证数据库标记，不代表真实 FFmpeg 闭环。"
+     "text": "切片 run_number 仍先 MAX 后 INSERT，存在并发冲突。"
     }
    ],
-   "auditedHash": "39fe8feac1c349c1e0bd2a893ea4abf5f544aca4e112149350a4ad06857bc440",
+   "auditedHash": "0c03c623704306716a44691b2dcda449c935f15f0e581822a2e5414c679e29f8",
    "auditedAt": "2026-08-24",
-   "auditedRev": "38fd60386a609b6ea85a3eb511b83cb296f4d2a1"
+   "auditedRev": "4eb82c16ad9834d98b7f0808d89be6601968b07c"
   },
   {
    "id": "subtitle",
@@ -1202,7 +1142,8 @@
     "app/services/database_backup_service.py",
     "scripts/backup_restore.py",
     "scripts/backup_restore_runtime.py",
-    "scripts/cleanup_database_backups.py"
+    "scripts/cleanup_database_backups.py",
+    "scripts/repair_foreign_key_integrity.py"
    ],
    "coupling": "core",
    "deps": [],
@@ -1213,9 +1154,9 @@
     "tests/test_database_backup_service.py",
     "tests/test_p1_1_db_performance.py"
    ],
-   "loc": 3023,
-   "contentHash": "18a27dfc8ba1bbf86653d9709070d1f221505a53bdc69ce614ee49c381ed193c",
-   "score": 63,
+   "loc": 3383,
+   "contentHash": "546767f4ebb2f0016e0ffd17d16572f14d85dc60f9ee94b378a5d3b60b7cb2f6",
+   "score": 71,
    "grade": "C",
    "tags": [
     "silent-except",
@@ -1229,74 +1170,34 @@
    ],
    "findings": [
     {
-     "sev": "HIGH",
-     "loc": "app/db/database.py:22",
-     "text": "活动库 foreign_key_check 已有 17 条违规：16 条 publish_jobs、1 条 subtitle_jobs 指向不存在的 output_clip。"
-    },
-    {
      "sev": "MED",
      "loc": "app/db/database.py:31",
-     "text": "init_db 依赖结构探测而无 user_version/schema_migrations；中断后只能猜测并重跑部分 Schema/数据迁移。"
+     "text": "启动迁移仍无 user_version 或 schema_migrations 账本。"
     },
     {
      "sev": "MED",
-     "loc": "app/db/database.py:644",
-     "text": "索引创建失败被 sqlite.Error 静默吞掉；旧唯一索引先删除，可能在缺约束状态继续启动。"
+     "loc": "app/db/database.py:601",
+     "text": "部分索引创建错误仍可能被静默忽略。"
     },
     {
      "sev": "MED",
-     "loc": "app/db/database.py:967",
-     "text": "旧表只 ALTER 加列，不会补齐缺失 FK/UNIQUE/ON DELETE，历史约束不完整会永久保留。"
+     "loc": "app/db/database.py:651",
+     "text": "旧库迁移不能系统修复缺失约束。"
     },
     {
      "sev": "MED",
-     "loc": "scripts/backup_restore.py:359",
-     "text": "备份验证只检查主 DB、quick_check 和四张表，不检查 FK、完整 Schema、索引或迁移版本。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/database_backup_service.py:287",
-     "text": "Schema 迁移备份未把 WAL/SHM sidecar 纳入完整清理/验证；已有大量 tmp/wal/shm 运维噪声。"
+     "loc": "scripts/backup_restore.py:305",
+     "text": "备份包验证仍未覆盖外键、关键索引和迁移版本。"
     },
     {
      "sev": "MED",
      "loc": "scripts/backup_restore.py:529",
-     "text": "restore 核心无进程锁/活动连接检查，绕过 PowerShell 包装时可在活跃 WAL 写入下替换数据库。"
-    },
-    {
-     "sev": "MED",
-     "loc": "scripts/migrate_task_dirs_to_project_names.py:225",
-     "text": "目录迁移先移动文件再更新 DB，无文件回滚且未复用统一连接设置，中断会使磁盘/DB 不一致。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "app/services/storage_service.py:197",
-     "text": "路径查询绕过统一连接且静默吞 DB 错误，可能错误 fallback 到 task_id 目录。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "scripts/backup_restore_runtime.py:143",
-     "text": "运行时通过 monkeypatch 改写 backup core，全量/运行时两套入口因导入顺序产生不同语义。"
-    },
-    {
-     "sev": "MED",
-     "loc": "tests/test_p0_security.py:352",
-     "text": "FK 测试不断言 foreign_keys=1 也不执行 foreign_key_check，现有 17 条违规无法被测试发现。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/db/database.py:31",
-     "text": "database.py 聚合 Schema、迁移、索引、数据修复、种子与备份触发，回归半径覆盖全应用。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "scripts/backup_restore.py:253",
-     "text": "备份 CLI 默认包含 .env 且不加密；备份被同步/共享时会扩大 Secret 外泄面。"
+     "text": "直接恢复核心路径仍缺统一进程锁或活动连接门禁。"
     }
    ],
-   "auditedHash": "18a27dfc8ba1bbf86653d9709070d1f221505a53bdc69ce614ee49c381ed193c",
+   "auditedHash": "546767f4ebb2f0016e0ffd17d16572f14d85dc60f9ee94b378a5d3b60b7cb2f6",
    "auditedAt": "2026-08-24",
-   "auditedRev": "38fd60386a609b6ea85a3eb511b83cb296f4d2a1"
+   "auditedRev": "4eb82c16ad9834d98b7f0808d89be6601968b07c"
   },
   {
    "id": "ops_delivery",

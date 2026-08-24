@@ -7,17 +7,17 @@
 
 > **Interactive view:** [`.codemap/codemap.html`](codemap.html) — per-module scores, findings, LoC, and the dependency graph. This file is the written report.
 
-**Generated:** 2026-08-24 · **Modules:** 13 · **Size:** 47576 tracked LoC across 131 files
+**Generated:** 2026-08-24 · **Modules:** 13 · **Size:** 48161 tracked LoC across 132 files
 
 ## Health by layer
 
 | Layer | Modules | Avg score |
 |---|--:|--:|
 | 界面 · API | 2 | 64 |
-| 业务编排 | 3 | 57 |
-| 媒体与 AI 处理 | 4 | 65 |
+| 业务编排 | 3 | 58 |
+| 媒体与 AI 处理 | 4 | 66 |
 | 外部执行边界 | 2 | 62 |
-| 持久化与运维 | 2 | 66 |
+| 持久化与运维 | 2 | 70 |
 
 ## Per-module lines of code & score
 
@@ -35,7 +35,7 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 | Module | LoC | Score | Tags |
 |---|--:|:--|:--|
 | Publish Center | 5,561 | 52 D | god-component, bloat, legacy, dual-format, fallback, silent-except, placeholder, duplication |
-| Task Review & Cut | 2,436 | 61 C | god-component, glue, duplication, dual-format, fallback, legacy, over-fit, silent-except |
+| Task Review & Cut | 2,460 | 65 C | god-component, glue, duplication, dual-format, fallback, legacy, over-fit, silent-except |
 | Pipeline & Job Queue | 1,745 | 58 D | fallback, silent-except, legacy, dual-format, stub, god-component, glue, over-fit |
 
 ### 媒体与 AI 处理
@@ -45,7 +45,7 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 | AI Selection | 4,420 | 63 C | fallback, silent-except, legacy, dual-format, stub, fake-output, bloat, duplication, god-component |
 | Subtitle | 2,391 | 70 C | fallback, silent-except, legacy, bloat, god-component, monkeypatch |
 | Transcription | 1,930 | 58 D | over-fit, fallback, fake-output, dual-format, silent-except, duplication, god-component, glue |
-| Media & Storage | 1,300 | 69 C | fallback, silent-except, legacy, dual-format, bloat, glue |
+| Media & Storage | 1,501 | 73 C | fallback, silent-except, legacy, dual-format, bloat, glue |
 
 ### 外部执行边界
 
@@ -59,38 +59,37 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 | Module | LoC | Score | Tags |
 |---|--:|:--|:--|
 | Ops & Delivery | 4,347 | 68 C | fallback, legacy, dual-format, duplication, bloat, glue, silent-except, monkeypatch |
-| SQLite Persistence | 3,023 | 63 C | silent-except, fallback, legacy, dual-format, glue, bloat, god-component, monkeypatch |
+| SQLite Persistence | 3,383 | 71 C | silent-except, fallback, legacy, dual-format, glue, bloat, god-component, monkeypatch |
 
 ## Worst offenders
 
 - **Publish Center (52/D)** — app/services/publish_service.py:564: 配置/账号归一化仅新增 masked 字段却保留原始 Secret/Token，GET 接口直接返回。
 - **Transcription (58/D)** — app/services/transcription_checkpoint_service.py:22: 文件指纹只哈希大小与首尾各 1MiB；大文件中部变化但首尾/大小不变会错误复用旧转写 checkpoint。
 - **Pipeline & Job Queue (58/D)** — app/services/job_service.py:329: checkpoint、progress 与终态更新只按 job_id，不校验 lease_owner/status；旧 worker 可覆盖新 attempt。
-- **Task Review & Cut (61/C)** — tests/test_task_query_service.py:175: 测试清理函数无条件 DELETE 多张核心整表，fixture 每个用例前后执行；若继承真实数据库路径会清空真实任务与发布记录。
 - **Publish Scheduler (62/C)** — app/services/publish_repository.py:54: 发布结果只按 job_id 写回，无 execution/worker/claim 代际条件；旧执行可覆盖新 claim 终态。
 - **Publishers & Worker (62/C)** — scripts/publish_host_worker.py:74: execution_id 直接拼 journal 路径且仅限长度，../、分隔符或盘符可逃逸 Worker 状态目录，读写异常 JSON。
 - **API & Runtime (63/C)** — app/main.py:97: API 写保护仅在 LOCAL_ADMIN_TOKEN 非空时启用；默认 Token 为空。若端口可被局域网访问，写 API 默认无认证。
 - **AI Selection (63/C)** — app/services/ai_config_service.py:318: get_ai_config_context 返回含 AI/ASR Key 的完整 values，GET /api/settings/ai 无读取鉴权，页面也复用该上下文。
-- **SQLite Persistence (63/C)** — app/db/database.py:22: 活动库 foreign_key_check 已有 17 条违规：16 条 publish_jobs、1 条 subtitle_jobs 指向不存在的 output_clip。
 - **Frontend UI (65/C)** — app/static/js/app.js:211: 多个写请求绕过统一 apiFetch；启用 LOCAL_ADMIN_TOKEN 时可能缺失 Authorization 并被 API 拒绝。
+- **Task Review & Cut (65/C)** — app/services/video_cut_workflow_service.py:248: 切片输出仍逐条独立提交，中途异常可留下半成功记录。
+- **Ops & Delivery (68/C)** — scripts/migrate_task_dirs_to_project_names.py:211: 任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。
 
 ## All findings
 
-### HIGH (25)
+### HIGH (23)
 
 - **Frontend UI** · `app/static/js/app.js:211` — 多个写请求绕过统一 apiFetch；启用 LOCAL_ADMIN_TOKEN 时可能缺失 Authorization 并被 API 拒绝。
 - **Frontend UI** · `app/static/js/app.js:1729` — 接口或任务数据直接拼接到 innerHTML；publish-center.js:2152 有同类路径，存在本地 DOM XSS/页面结构破坏风险。
-- **Media & Storage** · `app/services/storage_service.py:178` — _storage_path_from_dir_name 直接把 PureWindowsPath(task_dir_name) 的 parts 拼接到 tasks_dir，未复用 _safe_relative_parts；核心写入/读取原语缺少 traversal 覆盖。
-- **Media & Storage** · `app/services/storage_service.py:218` — allocate_task_dir_name 采用查询数据库+检查目录+返回的非原子分配，且无明确唯一约束/独占创建；并发上传或重试可能获得同一目录名。
-- **Media & Storage** · `app/services/storage_service.py:302` — resolve_video_file_path 对已存在路径直接原样返回；媒体接口只检查 exists/is_file 即 FileResponse，异常数据库路径可能暴露允许根目录外的本地文件。
+- **Media & Storage** · `app/services/storage_service.py:200` — 核心任务目录读写仍未统一复用安全相对路径校验。
+- **Media & Storage** · `app/services/storage_service.py:244` — 任务目录名仍为非原子分配，并发请求可能冲突。
+- **Media & Storage** · `app/services/storage_service.py:324` — 媒体响应仍可能信任数据库中的根目录外路径。
 - **Transcription** · `app/services/transcription_checkpoint_service.py:22` — 文件指纹只哈希大小与首尾各 1MiB；大文件中部变化但首尾/大小不变会错误复用旧转写 checkpoint。
 - **Transcription** · `app/services/transcript_service.py:260` — 捕获所有 Exception 会把 TranscriptCancelledError 包成 RuntimeError，取消可能被标记 failed 而非 cancelled。
 - **Transcription** · `app/services/transcript_workflow_service.py:318` — transcript.md 存在即返回 completed，不校验源指纹或最近生成是否成功；失败后旧转写可能被误当当前结果。
 - **AI Selection** · `app/services/ai_config_service.py:318` — get_ai_config_context 返回含 AI/ASR Key 的完整 values，GET /api/settings/ai 无读取鉴权，页面也复用该上下文。
-- **Task Review & Cut** · `tests/test_task_query_service.py:175` — 测试清理函数无条件 DELETE 多张核心整表，fixture 每个用例前后执行；若继承真实数据库路径会清空真实任务与发布记录。
-- **Task Review & Cut** · `app/services/video_cut_workflow_service.py:248` — 每个切片记录独立提交；中途异常时前项已提交但 cut_run 未失败，留下半成功状态。
-- **Task Review & Cut** · `app/services/task_lifecycle_service.py:152` — 状态更新无合法转移和产物前置条件校验，API 可把空任务直接标记完成。
-- **Task Review & Cut** · `app/services/task_service.py:451` — ffprobe 调用无 timeout 且未完整捕获 IO 异常，NAS/损坏媒体可令详情请求阻塞或 500。
+- **Task Review & Cut** · `app/services/video_cut_workflow_service.py:248` — 切片输出仍逐条独立提交，中途异常可留下半成功记录。
+- **Task Review & Cut** · `app/services/task_lifecycle_service.py:154` — 任务状态更新仍无合法迁移与产物前置校验。
+- **Task Review & Cut** · `app/services/task_service.py:451` — ffprobe 仍缺 timeout 和完整异常边界。
 - **Pipeline & Job Queue** · `app/services/job_service.py:329` — checkpoint、progress 与终态更新只按 job_id，不校验 lease_owner/status；旧 worker 可覆盖新 attempt。
 - **Pipeline & Job Queue** · `app/services/job_worker.py:38` — already_claimed 跳过 claim 且不核对当前 owner，已被接管的旧子进程仍可继续执行写结果。
 - **Pipeline & Job Queue** · `app/services/job_service.py:287` — claim_next_job 可把达到 max_attempts 的 running 任务直接失败而不要求 lease 过期，慢 worker 可能被误判。
@@ -101,10 +100,9 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Publish Scheduler** · `app/services/publish_scheduler.py:495` — repair_and_publish 检查与克隆间无状态锁；并发确认/重复点击可在源任务已发布后仍新建排期。
 - **Publishers & Worker** · `scripts/publish_host_worker.py:74` — execution_id 直接拼 journal 路径且仅限长度，../、分隔符或盘符可逃逸 Worker 状态目录，读写异常 JSON。
 - **Publishers & Worker** · `scripts/publish_host_worker.py:264` — 同 execution_id 不检查既有终态即重新发布；实例内锁无法协调同 ID 并发/重放，可能重复投稿。
-- **SQLite Persistence** · `app/db/database.py:22` — 活动库 foreign_key_check 已有 17 条违规：16 条 publish_jobs、1 条 subtitle_jobs 指向不存在的 output_clip。
 - **Ops & Delivery** · `scripts/migrate_task_dirs_to_project_names.py:211` — 任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。
 
-### MED (82)
+### MED (71)
 
 - **Frontend UI** · `app/templates/system_status.html:98` — 配置/API Key 字段进入 DOM，base.html:11 还承载本地管理 Token；需确认全链路始终掩码。
 - **Frontend UI** · `app/static/css/styles.css:870` — 使用多个未在 :root 定义的 CSS 自定义属性，相关声明可能失效。
@@ -113,11 +111,8 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **API & Runtime** · `app/main.py:97` — API 写保护仅在 LOCAL_ADMIN_TOKEN 非空时启用；默认 Token 为空。若端口可被局域网访问，写 API 默认无认证。
 - **API & Runtime** · `app/routers/tasks.py:220` — 多个 async 路由直接调用同步 FFmpeg/文件长任务，可能阻塞 FastAPI 事件循环；项目另有持久化异步 Job 路径。
 - **API & Runtime** · `app/models/task.py:7` — TaskStatus 同时定义大写自动流水线与小写手动状态，API 可直接提交枚举状态但不表达合法状态迁移。
-- **Media & Storage** · `app/services/storage_service.py:213` — 读取已有任务目录遇 sqlite3.Error 静默回空集合/None，数据库锁定或损坏会被伪装成无目录并走错误 fallback。
-- **Media & Storage** · `app/services/storage_service.py:533` — 清理计划逐个 rmtree，而调用方随后才更新数据库；后续失败时已删文件无法随数据库回滚，形成半删除。
-- **Media & Storage** · `app/services/storage_service.py:557` — move_task_directory_to_trash 复用未校验的目录拼接；虽当前无运行调用，但保留未来误用风险。
-- **Media & Storage** · `app/services/managed_process_service.py:18` — Windows taskkill 返回码/超时异常被忽略，未确认进程树退出；上层可能释放租约但 FFmpeg 仍继续。
-- **Media & Storage** · `tests/test_path_resolution.py:44` — 所谓唯一命名测试未写数据库或制造同名目录，未验证并发/冲突核心行为。
+- **Media & Storage** · `app/services/storage_service.py:219` — 数据库目录查询异常仍静默回退。
+- **Media & Storage** · `app/services/managed_process_service.py:18` — Windows 进程树终止仍未可靠确认完成。
 - **Transcription** · `app/services/transcript_service.py:552` — 远程响应无 utterances 时把 text/message 包成 0-1 秒片段，错误 message 可能被当成转写正文。
 - **Transcription** · `app/services/transcript_workflow_service.py:25` — 运行/取消状态仅用进程级集合且 check-then-add 非原子，多进程或重启可能重复转写且取消失联。
 - **Transcription** · `app/services/transcript_service.py:831` — 进度文件读失败/JSON 损坏时静默返回空字典，隐藏损坏并可能触发重跑。
@@ -135,12 +130,8 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **AI Selection** · `app/services/ai/ai_clip_analyzer.py:252` — 多个分析器重复偏好摘要、时间转换、默认字段和 AI 输出解析逻辑。
 - **AI Selection** · `tests/test_split_services.py:200` — 缺少真实 Provider 成功路径、文件写入失败一致性、并发运行和旧 checkpoint 覆盖测试。
 - **AI Selection** · `tests/test_codex_cli_provider.py:12` — Provider 测试主要 monkeypatch，缺少 HTTP 429/500/超时和协议 fallback 重复调用边界。
-- **Task Review & Cut** · `app/services/task_service.py:14` — task_service 集中导入多领域私有函数并与 task_query_service 反向依赖，职责重叠、回归半径大。
-- **Task Review & Cut** · `app/services/task_query_service.py:134` — 批量 output clip 逻辑复制 task_service 中的路径、字幕与发布就绪判断，口径易漂移。
-- **Task Review & Cut** · `app/services/task_service.py:717` — 单条候选异常时间格式即可让整个候选列表抛错，缺少逐条坏数据隔离。
-- **Task Review & Cut** · `app/services/task_service.py:587` — get_task 不过滤 is_deleted，已删除但保留历史的任务仍可被详情和动作接口读取。
-- **Task Review & Cut** · `app/services/video_cut_workflow_service.py:18` — MAX(run_number) 与 INSERT 分离且无唯一约束，并发重切可分配重复版本号。
-- **Task Review & Cut** · `app/services/video_cut_workflow_service.py:274` — 发布同步异常返回 partial，但任务主状态已先标完成，恢复含义分散。
+- **Task Review & Cut** · `app/services/task_service.py:14` — task_service 仍跨越多项业务职责并与查询层反向依赖。
+- **Task Review & Cut** · `app/services/video_cut_workflow_service.py:18` — 切片 run_number 仍先 MAX 后 INSERT，存在并发冲突。
 - **Subtitle** · `app/services/subtitle_data_service.py:352` — 手工 revision 的 active/base 检查在事务外，并发编辑可同时通过并让后提交者覆盖 active 选择。
 - **Subtitle** · `app/services/subtitle_data_service.py:489` — 批准 revision 在事务外校验，后续按 id 无条件批准激活；并发/重放旧请求可回退 active 版本。
 - **Subtitle** · `app/services/subtitle_data_service.py:135` — source/clip track 均先查后插；NULL output_clip_id 唯一约束不足，并发可能重复源轨或 500。
@@ -171,15 +162,11 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Publishers & Worker** · `app/services/publishers/browser_runtime.py:32` — platform/account_id 直接拼浏览器 profile/artifact 路径，异常 ID 可路径穿越或造成账号目录冲突。
 - **Publishers & Worker** · `scripts/publish_host_worker.py:293` — Worker 把 result/diagnostics 原样写 journal，兼容 Provider 异常输出中的 Token/Cookie 可能长期落盘并经接口返回。
 - **Publishers & Worker** · `app/services/publishers/page_scripts.py:14` — Worker 页面脚本延迟导入超大 publish_service 私有函数，形成 legacy glue 与高回归半径。
-- **SQLite Persistence** · `app/db/database.py:31` — init_db 依赖结构探测而无 user_version/schema_migrations；中断后只能猜测并重跑部分 Schema/数据迁移。
-- **SQLite Persistence** · `app/db/database.py:644` — 索引创建失败被 sqlite.Error 静默吞掉；旧唯一索引先删除，可能在缺约束状态继续启动。
-- **SQLite Persistence** · `app/db/database.py:967` — 旧表只 ALTER 加列，不会补齐缺失 FK/UNIQUE/ON DELETE，历史约束不完整会永久保留。
-- **SQLite Persistence** · `scripts/backup_restore.py:359` — 备份验证只检查主 DB、quick_check 和四张表，不检查 FK、完整 Schema、索引或迁移版本。
-- **SQLite Persistence** · `app/services/database_backup_service.py:287` — Schema 迁移备份未把 WAL/SHM sidecar 纳入完整清理/验证；已有大量 tmp/wal/shm 运维噪声。
-- **SQLite Persistence** · `scripts/backup_restore.py:529` — restore 核心无进程锁/活动连接检查，绕过 PowerShell 包装时可在活跃 WAL 写入下替换数据库。
-- **SQLite Persistence** · `scripts/migrate_task_dirs_to_project_names.py:225` — 目录迁移先移动文件再更新 DB，无文件回滚且未复用统一连接设置，中断会使磁盘/DB 不一致。
-- **SQLite Persistence** · `tests/test_p0_security.py:352` — FK 测试不断言 foreign_keys=1 也不执行 foreign_key_check，现有 17 条违规无法被测试发现。
-- **SQLite Persistence** · `app/db/database.py:31` — database.py 聚合 Schema、迁移、索引、数据修复、种子与备份触发，回归半径覆盖全应用。
+- **SQLite Persistence** · `app/db/database.py:31` — 启动迁移仍无 user_version 或 schema_migrations 账本。
+- **SQLite Persistence** · `app/db/database.py:601` — 部分索引创建错误仍可能被静默忽略。
+- **SQLite Persistence** · `app/db/database.py:651` — 旧库迁移不能系统修复缺失约束。
+- **SQLite Persistence** · `scripts/backup_restore.py:305` — 备份包验证仍未覆盖外键、关键索引和迁移版本。
+- **SQLite Persistence** · `scripts/backup_restore.py:529` — 直接恢复核心路径仍缺统一进程锁或活动连接门禁。
 - **Ops & Delivery** · `.github/workflows/ci.yml:3` — CI 仅监听 master push/PR；feature/docs 直接 push 不即时验证，问题延迟到开 PR。
 - **Ops & Delivery** · `scripts/start_docker_opencli.ps1:24` — 健康检查异常只警告不返回非零，服务失败也可能被调用方视为启动成功。
 - **Ops & Delivery** · `scripts/start.ps1:30` — Demo 覆盖生效前先对正式 E 盘配置运行 doctor，新机/迁移机的隔离 Demo 可能被旧路径阻断。
@@ -189,7 +176,7 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Ops & Delivery** · `tests/test_native_scripts.py:11` — 启停测试主要是源码字符串断言，Windows smoke 不做实际 restore/冲突/清理失败与恢复后健康验证。
 - **Ops & Delivery** · `scripts/seed_demo_data.py:32` — 缺 FFmpeg 时仍插入无媒体路径 Demo 数据并成功退出，数量检查通过但媒体 smoke 不可信。
 
-### LOW (39)
+### LOW (32)
 
 - **Frontend UI** · `app/static/js/subtitle-editor.js:171` — 字幕编辑器已有 escapeHtml、虚拟列表、竞态 token 与自动保存版本控制，是可保留的正向实现。
 - **Frontend UI** · `app/static/js/publish-center.js:4` — 前端明确只创建抖音任务，B站保留后端兼容；这是当前产品边界而非应机械删除的代码。
@@ -200,14 +187,10 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **API & Runtime** · `app/main.py:115` — 所有静态资源都 no-store，适合开发但导致每次页面加载重复下载。
 - **API & Runtime** · `tests/test_p0_security.py:352` — SQLite PRAGMA 安全测试只检查查询结果非空，没有断言实际开启值；关键 API 边界测试不足。
 - **API & Runtime** · `app/models/subtitle.py:86` — speaker_styles 使用 Any 嵌套字典，模型层无法保证渲染输入结构完整。
-- **Media & Storage** · `tests/test_path_resolution.py:142` — 测试通过 reload 改写全局配置/模块状态且未恢复，顺序或并行执行可能泄漏临时路径。
-- **Media & Storage** · `tests/test_p0_security.py:274` — 子进程测试未覆盖 Windows taskkill 失败、超时和残留进程树，关键边界仍依赖人工验证。
 - **Transcription** · `tests/test_long_live_foundation.py:65` — 未覆盖取消异常传播、损坏进度、并发转写、大文件中部变更、真实响应错误和 FFmpeg/网络恢复。
 - **AI Selection** · `app/services/ai/ai_clip_analyzer.py:456` — 输出归一化同时接受多组历史字段并填大量默认值，兼容有效但维护成本高。
 - **AI Selection** · `app/services/ai_config_service.py:55` — 旧 AI_REMOTE 与新分析/发布配置并存，运行时还改写全局 settings，形成双路径。
 - **AI Selection** · `tests/test_variety_comedy_selection.py:291` — 算法分支覆盖较好，但真实三阶段 Provider、资源消耗和全局评审降级未由集成测试锁定。
-- **Task Review & Cut** · `tests/test_split_services.py:119` — 测试直接把无产物任务设为 completed，固化了任意状态跳跃。
-- **Task Review & Cut** · `tests/test_versioning_rollback.py:163` — 版本测试使用虚构媒体路径，仅验证数据库标记，不代表真实 FFmpeg 闭环。
 - **Subtitle** · `app/services/subtitle_auto_workflow_service.py:273` — auto_config_json 损坏时静默降为空并写回 delivery mode，可能丢弃其余配置。
 - **Subtitle** · `app/services/subtitle_workflow_service.py:312` — 统一 revision 之外仍保留旧调用方导出适配，存在历史漂移成本。
 - **Subtitle** · `tests/test_subtitle_auto_workflow.py:172` — FFmpeg/FFprobe 缺失会跳过，AI Provider 测试固定合法 JSON，真实异常路径不足。
@@ -224,9 +207,6 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Publish Scheduler** · `app/services/publish_scheduler.py:1321` — 发布日志写异常被静默吞，审计日志缺失无健康告警。
 - **Publishers & Worker** · `scripts/opencli_host_bridge.py:74` — 旧 OpenCLI Bridge 类无 Worker Token 校验，虽 main 已转调新 Worker，双入口容易造成安全边界误解。
 - **Publishers & Worker** · `tests/test_publish_worker_client.py:138` — 未覆盖 execution id 重放/并发、恶意路径、账号锁竞态、profile 隔离和 journal 敏感字段清洗。
-- **SQLite Persistence** · `app/services/storage_service.py:197` — 路径查询绕过统一连接且静默吞 DB 错误，可能错误 fallback 到 task_id 目录。
-- **SQLite Persistence** · `scripts/backup_restore_runtime.py:143` — 运行时通过 monkeypatch 改写 backup core，全量/运行时两套入口因导入顺序产生不同语义。
-- **SQLite Persistence** · `scripts/backup_restore.py:253` — 备份 CLI 默认包含 .env 且不加密；备份被同步/共享时会扩大 Secret 外泄面。
 - **Ops & Delivery** · `scripts/acceptance.ps1:115` — 验收递归扫描正式任务目录，媒体量大/锁文件会显著拖慢或阻断 release gate。
 - **Ops & Delivery** · `scripts/backup_restore_runtime.py:142` — import 时 monkeypatch backup core，全局行为依赖导入顺序。
 - **Ops & Delivery** · `docs/PORTABLE_SETUP.md:127` — 文档描述与当前 start.ps1 实现不符，旧 Next Steps 又保留兼容入口，启动排障认知漂移。
@@ -234,9 +214,9 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 ## Cross-cutting themes
 
 - **本地单体架构是当前可运行的主要原因.** FastAPI + SQLite WAL + 文件产物 + 持久化 Job + Windows Worker 与个人本机规模匹配；不需要微服务化，现有恢复骨架应保留。
-- **数据一致性是最高优先级.** Persistence、Task/Review/Cut 和 Media Storage 共同暴露外键孤儿、迁移无账本、批次半提交与文件删除无法随数据库回滚。
+- **P0 数据一致性边界已封口，事务型旧债仍需继续.** 活动库外键、测试误删和媒体删除回滚已修复；迁移无账本、切片批次半提交与并发版本号仍是下一阶段重点。
 - **旧执行覆盖新执行是跨模块重复风险.** Workflow Job、Publish Scheduler 和 Windows Worker 都缺少完整的 owner/attempt/execution fencing；异常恢复顺序变化时可能重复执行或写错终态。
 - **可用性 fallback 正在掩盖降级结果.** AI 部分窗口、转写旧产物、损坏 JSON、封面生成、批量发布和风险字段多处静默继续，用户不一定能区分完整成功、部分成功和旧结果。
 - **发布与配置读取是主要安全边界.** Publish Center、AI Config、Frontend 和 Worker 共同存在原始 Secret 响应、可选写鉴权、DOM XSS、路径字符和 journal 脱敏缺口。
 - **复杂度集中而非全项目平均恶化.** publish_service.py、publish-center.js、app.js、publish_scheduler.py、subtitle_data_service.py 和 transcript_service.py 是主要 God Component；应按业务边界渐进拆分。
-- **测试数量足够但故障隔离仍不安全.** 500 项测试全部通过，但 Coverage 未采集，真实 E2E 和并发恢复不足；一个 fixture 在数据库路径错误时还可能清空真实表。
+- **测试已与活动数据隔离，但 Coverage 与真实故障闭环仍不足.** 512 项测试全部通过，Pytest 已强制使用进程级 sandbox；Coverage 尚未采集，真实 E2E、并发恢复和 Worker fencing 仍需补齐。

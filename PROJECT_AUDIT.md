@@ -10,6 +10,19 @@
 >
 > 边界：本轮只审计、运行隔离测试并生成文档/审计配置；没有修改生产业务代码、数据库 Schema 或真实发布流程。
 
+## 0. P0 整改后增量状态（2026-08-24）
+
+> 本节记录审计后的已验证整改，不改写下方原始审计快照。P1 尚未完成，因此项目成熟度暂不提前改判为“稳定 V1”。
+
+| P0 项目 | 结果 | 验证证据 |
+| --- | --- | --- |
+| 测试误连活动库 | 已封口 | Pytest 无条件使用进程级临时 sandbox；整表清理二次校验路径。故意传入活动 `DATABASE_PATH` 后全量 `512 passed`，测试路径仍在 sandbox。 |
+| 17 条 SQLite 外键异常 | 已修复 | 补充 8 个 `is_active=0`、无媒体路径的 tombstone；发布、字幕和 28 条 `NEED_REVIEW` 未减少；活动库 `quick_check=ok`、`foreign_key_check=0`。 |
+| 文件删除无法随数据库回滚 | 已封口 | 同卷隔离暂存 + manifest；第二个目录移动失败和数据库提交失败均恢复原目录；最终清理失败返回 `cleanup_pending` 并保留恢复证据。 |
+| SQLite 备份依赖 WAL/SHM | 已封口 | 三类 Online Backup 均转换为 `journal_mode=DELETE`，回归测试确认不生成配套 sidecar。 |
+
+Codemap 独立增量复评只上调受本轮实际影响的模块：`Media & Storage 69→73`、`Task Review & Cut 61→65`、`SQLite Persistence 63→71`；其余模块保持原分。仍未解决的高风险包括媒体读取/任务目录路径边界、任务状态跳跃、切片半提交、Job/Publish fencing、Secret 返回和恢复门禁，因此下方 `59/100 · 可用 V1` 仍作为完整审计基线，待 P1 全部验收后再统一重算总健康度。
+
 ## 1. Executive Summary
 
 ### 结论
