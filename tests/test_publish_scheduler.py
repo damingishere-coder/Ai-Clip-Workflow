@@ -373,9 +373,18 @@ def test_finished_manual_review_execution_is_reconciled_without_stale_wait(tmp_p
         def execution(_execution_id):
             return {
                 "phase": "manual_review",
+                "identity": {
+                    "job_id": job_id,
+                    "platform": str(_raw(job_id).get("platform") or ""),
+                    "account_id": str(_raw(job_id).get("account_id") or ""),
+                },
                 "details": {
                     "outcome": "NEED_REVIEW",
                     "message": "上传状态需要人工确认",
+                    "remote_video_id": "",
+                    "platform_url": "",
+                    "published_at": "",
+                    "provider_response": {},
                     "error_code": "video_upload_timeout",
                     "needs_manual_review": True,
                 },
@@ -406,9 +415,19 @@ def test_confirmed_success_execution_is_recovered_once_without_republishing(tmp_
             cls.calls += 1
             return {
                 "phase": "confirmed_success",
+                "identity": {
+                    "job_id": job_id,
+                    "platform": str(_raw(job_id).get("platform") or ""),
+                    "account_id": str(_raw(job_id).get("account_id") or ""),
+                },
                 "details": {
                     "outcome": "PUBLISHED",
                     "message": "投稿成功",
+                    "remote_video_id": "video-1",
+                    "platform_url": "https://www.douyin.com/video/video-1",
+                    "published_at": _utc(),
+                    "provider_response": {},
+                    "error_code": "",
                     "needs_manual_review": False,
                 },
             }

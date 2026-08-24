@@ -8,7 +8,7 @@
 - [x] P0.4：SQLite Online Backup 固定为不依赖 WAL/SHM 的单文件快照。
 - [x] P1.1：收紧媒体读取与任务目录边界，补齐核心读写路径的 traversal / arbitrary-file 回归测试；并补充同名目录原子预占和进程树退出确认。
 - [x] P1.2a：Workflow Job 增加每次 claim 唯一的 `lease_token`，旧 Worker 的心跳、进度、checkpoint、终态和 release 均不能覆盖新执行。
-- [ ] P1.2b：Publish Job 使用现有 `execution_id` 完成所有写回 fencing，并让 Windows Publish Worker 对重复 execution 幂等。
+- [x] P1.2b：Publish Job 使用现有 `execution_id` 完成所有写回 fencing，并让 Windows Publish Worker 对重复 execution 幂等；跨进程锁、恢复 fail-closed 和 Scheduler 优雅停机已覆盖。
 - [ ] P1.3：补齐任务状态转移约束、批处理原子性、取消/重启恢复和明确失败状态。
 - [ ] P1.4：统一第三方 AI/FFmpeg 超时、错误 JSON、429/5xx 与重试幂等边界，并避免重复计费。
 - [ ] P1.5：在不扩大个人本地项目范围的前提下处理密钥日志、输入校验和本地管理员接口门禁。
@@ -20,7 +20,7 @@
 2. 不需要点击“立即发送”；本轮没有执行真实投稿，也没有改变 28 条 `NEED_REVIEW` 的人工确认边界。
 3. 若未来永久删除返回 `cleanup_pending`，不要手工移动隔离目录；保留返回信息和 manifest，使用后续安全清理入口重试。
 4. 修复前数据库备份位于 `data/backups/workflow-before-foreign-key-repair-20260824-130321-535723-35a0f972.sqlite3`，只有活动库无法通过完整性检查时才考虑恢复，不要直接覆盖当前数据库。
-5. P1B.1 目前只通过隔离测试；活动库尚未增加 `workflow_jobs.lease_token`。完成 P1B.2 后会先检查没有活动 Workflow Job，再备份、迁移和重启烟测。
+5. P1B.1/P1B.2 代码与隔离测试均已完成；活动库尚未增加 `workflow_jobs.lease_token`。下一独立轮先确认没有活动 Workflow Job，再做在线备份、幂等迁移和正式重启烟测。
 
 ## 2026-08-24 工程体检确认的原始整改顺序
 
@@ -30,8 +30,8 @@
 2. **P0.2 数据一致性**：先做 WAL-aware 备份和 dry-run，再逐条处理活动库 17 条外键违规；修复前不要手工删记录。
 3. **P0.3 可恢复删除**：把“直接删文件后提交数据库”改成带隔离区和 manifest 的两阶段删除。
 4. **P1.1 Secret 与本地鉴权**：读取接口不再返回原始 API Key/OAuth Token；非 loopback 部署要求明确保护（尚未开始）。
-5. **P1.2 路径边界**：任务目录与媒体响应边界已完成；Worker execution/account id 的字符校验保留到发布 fencing 同轮处理。
-6. **P1.3 Job/Publish fencing**：旧 Worker/旧 execution 不得覆盖新 attempt，重复 execution id 不得再次投稿。
+5. **P1.2 路径边界**：任务目录、媒体响应、Worker execution/account id、浏览器 profile 和手工发布包边界均已完成。
+6. **P1.3 Job/Publish fencing**：Workflow lease token 与 Publish execution fencing 已完成；旧 Worker/旧 execution 不能覆盖新 attempt，重复 execution id 不会再次进入 Publisher。
 7. **P1.4 状态与部分成功**：逐步封住任务状态跳跃、切片/字幕批次半提交、转写旧结果复用和 AI partial 成本边界。
 8. P0/P1 稳定后，再补 Coverage、真实故障测试、readiness/日志，然后渐进拆分 `publish_service.py` 与前端大脚本。
 

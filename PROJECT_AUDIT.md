@@ -48,6 +48,21 @@ Codemap 复评后 `Media & Storage` 为 **84/B**。`API & Runtime` 仍为 **58/D
 
 本轮尚未在活动库执行加列迁移，也未进行正式服务重启；这是为了避免 P1B.2 尚未完成时反复触碰运行环境。Publish Scheduler/Windows Worker 仍缺 `execution_id` 写回 fencing 与重复 execution 幂等，所以项目成熟度继续保持“可用 V1”，不能只凭 Workflow Job 一侧完成就提前改判为“稳定 V1”。
 
+## 0.3 P1B.2 Publish execution fencing 状态（2026-08-24）
+
+| P1B.2 项目 | 结果 | 验证证据 |
+| --- | --- | --- |
+| 发布写回代际 | 已封口 | Provider 结果、阶段、成功、导出、失败、人工复核和安全重排队全部要求当前 `PUBLISHING + execution_id`；旧执行写回及同事务事件会回滚。 |
+| Worker 重复执行 | 已封口 | 同一 execution 只有身份匹配的完整终态才重放；执行与账号使用进程内互斥和 Windows 跨进程独占锁。同一 job 的旧 execution 进入上传后，新 execution 会被持久化 journal 证据阻断。 |
+| 网络不确定性 | 已封口 | 超时/连接重置后先查询 execution；锁仍活跃时保持 `PUBLISHING`，只有确认停在上传前且锁已释放才安全重试，避免盲目重复投稿。 |
+| 并发修复、编辑与排期 | 已封口 | retry/repair 在 `BEGIN IMMEDIATE` 中复核源状态和活跃替代任务；发送内容、目标、AI 文案回写和排期更新均校验原状态与 `updated_at`，不能覆盖已领取或并发编辑的任务。 |
+| 输入、日志与停机 | 已封口 | Worker 标识、浏览器/导出路径、人工发布 URL、风险 JSON 与敏感字段均收紧；本地发布包完整暂存后原子切换；应用保存 Scheduler Task 并在关闭时停止新扫描、等待当前轮结束。 |
+| 回归验证 | 通过 | 发布定向 `144 passed`，完整测试 `610 passed`；Ruff、Compileall、差异检查全部通过，未调用真实平台。 |
+
+P1B.1 与 P1B.2 已把“旧 Worker/旧发布 execution 覆盖新执行”和“网络不确定时盲目重试”这两类重复副作用边界封住。不过任务主状态仍允许跳跃、切片记录仍可能部分提交，Secret 读取与本地管理员接口也尚未完成收口；因此当前仍维持“可用 V1”，待 P1.3～P1.5 验收后再统一重算健康度并判断是否达到“稳定 V1”。
+
+Codemap 独立复评结果：`Publish Scheduler 62→71（C）`、`Publishers & Worker 62→76（B）`；`Publish Center` 因 4750 行 God Service、原始 Secret 响应和旧 API Provider 风险仍维持 `52（D）`。复评未发现 Scheduler/Worker 新的 HIGH 问题；Worker 尚保留“升级前无 identity/损坏 journal 无法归属 job”的兼容边界，不能据此对历史不确定任务自动重投。
+
 ## 1. Executive Summary
 
 ### 结论

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from app.services.publishers.base import (
@@ -24,11 +25,13 @@ class LocalBrowserPublisher(BasePublisher):
         platform: str,
         worker_client: PublishWorkerClient | None = None,
         repository: Any | None = None,
+        before_dispatch: Callable[[], None] | None = None,
         **_: Any,
     ) -> None:
         self.platform = str(platform or "").lower()
         self.worker_client = worker_client or PublishWorkerClient()
         self.repository = repository
+        self.before_dispatch = before_dispatch or (lambda: None)
 
     def validate(self, job: dict[str, Any]) -> None:
         super().validate(job)
@@ -65,4 +68,5 @@ class LocalBrowserPublisher(BasePublisher):
                 needs_manual_review=True,
                 provider_response={"login_status": login_status},
             )
+        self.before_dispatch()
         return self.worker_client.publish(self.build_payload(job))

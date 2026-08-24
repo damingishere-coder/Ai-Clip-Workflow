@@ -50,25 +50,32 @@ def _build_allow_origin_header(origin: str) -> str:
 async def lifespan(app: FastAPI):
     previous_temp = tempfile.tempdir
     previous_temp_env = {name: os.environ.get(name) for name in ("TEMP", "TMP")}
-    app.state.media_storage = configure_runtime_media_storage()
-    init_db()
-    workflow_job_runner = WorkflowJobRunner()
-    workflow_job_runner.start()
-    app.state.workflow_job_runner = workflow_job_runner
-    scheduler = await start_scheduler_background()
-    app.state.publish_scheduler = scheduler
+    workflow_job_runner = None
+    scheduler = None
     try:
+        app.state.media_storage = configure_runtime_media_storage()
+        init_db()
+        workflow_job_runner = WorkflowJobRunner()
+        workflow_job_runner.start()
+        app.state.workflow_job_runner = workflow_job_runner
+        scheduler = await start_scheduler_background()
+        app.state.publish_scheduler = scheduler
         yield
     finally:
-        workflow_job_runner.stop()
-        if scheduler:
-            scheduler.stop()
-        tempfile.tempdir = previous_temp
-        for name, value in previous_temp_env.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
+        try:
+            if workflow_job_runner:
+                workflow_job_runner.stop()
+        finally:
+            try:
+                if scheduler:
+                    await scheduler.shutdown()
+            finally:
+                tempfile.tempdir = previous_temp
+                for name, value in previous_temp_env.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
 
 
 app = FastAPI(

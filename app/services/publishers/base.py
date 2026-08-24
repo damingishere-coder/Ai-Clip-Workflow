@@ -99,16 +99,21 @@ class PublishResult:
         )
 
 
-_SENSITIVE_KEYS = {
-    "access_token", "authorization", "cookie", "cookies", "password", "refresh_token",
-    "secret", "storage_state", "token", "client_secret",
+_SENSITIVE_KEY_PARTS = {
+    "accesskey", "accesstoken", "apikey", "apisecret", "authorization", "authtoken",
+    "bearer", "clientsecret",
+    "cookie", "cookies", "credential", "credentials", "csrftoken", "password", "privatekey",
+    "idtoken", "jwt", "refreshtoken", "secret", "secretkey", "sessiontoken", "storagestate",
+    "token", "tokenvalue",
 }
 
 
 def sanitize_provider_response(value: Any) -> Any:
     if isinstance(value, dict):
         return {
-            str(key): "[REDACTED]" if str(key).lower() in _SENSITIVE_KEYS else sanitize_provider_response(item)
+            str(key): "[REDACTED]"
+            if re.sub(r"[^a-z0-9]", "", str(key).lower()) in _SENSITIVE_KEY_PARTS
+            else sanitize_provider_response(item)
             for key, item in value.items()
         }
     if isinstance(value, list):

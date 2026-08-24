@@ -133,6 +133,7 @@ class FakeWorker:
             message="测试投稿成功",
             remote_video_id="remote-test-1",
             platform_url="https://www.douyin.com/video/test-1",
+            published_at=_iso(),
         )
 
 

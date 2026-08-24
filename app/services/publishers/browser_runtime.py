@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterator, Sequence
 
 from app.core.config import settings
 from app.services.publishers.base import PublishError, PublishNeedsReview
+from app.services.publishers.worker_client import validate_worker_identifier
 
 
 PhaseCallback = Callable[[str, dict[str, Any] | None], None]
@@ -26,11 +27,11 @@ class BrowserRuntime:
         *,
         phase_callback: PhaseCallback | None = None,
     ) -> None:
-        self.platform = platform
-        self.account_id = account_id
+        self.platform = validate_worker_identifier(platform, "platform", max_length=20)
+        self.account_id = validate_worker_identifier(account_id, "account_id", max_length=120)
         self.phase_callback = phase_callback or (lambda _phase, _details=None: None)
-        self.profile_dir = Path(settings.publish_browser_profile_dir) / platform / account_id
-        self.artifact_dir = Path(settings.publish_browser_artifact_dir) / platform / account_id
+        self.profile_dir = Path(settings.publish_browser_profile_dir) / self.platform / self.account_id
+        self.artifact_dir = Path(settings.publish_browser_artifact_dir) / self.platform / self.account_id
 
     def phase(self, phase: str, details: dict[str, Any] | None = None) -> None:
         self.phase_callback(phase, details)

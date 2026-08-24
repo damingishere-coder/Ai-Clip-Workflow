@@ -7,7 +7,7 @@
 
 > **Interactive view:** [`.codemap/codemap.html`](codemap.html) — per-module scores, findings, LoC, and the dependency graph. This file is the written report.
 
-**Generated:** 2026-08-24 · **Modules:** 13 · **Size:** 48709 tracked LoC across 132 files
+**Generated:** 2026-08-24 · **Modules:** 13 · **Size:** 49906 tracked LoC across 132 files
 
 ## Health by layer
 
@@ -16,7 +16,7 @@
 | 界面 · API | 2 | 62 |
 | 业务编排 | 3 | 62 |
 | 媒体与 AI 处理 | 4 | 69 |
-| 外部执行边界 | 2 | 62 |
+| 外部执行边界 | 2 | 74 |
 | 持久化与运维 | 2 | 68 |
 
 ## Per-module lines of code & score
@@ -28,13 +28,13 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 | Module | LoC | Score | Tags |
 |---|--:|:--|:--|
 | Frontend UI | 13,840 | 65 C | god-component, bloat, glue, duplication, legacy |
-| API & Runtime | 2,742 | 58 D | fallback, legacy, dual-format, duplication, glue, bloat, god-component, silent-except, any-escape |
+| API & Runtime | 2,749 | 58 D | fallback, legacy, dual-format, duplication, glue, bloat, god-component, silent-except, any-escape |
 
 ### 业务编排
 
 | Module | LoC | Score | Tags |
 |---|--:|:--|:--|
-| Publish Center | 5,561 | 52 D | god-component, bloat, legacy, dual-format, fallback, silent-except, placeholder, duplication |
+| Publish Center | 5,593 | 52 D | god-component, bloat, legacy, dual-format, fallback, silent-except, placeholder, duplication |
 | Task Review & Cut | 2,462 | 60 C | god-component, glue, duplication, dual-format, fallback, legacy, over-fit, silent-except |
 | Pipeline & Job Queue | 2,048 | 74 C | fallback, silent-except, legacy, stub, god-component, glue, over-fit |
 
@@ -51,8 +51,8 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 
 | Module | LoC | Score | Tags |
 |---|--:|:--|:--|
-| Publishers & Worker | 2,116 | 62 C | any-escape, fallback, legacy, dual-format, glue, god-component, duplication |
-| Publish Scheduler | 1,754 | 62 C | god-component, bloat, glue, fallback, legacy, silent-except |
+| Publishers & Worker | 2,699 | 76 B | legacy, glue, silent-except, fallback |
+| Publish Scheduler | 2,329 | 71 C | god-component, bloat, legacy, silent-except |
 
 ### 持久化与运维
 
@@ -63,25 +63,25 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 
 ## Worst offenders
 
-- **Publish Center (52/D)** — app/services/publish_service.py:564: 配置/账号归一化仅新增 masked 字段却保留原始 Secret/Token，GET 接口直接返回。
-- **API & Runtime (58/D)** — app/routers/settings.py:10-12: GET /api/settings/ai 无读取鉴权，直接返回 get_ai_config_context；该上下文的 values 包含 AI/ASR API Key 原始值，匿名读取请求即可获得本地配置密钥。
+- **Publish Center (52/D)** — app/services/publish_service.py:570: _normalize_config/_normalize_account 仅新增 *_masked 字段，却保留 client_secret、access_token、refresh_token 原字段；GET /api/publish/platforms、/accounts 及保存配置/账号响应直接返回这些原始密钥，存在敏感凭据泄漏风险。
+- **API & Runtime (58/D)** — app/routers/settings.py:44: AI/发布设置读取接口仍可能返回原始 Secret/API Key/OAuth Token；本地页面脚本和任意能访问接口的调用方可读取敏感配置。
 - **Transcription (59/D)** — app/services/transcript_workflow_service.py:317: transcript Markdown 存在即返回 completed，未校验源指纹、Provider、进度状态或文件完整性。
 - **Task Review & Cut (60/C)** — app/services/video_cut_workflow_service.py:248-255: 每个 CutResult 通过 _insert_output_clip_record 独立提交事务；中途插入异常时前面的 output_clip 已落库，cut_run 未被标记 failed，任务可能停留在 cutting 并同时暴露半批新结果。
-- **Publish Scheduler (62/C)** — app/services/publish_repository.py:54: 发布结果只按 job_id 写回，无 execution/worker/claim 代际条件；旧执行可覆盖新 claim 终态。
-- **Publishers & Worker (62/C)** — scripts/publish_host_worker.py:74: execution_id 直接拼 journal 路径且仅限长度，../、分隔符或盘符可逃逸 Worker 状态目录，读写异常 JSON。
 - **AI Selection (63/C)** — app/services/ai_config_service.py:318: get_ai_config_context 返回含 AI/ASR Key 的完整 values，GET /api/settings/ai 无读取鉴权，页面也复用该上下文。
 - **Frontend UI (65/C)** — app/static/js/app.js:211: 多个写请求绕过统一 apiFetch；启用 LOCAL_ADMIN_TOKEN 时可能缺失 Authorization 并被 API 拒绝。
 - **Ops & Delivery (68/C)** — scripts/migrate_task_dirs_to_project_names.py:211: 任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。
 - **SQLite Persistence (69/C)** — app/db/database.py:31: init_db 仍依赖结构探测执行启动迁移，没有 user_version 或 schema_migrations 账本。
+- **Subtitle (70/C)** — app/services/subtitle_data_service.py:352: 手工 revision 的 active/base 检查在事务外，并发编辑可覆盖 active 选择。
+- **Publish Scheduler (71/C)** — app/services/publish_scheduler.py:756-785: recover_interrupted_jobs 每轮加载全部 PUBLISHING 任务，并对每个任务串行查询 Worker，没有批量上限、并发控制或退避；Worker 不可用或卡住任务较多时，单轮耗时按任务数乘以网络超时增长，会延迟后续排期处理。
 
 ## All findings
 
-### HIGH (19)
+### HIGH (15)
 
 - **Frontend UI** · `app/static/js/app.js:211` — 多个写请求绕过统一 apiFetch；启用 LOCAL_ADMIN_TOKEN 时可能缺失 Authorization 并被 API 拒绝。
 - **Frontend UI** · `app/static/js/app.js:1729` — 接口或任务数据直接拼接到 innerHTML；publish-center.js:2152 有同类路径，存在本地 DOM XSS/页面结构破坏风险。
-- **API & Runtime** · `app/routers/settings.py:10-12` — GET /api/settings/ai 无读取鉴权，直接返回 get_ai_config_context；该上下文的 values 包含 AI/ASR API Key 原始值，匿名读取请求即可获得本地配置密钥。
-- **API & Runtime** · `app/routers/tasks.py:174-179` — PATCH /api/tasks/{task_id}/status 接受任意 TaskStatus 后直接调用 update_task_status；底层更新按 id 直接写入，没有检查当前状态、前置产物或合法状态转移，调用者可把空任务直接标记为 completed。
+- **API & Runtime** · `app/routers/settings.py:44` — AI/发布设置读取接口仍可能返回原始 Secret/API Key/OAuth Token；本地页面脚本和任意能访问接口的调用方可读取敏感配置。
+- **API & Runtime** · `app/services/task_lifecycle_service.py:152` — 任务主状态仍可由 PATCH /api/tasks/{task_id}/status 直接写入，未校验合法状态转移、前置产物或当前状态；空任务可被标记 completed。
 - **Transcription** · `app/services/transcript_workflow_service.py:317` — transcript Markdown 存在即返回 completed，未校验源指纹、Provider、进度状态或文件完整性。
 - **Transcription** · `app/services/transcript_service.py:265` — JobLeaseLostError 已显式透传，但 TranscriptCancelledError 仍会被统一包装为 RuntimeError，取消可能落成 failed。
 - **Transcription** · `app/services/transcript_service.py:516` — 远程分块请求每次使用随机 request id，缺少持久化幂等键和超时后结果确认，重试可能重复计费。
@@ -91,24 +91,21 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Task Review & Cut** · `app/services/task_service.py:451-478` — _probe_video 调用 ffprobe 没有 timeout，也没有捕获 subprocess OSError、媒体读取异常或 stat 异常；get_task 默认 include_video_probe=True，损坏、卡死或不可达媒体可长期阻塞任务详情或直接 500。
 - **Pipeline & Job Queue** · `app/services/pipeline_engine.py:118` — 取消仍只在每个 step 开始前检查；step 执行期间及最后一步完成后缺少统一取消门禁，Workflow Job 与任务主状态仍可能分叉。
 - **Pipeline & Job Queue** · `app/services/pipeline_engine.py:158` — READY_TO_PUBLISH 在同一次 run 中立即转为 COMPLETED，待人工确认状态不可稳定观察。
-- **Publish Center** · `app/services/publish_service.py:564` — 配置/账号归一化仅新增 masked 字段却保留原始 Secret/Token，GET 接口直接返回。
-- **Publish Scheduler** · `app/services/publish_repository.py:54` — 发布结果只按 job_id 写回，无 execution/worker/claim 代际条件；旧执行可覆盖新 claim 终态。
-- **Publish Scheduler** · `app/services/publish_scheduler.py:495` — repair_and_publish 检查与克隆间无状态锁；并发确认/重复点击可在源任务已发布后仍新建排期。
-- **Publishers & Worker** · `scripts/publish_host_worker.py:74` — execution_id 直接拼 journal 路径且仅限长度，../、分隔符或盘符可逃逸 Worker 状态目录，读写异常 JSON。
-- **Publishers & Worker** · `scripts/publish_host_worker.py:264` — 同 execution_id 不检查既有终态即重新发布；实例内锁无法协调同 ID 并发/重放，可能重复投稿。
+- **Publish Center** · `app/services/publish_service.py:570` — _normalize_config/_normalize_account 仅新增 *_masked 字段，却保留 client_secret、access_token、refresh_token 原字段；GET /api/publish/platforms、/accounts 及保存配置/账号响应直接返回这些原始密钥，存在敏感凭据泄漏风险。
 - **Ops & Delivery** · `scripts/migrate_task_dirs_to_project_names.py:211` — 任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。
 
-### MED (78)
+### MED (74)
 
 - **Frontend UI** · `app/templates/system_status.html:98` — 配置/API Key 字段进入 DOM，base.html:11 还承载本地管理 Token；需确认全链路始终掩码。
 - **Frontend UI** · `app/static/css/styles.css:870` — 使用多个未在 :root 定义的 CSS 自定义属性，相关声明可能失效。
 - **Frontend UI** · `app/static/js/app.js:1` — 任务、转写、AI、审核、切片、字幕和配置行为集中在超大全局脚本，回归半径较大。
 - **Frontend UI** · `tests/test_publish_center_browser.py:16` — Playwright 缺失时核心浏览器测试可静默跳过，字幕交互与鉴权失败路径覆盖不足。
-- **API & Runtime** · `app/main.py:40-46,97-107` — 写 API 仅在 LOCAL_ADMIN_TOKEN 非空时校验，默认配置为空；同时 localhost/127.0.0.1 任意端口均允许跨源请求。服务被 Docker、局域网或其他本地网页访问时，写操作可能缺少有效鉴权。
-- **API & Runtime** · `app/routers/tasks.py:128-133` — 任务详情接口调用 get_task(task_id)，而查询 SQL 未过滤 is_deleted；已软删除任务仍可能从详情入口读取，并继续成为后续媒体或操作接口的上下文。
-- **API & Runtime** · `app/routers/tasks.py:220-241` — 多个 async 路由直接调用同步的音频提取、转写处理函数，另有 process_video_cuts 在 390-399 行直接调用同步切片；FFmpeg、网络或文件操作期间会阻塞 FastAPI 事件循环。
-- **API & Runtime** · `app/models/task.py:7-40` — TaskStatus 同时定义大写自动流水线状态和小写手动状态，API 使用同一个枚举承载两套状态语义；结合无状态机校验，容易形成状态口径漂移和非预期跳转。
-- **API & Runtime** · `app/routers/files.py:9-11` — 媒体目录浏览接口为匿名 GET，虽然服务层限制了允许根目录，但仍会返回绝对路径、目录名和视频文件列表；非纯本机部署时会扩大本地文件布局泄露面。
+- **API & Runtime** · `app/core/security.py:23` — 本地管理员鉴权是可选配置；token 为空时写接口仅依赖 loopback/CORS 部署假设，若监听范围或反向代理配置改变会扩大未授权操作面。
+- **API & Runtime** · `app/services/task_service.py:587` — 任务详情按 id 查询但不统一过滤 is_deleted，已永久删除任务仍可能被详情和后续动作读取，删除语义与查询语义不一致。
+- **API & Runtime** · `app/routers/tasks.py:127` — 多个 async 路由直接执行同步 SQLite、文件系统、FFprobe/FFmpeg 辅助逻辑，慢磁盘或损坏媒体可阻塞事件循环。
+- **API & Runtime** · `app/models/task.py:12` — 任务状态同时存在枚举、大小写字符串和旧别名，多处路由/服务自行转换，状态口径容易漂移。
+- **API & Runtime** · `app/routers/files.py:30` — 已有文件浏览接口在本地鉴权可选时允许匿名枚举白名单根目录中的媒体元数据，部署边界变化后会泄露本地文件信息。
+- **API & Runtime** · `app/services/publish_scheduler.py:274` — Scheduler 关闭会等待当前 run_once 完成；真实发布/恢复调用最长可接近配置的 1800 秒，停机延迟虽优先保证不重复投稿，但仍缺独立可观测的 drain 超时策略。
 - **Media & Storage** · `app/services/storage_service.py:840-846` — move_task_directory_to_trash 明确传入 reserve=False，仍采用查询后检查目录的非原子分配；当前无运行时调用，属于遗留兼容入口，但未来恢复调用时仍可能并发复用同一回收站目录。
 - **Media & Storage** · `app/services/storage_service.py:361-367` — 通用 resolve_video_file_path 对已存在路径仍原样返回。媒体 HTTP 路由已增加任务边界，但 publish/auto-publish/subtitle/task 查询等非 HTTP 调用方仍可把数据库中的现有外部路径交给后续读取或上传逻辑。
 - **Transcription** · `app/services/transcript_service.py:516` — HTTP 429、Retry-After、网络瞬断和可恢复服务错误缺少专门退避策略。
@@ -149,22 +146,17 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Pipeline & Job Queue** · `app/services/job_worker.py:198` — 子进程 stdout/stderr 仍丢弃，父进程只保留退出码，恢复与诊断证据不足。
 - **Pipeline & Job Queue** · `app/services/job_service.py:126` — Job JSON 损坏时静默保留原字符串，执行器可能产生不明确的数据错误。
 - **Pipeline & Job Queue** · `app/services/job_service.py:18` — ai_analysis 与 publish 类型仍可创建但 worker 未实现，属于可创建不可执行的 legacy/stub。
-- **Publish Center** · `app/services/publish_service.py:4562` — 4k+ 行文件混合 CRUD、OAuth、内容、封面、同步、历史、多个 Publisher 与页面上下文，是高耦合 God Component。
-- **Publish Center** · `app/services/publish_service.py:2935` — 历史 SQL 先用大写状态过滤再规范化，旧小写 ready/published/failed 记录可能被提前排除。
-- **Publish Center** · `app/services/publish_service.py:2137` — 封面生成异常只写 item cover_error 未计入 errors，整体仍可能返回 ok，形成隐式部分成功。
-- **Publish Center** · `app/services/publish_service.py:2784` — 批量创建遇无效 output_clip_id 直接跳过且仍返回 ok，全无效时也可能显示成功创建 0 条。
-- **Publish Center** · `app/services/publish_readiness.py:167` — api_publish 可被创建且兼容入口仍在，但 readiness 正常调度统一判 unsupported，模式契约不一致。
-- **Publish Center** · `app/services/publish_providers.py:216` — 旧 API 发布超时统一 failed；若平台已接收而响应丢失，重试可能重复投稿且未进入 NEED_REVIEW。
-- **Publish Scheduler** · `app/services/publish_scheduler.py:1403` — 丢弃 create_task 引用，关闭只 stop 不 await，存在 Sonar S7502 的生命周期/优雅停机缺口。
-- **Publish Scheduler** · `app/services/publish_scheduler.py:264` — 每轮加载全部 SCHEDULED 再由 Python 判断到期，无 SQL due 条件/批量上限。
-- **Publish Scheduler** · `app/services/publish_scheduler.py:617` — 全部 PUBLISHING 任务串行查询 Worker execution；多个超时会拖长整轮扫描。
-- **Publish Scheduler** · `app/services/publish_scheduler.py:1305` — 风险 JSON 损坏时静默回空列表，可能绕过风险复核继续投稿，属于 fail-open。
-- **Publish Scheduler** · `app/services/publish_scheduler.py:961` — 人工发布 URL 只做域名子串匹配，不解析 hostname，错误域名/query 也可通过。
-- **Publish Scheduler** · `tests/test_publish_scheduler_state_machine.py:302` — 未覆盖旧 execution 回写、新旧 claim、repair 并发、后台 Task 生命周期和损坏 risk_flags。
-- **Publishers & Worker** · `scripts/publish_host_worker.py:231` — 账号操作先 check locked 再后台获取锁，存在竞态；锁仅进程内，多 Worker/重启不持久。
-- **Publishers & Worker** · `app/services/publishers/browser_runtime.py:32` — platform/account_id 直接拼浏览器 profile/artifact 路径，异常 ID 可路径穿越或造成账号目录冲突。
-- **Publishers & Worker** · `scripts/publish_host_worker.py:293` — Worker 把 result/diagnostics 原样写 journal，兼容 Provider 异常输出中的 Token/Cookie 可能长期落盘并经接口返回。
-- **Publishers & Worker** · `app/services/publishers/page_scripts.py:14` — Worker 页面脚本延迟导入超大 publish_service 私有函数，形成 legacy glue 与高回归半径。
+- **Publish Center** · `app/services/publish_service.py:266` — publish_service.py 当前约4750行，混合配置/账号/OAuth、文案与封面、队列同步、历史、旧 OpenCLI 脚本、API Provider 和页面上下文，形成高耦合 God Component，任一发布流程改动的 blast radius 很大。
+- **Publish Center** · `app/services/publish_service.py:2941` — 历史查询 SQL 只按 PUBLISH_HISTORY_STATUSES 的大写值过滤，之后才调用 _normalize_publish_status；LEGACY_STATUS_MAP 支持旧小写状态但旧记录会在 SQL 层被提前排除，历史页可能漏数据。
+- **Publish Center** · `app/services/publish_service.py:2144` — sync_task_publish_jobs 封面生成失败时只把 {'cover_error': ...} 放入 item_covers，仍继续插入 WAITING 任务且不计入 errors；同步可能返回 ok，但生成的任务实际无法通过 local_browser readiness。
+- **Publish Center** · `app/services/publish_service.py:2787` — create_batch_publish_jobs 对不存在的 output_clip_id 直接 continue，全部无效或部分无效时仍返回 status='ok'，调用方无法区分‘创建成功’与‘输入被静默丢弃’。
+- **Publish Center** · `app/services/publish_readiness.py:167` — publish_domain/create_publish_job 仍允许 api_publish，publishers registry 也保留兼容入口，但统一 readiness 只接受 local_browser/manual_export 并将 api_publish 标记 unsupported_publish_mode，持久化任务与调度契约不一致。
+- **Publish Center** · `app/services/publish_providers.py:117` — BilibiliPublishProvider 在完成配置和 token 校验后始终抛出 bilibili_provider_pending；api_publish 模式仍可创建/注册，因此这是已接线但必然失败的 placeholder 路径。
+- **Publish Center** · `app/services/publish_providers.py:66` — 旧 Douyin API Provider 将 upload 与 create 分成两个无幂等键的请求；_request_json 只包装 HTTPError/URLError，平台已接收后网络超时或连接异常可能被判失败，重试会重复上传/投稿且没有 NEED_REVIEW 不确定态。
+- **Publish Scheduler** · `app/services/publish_scheduler.py:756-785` — recover_interrupted_jobs 每轮加载全部 PUBLISHING 任务，并对每个任务串行查询 Worker，没有批量上限、并发控制或退避；Worker 不可用或卡住任务较多时，单轮耗时按任务数乘以网络超时增长，会延迟后续排期处理。
+- **Publish Scheduler** · `app/services/publish_scheduler.py:281-302` — list_due_jobs 每轮 SELECT 全部 SCHEDULED 记录，再逐条在 Python 中解析时间；虽已有状态/排期索引，但没有 SQL due 条件、分页或批量上限，排期量增长后会增加扫描内存和调度延迟。
+- **Publish Scheduler** · `app/services/publish_scheduler.py:133-1788` — PublishScheduler 约 1891 行、42 个方法，同时承担排期计算、任务领取、执行结果写回、Worker 恢复、重试修复、人工复核、批量排期和旧版兼容；职责边界过宽，修改任一状态路径的回归半径较大。
+- **Publishers & Worker** · `scripts/publish_host_worker.py:321` — _prior_job_execution_requires_review 扫描旧 execution journal 时，若 journal 缺少 identity 或已损坏，直接 continue；跨 execution 无法确认其 job_id 时不会阻断新 execution。旧 Worker 在上传后崩溃并留下无身份/损坏日志时，仍存在重复投稿边界。
 - **SQLite Persistence** · `app/db/database.py:31` — init_db 仍依赖结构探测执行启动迁移，没有 user_version 或 schema_migrations 账本。
 - **SQLite Persistence** · `app/db/database.py:625` — 索引创建捕获所有 sqlite3.Error 后静默继续，关键唯一索引失败可能无告警。
 - **SQLite Persistence** · `app/db/database.py:675` — 历史表迁移主要补列，未系统重建或验证旧库 Foreign Key、UNIQUE、CHECK 约束。
@@ -179,14 +171,14 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Ops & Delivery** · `tests/test_native_scripts.py:11` — 启停测试主要是源码字符串断言，Windows smoke 不做实际 restore/冲突/清理失败与恢复后健康验证。
 - **Ops & Delivery** · `scripts/seed_demo_data.py:32` — 缺 FFmpeg 时仍插入无媒体路径 Demo 数据并成功退出，数量检查通过但媒体 smoke 不可信。
 
-### LOW (36)
+### LOW (37)
 
 - **Frontend UI** · `app/static/js/subtitle-editor.js:171` — 字幕编辑器已有 escapeHtml、虚拟列表、竞态 token 与自动保存版本控制，是可保留的正向实现。
 - **Frontend UI** · `app/static/js/publish-center.js:4` — 前端明确只创建抖音任务，B站保留后端兼容；这是当前产品边界而非应机械删除的代码。
-- **API & Runtime** · `app/main.py:153-155` — /health 只返回进程级 status/app，不检查 SQLite、持久化 Job Runner、Scheduler、FFmpeg 或发布 Worker，就绪状态不足。
-- **API & Runtime** · `app/routers/publish.py:63-71` — OAuth callback 捕获通用 Exception，并将原始异常字符串拼入 redirect query；错误细节可能进入浏览器地址栏、历史记录或 Referer。
-- **API & Runtime** · `app/core/config.py:80,244-250` — local_admin_token 在 Settings 中重复定义，AI 新旧配置字段也并存并通过兼容 fallback 读取，配置所有权和运行时来源不够单一。
-- **API & Runtime** · `app/models/subtitle.py:86` — speaker_styles 使用 Any 嵌套字典，API 模型层无法约束渲染输入结构，非法配置可能延迟到字幕渲染阶段才失败。
+- **API & Runtime** · `app/main.py:91` — /health 只返回进程级 ok，未覆盖数据库可写、任务存储、Scheduler/Worker readiness，无法作为完整就绪判断。
+- **API & Runtime** · `app/routers/settings.py:170` — OAuth 错误信息通过 query 参数回显到页面，缺少统一长度/字符约束与结构化错误码。
+- **API & Runtime** · `app/core/config.py:1` — 配置定义和兼容别名仍分散在 settings、环境变量与发布服务，存在重复默认值和 dual-format 维护成本。
+- **API & Runtime** · `app/models/task.py:360` — speaker_styles 等动态结构仍使用 Any，边界校验主要依赖下游调用方。
 - **Media & Storage** · `tests/test_storage_boundaries.py:14-32` — 新增边界测试没有覆盖任务目录数据库读取在 sqlite3.Error、锁定或损坏数据库下显式失败的回归；代码已有保护但证据不足。
 - **Media & Storage** · `app/services/storage_service.py:257-300` — reserve=True 会在数据库任务记录写入前创建目录；进程在预占后崩溃可能留下无数据库记录的空目录，虽不会覆盖数据，但会造成孤儿目录累积。
 - **Transcription** · `tests/test_long_live_foundation.py:65` — 已覆盖失租 checkpoint 和异常透传，仍缺取消、429/坏响应、重复计费与真实 Markdown 闭环。
@@ -204,14 +196,15 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Pipeline & Job Queue** · `tests/test_job_fencing.py:59` — 已覆盖 owner/token、迁移、转写 checkpoint 与字幕 cleanup fencing，但尚无真实父子进程重启中失租测试。
 - **Pipeline & Job Queue** · `tests/test_auto_pipeline.py:204` — 仍缺稳定 READY 状态、最后一步取消和重启副作用去重测试。
 - **Pipeline & Job Queue** · `app/services/pipeline_engine.py:572` — JSON/时间配置损坏时静默回退默认排期，故障可见性不足。
-- **Publish Center** · `app/services/publish_providers.py:204` — 旧 multipart 发布把完整视频和完整请求体同时载入内存，大文件有约双倍峰值。
-- **Publish Center** · `app/services/publish_service.py:1579` — 批量 job 规范化在缺 accounts 时逐项查询账号，存在 N+1。
-- **Publish Center** · `app/services/publish_service.py:61` — 旧小写与新大写状态字典重复定义/覆盖，增加双格式维护成本。
-- **Publish Center** · `tests/test_publish_history.py:111` — 未覆盖旧状态 SQL 过滤、原始 Secret 响应、批量无效 ID、封面 partial 和 API 超时不确定结果。
-- **Publish Scheduler** · `app/services/publish_repository.py:33` — provider_response 脱敏但 publish_result 直接序列化完整结果，兼容 Publisher 敏感字段可能入库。
-- **Publish Scheduler** · `app/services/publish_scheduler.py:1321` — 发布日志写异常被静默吞，审计日志缺失无健康告警。
-- **Publishers & Worker** · `scripts/opencli_host_bridge.py:74` — 旧 OpenCLI Bridge 类无 Worker Token 校验，虽 main 已转调新 Worker，双入口容易造成安全边界误解。
-- **Publishers & Worker** · `tests/test_publish_worker_client.py:138` — 未覆盖 execution id 重放/并发、恶意路径、账号锁竞态、profile 隔离和 journal 敏感字段清洗。
+- **Publish Center** · `app/services/publish_providers.py:204` — _post_multipart 先 file_path.read_bytes() 再 b''.join(chunks)，完整视频和完整 multipart body 同时驻留内存，大文件发布存在约双倍峰值。
+- **Publish Center** · `app/services/publish_service.py:1569` — _batch_find_publish_jobs 对每条记录直接调用 _normalize_job(row)，未传入预取 accounts；_normalize_job 会逐条触发 readiness/account 查询，发布中心批量切片时形成 N+1 查询。
+- **Publish Center** · `tests/test_publish_history.py:111` — 现有定向测试未覆盖原始 Secret/Token 响应、旧小写历史状态、同步封面 partial、批量无效 ID，以及 API 超时后已接收的重复投稿边界。
+- **Publish Scheduler** · `app/services/publish_scheduler.py:274-279` — shutdown 已能追踪并等待后台 Task，但没有超时或取消兜底；若当前 run_once 被数据库锁、Worker 串行查询或文件操作长期阻塞，应用优雅停机仍可能无限等待。
+- **Publish Scheduler** · `app/services/publish_scheduler.py:1807-1812` — queue_snapshot 对非法 scheduled_at 捕获 ValueError 后静默 pass；损坏排期会从“今日任务”视图中消失，未产生告警或错误计数，降低数据异常可见性。
+- **Publishers & Worker** · `app/services/publishers/page_scripts.py:14` — 页面脚本入口仍通过延迟导入 publish_service 私有函数来转发大量 DOM 脚本；这是有意保留的兼容层，但形成 legacy glue，脚本变更仍会牵连 4750 行 God Service。
+- **Publishers & Worker** · `app/services/publishers/browser_runtime.py:315` — screenshot 捕获裸 Exception 后返回空字符串，截图失败不会进入发布结果或健康信号；发布可以继续但缺少关键诊断证据。
+- **Publishers & Worker** · `scripts/opencli_host_bridge.py:74` — 旧 OpenCLIHostBridgeHandler 的 /run 处理器本身没有 Bearer Token 校验；当前 main 已转调受保护的 publish_host_worker，默认入口不再使用它，但保留的可直接实例化旧处理器仍会造成安全边界误解。
+- **Publishers & Worker** · `tests/test_publish_worker_client.py:155` — 当前测试已覆盖双进程锁竞争、死进程锁回收和常规 execution fencing，但仍未覆盖无身份/损坏旧 journal 被跨 execution 扫描跳过、screenshot 失败信号及旧 bridge 处理器被直接启动时的鉴权边界。
 - **SQLite Persistence** · `app/db/database.py:656` — Workflow claim 索引未覆盖 lease_expires_at，队列规模增长后过期接管扫描可能退化。
 - **SQLite Persistence** · `tests/test_job_fencing.py:206` — 已覆盖并发补列和旧 running guard，仍缺完整启动链迁移失败回滚测试。
 - **Ops & Delivery** · `scripts/acceptance.ps1:115` — 验收递归扫描正式任务目录，媒体量大/锁文件会显著拖慢或阻断 release gate。
@@ -222,8 +215,8 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 
 - **本地单体架构是当前可运行的主要原因.** FastAPI + SQLite WAL + 文件产物 + 持久化 Job + Windows Worker 与个人本机规模匹配；不需要微服务化，现有恢复骨架应保留。
 - **P0 数据一致性边界已封口，事务型旧债仍需继续.** 活动库外键、测试误删和媒体删除回滚已修复；迁移无账本、切片批次半提交与并发版本号仍是下一阶段重点。
-- **旧执行覆盖新执行是跨模块重复风险.** Workflow Job、Publish Scheduler 和 Windows Worker 都缺少完整的 owner/attempt/execution fencing；异常恢复顺序变化时可能重复执行或写错终态。
+- **Job 与发布执行代际已封口，下一风险转向业务状态原子性.** Workflow lease token、Publish execution fencing 和 Windows Worker journal 幂等已经完成；任务状态跳跃、切片半提交和取消恢复仍是下一阶段重点。
 - **可用性 fallback 正在掩盖降级结果.** AI 部分窗口、转写旧产物、损坏 JSON、封面生成、批量发布和风险字段多处静默继续，用户不一定能区分完整成功、部分成功和旧结果。
-- **发布与配置读取是主要安全边界.** Publish Center、AI Config、Frontend 和 Worker 共同存在原始 Secret 响应、可选写鉴权、DOM XSS、路径字符和 journal 脱敏缺口。
+- **发布与配置读取是主要安全边界.** Publish Center、AI Config 与 Frontend 仍存在原始 Secret 响应、可选写鉴权和 DOM XSS；Worker 路径与 journal 脱敏已收紧，但本地管理员接口门禁尚未完成。
 - **复杂度集中而非全项目平均恶化.** publish_service.py、publish-center.js、app.js、publish_scheduler.py、subtitle_data_service.py 和 transcript_service.py 是主要 God Component；应按业务边界渐进拆分。
-- **测试已与活动数据隔离，但 Coverage 与真实故障闭环仍不足.** 546 项测试全部通过，Pytest 已强制使用进程级 sandbox；Coverage 尚未采集，真实 E2E、并发恢复和外部副作用幂等仍需补齐。
+- **测试已与活动数据隔离，但 Coverage 与真实故障闭环仍不足.** 610 项测试全部通过，Pytest 已强制使用进程级 sandbox；Coverage 尚未采集，真实平台 E2E 和故障注入仍需在不触发生产副作用的边界下补齐。

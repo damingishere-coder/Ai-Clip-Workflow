@@ -1,5 +1,19 @@
 # Development Log
 
+## 2026-08-24 稳定 V1 P1B.2 发布执行代际与 Worker 幂等
+
+- Scheduler 每次领取发布任务都会保留唯一 `execution_id`；平台结果、阶段、成功、导出、失败、人工复核和安全重排队全部要求命中当前 `PUBLISHING + execution_id`。旧执行写回会返回 `skipped`，同一事务中的结果和事件一并回滚。
+- `retry_failed` 与旧任务安全修复把源状态复核、活跃替代任务检查、克隆和事件写入放入同一个 `BEGIN IMMEDIATE`；并发点击只会产生一个替代任务。排期修改同时校验原状态和 `updated_at`，不能把已领取或被并发编辑的任务覆盖回 `SCHEDULED`。
+- 发送内容、平台目标和 AI 文案重新生成使用微秒级 `updated_at` 乐观并发版本；AI 慢调用返回时若任务已被人工修改或进入 `PUBLISHING`，旧结果会被拒绝，不覆盖真实投稿采用的文案。
+- Worker 查询失败不再根据数据库旧阶段自动重排队；HTTP 超时后若 Worker 仍持有 execution 锁，任务保持 `PUBLISHING` 等待明确终态。只有 Worker 可查询、锁已释放且确认仍停在上传前阶段时，才允许安全重试。
+- Windows Worker 对 job、execution 和账号同时使用进程内互斥与操作系统级跨进程文件锁；进程崩溃后锁由操作系统自动释放，不再依赖“读 PID 后删除锁文件”的竞态回收。同 execution 的终态直接重放既有结果，身份冲突、损坏/不一致 journal、上传后中断和并行 execution 全部 fail closed。
+- `job_id`、`execution_id`、`account_id`、浏览器 profile/artifact 路径和本地发布包目录增加 Windows/路径安全校验；手工发布 URL 改为解析 hostname，损坏风险 JSON 会进入人工复核而不是当作无风险。
+- Provider 结果、journal 和发布事件统一脱敏 `accessToken`、`refresh-token`、`session_token`、`csrfToken`、`clientSecret` 等常见变体；发布日志写入失败会留下受控错误日志，不再静默消失。
+- Scheduler 后台 Task 由应用保存引用；关闭时停止新扫描并等待当前轮结束，避免停机时丢弃进行中的恢复/发布状态处理。
+- 独立验收通过：发布定向 `144 passed`，完整测试 `610 passed`；Ruff、Python Compileall 和 `git diff --check` 全部通过。测试未修改工作区，未调用真实 AI、Chrome、远程 Worker、抖音或 B站。
+- Codemap 独立复评：`Publish Scheduler 62→71（C）`、`Publishers & Worker 62→76（B）`；`Publish Center` 的本轮并发旧写已修，但原始 Secret 响应、God Service 与旧 API Provider 风险未处理，仍为 `52（D）`。
+- 本轮没有修改数据库 Schema 或活动数据。P1B.1 的 `workflow_jobs.lease_token` 活动库迁移与正式服务重启仍需在单独的备份/无活动 Job 窗口执行。
+
 ## 2026-08-24 稳定 V1 P1B.1 Workflow Job 执行代际隔离
 
 - `workflow_jobs` 新增可空 `lease_token`；每次领取任务都生成新的随机 token，并与 `lease_owner` 一起构成当前执行代际。旧数据库迁移前会先创建 SQLite Online Backup。

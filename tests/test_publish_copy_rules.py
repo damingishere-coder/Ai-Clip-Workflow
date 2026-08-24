@@ -205,6 +205,38 @@ def test_ai_failure_does_not_overwrite_existing_copy(monkeypatch) -> None:
     )
 
 
+def test_metadata_regeneration_does_not_overwrite_concurrent_publish(monkeypatch) -> None:
+    job_id = _seed_job(title=VALID_TITLE, description=VALID_DESCRIPTION, tags=VALID_TAGS)
+
+    def generate_after_concurrent_claim(*_args, **_kwargs):
+        with get_connection() as connection:
+            connection.execute(
+                """
+                UPDATE publish_jobs
+                SET title = '并发发布采用的标题', status = 'PUBLISHING', updated_at = ?
+                WHERE id = ?
+                """,
+                (datetime.now(timezone.utc).isoformat(timespec="microseconds"), job_id),
+            )
+            connection.commit()
+        return {
+            "title": "过期 AI 标题",
+            "description": VALID_DESCRIPTION,
+            "tags": VALID_TAGS,
+            "source": "ai:test",
+            "error": "",
+        }
+
+    monkeypatch.setattr(publish_service, "generate_publish_metadata", generate_after_concurrent_claim)
+
+    with pytest.raises(ValueError, match="内容或状态已经变化"):
+        publish_service.regenerate_send_job_metadata(job_id, use_ai=True)
+
+    stored = _raw_job(job_id)
+    assert stored["status"] == "PUBLISHING"
+    assert stored["title"] == "并发发布采用的标题"
+
+
 def test_manual_save_binds_unique_account_and_synchronizes_alias_fields() -> None:
     account_id = _seed_account()
     job_id = _seed_job(title=VALID_TITLE, description=VALID_DESCRIPTION, tags=VALID_TAGS)

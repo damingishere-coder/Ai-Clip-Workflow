@@ -51,7 +51,7 @@ from app.services.publish_providers import (
 )
 from app.services.publish_domain import AUTO_PUBLISH_PLATFORMS, PUBLISH_MODES, TARGET_PLATFORMS
 from app.services.publish_readiness import PublishPlatformIsolationBlocked
-from app.services.publish_time import app_zone, local_display, parse_datetime
+from app.services.publish_time import app_zone, local_display, parse_datetime, utc_now_iso
 from app.services.storage_service import get_artifact_paths, resolve_video_file_path
 from app.services.video_cut_service import ensure_ffmpeg_available, sanitize_filename_part, summarize_stderr
 
@@ -265,6 +265,12 @@ CommandRunner = Callable[[list[str]], subprocess.CompletedProcess]
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _version_iso() -> str:
+    """publish_jobs.updated_at 的乐观并发版本；创建时间继续保持旧显示顺序。"""
+
+    return utc_now_iso()
 
 
 def _unique_paths(paths: list[Path]) -> list[Path]:
@@ -3278,14 +3284,14 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
             existing=job.get("provider_payload") or {},
             upgrade_status="manual_saved",
         )
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE publish_jobs
             SET title = ?, description = ?, caption = ?, tags = ?, hashtags = ?, visibility = ?,
                 cover_file_path = ?, cover_time_seconds = ?, allow_download = ?,
                 bilibili_tid = ?, bilibili_copyright = ?, bilibili_source = ?,
                 account_id = ?, provider_response = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = ? AND updated_at = ?
             """,
             (
                 safe_content["title"],
@@ -3302,10 +3308,15 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
                 (payload.bilibili_source or "").strip(),
                 account_id or None,
                 provider_response,
-                _now_iso(),
+                _version_iso(),
                 job_id,
+                job.get("status"),
+                job.get("updated_at"),
             ),
         )
+        if not cursor.rowcount:
+            connection.rollback()
+            raise ValueError("发送任务内容或状态已经变化，请刷新后重试。")
         connection.commit()
     return {"status": "ok", "message": "发送内容已保存。", "job": get_publish_job(job_id)}
 
@@ -3335,13 +3346,24 @@ def update_publish_job_target(job_id: str, payload: PublishJobTargetUpdate) -> d
             raise ValueError("账号与目标平台不一致")
     try:
         with get_connection() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE publish_jobs SET platform = ?, account_id = ?, publish_mode = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status = ? AND updated_at = ?
                 """,
-                (payload.platform, account_id or None, payload.publish_mode, _now_iso(), job_id),
+                (
+                    payload.platform,
+                    account_id or None,
+                    payload.publish_mode,
+                    _version_iso(),
+                    job_id,
+                    job.get("status"),
+                    job.get("updated_at"),
+                ),
             )
+            if not cursor.rowcount:
+                connection.rollback()
+                raise ValueError("发布任务内容或状态已经变化，请刷新后重试")
             connection.commit()
     except Exception as exc:
         if "UNIQUE constraint" in str(exc):
@@ -3391,7 +3413,7 @@ def update_publish_job_content(job_id: str, payload: PublishJobContentUpdate) ->
         ensure_future(payload.scheduled_at, settings.app_timezone)
         scheduled_at = to_utc_iso(payload.scheduled_at, settings.app_timezone)
     status = PUBLISH_STATUS_SCHEDULED if scheduled_at else PUBLISH_STATUS_WAITING
-    now = _now_iso()
+    now = _version_iso()
     with get_connection() as connection:
         account_id = str(job.get("account_id") or "")
         if not account_id and str(job.get("publish_mode") or "") == "local_browser":
@@ -3401,14 +3423,14 @@ def update_publish_job_content(job_id: str, payload: PublishJobContentUpdate) ->
             existing=job.get("provider_payload") or {},
             upgrade_status="manual_saved",
         )
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE publish_jobs
             SET title = ?, description = ?, caption = ?, tags = ?, hashtags = ?,
                 cover_text = ?, scheduled_at = ?, status = ?, risk_flags = '',
                 account_id = ?, provider_response = ?,
                 error_code = '', error_message = '', last_error = '', updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = ? AND updated_at = ?
             """,
             (
                 safe_content["title"],
@@ -3423,8 +3445,13 @@ def update_publish_job_content(job_id: str, payload: PublishJobContentUpdate) ->
                 provider_response,
                 now,
                 job_id,
+                job.get("status"),
+                job.get("updated_at"),
             ),
         )
+        if not cursor.rowcount:
+            connection.rollback()
+            raise ValueError("发布任务内容或状态已经变化，请刷新后重试")
         connection.commit()
     return {"status": "ok", "message": "publish content saved", "job": get_publish_job(job_id)}
 
@@ -3447,12 +3474,12 @@ def regenerate_send_job_metadata(job_id: str, use_ai: bool = True) -> dict:
         account_id = str(job.get("account_id") or "")
         if not account_id and str(job.get("publish_mode") or "") == "local_browser":
             account_id = _unique_normal_account_id(connection, str(job.get("platform") or ""))
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE publish_jobs
             SET title = ?, description = ?, caption = ?, tags = ?, hashtags = ?,
                 account_id = ?, provider_response = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = ? AND updated_at = ?
             """,
             (
                 metadata["title"],
@@ -3470,10 +3497,15 @@ def regenerate_send_job_metadata(job_id: str, use_ai: bool = True) -> dict:
                     existing=job.get("provider_payload") or {},
                     upgrade_status="manual_retry" if use_ai else "rule_regenerated",
                 ),
-                _now_iso(),
+                _version_iso(),
                 job_id,
+                job.get("status"),
+                job.get("updated_at"),
             ),
         )
+        if not cursor.rowcount:
+            connection.rollback()
+            raise ValueError("发送任务内容或状态已经变化，请刷新后重新生成文案。")
         connection.commit()
     return {
         "status": "ok",

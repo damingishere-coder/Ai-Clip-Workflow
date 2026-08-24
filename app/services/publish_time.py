@@ -25,7 +25,8 @@ def utc_now() -> datetime:
 
 
 def utc_now_iso() -> str:
-    return utc_now().isoformat(timespec="seconds")
+    # updated_at 同时承担轻量乐观并发版本；秒级精度无法区分同一秒内的两次写入。
+    return utc_now().isoformat(timespec="microseconds")
 
 
 def parse_datetime(value: str | None, timezone_name: str | None = None) -> datetime:
