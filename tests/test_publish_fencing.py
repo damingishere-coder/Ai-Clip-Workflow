@@ -806,6 +806,22 @@ def test_malformed_risk_flags_fail_closed_before_executor(tmp_path):
     assert _raw(job_id)["status"] == "NEED_REVIEW"
 
 
+@pytest.mark.parametrize("risk_flags", ['"not-a-list"', '{"unexpected": true}', '{"risk_flags": "bad"}'])
+def test_wrong_shape_risk_flags_fail_closed_before_executor(tmp_path, risk_flags):
+    job_id = _seed_job(tmp_path, status="SCHEDULED")
+    with get_connection() as connection:
+        connection.execute("UPDATE publish_jobs SET risk_flags = ? WHERE id = ?", (risk_flags, job_id))
+        connection.commit()
+    scheduler = PublishScheduler(
+        executor=lambda *_args, **_kwargs: pytest.fail("风险字段结构错误时不得调用 Publisher")
+    )
+
+    result = scheduler.execute_job(job_id)
+
+    assert result["status"] == "need_review"
+    assert _raw(job_id)["status"] == "NEED_REVIEW"
+
+
 def test_manual_publish_url_validates_hostname_not_substring(tmp_path):
     job_id = _seed_job(tmp_path, status="NEED_REVIEW")
 

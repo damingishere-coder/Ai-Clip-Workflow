@@ -11,12 +11,12 @@ import socket
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import urlparse
 from uuid import uuid4
 
 from app.core.config import settings
 from app.db.database import get_connection, init_db
 from app.services.publish_executor import execute_publish_job, is_publish_dispatch_active
+from app.services.publish_domain import safe_platform_url, validate_platform_url
 from app.services.publish_readiness import (
     PublishPlatformIsolationBlocked,
     SendReadinessBlocked,
@@ -37,6 +37,7 @@ from app.services.publish_time import (
     utc_now_iso,
 )
 from app.services.publishers.base import (
+    parse_public_json_dict,
     PublishError,
     PublishOutcome,
     PublishResult,
@@ -1187,16 +1188,7 @@ class PublishScheduler:
             raise ValueError("发布任务不存在")
         if str(job.get("status") or "").upper() != "NEED_REVIEW":
             raise ValueError("只有需复核任务可以人工标记已发布")
-        url = str(platform_url or "").strip()
-        expected_domain = "douyin.com" if job.get("platform") == "douyin" else "bilibili.com"
-        parsed_url = urlparse(url)
-        hostname = str(parsed_url.hostname or "").lower().rstrip(".")
-        if (
-            parsed_url.scheme not in {"http", "https"}
-            or not hostname
-            or (hostname != expected_domain and not hostname.endswith(f".{expected_domain}"))
-        ):
-            raise ValueError(f"请填写有效的 {expected_domain} 作品链接")
+        url = validate_platform_url(str(job.get("platform") or ""), platform_url, allow_empty=False)
         result = PublishResult(
             outcome=PublishOutcome.PUBLISHED,
             message="人工核对平台后标记为已发布",
@@ -1500,6 +1492,29 @@ class PublishScheduler:
         require_publishing: bool = True,
         expected_execution_id: str | None = None,
     ) -> dict[str, Any]:
+        job = self.repository.get_job(job_id)
+        if not job:
+            return {"status": "skipped", "job_id": job_id, "message": "发布任务不存在"}
+        try:
+            validate_platform_url(str(job.get("platform") or ""), result.platform_url)
+        except ValueError as exc:
+            if require_publishing:
+                review_result = PublishResult(
+                    outcome=PublishOutcome.NEED_REVIEW,
+                    message="Publisher 返回的作品链接不可信，已停止生成可点击链接",
+                    published_at=result.published_at,
+                    provider_response={"invalid_result": result.as_dict()},
+                    error_code="invalid_platform_url",
+                    needs_manual_review=True,
+                )
+                return self._mark_need_review(
+                    job_id,
+                    "invalid_platform_url",
+                    f"Publisher 返回的作品链接不可信，已停止生成可点击链接：{exc}",
+                    review_result,
+                    expected_execution_id=expected_execution_id,
+                )
+            raise
         now = utc_now_iso()
         if require_publishing:
             if expected_execution_id is None:
@@ -1760,11 +1775,14 @@ class PublishScheduler:
             connection.commit()
         if not cursor.rowcount:
             raise ValueError("任务状态已变化，请刷新后重试")
-        return {"status": "ok", "job": self.repository.get_job(job_id)}
+        return {"status": "ok", "job": self._public_job(job_id)}
 
     @staticmethod
     def _risk_flags(job: dict[str, Any]) -> list[Any]:
-        for value in (job.get("risk_flags"), job.get("provider_response")):
+        for field_name, value in (
+            ("risk_flags", job.get("risk_flags")),
+            ("provider_response", job.get("provider_response")),
+        ):
             if not value:
                 continue
             try:
@@ -1773,8 +1791,13 @@ class PublishScheduler:
                 return ["risk_flags_invalid"]
             if isinstance(parsed, list):
                 return [item for item in parsed if item]
-            if isinstance(parsed, dict) and isinstance(parsed.get("risk_flags"), list):
-                return [item for item in parsed["risk_flags"] if item]
+            if isinstance(parsed, dict):
+                if "risk_flags" not in parsed and field_name == "provider_response":
+                    continue
+                nested = parsed.get("risk_flags")
+                if isinstance(nested, list):
+                    return [item for item in nested if item]
+            return ["risk_flags_invalid"]
         return []
 
     def _append_log(self, job_id: str, message: str) -> None:
@@ -1799,7 +1822,17 @@ def queue_snapshot(task_id: str | None = None) -> dict[str, Any]:
             f"SELECT * FROM publish_jobs {where} ORDER BY COALESCE(scheduled_at, created_at), created_at DESC",
             params,
         ).fetchall()
-    jobs = [dict(row) for row in rows]
+    jobs = []
+    for row in rows:
+        job = dict(row)
+        job["provider_payload"] = parse_public_json_dict(job.pop("provider_response", None))
+        job["publish_result_payload"] = parse_public_json_dict(job.pop("publish_result", None))
+        jobs.append(job)
+    for job in jobs:
+        job["platform_url"] = safe_platform_url(
+            str(job.get("platform") or ""),
+            str(job.get("platform_url") or ""),
+        )
     statuses = ("DRAFT", "WAITING", "SCHEDULED", "PUBLISHING", "PUBLISHED", "EXPORTED", "FAILED", "NEED_REVIEW", "CANCELLED")
     by_status = {status: [job for job in jobs if str(job.get("status") or "").upper() == status] for status in statuses}
     today = utc_now().astimezone(app_zone()).date()

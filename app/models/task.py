@@ -1,7 +1,38 @@
 from enum import Enum
 from typing import Any, Literal, Optional
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, validator
+
+
+_PUBLISH_CONFIG_URL_FIELDS = (
+    "redirect_uri",
+    "api_base_url",
+    "auth_url",
+    "token_url",
+    "refresh_url",
+    "upload_url",
+    "create_url",
+)
+
+
+def _validate_publish_config_url(value: str) -> str:
+    text = value.strip()
+    if not text:
+        return text
+    parsed = urlsplit(text)
+    hostname = str(parsed.hostname or "").lower().rstrip(".")
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("发布接口 URL 端口无效") from exc
+    if parsed.scheme not in {"http", "https"} or not hostname:
+        raise ValueError("发布接口必须是完整的 http:// 或 https:// URL")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("发布接口 URL 不能包含账号、密码、查询参数或片段")
+    if parsed.scheme != "https" and hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("非本机发布接口必须使用 https://")
+    return text
 
 
 class TaskStatus(str, Enum):
@@ -90,7 +121,7 @@ class TaskSummary(BaseModel):
 
 class TaskStatusUpdate(BaseModel):
     status: TaskStatus
-    error_message: Optional[str] = None
+    error_message: Optional[str] = Field(default=None, max_length=2000)
 
 
 class TaskAIPreferenceUpdate(BaseModel):
@@ -157,6 +188,18 @@ class PublishPlatformConfigUpdate(BaseModel):
     upload_url: str = Field(default="", max_length=1000)
     create_url: str = Field(default="", max_length=1000)
     extra_config: Optional[str] = Field(default="", max_length=4000)
+
+    @field_validator("app_name", "client_key", "client_secret", "scope", mode="before")
+    @classmethod
+    def reject_config_control_characters(cls, value):
+        if isinstance(value, str) and any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("发布配置不能包含换行或控制字符")
+        return value
+
+    @field_validator(*_PUBLISH_CONFIG_URL_FIELDS)
+    @classmethod
+    def validate_config_urls(cls, value: str) -> str:
+        return _validate_publish_config_url(value)
 
 
 class PublishAccountCreate(BaseModel):

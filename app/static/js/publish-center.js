@@ -2149,7 +2149,11 @@ if (publishCenterRoot) {
       latestPreviewItems.forEach((item, index) => {
         const row = document.querySelector(`[data-publish-row][data-job-id="${CSS.escape(item.job_id)}"]`);
         const line = document.createElement("div");
-        line.innerHTML = `<strong>第 ${index + 1} 条：${row?.querySelector("[data-row-title]")?.textContent || item.job_id}</strong><time>${item.scheduled_at_local_display}</time>`;
+        const title = document.createElement("strong");
+        const scheduledAt = document.createElement("time");
+        title.textContent = `第 ${index + 1} 条：${row?.querySelector("[data-row-title]")?.textContent || item.job_id}`;
+        scheduledAt.textContent = item.scheduled_at_local_display || "";
+        line.append(title, scheduledAt);
         previewList.appendChild(line);
       });
       latestPreviewSignature = previewSignature(payload);

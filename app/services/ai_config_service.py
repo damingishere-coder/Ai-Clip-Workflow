@@ -87,6 +87,17 @@ REMOTE_MODEL_OPTIONS = ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat",
 REMOTE_PROTOCOL_OPTIONS = ["chat_completions", "responses"]
 TRANSCRIPTION_AUDIO_FORMAT_OPTIONS = ["mp3", "ogg"]
 
+SECRET_SETTING_KEYS = frozenset(
+    {
+        "VOLCENGINE_ASR_API_KEY",
+        "VOLCENGINE_ASR_APP_KEY",
+        "VOLCENGINE_ASR_ACCESS_KEY",
+        "AI_ANALYSIS_REMOTE_API_KEY",
+        "AI_PUBLISH_REMOTE_API_KEY",
+        "AI_LOCAL_API_KEY",
+    }
+)
+
 ENV_APPEND_GROUPS = [
     (
         "# AI common switch",
@@ -280,8 +291,21 @@ def _remote_ready(values: dict[str, str], prefix: str) -> bool:
     )
 
 
+def _public_config_values(values: dict[str, str]) -> dict[str, str]:
+    """只把非敏感配置送到浏览器；Secret 用单独布尔状态表达。"""
+    return {
+        key: "" if key in SECRET_SETTING_KEYS else value
+        for key, value in values.items()
+    }
+
+
 def get_ai_config_context() -> dict:
     values = _current_config_values()
+    public_values = _public_config_values(values)
+    secret_configured = {
+        key: bool(str(values.get(key) or "").strip())
+        for key in SECRET_SETTING_KEYS
+    }
     transcription_ready = bool(
         values["TRANSCRIPTION_PROVIDER"] == "local"
         or (
@@ -316,9 +340,9 @@ def get_ai_config_context() -> dict:
     if values["AI_PUBLISH_PROVIDER"] == "local":
         publish_ready = local_ready
     return {
-        "env_path": str(_env_path()),
         "env_exists": _env_path().exists(),
-        "values": values,
+        "values": public_values,
+        "secret_configured": secret_configured,
         "transcription_ready": transcription_ready,
         "analysis_ready": analysis_ready,
         "analysis_key_valid": _key_valid(values["AI_ANALYSIS_REMOTE_API_KEY"]),

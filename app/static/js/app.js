@@ -1,12 +1,8 @@
 async function apiFetch(url, options = {}) {
   const requestOptions = { ...options };
   const headers = new Headers(options.headers || {});
-  const token = document.querySelector('meta[name="local-admin-token"]')?.content || "";
   if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
-  }
-  if (token && !headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${token}`);
   }
   requestOptions.headers = headers;
   const response = await fetch(url, requestOptions);
@@ -1636,7 +1632,11 @@ document.querySelectorAll("[data-sync-publish-task]").forEach((button) => {
       }
       const summary = document.querySelector("[data-publish-link-summary]");
       if (summary) {
-        summary.innerHTML = `<strong>发送中心关联：${data.link_state?.label || "同步完成"}</strong><span>${data.message || ""}</span>`;
+        const heading = document.createElement("strong");
+        const detail = document.createElement("span");
+        heading.textContent = `发送中心关联：${data.link_state?.label || "同步完成"}`;
+        detail.textContent = data.message || "";
+        summary.replaceChildren(heading, detail);
       }
       showClipReviewMessage(data.message || "发送中心同步完成。", data.status === "partial" ? "error" : "success");
       if (!document.querySelector("#process-result")) {
@@ -2390,15 +2390,11 @@ if (aiConfigForm) {
     if (aiConfigResult) aiConfigResult.textContent = "正在保存三类 AI 接口配置...";
 
     try {
-      const response = await fetch("/api/settings/ai", {
+      const data = await window.apiFetch("/api/settings/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "保存失败");
-      }
       if (aiConfigResult) aiConfigResult.textContent = data.message || "保存成功。";
       window.setTimeout(() => {
         toggleAiConfigModal(false);

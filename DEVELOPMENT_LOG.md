@@ -1249,3 +1249,25 @@
 - 任务详情和媒体预检的 FFprobe 增加超时/OSError 边界；视频切片、音频提取和字幕烧录增加超时/停滞终止与 `.part` 原子切换/失败清理。独立 ASS 导出在无媒体时使用 1080×1920 画布，有媒体但探测失败时明确报错。
 - 新增 Provider 错误矩阵、重复调用、远程转写 uncertain、取消传播、媒体超时、部分文件清理和文案 checkpoint 恢复测试；重点回归 `67 passed`。最终独立验收 Ruff、Compileall 通过；全量收集 714 项，排除 3 个真实 FFmpeg 参数实例后 `711 passed`、0 失败、10 个弃用告警。
 - 未读取或修改 `.env`，未访问真实 AI、火山引擎、FFmpeg、Chrome 或平台，也未写入活动 SQLite。下一轮 P1.5 处理密钥响应、输入校验、XSS 与本地管理员接口门禁。
+
+## 2026-08-25 稳定 V1 P1.5 本地安全边界
+
+- AI 配置读取 DTO 不再返回火山、远程分析、发布文案或本地 Provider 的原始 Key，也不再返回 `.env` 绝对路径；页面改为“已配置，留空保持”的密码框，空值保存继续保留已有密钥。
+- AI HTTP 错误与坏 JSON 不再把 Provider 原始正文写入任务日志；日志只保留 HTTP 状态、错误类别、重试和计费不确定语义，避免上游回显 Prompt、Token 或内部诊断。
+- 发布平台配置和账号读取 DTO 删除原始 `client_secret`、`access_token`、`refresh_token`，只保留脱敏摘要；Provider 内部调用通过私有读取路径取得凭据，避免把展示 DTO 误用于真实发布。
+- OAuth callback helper 保存 Token 后只返回脱敏账号 DTO，不再把平台原始授权响应重新挂回返回值。
+- 发布执行结果 DTO 会递归脱敏 Provider 响应中的 Token、Cookie、Authorization 和 Secret；数据库事件与立即执行响应共用同一脱敏边界。
+- 脱敏规则覆盖 `Set-Cookie`、`X-Auth-Token`、`provider_access_token` 等前后缀键，并清理 message/异常字符串中的 Bearer、Authorization、Cookie 与常见 Token 赋值，不只依赖精确字段名。
+- 发布任务列表、详情、历史与 Scheduler 快照不再返回旧库中的原始 `provider_response`/`publish_result` 字符串，只返回递归脱敏后的结构；这也覆盖新脱敏逻辑上线前的历史记录。
+- 损坏或非对象的历史 Provider JSON 只返回 `invalid_payload` 标志，不回显 `raw/data` 原文，避免半截 Token JSON 绕过按字段名脱敏。
+- 除健康检查、favicon 和静态资源外，页面、API 与媒体默认同时校验回环 Host 和客户端 IP；伪造 `Host: localhost` 不能绕过。非本机请求必须携带配置的 Bearer Token，写请求还会拒绝跨站 Origin。Token 不再注入 HTML 或前端 JavaScript。
+- Docker Web 端口改为只绑定 `127.0.0.1:8001`；容器内显式启用 loopback 代理兼容，必须与该 Host 绑定成对保留。保持当前个人本地使用方式，不引入多用户权限系统，也不改变 Windows Worker、平台验证码和人工复核边界。
+- 媒体 CORS 取消“任意 localhost 端口”通配，只允许明确列出的本地前端端口和抖音/B站创作者中心；未知本地网页不能读取源视频或产物。
+- 设置模型统一拒绝控制字符、异常长度、带凭据/查询/片段的服务地址、非 HTTPS 远程端点和越界响应路径；本地 AI URL 只允许明确的本机主机名。
+- 发布平台 OAuth/API 配置同步拒绝控制字符、危险 scheme、URL 内嵌凭据和非本机明文 HTTP，避免持久化后形成 OAuth 跳转或 Provider SSRF 入口。
+- 发布结果 URL 在最终落库和返回前按协议与真实 hostname 校验；伪造域名或危险 scheme 会进入 `NEED_REVIEW`，不会被记录为可信平台链接。
+- `risk_flags` JSON 损坏或结构不是数组时一律 fail closed 进入 `NEED_REVIEW`，不再把合法 JSON 的错误结构当作“无风险”。
+- 发送中心动态排期预览和任务发布链接改为 DOM `textContent` 构造，不再把标题、描述或 URL 拼进 `innerHTML`；Jinja 与字幕工作台既有转义保持不变。
+- 新增密钥不回显、空值保留、远程门禁、跨站写入、验证错误不回显原输入、发布 Token DTO、恶意 URL 和动态 XSS 回归。所有测试只使用临时 SQLite 与 mock，不读取 `.env`，不调用真实 Provider、Chrome 或平台。
+- 修复安全门禁误拒随机本机端口同源 POST 的回归：现在只有 Origin 与请求自身的 scheme/host/port 完全一致才按同源放行，不重新开放任意 localhost 跨域。
+- 最终隔离验收收集 751 项，排除 3 个真实 FFmpeg 参数实例后 `748 passed`、0 失败、10 个依赖告警；Ruff、Compileall、两个 JavaScript 语法检查、三套 Docker Compose 配置和 `git diff --check` 全部通过。活动库 `data/workflow.sqlite3` 前后大小均为 `7041024` bytes，SHA256 均为 `7AA6BE7955B46CA66A4A255A712E945832BA91E453BE73013699AEE1D4413E7F`。

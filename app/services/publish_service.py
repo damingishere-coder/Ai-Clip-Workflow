@@ -32,6 +32,7 @@ from app.models.task import (
 )
 from app.services.ai.ai_clip_analyzer import build_provider, loads_ai_json
 from app.services.ai.base import AIProviderError, generate_json_with_safe_retry
+from app.services.publishers.base import parse_public_json_dict
 from app.services.database_backup_service import create_publish_migration_backup
 from app.services.publish_copy_rules import (
     BILIBILI_TITLE_MAX,
@@ -49,7 +50,12 @@ from app.services.publish_providers import (
     DouyinPublishProvider,
     PublishProviderError,
 )
-from app.services.publish_domain import AUTO_PUBLISH_PLATFORMS, PUBLISH_MODES, TARGET_PLATFORMS
+from app.services.publish_domain import (
+    AUTO_PUBLISH_PLATFORMS,
+    PUBLISH_MODES,
+    TARGET_PLATFORMS,
+    safe_platform_url,
+)
 from app.services.publish_readiness import PublishPlatformIsolationBlocked
 from app.services.publish_time import app_zone, local_display, parse_datetime, utc_now_iso
 from app.services.storage_service import get_artifact_paths, resolve_video_file_path
@@ -571,6 +577,7 @@ def _normalize_config(row) -> dict:
     config = dict(row)
     client_key = config.get("client_key") or ""
     client_secret = config.get("client_secret") or ""
+    config.pop("client_secret", None)
     config.update(
         {
             "platform_label": PLATFORM_LABELS.get(config.get("platform"), config.get("platform")),
@@ -585,11 +592,15 @@ def _normalize_config(row) -> dict:
 def _normalize_account(row) -> dict:
     account = dict(row)
     login_status = account.get("login_status") or "login_required"
+    access_token = account.get("access_token")
+    refresh_token = account.get("refresh_token")
+    account.pop("access_token", None)
+    account.pop("refresh_token", None)
     account.update(
         {
             "platform_label": PLATFORM_LABELS.get(account.get("platform"), account.get("platform")),
-            "access_token_masked": _mask_secret(account.get("access_token")),
-            "refresh_token_masked": _mask_secret(account.get("refresh_token")),
+            "access_token_masked": _mask_secret(access_token),
+            "refresh_token_masked": _mask_secret(refresh_token),
             "is_authorized": account.get("authorization_status") == "authorized",
             "auth_type": account.get("auth_type") or "browser_profile",
             "login_status": login_status,
@@ -660,8 +671,11 @@ def _normalize_job(
 ) -> dict:
     job = dict(row)
     status = _normalize_publish_status(job.get("status"))
-    provider_payload = _parse_json_text(job.get("provider_response"))
-    publish_result_payload = _parse_json_text(job.get("publish_result")) if "publish_result" in job else {}
+    provider_payload = parse_public_json_dict(job.get("provider_response"))
+    publish_result_payload = parse_public_json_dict(job.get("publish_result")) if "publish_result" in job else {}
+    # 旧记录和兼容写入可能包含未脱敏 JSON；公共 DTO 只返回清洗后的结构。
+    job.pop("provider_response", None)
+    job.pop("publish_result", None)
     caption = job.get("caption") or job.get("description") or ""
     hashtags = job.get("hashtags") or job.get("tags") or ""
     clip_id = job.get("clip_id") or job.get("output_clip_id") or ""
@@ -731,7 +745,10 @@ def _normalize_job(
             ),
             "provider_payload": provider_payload,
             "publish_result_payload": publish_result_payload,
-            "platform_url": job.get("platform_url") or provider_payload.get("url") or provider_payload.get("platform_url") or "",
+            "platform_url": safe_platform_url(
+                str(job.get("platform") or ""),
+                job.get("platform_url") or provider_payload.get("url") or provider_payload.get("platform_url") or "",
+            ),
             "trace_path": provider_payload.get("trace_path") or "",
             "content_complete": not missing_fields,
             "missing_fields": missing_fields,
@@ -853,17 +870,22 @@ def list_platform_configs() -> list[dict]:
     return [_normalize_config(row) for row in rows]
 
 
-def get_platform_config(platform: str) -> dict | None:
+def _get_platform_config_record(platform: str) -> dict | None:
     with get_connection() as connection:
         row = connection.execute(
             "SELECT * FROM publish_platform_configs WHERE platform = ?",
             (platform,),
         ).fetchone()
+    return dict(row) if row else None
+
+
+def get_platform_config(platform: str) -> dict | None:
+    row = _get_platform_config_record(platform)
     return _normalize_config(row) if row else None
 
 
 def update_platform_config(platform: str, payload: PublishPlatformConfigUpdate) -> dict:
-    existing = get_platform_config(platform)
+    existing = _get_platform_config_record(platform)
     if not existing:
         raise ValueError("发布平台不存在。")
 
@@ -903,7 +925,7 @@ def update_platform_config(platform: str, payload: PublishPlatformConfigUpdate) 
 
 
 def test_platform_config(platform: str) -> dict:
-    config = get_platform_config(platform)
+    config = _get_platform_config_record(platform)
     if not config:
         raise ValueError("发布平台不存在。")
     provider = _get_provider(platform, config)
@@ -950,11 +972,16 @@ def _unique_normal_account_id(connection, platform: str) -> str:
     return str(rows[0]["id"] or "")
 
 
-def get_account(account_id: str) -> dict | None:
+def _get_account_record(account_id: str) -> dict | None:
     if not account_id:
         return None
     with get_connection() as connection:
         row = connection.execute("SELECT * FROM publish_accounts WHERE id = ?", (account_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_account(account_id: str) -> dict | None:
+    row = _get_account_record(account_id)
     return _normalize_account(row) if row else None
 
 
@@ -1046,7 +1073,7 @@ def open_browser_creator_center(account_id: str) -> dict:
 
 
 def build_douyin_oauth_url() -> dict:
-    config = get_platform_config("douyin")
+    config = _get_platform_config_record("douyin")
     if not config:
         raise ValueError("抖音配置不存在。")
     state = uuid4().hex
@@ -1091,7 +1118,7 @@ def save_douyin_oauth_account(code: str, state: str = "") -> dict:
     if not _validate_and_consume_oauth_state(state, "douyin"):
         raise ValueError("OAuth state 无效或已过期，请重新发起授权")
 
-    config = get_platform_config("douyin")
+    config = _get_platform_config_record("douyin")
     if not config:
         raise ValueError("抖音配置不存在。")
     response = DouyinPublishProvider(config).exchange_code(code)
@@ -1113,9 +1140,7 @@ def save_douyin_oauth_account(code: str, state: str = "") -> dict:
         scopes=data.get("scope") or config.get("scope") or "",
         remark="OAuth 授权创建",
     )
-    result = create_account(payload)
-    result["provider_response"] = response
-    return result
+    return create_account(payload)
 
 
 def _get_output_clip_for_publish(task_id: str, output_clip_id: str) -> dict | None:
@@ -2654,12 +2679,12 @@ def generate_publish_job_cover(job_id: str, payload: PublishCoverCreate) -> dict
 
 
 def _validate_api_publish_ready(payload: PublishJobCreate) -> tuple[dict, dict]:
-    account = get_account(payload.account_id or "")
+    account = _get_account_record(payload.account_id or "")
     if not account:
         raise ValueError("真实发布必须先选择一个已配置的发布账号。")
     if account.get("platform") != payload.platform:
         raise ValueError("账号平台和发布平台不一致。")
-    config = get_platform_config(payload.platform)
+    config = _get_platform_config_record(payload.platform)
     if not config:
         raise ValueError("发布平台配置不存在。")
     _get_provider(payload.platform, config).validate_config()
@@ -4546,8 +4571,8 @@ def execute_api_publish_job(job_id: str) -> dict:
     if not output_clip:
         raise ValueError("切片记录不存在。")
     _, video_path = _resolve_publish_video_path(output_clip, job["video_source"])
-    config = get_platform_config(job["platform"])
-    account = get_account(job.get("account_id") or "")
+    config = _get_platform_config_record(job["platform"])
+    account = _get_account_record(job.get("account_id") or "")
     if not config or not account:
         raise ValueError("平台配置或账号不存在。")
     return _execute_publish_job(job_id, config=config, account=account, video_path=video_path)

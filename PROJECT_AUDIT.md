@@ -143,6 +143,24 @@ Codemap 最终独立复核真实保留了未完成项：`AI Selection 55/D` 中�
 
 本轮没有新增数据库列、没有迁移或写入活动库，也没有调用真实 AI、火山引擎、FFmpeg、Chrome、抖音或 B站。当前保证是 **at-most-once 自动重试 + 明确不确定态**，不是跨第三方服务与 SQLite 的数学意义 exactly-once；进程可能在第三方已受理、请求前账本尚未提交这一不可消除的极窄边界退出。由于 P1.5 的密钥、输入、XSS 和本地管理员门禁尚未完成，项目成熟度继续维持 **可用 V1**，不提前改判“稳定 V1”。
 
+## 0.9 P1.5 密钥、输入、XSS 与本地管理员边界（2026-08-25）
+
+| P1.5 项目 | 结果 | 验证证据 |
+| --- | --- | --- |
+| AI Secret DTO | 已封口 | AI 配置读取不返回火山、分析、发布或本地 Provider Key，也不返回 `.env` 绝对路径；密码框始终留空，空值保存保留原 Secret。 |
+| Publish Secret DTO | 已封口 | 配置、账号、OAuth callback、PublishResult、任务详情/历史与 Scheduler 快照均不返回原始 Secret；旧库、嵌套键、异常键前后缀、字符串 Bearer 和损坏 JSON 都经过 fail-closed 脱敏。 |
+| 本地管理员门禁 | 已封口（当前部署） | 原生请求同时校验 loopback Host 与 client IP，伪造 `Host: localhost` 不能绕过；非本机请求要求 Bearer Token。Docker 只绑定 `127.0.0.1:8001`，容器代理兼容必须与该绑定成对保留。 |
+| 浏览器写入与媒体读取 | 已封口 | `/api` 写请求允许严格同源或明确白名单 Origin，拒绝其他来源；媒体 CORS 不再放行任意 localhost 端口，仅允许明确本地前端与抖音/B站创作者中心。管理员 Token 不再注入 HTML/JavaScript。 |
+| 输入与 URL | 已收紧 | AI/ASR/OAuth/发布 API 配置拒绝控制字符、危险 scheme、URL 内嵌凭据、远程明文 HTTP 和异常 Responses 路径；任务错误文本有长度上限，作品 URL 按真实 hostname 校验。 |
+| 前端 XSS | 已封口（已确认入口） | 发送关联摘要和排期预览不再把动态内容拼入 `innerHTML`，统一使用 DOM + `textContent`；Jinja 与字幕既有转义保持。 |
+| 发布 fail-closed | 已封口 | 不可信作品 URL 和损坏/错误结构 `risk_flags` 进入 `NEED_REVIEW`，不会生成可信链接或继续自动投稿。 |
+
+独立 Codemap 复评中，P1.5 直接触碰模块已不再出现 Secret/XSS/Host 绕过 HIGH：`Frontend UI 71/C`、`API Runtime 65/C`、`Persistence 72/C`、`Publish Center 65/C`、`Publish Scheduler 74/C`、`Publisher Worker 80/B`。保留项主要是 God Component、旧状态/旧发布模式、同步路由阻塞、错误详情统一脱敏和真实浏览器故障测试，进入 P2 渐进处理。
+
+最终隔离验收收集 751 项，排除 3 个真实 FFmpeg 参数实例后 `748 passed`；Ruff、Compileall、两个 JavaScript 语法检查、三套 Docker Compose 配置和差异检查全部通过。活动 SQLite 的大小和 SHA256 在验收前后完全一致。
+
+本轮不读取或修改 `.env`，不迁移活动库，也不调用真实 AI、FFmpeg、Chrome 或平台。Codemap 在交叉复评 P1.4 时新增确认三条 AI 一致性 HIGH：候选/run/终态半提交、人工 AI 无持久 lease、普通/综艺局部失败仍可进入切片。因此此节点仍诚实维持 **可用 V1**，先完成独立 P1.4b 后再统一重算“稳定 V1”，不以安全项通过掩盖 AI 恢复缺口。
+
 ## 1. Executive Summary
 
 ### 结论

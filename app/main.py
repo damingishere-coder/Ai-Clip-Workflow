@@ -1,6 +1,9 @@
 from contextlib import asynccontextmanager
+import hmac
+import ipaddress
 import os
 import tempfile
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -27,8 +30,9 @@ _ALLOWED_CORS_ORIGINS = {
     "http://127.0.0.1:5173",
 }
 
-# /api 写方法（需要 token 校验）
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_PUBLIC_PATHS = {"/health", "/favicon.ico"}
 
 
 def _is_origin_allowed(origin: str) -> bool:
@@ -40,10 +44,59 @@ def _is_origin_allowed(origin: str) -> bool:
 def _build_allow_origin_header(origin: str) -> str:
     if _is_origin_allowed(origin):
         return origin
-    # 对于 localhost / 127.0.0.1 的任意端口也放行（本地开发）
-    if origin.startswith("http://localhost:") or origin.startswith("http://127.0.0.1:"):
-        return origin
     return "null"
+
+
+def _is_local_origin(origin: str) -> bool:
+    return _is_origin_allowed(origin)
+
+
+def _is_same_origin(request: Request, origin: str) -> bool:
+    try:
+        parsed = urlsplit(origin)
+        return (
+            parsed.scheme.lower() == request.url.scheme.lower()
+            and (parsed.hostname or "").lower().rstrip(".")
+            == str(request.url.hostname or "").lower().rstrip(".")
+            and parsed.port == request.url.port
+        )
+    except ValueError:
+        return False
+
+
+def _is_loopback_address(value: str) -> bool:
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_local_request(request: Request) -> bool:
+    hostname = str(request.url.hostname or "").lower().rstrip(".")
+    client_host = str(request.client.host if request.client else "").lower()
+    if hostname == "testserver" and client_host == "testclient":
+        return True
+    if hostname not in _LOOPBACK_HOSTS:
+        return False
+    if _is_loopback_address(client_host):
+        return True
+    # Docker NAT 无法把宿主机回环连接保留成 loopback client IP。该兼容仅在
+    # Compose 显式开启，并与 127.0.0.1 host 端口绑定共同构成本地边界。
+    return os.environ.get("NIUMA_TRUST_DOCKER_LOOPBACK_PROXY", "").strip().lower() == "true"
+
+
+def _has_valid_admin_token(request: Request) -> bool:
+    configured = str(settings.local_admin_token or "")
+    if not configured:
+        return False
+    scheme, separator, credential = request.headers.get("Authorization", "").partition(" ")
+    if separator != " " or scheme.lower() != "bearer" or not credential:
+        return False
+    return hmac.compare_digest(credential.encode("utf-8"), configured.encode("utf-8"))
+
+
+def _is_public_path(path: str) -> bool:
+    return path in _PUBLIC_PATHS or path.startswith("/static/")
 
 
 @asynccontextmanager
@@ -92,7 +145,15 @@ async def request_validation_error_handler(_request: Request, exc: RequestValida
         location = tuple(error.get("loc") or ())
         if "selection_profile" in location:
             return JSONResponse(status_code=422, content={"detail": "请选择有效的选片模式"})
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    safe_errors = [
+        {
+            "type": str(error.get("type") or "validation_error"),
+            "loc": list(error.get("loc") or ()),
+            "msg": str(error.get("msg") or "输入校验失败"),
+        }
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": safe_errors})
 
 
 @app.middleware("http")
@@ -100,40 +161,60 @@ async def security_middleware(request: Request, call_next):
     request_path = request.url.path
     request_origin = request.headers.get("Origin", "")
 
-    # ── 1. API 写保护 ──
-    if request_path.startswith("/api/") and request.method in _WRITE_METHODS:
-        token = settings.local_admin_token
-        if token:
-            auth_header = request.headers.get("Authorization", "")
-            expected = f"Bearer {token}"
-            if auth_header != expected:
-                return JSONResponse(
-                    status_code=401,
-                    content={"detail": "API 写操作需要有效的 LOCAL_ADMIN_TOKEN"},
-                )
+    # ── 1. 本地单用户门禁 ──
+    # 正式启动和 Docker 端口均只绑定 loopback；若用户主动改为远程暴露，
+    # 页面、API 和媒体必须携带独立 Bearer Token，且 Token 永不下发到浏览器。
+    if not _is_public_path(request_path) and not _is_local_request(request):
+        if not settings.local_admin_token:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "NiuMa Studio 管理界面仅允许从本机访问"},
+            )
+        if not _has_valid_admin_token(request):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "远程访问需要有效的 LOCAL_ADMIN_TOKEN"},
+            )
 
-    # ── 2. OPTIONS 预检请求处理 ──
+    # ── 2. 浏览器跨站写保护 ──
+    if (
+        request_path.startswith("/api/")
+        and request.method in _WRITE_METHODS
+        and request_origin
+        and not _is_same_origin(request, request_origin)
+        and not _is_local_origin(request_origin)
+    ):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "已拒绝非本机网页发起的写操作"},
+        )
+
+    # ── 3. OPTIONS 预检请求处理 ──
     is_static_asset = request_path.startswith(("/media/", "/static/"))
     if is_static_asset and request.method == "OPTIONS":
         response = Response()
     else:
         response = await call_next(request)
 
-    # ── 3. 静态资源缓存 ──
+    # ── 4. 静态资源缓存 ──
     if request_path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-store, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
 
-    # ── 4. CORS / Private Network Access ──
+    # ── 5. CORS / Private Network Access ──
     if is_static_asset:
         allow_origin = _build_allow_origin_header(request_origin)
         response.headers["Access-Control-Allow-Origin"] = allow_origin
         response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "*"
         # 仅白名单 Origin 返回 Private Network 预检头
-        if _is_origin_allowed(request_origin) or request_origin.startswith("http://localhost:") or request_origin.startswith("http://127.0.0.1:"):
+        if _is_origin_allowed(request_origin) or _is_local_origin(request_origin):
             response.headers["Access-Control-Allow-Private-Network"] = "true"
+
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["X-Frame-Options"] = "DENY"
 
     return response
 

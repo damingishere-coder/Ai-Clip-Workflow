@@ -292,6 +292,26 @@ def test_due_job_follows_publisher_outcome(tmp_path, outcome, expected):
     assert row["finished_at"]
 
 
+def test_untrusted_provider_platform_url_requires_manual_review(tmp_path):
+    calls: list[str] = []
+    job_id = _job(tmp_path)
+    result = PublishResult(
+        outcome=PublishOutcome.PUBLISHED,
+        message="投稿成功但链接异常",
+        remote_video_id="remote-unsafe",
+        platform_url="javascript:alert(1)",
+        published_at=_iso(),
+    )
+
+    PublishScheduler(executor=_executor(result, calls)).run_once()
+
+    row = _raw(job_id)
+    assert calls == [job_id]
+    assert row["status"] == "NEED_REVIEW"
+    assert row["error_code"] == "invalid_platform_url"
+    assert row["platform_url"] in {None, ""}
+
+
 def test_published_job_is_never_executed_again(tmp_path):
     calls: list[str] = []
     job_id = _job(tmp_path, status="PUBLISHED")

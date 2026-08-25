@@ -95,7 +95,7 @@
   </div>
   <form id="ai-config-form" class="settings-form ai-interface-form">
     <input name="ai_remote_base_url" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_BASE_URL'] }}">
-    <input name="ai_remote_api_key" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_API_KEY'] }}">
+    <input name="ai_remote_api_key" type="hidden" value="">
     <input name="ai_remote_model" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_MODEL'] }}">
     <input name="ai_remote_review_model" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_MODEL'] }}">
     <input name="ai_remote_publish_model" type="hidden" value="{{ ai_config['values']['AI_PUBLISH_REMOTE_MODEL'] }}">
@@ -103,7 +103,7 @@
     <input name="ai_remote_reasoning_effort" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_REASONING_EFFORT'] }}">
     <input name="ai_remote_responses_path" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_RESPONSES_PATH'] }}">
     <input name="ai_remote_disable_response_storage" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_DISABLE_RESPONSE_STORAGE'] }}">
-    <input name="ai_local_api_key" type="hidden" value="{{ ai_config['values']['AI_LOCAL_API_KEY'] }}">
+    <input name="ai_local_api_key" type="hidden" value="">
     <input name="ai_local_protocol" type="hidden" value="{{ ai_config['values']['AI_LOCAL_PROTOCOL'] }}">
     <input name="ai_local_fallback_protocol" type="hidden" value="{{ ai_config['values']['AI_LOCAL_FALLBACK_PROTOCOL'] }}">
     <input name="ai_network_access" type="hidden" value="{{ ai_config['values']['AI_NETWORK_ACCESS'] }}">
@@ -154,10 +154,10 @@
         </label>
         <input name="transcription_fallback_provider" type="hidden" value="{{ ai_config['values']['TRANSCRIPTION_FALLBACK_PROVIDER'] }}">
         <label><span>接口地址</span><input name="volcengine_asr_api_url" value="{{ ai_config['values']['VOLCENGINE_ASR_API_URL'] }}"></label>
-        <label><span>API Key</span><input name="volcengine_asr_api_key" type="text" value="{{ ai_config['values']['VOLCENGINE_ASR_API_KEY'] }}"></label>
+        <label><span>API Key</span><input name="volcengine_asr_api_key" type="password" value="" autocomplete="new-password" placeholder="{{ '已配置，留空保持' if ai_config.secret_configured['VOLCENGINE_ASR_API_KEY'] else '尚未配置' }}"></label>
         <div class="form-row">
-          <label><span>App Key（可选）</span><input name="volcengine_asr_app_key" type="text" value="{{ ai_config['values']['VOLCENGINE_ASR_APP_KEY'] }}"></label>
-          <label><span>Access Key（可选）</span><input name="volcengine_asr_access_key" type="text" value="{{ ai_config['values']['VOLCENGINE_ASR_ACCESS_KEY'] }}"></label>
+          <label><span>App Key（可选）</span><input name="volcengine_asr_app_key" type="password" value="" autocomplete="new-password" placeholder="{{ '已配置，留空保持' if ai_config.secret_configured['VOLCENGINE_ASR_APP_KEY'] else '尚未配置' }}"></label>
+          <label><span>Access Key（可选）</span><input name="volcengine_asr_access_key" type="password" value="" autocomplete="new-password" placeholder="{{ '已配置，留空保持' if ai_config.secret_configured['VOLCENGINE_ASR_ACCESS_KEY'] else '尚未配置' }}"></label>
         </div>
         <div class="form-row">
           <label><span>资源 ID</span><input name="volcengine_asr_resource_id" value="{{ ai_config['values']['VOLCENGINE_ASR_RESOURCE_ID'] }}"></label>
@@ -176,7 +176,7 @@
       <div class="settings-section ai-interface-section">
         <h3>2. 分析文字稿，生成候选切片</h3>
         <label><span>Base URL</span><input name="ai_analysis_remote_base_url" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_BASE_URL'] }}"></label>
-        <label><span>API Key</span><input name="ai_analysis_remote_api_key" type="text" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_API_KEY'] }}"></label>
+        <label><span>API Key</span><input name="ai_analysis_remote_api_key" type="password" value="" autocomplete="new-password" placeholder="{{ '已配置，留空保持' if ai_config.secret_configured['AI_ANALYSIS_REMOTE_API_KEY'] else '尚未配置' }}"></label>
         <div class="form-row">
           <label><span>模型</span><input name="ai_analysis_remote_model" list="remote-model-options" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_MODEL'] }}"></label>
           <label>
@@ -207,7 +207,7 @@
           </select>
         </label>
         <label><span>Base URL</span><input name="ai_publish_remote_base_url" value="{{ ai_config['values']['AI_PUBLISH_REMOTE_BASE_URL'] }}"></label>
-        <label><span>API Key</span><input name="ai_publish_remote_api_key" type="text" value="{{ ai_config['values']['AI_PUBLISH_REMOTE_API_KEY'] }}"></label>
+        <label><span>API Key</span><input name="ai_publish_remote_api_key" type="password" value="" autocomplete="new-password" placeholder="{{ '已配置，留空保持' if ai_config.secret_configured['AI_PUBLISH_REMOTE_API_KEY'] else '尚未配置' }}"></label>
         <div class="form-row">
           <label><span>模型</span><input name="ai_publish_remote_model" list="remote-model-options" value="{{ ai_config['values']['AI_PUBLISH_REMOTE_MODEL'] }}"></label>
           <label>
@@ -267,8 +267,8 @@
     <ul class="compact-list">
       <li>任务资料根目录：{{ storage_root }}</li>
       <li>数据库文件：{{ database_path }}（{{ "已存在" if database_exists else "尚未创建" }}）</li>
-      <li>AI 接口配置文件：{{ ai_config.env_path }}（{{ "已存在" if ai_config.env_exists else "尚未创建" }}）</li>
-      <li>1. 音频转写：{{ ai_config['values']['VOLCENGINE_ASR_API_URL'] }} · {{ ai_config['values']['VOLCENGINE_ASR_RESOURCE_ID'] }} · Key {{ "已填写" if ai_config['values']['VOLCENGINE_ASR_API_KEY'] or ai_config['values']['VOLCENGINE_ASR_APP_KEY'] else "未填写" }}</li>
+      <li>AI 接口配置文件：项目本地 .env（{{ "已存在" if ai_config.env_exists else "尚未创建" }}）</li>
+      <li>1. 音频转写：{{ ai_config['values']['VOLCENGINE_ASR_API_URL'] }} · {{ ai_config['values']['VOLCENGINE_ASR_RESOURCE_ID'] }} · Key {{ "已填写" if ai_config.secret_configured['VOLCENGINE_ASR_API_KEY'] or ai_config.secret_configured['VOLCENGINE_ASR_APP_KEY'] else "未填写" }}</li>
       <li>2. 分析文字稿，生成候选切片：{{ ai_config['values']['AI_ANALYSIS_REMOTE_BASE_URL'] }} · {{ ai_config['values']['AI_ANALYSIS_REMOTE_PROTOCOL'] }} · {{ ai_config['values']['AI_ANALYSIS_REMOTE_MODEL'] }} · Key {{ "有效" if ai_config.analysis_key_valid else "异常" }}</li>
       <li>3. 发送中心生成发布文案：{{ ai_config['values']['AI_PUBLISH_REMOTE_BASE_URL'] }} · {{ ai_config['values']['AI_PUBLISH_REMOTE_PROTOCOL'] }} · {{ ai_config['values']['AI_PUBLISH_REMOTE_MODEL'] }} · Key {{ "有效" if ai_config.publish_key_valid else "异常" }}</li>
       <li>本地 AI：{{ ai_config['values']['AI_LOCAL_BASE_URL'] }} · {{ ai_config['values']['AI_LOCAL_MODEL'] }} · Ollama {{ "在线" if ai_config.local_ollama_online else "离线" }}</li>

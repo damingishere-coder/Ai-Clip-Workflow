@@ -464,10 +464,10 @@ class TestAPISecurityConfig:
         assert len(local_origins) > 0
 
     def test_build_allow_origin_for_localhost(self):
-        """未知 localhost 端口也返回 Origin 本身"""
+        """未知 localhost 端口不能读取媒体内容。"""
         from app.main import _build_allow_origin_header
         result = _build_allow_origin_header("http://localhost:9999")
-        assert result == "http://localhost:9999"
+        assert result == "null"
 
     def test_build_allow_origin_for_unknown(self):
         """完全未知的 Origin 返回 'null'"""

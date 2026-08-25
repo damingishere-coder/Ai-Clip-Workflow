@@ -74,6 +74,33 @@ def test_ai_transport_does_not_mark_5xx_or_timeout_safe(monkeypatch):
     assert timeout_error.value.billing_uncertain is True
 
 
+def test_ai_transport_error_never_exposes_provider_body(monkeypatch):
+    secret = "provider-secret-sentinel"
+    monkeypatch.setattr(
+        "app.services.ai.base.urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            _http_error(401, body=json.dumps({"authorization": secret, "prompt": secret}))
+        ),
+    )
+
+    with pytest.raises(AIProviderError) as captured:
+        post_json("https://provider.invalid", {}, "", 1)
+
+    assert captured.value.http_status == 401
+    assert secret not in str(captured.value)
+
+
+def test_ai_transport_invalid_json_never_exposes_response_body(monkeypatch):
+    secret = "invalid-json-secret-sentinel"
+    monkeypatch.setattr("app.services.ai.base.urlopen", lambda *_args, **_kwargs: _Response(secret))
+
+    with pytest.raises(AIProviderError) as captured:
+        post_json("https://provider.invalid", {}, "", 1)
+
+    assert captured.value.category == "invalid_response_json"
+    assert secret not in str(captured.value)
+
+
 def test_shared_retry_only_repeats_explicitly_safe_failures():
     class Provider:
         def __init__(self, *, safe: bool):

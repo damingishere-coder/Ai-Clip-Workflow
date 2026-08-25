@@ -118,9 +118,17 @@ def post_json(url: str, payload: dict[str, Any], api_key: str, timeout_seconds: 
         with urlopen(request, timeout=timeout_seconds) as response:
             body = response.read().decode("utf-8", errors="replace")
     except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:500]
+        # Provider 错误正文可能回显 Authorization、Prompt、内部地址或账号诊断。
+        # 读取并丢弃以释放连接，但只向任务日志暴露状态类别。
+        exc.read()
         if exc.code in {401, 403}:
-            detail = f"{detail}。请检查远程 AI Key 是否缺失、无效，或中转站账号是否有当前模型权限。"
+            detail = "请检查远程 AI Key 是否缺失、无效，或中转站账号是否有当前模型权限"
+        elif exc.code == 429:
+            detail = "请求过于频繁，Provider 已限流"
+        elif exc.code >= 500:
+            detail = "Provider 服务暂时异常"
+        else:
+            detail = "Provider 拒绝了本次请求"
         retry_after = _parse_retry_after((exc.headers or {}).get("Retry-After")) if exc.code == 429 else None
         raise AIProviderError(
             f"AI 接口返回 HTTP {exc.code}：{detail}",
@@ -135,7 +143,7 @@ def post_json(url: str, payload: dict[str, Any], api_key: str, timeout_seconds: 
         is_timeout = isinstance(reason, (TimeoutError, socket.timeout))
         is_preconnect_failure = isinstance(reason, (ConnectionRefusedError, socket.gaierror))
         raise AIProviderError(
-            "AI 接口连接超时" if is_timeout else f"无法连接 AI 接口：{reason}",
+            "AI 接口连接超时" if is_timeout else "无法连接 AI 接口",
             category="timeout" if is_timeout else "network_error",
             safe_to_retry=is_preconnect_failure,
             billing_uncertain=not is_preconnect_failure,
@@ -148,7 +156,7 @@ def post_json(url: str, payload: dict[str, Any], api_key: str, timeout_seconds: 
         ) from exc
     except OSError as exc:
         raise AIProviderError(
-            f"AI 接口请求失败：{exc}",
+            "AI 接口请求失败",
             category="network_error",
             billing_uncertain=True,
         ) from exc
@@ -164,7 +172,7 @@ def post_json(url: str, payload: dict[str, Any], api_key: str, timeout_seconds: 
         parsed = json.loads(body)
     except json.JSONDecodeError as exc:
         raise AIProviderError(
-            f"AI 接口响应不是 JSON：{body[:300]}",
+            "AI 接口响应不是有效 JSON",
             category="invalid_response_json",
             billing_uncertain=True,
         ) from exc
