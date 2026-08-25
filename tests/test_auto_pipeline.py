@@ -340,7 +340,13 @@ def test_daily_window_schedule_supports_seven_to_midnight_without_looping():
 
 def test_create_auto_publish_job_records_scheduled_at():
     task = _create_auto_task("test-auto-publish-job")
-    clip_path = _fake_video("publish_clip.mp4")
+    paths = get_artifact_paths(task["id"])
+    paths["clips_dir"].mkdir(parents=True, exist_ok=True)
+    paths["covers_dir"].mkdir(parents=True, exist_ok=True)
+    clip_path = paths["clips_dir"] / "publish_clip.mp4"
+    cover_path = paths["covers_dir"] / "publish_clip_cover.jpg"
+    clip_path.write_bytes(b"fake mp4")
+    cover_path.write_bytes(b"fake jpg")
     with get_connection() as connection:
         now = "2026-06-23T08:00:00+00:00"
         connection.execute(
@@ -358,7 +364,7 @@ def test_create_auto_publish_job_records_scheduled_at():
         {
             "output_clip": {"id": "out-1", "output_file_path": str(clip_path)},
             "cover": {
-                "cover_file_path": str(_fake_cover("publish_clip_cover.jpg")),
+                "cover_file_path": str(cover_path),
                 "cover_time_seconds": 12.5,
                 "cover_source": "ai_frame",
             },
@@ -374,14 +380,45 @@ def test_create_auto_publish_job_records_scheduled_at():
             "scheduled_at": "2026-06-23T08:10:00+00:00",
         }
     ]
-    result = create_auto_publish_jobs(
-        task,
-        scheduled_items,
-        subtitle_delivery_mode="original",
-        workflow_job_id="test-auto-workflow-job",
-    )
+    workflow_job = job_service.create_job(task["id"], job_service.JOB_TYPE_AUTO_PIPELINE)
+    claimed = job_service.claim_job(workflow_job["id"], "auto-publish-test-worker")
+    with job_service.job_lease_context(
+        workflow_job["id"],
+        "auto-publish-test-worker",
+        claimed["lease_token"],
+    ):
+        result = create_auto_publish_jobs(
+            task,
+            scheduled_items,
+            subtitle_delivery_mode="original",
+            workflow_job_id=workflow_job["id"],
+        )
+        cover_path.write_bytes(b"changed cover")
+        with pytest.raises(ValueError, match="证据已失效"):
+            create_auto_publish_jobs(
+                task,
+                scheduled_items,
+                subtitle_delivery_mode="original",
+                workflow_job_id=workflow_job["id"],
+            )
+        cover_path.write_bytes(b"fake jpg")
+        changed_copy = [
+            {
+                **scheduled_items[0],
+                "metadata": {**scheduled_items[0]["metadata"], "title": "新的排期标题"},
+            }
+        ]
+        with pytest.raises(ValueError, match="文案证据已失效"):
+            create_auto_publish_jobs(
+                task,
+                changed_copy,
+                subtitle_delivery_mode="original",
+                workflow_job_id=workflow_job["id"],
+            )
     assert result["created_count"] == 1
-    assert result["created"][0]["provider_payload"]["workflow_job_id"] == "test-auto-workflow-job"
+    assert result["created"][0]["provider_payload"]["workflow_job_id"] == workflow_job["id"]
+    assert result["created"][0]["provider_payload"]["video_file_fingerprint"]
+    assert result["created"][0]["provider_payload"]["cover_file_fingerprint"]
     with get_connection() as connection:
         row = connection.execute(
             "SELECT scheduled_at, status, video_source, cover_mode, cover_time_seconds, cover_file_path FROM publish_jobs WHERE task_id = ?",
@@ -394,6 +431,47 @@ def test_create_auto_publish_job_records_scheduled_at():
     assert row["cover_mode"] == "time"
     assert row["cover_time_seconds"] == 12.5
     assert row["cover_file_path"].endswith("publish_clip_cover.jpg")
+
+
+def test_workflow_publish_rejects_artifacts_outside_task_directory():
+    task = _create_auto_task("test-auto-publish-unmanaged")
+    clip_path = _fake_video("unmanaged_publish_clip.mp4")
+    cover_path = _fake_cover("unmanaged_publish_cover.jpg")
+    workflow_job = job_service.create_job(task["id"], job_service.JOB_TYPE_AUTO_PIPELINE)
+    claimed = job_service.claim_job(workflow_job["id"], "unmanaged-publish-worker")
+
+    with job_service.job_lease_context(
+        workflow_job["id"],
+        "unmanaged-publish-worker",
+        claimed["lease_token"],
+    ):
+        with pytest.raises(ValueError, match="原片切片文件不存在"):
+            create_auto_publish_jobs(
+                task,
+                [
+                    {
+                        "output_clip": {"id": "unmanaged-out", "output_file_path": str(clip_path)},
+                        "cover": {"cover_file_path": str(cover_path), "cover_time_seconds": 1},
+                        "metadata": {
+                            "platform": "douyin",
+                            "title": "越界测试",
+                            "caption": "越界测试",
+                            "hashtags": ["测试"],
+                            "risk_flags": [],
+                        },
+                        "scheduled_at": "",
+                    }
+                ],
+                subtitle_delivery_mode="original",
+                workflow_job_id=workflow_job["id"],
+            )
+
+    with get_connection() as connection:
+        count = connection.execute(
+            "SELECT COUNT(*) FROM publish_jobs WHERE task_id = ?",
+            (task["id"],),
+        ).fetchone()[0]
+    assert count == 0
 
 
 def test_create_auto_publish_job_without_schedule_waits_for_send_center():

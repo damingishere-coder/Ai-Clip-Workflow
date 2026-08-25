@@ -289,6 +289,34 @@ def test_completed_metadata_restores_context_without_regeneration(tmp_path: Path
         TaskStatus.PUBLISH_JOB_CREATING.value,
     ]
     publish_outputs = stored["steps"][TaskStatus.PUBLISH_JOB_CREATING.value]["outputs"]
+    with job_service.job_lease_context(job["id"], "metadata-owner", job["lease_token"]):
+        recovered_publish = engine._reconcile_interrupted_step(
+            task["id"],
+            TaskStatus.PUBLISH_JOB_CREATING,
+            {"baseline": {"schedule": publish_outputs["schedule_input"]}},
+        )
+    assert recovered_publish is not None
+    assert recovered_publish["created_count"] == 1
+    assert recovered_publish["created"][0]["id"] == publish_outputs["created_ids"][0]
+    expected_job = publish_outputs["job_evidence"][0]
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE output_clip SET is_active = 0 WHERE id = ?",
+            (expected_job["output_clip_id"],),
+        )
+        connection.commit()
+    with pytest.raises(PipelineCheckpointError, match="切片已失活"):
+        engine._restore_checkpoint_step(
+            task["id"],
+            TaskStatus.PUBLISH_JOB_CREATING,
+            publish_outputs,
+        )
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE output_clip SET is_active = 1 WHERE id = ?",
+            (expected_job["output_clip_id"],),
+        )
+        connection.commit()
     with get_connection() as connection:
         connection.execute(
             "UPDATE publish_jobs SET platform = 'bilibili' WHERE id = ?",
@@ -301,7 +329,6 @@ def test_completed_metadata_restores_context_without_regeneration(tmp_path: Path
             TaskStatus.PUBLISH_JOB_CREATING,
             publish_outputs,
         )
-    expected_job = publish_outputs["job_evidence"][0]
     with get_connection() as connection:
         connection.execute(
             "UPDATE publish_jobs SET platform = ?, title = 'tampered title' WHERE id = ?",

@@ -104,7 +104,8 @@ def _lease_write_condition(
     lease = _resolve_job_lease(lease_owner, lease_token)
     if lease:
         return (
-            "id = ? AND status = ? AND lease_owner = ? AND lease_token = ?",
+            "id = ? AND status = ? AND lease_owner = ? AND lease_token = ? "
+            "AND lease_expires_at > strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')",
             (JOB_STATUS_RUNNING, lease[0], lease[1]),
             True,
         )
@@ -188,56 +189,69 @@ def create_or_get_active_job(
     返回值中的布尔值表示是否新建。`BEGIN IMMEDIATE` 将“查询 + 新建”
     串行化，避免连续点击或并发请求为同一任务创建重复的切片作业。
     """
-    resolved_job_id = uuid4().hex[:12]
-    now = _now_iso()
-    payload_json = json.dumps(payload or {}, ensure_ascii=False)
-
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        existing = connection.execute(
-            """
-            SELECT id
-            FROM workflow_jobs
-            WHERE task_id = ?
-              AND job_type = ?
-              AND status IN (?, ?)
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            (
-                task_id,
-                job_type,
-                JOB_STATUS_QUEUED,
-                JOB_STATUS_RUNNING,
-            ),
-        ).fetchone()
-        if existing:
-            connection.commit()
-            return get_job(existing["id"]), False
-
-        connection.execute(
-            """
-            INSERT INTO workflow_jobs (
-                id, task_id, job_type, status, progress, message,
-                payload_json, result_json, error_message,
-                created_at, updated_at, started_at, finished_at
-            )
-            VALUES (?, ?, ?, ?, 0, ?, ?, '{}', NULL, ?, ?, NULL, NULL)
-            """,
-            (
-                resolved_job_id,
-                task_id,
-                job_type,
-                JOB_STATUS_QUEUED,
-                f"{JOB_TYPE_LABELS.get(job_type, job_type)}任务已加入队列",
-                payload_json,
-                now,
-                now,
-            ),
+        resolved_job_id, created = create_or_get_active_job_with_connection(
+            connection,
+            task_id=task_id,
+            job_type=job_type,
+            payload=payload,
         )
         connection.commit()
+    return get_job(resolved_job_id), created
 
-    return get_job(resolved_job_id), True
+
+def create_or_get_active_job_with_connection(
+    connection,
+    *,
+    task_id: str,
+    job_type: str,
+    payload: Optional[dict] = None,
+) -> tuple[str, bool]:
+    """在调用方事务中原子复用或创建活动 Job，不自行 commit。"""
+    existing = connection.execute(
+        """
+        SELECT id
+        FROM workflow_jobs
+        WHERE task_id = ?
+          AND job_type = ?
+          AND status IN (?, ?)
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (
+            task_id,
+            job_type,
+            JOB_STATUS_QUEUED,
+            JOB_STATUS_RUNNING,
+        ),
+    ).fetchone()
+    if existing:
+        return str(existing["id"]), False
+
+    resolved_job_id = uuid4().hex[:12]
+    now = _now_iso()
+    connection.execute(
+        """
+        INSERT INTO workflow_jobs (
+            id, task_id, job_type, status, progress, message,
+            payload_json, result_json, error_message,
+            created_at, updated_at, started_at, finished_at
+        )
+        VALUES (?, ?, ?, ?, 0, ?, ?, '{}', NULL, ?, ?, NULL, NULL)
+        """,
+        (
+            resolved_job_id,
+            task_id,
+            job_type,
+            JOB_STATUS_QUEUED,
+            f"{JOB_TYPE_LABELS.get(job_type, job_type)}任务已加入队列",
+            json.dumps(payload or {}, ensure_ascii=False),
+            now,
+            now,
+        ),
+    )
+    return resolved_job_id, True
 
 
 # ── 查询 job ─────────────────────────────────────────────────────
@@ -306,12 +320,12 @@ def mark_job_running(job_id: str) -> dict | None:
 
 def claim_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> dict | None:
     """原子领取一个排队任务，或接管 lease 已过期的运行任务。"""
-    now = datetime.now(timezone.utc)
-    now_iso = now.isoformat(timespec="seconds")
-    lease_expires_at = (now + timedelta(seconds=max(30, lease_seconds))).isoformat(timespec="seconds")
     lease_token = uuid4().hex
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat(timespec="seconds")
+        lease_expires_at = (now + timedelta(seconds=max(30, lease_seconds))).isoformat(timespec="seconds")
         row = connection.execute(
             "SELECT status, lease_expires_at, cancel_requested, attempt_count, max_attempts FROM workflow_jobs WHERE id = ?",
             (job_id,),
@@ -352,12 +366,12 @@ def claim_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> dict |
 
 def claim_next_job(lease_owner: str, lease_seconds: int = 120) -> dict | None:
     """按创建时间领取一个重型任务，保证本地默认串行。"""
-    now_value = datetime.now(timezone.utc)
-    now = now_value.isoformat(timespec="seconds")
-    lease_expires_at = (now_value + timedelta(seconds=max(30, lease_seconds))).isoformat(timespec="seconds")
     lease_token = uuid4().hex
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        now_value = datetime.now(timezone.utc)
+        now = now_value.isoformat(timespec="seconds")
+        lease_expires_at = (now_value + timedelta(seconds=max(30, lease_seconds))).isoformat(timespec="seconds")
         connection.execute(
             """
             UPDATE workflow_jobs
@@ -437,14 +451,16 @@ def validate_job_lease(
     *,
     require_unexpired: bool = True,
 ) -> dict | None:
-    now = _now_iso()
-    expiry_clause = "AND lease_expires_at > ?" if require_unexpired else ""
+    expiry_clause = (
+        "AND lease_expires_at > strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')"
+        if require_unexpired
+        else ""
+    )
     params: tuple[str, ...] = (
         job_id,
         JOB_STATUS_RUNNING,
         lease_owner,
         lease_token,
-        *((now,) if require_unexpired else ()),
     )
     with get_connection() as connection:
         row = connection.execute(
@@ -475,9 +491,9 @@ def heartbeat_job(
             """
             UPDATE workflow_jobs SET heartbeat_at = ?, lease_expires_at = ?, updated_at = ?
             WHERE id = ? AND status = ? AND lease_owner = ? AND lease_token = ?
-              AND lease_expires_at > ?
+              AND lease_expires_at > strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
             """,
-            (now_iso, expires, now_iso, job_id, JOB_STATUS_RUNNING, lease[0], lease[1], now_iso),
+            (now_iso, expires, now_iso, job_id, JOB_STATUS_RUNNING, lease[0], lease[1]),
         )
         connection.commit()
     if cursor.rowcount == 0:
@@ -813,6 +829,87 @@ def mark_job_completed(
     if cursor.rowcount == 0:
         return None
     return get_job(job_id)
+
+
+def mark_job_completed_with_followup(
+    job_id: str,
+    result: Optional[dict],
+    *,
+    followup_task_id: str,
+    followup_job_type: str,
+    followup_payload: Optional[dict] = None,
+    result_followup_key: str = "followup_job_id",
+    lease_owner: str | None = None,
+    lease_token: str | None = None,
+) -> tuple[dict, dict, bool]:
+    """在同一事务内完成当前 Job 并创建/复用后续 Job。"""
+    lease = _resolve_job_lease(lease_owner, lease_token)
+    if lease is None:
+        raise ValueError("完成并创建后续 Job 需要有效的 Workflow Job 租约")
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        now = _now_iso()
+        active = connection.execute(
+            """
+            SELECT 1 FROM workflow_jobs
+            WHERE id = ? AND status = ? AND lease_owner = ? AND lease_token = ?
+              AND lease_expires_at > strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
+              AND cancel_requested = 0
+            """,
+            (job_id, JOB_STATUS_RUNNING, lease[0], lease[1]),
+        ).fetchone()
+        if not active:
+            connection.rollback()
+            raise JobLeaseLostError(f"Workflow Job 完成前租约已失效或已取消：{job_id}")
+        followup_job_id, created = create_or_get_active_job_with_connection(
+            connection,
+            task_id=followup_task_id,
+            job_type=followup_job_type,
+            payload=followup_payload,
+        )
+        followup_row = connection.execute(
+            "SELECT payload_json FROM workflow_jobs WHERE id = ?",
+            (followup_job_id,),
+        ).fetchone()
+        try:
+            existing_followup_payload = json.loads(followup_row["payload_json"] or "{}")
+        except (TypeError, json.JSONDecodeError) as exc:
+            connection.rollback()
+            raise ValueError("后续 Workflow Job payload 已损坏，拒绝复用") from exc
+        if existing_followup_payload != (followup_payload or {}):
+            connection.rollback()
+            raise ValueError("已有后续 Workflow Job 的执行参数不同，拒绝错误复用")
+        result_payload = {**(result or {}), result_followup_key: followup_job_id}
+        cursor = connection.execute(
+            """
+            UPDATE workflow_jobs
+            SET status = ?, progress = 100, message = '任务已完成', result_json = ?,
+                finished_at = ?, updated_at = ?, lease_owner = NULL,
+                lease_token = NULL, lease_expires_at = NULL, heartbeat_at = NULL
+            WHERE id = ? AND status = ? AND lease_owner = ? AND lease_token = ?
+              AND lease_expires_at > strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
+              AND cancel_requested = 0
+            """,
+            (
+                JOB_STATUS_COMPLETED,
+                json.dumps(result_payload, ensure_ascii=False),
+                now,
+                now,
+                job_id,
+                JOB_STATUS_RUNNING,
+                lease[0],
+                lease[1],
+            ),
+        )
+        if cursor.rowcount != 1:
+            connection.rollback()
+            raise JobLeaseLostError(f"Workflow Job 完成提交冲突：{job_id}")
+        connection.commit()
+    completed_job = get_job(job_id)
+    followup_job = get_job(followup_job_id)
+    if not completed_job or not followup_job:
+        raise RuntimeError("Workflow Job 原子提交后无法读取结果")
+    return completed_job, followup_job, created
 
 
 def mark_job_failed(

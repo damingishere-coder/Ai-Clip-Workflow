@@ -109,6 +109,23 @@ Codemap 独立复评结果：`Publish Scheduler 62→71（C）`、`Publishers & 
 
 Codemap 独立复评将 `SQLite Persistence` 从 **64/C 提升到 73/C**，原 HIGH“先删索引、重建失败静默吞掉”和 MED“没有迁移账本”均已移除。模块仍为 C：历史列探测和多处 `executescript` 继续属于 pre-ledger compatibility，不能保证整个旧库升级原子；备份恢复工具还缺 FK/ledger/关键索引验证与运行中服务闸门。P1.3c 已完成有限范围目标，但项目整体仍维持 **可用 V1**，下一轮按路线处理 P1.3d，而不是借机全面重写数据库层。
 
+## 0.7 P1.3d 字幕批次与跨进程恢复状态（2026-08-25）
+
+| P1.3d 项目 | 结果 | 验证证据 |
+| --- | --- | --- |
+| 批量批准原子性 | 已封口 | active revision、cue/质量、批准、Workflow Job 创建/复用和字幕交付模式在同一个 `BEGIN IMMEDIATE` 中提交；任一条失败整批回滚。 |
+| Revision 并发覆盖 | 已封口 | 手工保存、单条批准、原片轨生成、切片轨同步和字幕导入均在写锁内重读 current active revision 并使用条件更新；旧页面或迟到执行不能把 active 指针回退。 |
+| 成片激活与旧 Worker | 已封口 | 临时文件切换、completed/verified 和 active 版本切换绑定当前 workflow owner/token/expiry/cancel 与当前已批准 revision；迟到结果不能覆盖新版本。 |
+| 中断目录与子记录 | 已封口 | 接管会收口同一 Workflow Job 的 `processing/queued` 子记录，只清理本次标记的 `.part.mp4` 和无数据库引用的孤儿最终视频；其他 Job、active 文件、历史结果和可复用 ASS 不删除。 |
+| 跨进程 checkpoint | 已封口 | “字幕 DB 已提交但 checkpoint 未写”可恢复；字幕完成与后续 auto-pipeline Job 同事务提交；发布草稿已提交但 checkpoint 未写时按 schedule、任务目录和 workflow 证据恢复。 |
+| Lease 与进程启动 | 已封口 | 所有通用 Job 写回拒绝过期 lease；发布批次提交前二次验 lease；子进程启动失败明确标记 failed，不再让 Worker 线程无声退出。 |
+| 路径和证据 | 已封口（自动流水线） | Workflow 创建发布草稿前，视频/封面必须位于当前任务受控目录、扩展名合法且非空，并持久化 size/fingerprint，坏草稿不会先提交再被去重掩盖。 |
+| 隔离回归 | 通过 | Ruff、Compileall 通过；10 组字幕/Job/自动流水线/checkpoint/状态机/发布关联/版本回滚测试 `167 passed`。活动库前后 size 与 SHA256 一致。 |
+
+Codemap 最终独立复评未再发现 P1.3d 新的 HIGH。`Subtitle` 为 **69/C**：本轮的批准、激活、接管和 revision 覆盖风险已封口，剩余中风险主要是源轨向多个切片逐条同步的部分完成、损坏 ASR chunk 静默跳过、FFprobe 画布 fallback 以及 1400 行 God Service；前两项中的输入/探测故障归入 P1.4，结构拆分归入 P2。`Pipeline & Job Queue` 为 **87/B**，核心 lease/follow-up/发布恢复与创建时媒体/文案证据边界已经收口；剩余问题主要是恢复计数语义和 God Component 拆分，均不值得在本轮扩大重构。
+
+本轮没有增加数据库列、没有迁移活动库、没有调用 AI Provider、Chrome 或真实投稿。项目成熟度继续维持 **可用 V1**：P1.3d 已解决“字幕正常时能跑、进程切换时可能重复或覆盖”的问题，但 P1.4 的第三方超时/错误响应/计费幂等和 P1.5 的密钥/输入/XSS/管理员门禁仍是改判“稳定 V1”的必要条件。
+
 ## 1. Executive Summary
 
 ### 结论

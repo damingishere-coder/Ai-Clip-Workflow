@@ -130,6 +130,29 @@ def test_expired_lease_cannot_heartbeat_or_start_claimed_subprocess(monkeypatch)
         _cleanup(task_id)
 
 
+def test_worker_marks_job_failed_when_subprocess_cannot_start(monkeypatch) -> None:
+    task_id, created = _create_task_and_job()
+    runner = job_worker.WorkflowJobRunner()
+    try:
+        claimed = job_service.claim_job(created["id"], runner.owner)
+        assert claimed and claimed["lease_token"]
+        monkeypatch.setattr(
+            job_worker,
+            "popen_process_group",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("spawn denied")),
+        )
+
+        runner._run_job_subprocess(created["id"])
+
+        failed = job_service.get_job(created["id"])
+        assert failed["status"] == job_service.JOB_STATUS_FAILED
+        assert "无法启动 Job 子进程：spawn denied" in failed["error_message"]
+        assert failed["lease_owner"] is None
+        assert failed["lease_token"] is None
+    finally:
+        _cleanup(task_id)
+
+
 def test_claim_next_does_not_fail_live_max_attempt_worker() -> None:
     active_task_id, active_created = _create_task_and_job(max_attempts=1)
     queued_task_id, queued_created = _create_task_and_job()

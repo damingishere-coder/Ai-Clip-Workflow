@@ -1225,3 +1225,15 @@
 - Windows 子进程树终止现在校验 `taskkill` 退出码并等待进程退出；超时、启动失败、非零退出和无法确认退出都会显式报错，不再让上层误以为已经安全停止。
 - 移除路径测试中的全局模块 reload 泄漏，并让边界测试始终引用当前运行时 `storage_service`，消除全量测试顺序依赖。
 - 独立验收：边界专项 `52 passed`，全量 `533 passed`；Ruff、Python Compileall 和 `git diff --check` 全部通过。未访问真实 NAS 内容，未触发 AI 或真实投稿。
+
+## 2026-08-25 稳定 V1 P1.3d 字幕批次原子性与恢复
+
+- 字幕“审核并批量烧录”改为一个 `BEGIN IMMEDIATE` 事务：所有当前 active revision 在事务内重新校验，批准、创建/复用 Workflow Job 和 `subtitle_delivery_mode` 同时提交；任一 revision、配置或 Job 插入失败时整批回滚。
+- 单条批准也在写锁内重新核对 active revision，过期页面请求不能把字幕轨回退到旧版本；损坏的 `auto_config_json` 改为明确失败，不再静默覆盖为 `{}`。
+- 字幕成片的临时文件切换、completed/verified 写回和 active 版本切换合并为一次短事务，并绑定当前 Workflow Job 的 owner、lease token、未过期时间和取消状态；旧 Worker 或旧 revision 不能激活迟到结果。
+- 新 Worker 接管时会收口同一 Workflow Job 遗留的 processing 子任务，只清理本执行标记的 `.part.mp4` 和没有数据库引用的中断最终文件；其他 Job、已验证 active 文件、外部文件和历史 revision 均保留。
+- 若进程在“字幕 DB 已提交、checkpoint 尚未写入”的窄窗口退出，重启会从同一 Workflow Job 的 active + verified 结果恢复 checkpoint，不重复运行 FFmpeg。
+- 字幕完成与后续自动流水线 Job 改为同事务提交；取消、过期 lease 或不兼容的续跑 payload 会整笔回滚。发布草稿批次在提交前再次核验 lease，并可从同一 Workflow Job 的持久化草稿证据恢复 checkpoint。
+- 源轨生成、切片轨同步、手工保存和字幕导入均在写锁内重读 active revision 并使用条件更新；迟到的旧读取不能覆盖较新的人工版本。“跳过字幕”也会拒绝已经排队的后续自动流水线。
+- Worker 子进程启动失败会明确写入 failed 而不是让队列线程退出；重启接管同时收口 processing/queued 字幕子记录，按 revision 复用的 ASS 缓存不会被误删。
+- 最终独立验收 Ruff、Compileall 通过，字幕/Job fencing/队列/自动流水线/checkpoint/状态机/发布关联/版本回滚共 `167 passed`。Pytest 明确使用临时 `test_workflow.sqlite3`；活动库前后 size 与 SHA256 完全一致。未调用 AI、Chrome 或真实平台投稿。

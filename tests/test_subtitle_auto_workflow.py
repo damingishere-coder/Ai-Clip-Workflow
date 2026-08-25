@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import shutil
 import subprocess
 from pathlib import Path
@@ -26,12 +27,14 @@ from app.services.subtitle_auto_workflow_service import (
     enqueue_task_subtitle_render,
     execute_subtitle_render_job,
     prepare_task_subtitle_review,
+    reconcile_interrupted_subtitle_job,
     skip_task_subtitles_and_resume,
     skip_task_subtitles_to_review,
 )
 from app.services.subtitle_data_service import (
     accept_suggestion_revision,
     approve_revision,
+    create_manual_revision,
     ensure_clip_track,
     get_revision,
     get_track,
@@ -39,6 +42,7 @@ from app.services.subtitle_data_service import (
 from app.services.subtitle_workflow_service import (
     _create_subtitle_job,
     _build_ffmpeg_render_command,
+    _finalize_subtitle_job,
     _probe_media,
     _render_with_fallback,
     _validate_rendered_media,
@@ -156,6 +160,27 @@ def _create_task(tmp_path: Path, *, status: str = "VIDEO_CUTTING") -> tuple[str,
     return task_id, output_id, output_path
 
 
+def _add_output_clip(task_id: str, tmp_path: Path, *, file_name: str = "z-clip.mp4") -> tuple[str, Path]:
+    output_id = f"out-{uuid4().hex[:8]}"
+    output_path = tmp_path / f"{output_id}.mp4"
+    output_path.write_bytes(b"clip")
+    now = "2026-08-24T00:00:01+00:00"
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO output_clip (
+                id, task_id, output_file_path, output_file_name, status, is_active,
+                source_start_ms, source_end_ms, source_duration_ms,
+                source_fingerprint, snapshot_source, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'completed', 1, 0, 5000, 5000,
+                      'source-v1', 'cut_commit', ?, ?)
+            """,
+            (output_id, task_id, str(output_path), file_name, now, now),
+        )
+        connection.commit()
+    return output_id, output_path
+
+
 def test_schema_contains_async_render_validation_fields():
     with get_connection() as connection:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(subtitle_jobs)")}
@@ -236,6 +261,15 @@ def test_prepare_review_creates_clip_draft_and_pauses(tmp_path: Path):
 
     init_db()
     assert get_task(task_id, include_video_probe=False)["status"] == TaskStatus.PENDING_SUBTITLE_REVIEW.value
+
+
+def test_prepare_review_cannot_reopen_terminal_task(tmp_path: Path):
+    task_id, _, _ = _create_task(tmp_path, status=TaskStatus.READY_TO_PUBLISH.value)
+
+    with pytest.raises(ValueError, match="不能进入字幕审核"):
+        prepare_task_subtitle_review(task_id)
+
+    assert get_task(task_id, include_video_probe=False)["status"] == TaskStatus.READY_TO_PUBLISH.value
 
 
 def test_review_page_and_api_enqueue_batch_job(tmp_path: Path):
@@ -336,6 +370,108 @@ def test_batch_approval_pins_revisions_and_records_delivery_mode(tmp_path: Path)
     assert config["subtitle_delivery_mode"] == "subtitled"
 
 
+def test_batch_approval_rolls_back_when_later_revision_is_invalid(tmp_path: Path):
+    task_id, first_output_id, _ = _create_task(tmp_path)
+    prepare_task_subtitle_review(task_id)
+    second_output_id, _ = _add_output_clip(task_id, tmp_path)
+    first_track = ensure_clip_track(task_id, first_output_id)
+    second_track = ensure_clip_track(task_id, second_output_id)
+    with get_connection() as connection:
+        second_cues = connection.execute(
+            "SELECT id FROM subtitle_cues WHERE revision_id = ? ORDER BY cue_index ASC",
+            (second_track["active_revision_id"],),
+        ).fetchall()
+        connection.execute(
+            "UPDATE subtitle_cues SET start_ms = 1000 WHERE id = ?",
+            (second_cues[1]["id"],),
+        )
+        connection.commit()
+
+    with pytest.raises(ValueError, match="时间重叠"):
+        enqueue_task_subtitle_render(task_id, approve_active_revisions=True, continue_pipeline=True)
+
+    with get_connection() as connection:
+        statuses = {
+            row["id"]: row["status"]
+            for row in connection.execute(
+                "SELECT id, status FROM subtitle_revisions WHERE id IN (?, ?)",
+                (first_track["active_revision_id"], second_track["active_revision_id"]),
+            ).fetchall()
+        }
+        job_count = connection.execute(
+            "SELECT COUNT(*) FROM workflow_jobs WHERE task_id = ? AND job_type = ?",
+            (task_id, job_service.JOB_TYPE_SUBTITLE),
+        ).fetchone()[0]
+    assert statuses[first_track["active_revision_id"]] == "draft"
+    assert statuses[second_track["active_revision_id"]] == "draft"
+    assert job_count == 0
+
+
+def test_job_insert_failure_rolls_back_approval_and_delivery_mode(tmp_path: Path):
+    task_id, output_id, _ = _create_task(tmp_path)
+    prepare_task_subtitle_review(task_id)
+    track = ensure_clip_track(task_id, output_id)
+    with get_connection() as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER fail_subtitle_workflow_job_insert
+            BEFORE INSERT ON workflow_jobs
+            WHEN NEW.job_type = 'subtitle'
+            BEGIN
+                SELECT RAISE(ABORT, 'forced subtitle job insert failure');
+            END
+            """
+        )
+        connection.commit()
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="forced subtitle job insert failure"):
+            enqueue_task_subtitle_render(task_id, approve_active_revisions=True, continue_pipeline=True)
+    finally:
+        with get_connection() as connection:
+            connection.execute("DROP TRIGGER IF EXISTS fail_subtitle_workflow_job_insert")
+            connection.commit()
+
+    with get_connection() as connection:
+        revision_status = connection.execute(
+            "SELECT status FROM subtitle_revisions WHERE id = ?",
+            (track["active_revision_id"],),
+        ).fetchone()[0]
+        config = json.loads(
+            connection.execute("SELECT auto_config_json FROM tasks WHERE id = ?", (task_id,)).fetchone()[0]
+        )
+        job_count = connection.execute(
+            "SELECT COUNT(*) FROM workflow_jobs WHERE task_id = ? AND job_type = ?",
+            (task_id, job_service.JOB_TYPE_SUBTITLE),
+        ).fetchone()[0]
+    assert revision_status == "draft"
+    assert "subtitle_delivery_mode" not in config
+    assert job_count == 0
+
+
+def test_corrupt_delivery_config_fails_closed_without_partial_approval(tmp_path: Path):
+    task_id, output_id, _ = _create_task(tmp_path)
+    prepare_task_subtitle_review(task_id)
+    track = ensure_clip_track(task_id, output_id)
+    with get_connection() as connection:
+        connection.execute("UPDATE tasks SET auto_config_json = '{broken' WHERE id = ?", (task_id,))
+        connection.commit()
+
+    with pytest.raises(ValueError, match="配置已损坏"):
+        enqueue_task_subtitle_render(task_id, approve_active_revisions=True, continue_pipeline=True)
+
+    with get_connection() as connection:
+        assert connection.execute(
+            "SELECT status FROM subtitle_revisions WHERE id = ?", (track["active_revision_id"],)
+        ).fetchone()[0] == "draft"
+        assert connection.execute(
+            "SELECT auto_config_json FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()[0] == "{broken"
+        assert connection.execute(
+            "SELECT COUNT(*) FROM workflow_jobs WHERE task_id = ? AND job_type = ?",
+            (task_id, job_service.JOB_TYPE_SUBTITLE),
+        ).fetchone()[0] == 0
+
+
 def test_skip_is_explicit_and_enters_clip_review_without_resume_job(tmp_path: Path):
     task_id, _, _ = _create_task(tmp_path)
     prepare_task_subtitle_review(task_id)
@@ -360,12 +496,85 @@ def test_legacy_skip_endpoint_uses_new_review_semantics(tmp_path: Path):
     assert result["review_url"].endswith("/clips/review")
 
 
+def test_skip_with_corrupt_config_keeps_review_gate_and_original_payload(tmp_path: Path):
+    task_id, _, _ = _create_task(tmp_path)
+    prepare_task_subtitle_review(task_id)
+    with get_connection() as connection:
+        connection.execute("UPDATE tasks SET auto_config_json = '[broken' WHERE id = ?", (task_id,))
+        connection.commit()
+    with pytest.raises(ValueError, match="配置已损坏"):
+        skip_task_subtitles_to_review(task_id)
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT status, auto_config_json FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+    assert row["status"] == TaskStatus.PENDING_SUBTITLE_REVIEW.value
+    assert row["auto_config_json"] == "[broken"
+
+
 def test_skip_rejects_active_subtitle_job(tmp_path: Path):
     task_id, _, _ = _create_task(tmp_path)
     prepare_task_subtitle_review(task_id)
     enqueue_task_subtitle_render(task_id, approve_active_revisions=True, continue_pipeline=True)
     with pytest.raises(ValueError, match="仍在运行"):
         skip_task_subtitles_and_resume(task_id)
+
+
+def test_skip_rejects_queued_pipeline_resume_after_subtitle_completion(tmp_path: Path):
+    task_id, _, _ = _create_task(tmp_path)
+    prepare_task_subtitle_review(task_id)
+    job_service.create_job(
+        task_id,
+        job_service.JOB_TYPE_AUTO_PIPELINE,
+        {"retry": False, "start_step": TaskStatus.METADATA_GENERATING.value},
+    )
+
+    with pytest.raises(ValueError, match="后续自动流水线仍在运行"):
+        skip_task_subtitles_to_review(task_id)
+
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT status, auto_config_json FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+    assert row["status"] == TaskStatus.PENDING_SUBTITLE_REVIEW.value
+    assert json.loads(row["auto_config_json"] or "{}").get("subtitle_delivery_mode") != "original"
+
+
+def test_render_enqueue_rejects_existing_pipeline_resume(tmp_path: Path):
+    task_id, _, _ = _create_task(tmp_path)
+    prepare_task_subtitle_review(task_id)
+    job_service.create_job(
+        task_id,
+        job_service.JOB_TYPE_AUTO_PIPELINE,
+        {"retry": False, "start_step": TaskStatus.METADATA_GENERATING.value},
+    )
+
+    with pytest.raises(ValueError, match="不能重复执行字幕烧录"):
+        enqueue_task_subtitle_render(
+            task_id,
+            approve_active_revisions=True,
+            continue_pipeline=True,
+        )
+
+    with get_connection() as connection:
+        subtitle_jobs = connection.execute(
+            "SELECT COUNT(*) FROM workflow_jobs WHERE task_id = ? AND job_type = ?",
+            (task_id, job_service.JOB_TYPE_SUBTITLE),
+        ).fetchone()[0]
+        revision_statuses = {
+            row[0]
+            for row in connection.execute(
+                """
+                SELECT sr.status FROM subtitle_revisions sr
+                JOIN subtitle_tracks st ON st.id = sr.track_id
+                WHERE st.task_id = ? AND st.active_revision_id = sr.id
+                """,
+                (task_id,),
+            ).fetchall()
+        }
+    assert subtitle_jobs == 0
+    assert revision_statuses == {"draft"}
 
 
 def test_pending_subtitle_review_cannot_sync_publish_center(tmp_path: Path):
@@ -375,7 +584,10 @@ def test_pending_subtitle_review_cannot_sync_publish_center(tmp_path: Path):
         sync_task_publish_jobs(task_id)
 
 
-def test_batch_execution_checkpoints_and_queues_resume(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_batch_execution_checkpoints_and_completes_with_resume_atomically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     task_id, output_id, _ = _create_task(tmp_path)
     prepare_task_subtitle_review(task_id)
     queued = enqueue_task_subtitle_render(task_id, approve_active_revisions=True, continue_pipeline=True)
@@ -394,10 +606,126 @@ def test_batch_execution_checkpoints_and_queues_resume(tmp_path: Path, monkeypat
     claimed = job_service.claim_job(queued["job_id"], "subtitle-test-worker")
     with job_service.job_lease_context(queued["job_id"], "subtitle-test-worker", claimed["lease_token"]):
         result = execute_subtitle_render_job(queued["job_id"], task_id, queued["job"]["payload_json"])
+        completed_job, resume_job, created = job_service.mark_job_completed_with_followup(
+            queued["job_id"],
+            result,
+            followup_task_id=task_id,
+            followup_job_type=job_service.JOB_TYPE_AUTO_PIPELINE,
+            followup_payload={"retry": False, "start_step": TaskStatus.METADATA_GENERATING.value},
+            result_followup_key="resume_job_id",
+        )
     checkpoint = job_service.get_job(queued["job_id"])["checkpoint_json"]
     assert result["completed_count"] == 1
     assert checkpoint["completed"][output_id]["revision_id"]
-    assert result["resume_job_id"]
+    assert result["resume_requested"] is True
+    assert result["resume_job_id"] == ""
+    assert created is True
+    assert completed_job["status"] == job_service.JOB_STATUS_COMPLETED
+    assert completed_job["result_json"]["resume_job_id"] == resume_job["id"]
+    assert resume_job["job_type"] == job_service.JOB_TYPE_AUTO_PIPELINE
+    assert resume_job["payload_json"]["start_step"] == TaskStatus.METADATA_GENERATING.value
+
+
+def test_cancelled_subtitle_job_cannot_create_resume_job(tmp_path: Path):
+    task_id, _, _ = _create_task(tmp_path)
+    prepare_task_subtitle_review(task_id)
+    queued = enqueue_task_subtitle_render(task_id, approve_active_revisions=True, continue_pipeline=True)
+    claimed = job_service.claim_job(queued["job_id"], "subtitle-cancelled-worker")
+
+    job_service.request_job_cancel(queued["job_id"])
+    with job_service.job_lease_context(
+        queued["job_id"],
+        "subtitle-cancelled-worker",
+        claimed["lease_token"],
+    ):
+        with pytest.raises(job_service.JobLeaseLostError, match="租约已失效或已取消"):
+            job_service.mark_job_completed_with_followup(
+                queued["job_id"],
+                {"resume_requested": True},
+                followup_task_id=task_id,
+                followup_job_type=job_service.JOB_TYPE_AUTO_PIPELINE,
+                followup_payload={"retry": False, "start_step": TaskStatus.METADATA_GENERATING.value},
+                result_followup_key="resume_job_id",
+            )
+
+    with get_connection() as connection:
+        resume_count = connection.execute(
+            "SELECT COUNT(*) FROM workflow_jobs WHERE task_id = ? AND job_type = ?",
+            (task_id, job_service.JOB_TYPE_AUTO_PIPELINE),
+        ).fetchone()[0]
+    assert resume_count == 0
+    assert job_service.get_job(queued["job_id"])["cancel_requested"] == 1
+
+
+def test_incompatible_existing_resume_job_rolls_back_subtitle_completion(tmp_path: Path):
+    task_id, _, _ = _create_task(tmp_path)
+    prepare_task_subtitle_review(task_id)
+    queued = enqueue_task_subtitle_render(task_id, approve_active_revisions=True, continue_pipeline=True)
+    existing_resume = job_service.create_job(
+        task_id,
+        job_service.JOB_TYPE_AUTO_PIPELINE,
+        {"retry": True, "start_step": TaskStatus.AI_ANALYZING.value},
+    )
+    claimed = job_service.claim_job(queued["job_id"], "subtitle-payload-worker")
+
+    with job_service.job_lease_context(
+        queued["job_id"],
+        "subtitle-payload-worker",
+        claimed["lease_token"],
+    ):
+        with pytest.raises(ValueError, match="执行参数不同"):
+            job_service.mark_job_completed_with_followup(
+                queued["job_id"],
+                {"resume_requested": True},
+                followup_task_id=task_id,
+                followup_job_type=job_service.JOB_TYPE_AUTO_PIPELINE,
+                followup_payload={"retry": False, "start_step": TaskStatus.METADATA_GENERATING.value},
+                result_followup_key="resume_job_id",
+            )
+
+    current = job_service.get_job(queued["job_id"])
+    assert current["status"] == job_service.JOB_STATUS_RUNNING
+    assert current["result_json"] == {}
+    assert job_service.get_job(existing_resume["id"])["payload_json"] == {
+        "retry": True,
+        "start_step": TaskStatus.AI_ANALYZING.value,
+    }
+
+
+def test_restart_recovers_completed_active_result_before_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    task_id, output_id, _ = _create_task(tmp_path)
+    prepare_task_subtitle_review(task_id)
+    queued = enqueue_task_subtitle_render(task_id, approve_active_revisions=True, continue_pipeline=True)
+    workflow_job_id = queued["job_id"]
+    revision_id = queued["job"]["payload_json"]["items"][0]["revision_id"]
+    rendered_path = tmp_path / "already-committed.mp4"
+    rendered_path.write_bytes(b"verified")
+    child = _create_subtitle_job(
+        task_id,
+        output_id,
+        "completed",
+        output_file_path=str(rendered_path),
+        revision_id=revision_id,
+        workflow_job_id=workflow_job_id,
+        is_active=1,
+    )
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE subtitle_jobs SET validation_status = 'verified', verified_at = updated_at WHERE id = ?",
+            (child["id"],),
+        )
+        connection.commit()
+    renderer = Mock(side_effect=AssertionError("已提交结果不得重复渲染"))
+    monkeypatch.setattr(
+        "app.services.subtitle_auto_workflow_service.render_subtitles_for_output_clip",
+        renderer,
+    )
+    claimed = job_service.claim_job(workflow_job_id, "subtitle-recovery-worker")
+    with job_service.job_lease_context(workflow_job_id, claimed["lease_owner"], claimed["lease_token"]):
+        result = execute_subtitle_render_job(workflow_job_id, task_id, queued["job"]["payload_json"])
+    renderer.assert_not_called()
+    assert result["completed"][output_id]["subtitle_job_id"] == child["id"]
+    assert job_service.get_job(workflow_job_id)["checkpoint_json"]["completed"][output_id]["subtitle_job_id"] == child["id"]
 
 
 def test_cancel_cleanup_is_precise_and_retry_keeps_checkpoint(
@@ -467,6 +795,176 @@ def test_cancel_cleanup_is_precise_and_retry_keeps_checkpoint(
     retried = job_service.retry_job(workflow_job_id)
     assert retried["status"] == job_service.JOB_STATUS_QUEUED
     assert retried["checkpoint_json"] == checkpoint
+
+
+def test_takeover_rejects_stale_finalize_and_reconciles_owned_temp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    task_id, output_id, _ = _create_task(tmp_path)
+    prepare_task_subtitle_review(task_id)
+    track = ensure_clip_track(task_id, output_id)
+    approve_revision(track["id"], track["active_revision_id"])
+    old_final = tmp_path / "old-active.mp4"
+    old_final.write_bytes(b"old")
+    old_active = _create_subtitle_job(
+        task_id,
+        output_id,
+        "completed",
+        output_file_path=str(old_final),
+        revision_id=track["active_revision_id"],
+        is_active=1,
+    )
+    queued = enqueue_task_subtitle_render(task_id, continue_pipeline=True)
+    workflow_job_id = queued["job_id"]
+    stale_claim = job_service.claim_job(workflow_job_id, "subtitle-stale-worker")
+    child = _create_subtitle_job(
+        task_id,
+        output_id,
+        "processing",
+        revision_id=track["active_revision_id"],
+        workflow_job_id=workflow_job_id,
+        is_active=0,
+    )
+    managed_dir = tmp_path / "managed-subtitled"
+    managed_dir.mkdir()
+    temporary_path = managed_dir / f".new-output.{workflow_job_id}.part.mp4"
+    temporary_path.write_bytes(b"new")
+    workflow_marker = hashlib.sha256(workflow_job_id.encode("utf-8")).hexdigest()[:12]
+    orphan_final = managed_dir / f"clip_subtitled_{workflow_marker}_orphan.mp4"
+    orphan_final.write_bytes(b"orphan")
+    referenced_final = managed_dir / f"clip_subtitled_{workflow_marker}_referenced.mp4"
+    referenced_final.write_bytes(b"referenced")
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE subtitle_jobs SET output_file_path = ? WHERE id = ?",
+            (str(referenced_final), old_active["id"]),
+        )
+        connection.commit()
+    final_path = managed_dir / "new-output.mp4"
+    subtitle_path = managed_dir / "revision.ass"
+    subtitle_path.write_text("subtitle", encoding="utf-8")
+    monkeypatch.setattr(
+        "app.services.subtitle_auto_workflow_service.get_artifact_paths",
+        lambda _task_id: {"subtitled_dir": managed_dir},
+    )
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE workflow_jobs SET lease_expires_at = '2000-01-01T00:00:00+00:00' WHERE id = ?",
+            (workflow_job_id,),
+        )
+        connection.commit()
+    current_claim = job_service.claim_job(workflow_job_id, "subtitle-current-worker")
+
+    with job_service.job_lease_context(
+        workflow_job_id,
+        stale_claim["lease_owner"],
+        stale_claim["lease_token"],
+    ):
+        with pytest.raises(job_service.JobLeaseLostError, match="租约已失效"):
+            _finalize_subtitle_job(
+                task_id=task_id,
+                output_clip_id=output_id,
+                revision_id=track["active_revision_id"],
+                subtitle_job_id=child["id"],
+                workflow_job_id=workflow_job_id,
+                subtitle_path=subtitle_path,
+                temporary_path=temporary_path,
+                output_path=final_path,
+                validation={"duration": 3.0},
+                encoder="libx264",
+                audio_mode="aac",
+            )
+    assert final_path.exists() is False
+    assert temporary_path.exists() is True
+    with get_connection() as connection:
+        assert connection.execute(
+            "SELECT is_active FROM subtitle_jobs WHERE id = ?", (old_active["id"],)
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT status FROM subtitle_jobs WHERE id = ?", (child["id"],)
+        ).fetchone()[0] == "processing"
+        connection.execute(
+            "UPDATE subtitle_jobs SET status = 'queued' WHERE id = ?",
+            (child["id"],),
+        )
+        connection.commit()
+
+    with job_service.job_lease_context(
+        workflow_job_id,
+        current_claim["lease_owner"],
+        current_claim["lease_token"],
+    ):
+        recovery = reconcile_interrupted_subtitle_job(workflow_job_id)
+    assert recovery["interrupted_count"] == 1
+    assert recovery["deleted_artifact_count"] == 2
+    assert temporary_path.exists() is False
+    assert orphan_final.exists() is False
+    assert referenced_final.read_bytes() == b"referenced"
+    assert old_final.read_bytes() == b"old"
+    with get_connection() as connection:
+        assert connection.execute(
+            "SELECT status FROM subtitle_jobs WHERE id = ?", (child["id"],)
+        ).fetchone()[0] == "failed"
+
+
+def test_old_revision_cannot_activate_after_editor_moves_forward(tmp_path: Path):
+    task_id, output_id, _ = _create_task(tmp_path)
+    prepare_task_subtitle_review(task_id)
+    track = ensure_clip_track(task_id, output_id)
+    approved = approve_revision(track["id"], track["active_revision_id"])
+    old_final = tmp_path / "current-active.mp4"
+    old_final.write_bytes(b"current")
+    current_active = _create_subtitle_job(
+        task_id,
+        output_id,
+        "completed",
+        output_file_path=str(old_final),
+        revision_id=approved["id"],
+        is_active=1,
+    )
+    child = _create_subtitle_job(
+        task_id,
+        output_id,
+        "processing",
+        revision_id=approved["id"],
+        is_active=0,
+    )
+    newer = create_manual_revision(
+        track["id"],
+        base_revision_id=approved["id"],
+        cues=approved["cues"],
+        note="渲染期间的新编辑",
+    )
+    temporary_path = tmp_path / ".old-revision.part.mp4"
+    temporary_path.write_bytes(b"old-revision-render")
+    final_path = tmp_path / "old-revision-final.mp4"
+    subtitle_path = tmp_path / "old-revision.ass"
+    subtitle_path.write_text("subtitle", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="revision 已变化"):
+        _finalize_subtitle_job(
+            task_id=task_id,
+            output_clip_id=output_id,
+            revision_id=approved["id"],
+            subtitle_job_id=child["id"],
+            workflow_job_id=None,
+            subtitle_path=subtitle_path,
+            temporary_path=temporary_path,
+            output_path=final_path,
+            validation={"duration": 3.0},
+            encoder="libx264",
+            audio_mode="aac",
+        )
+    assert final_path.exists() is False
+    assert get_track(track["id"])["active_revision_id"] == newer["id"]
+    with get_connection() as connection:
+        assert connection.execute(
+            "SELECT is_active FROM subtitle_jobs WHERE id = ?", (current_active["id"],)
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT is_active FROM subtitle_jobs WHERE id = ?", (child["id"],)
+        ).fetchone()[0] == 0
 
 
 def test_ffmpeg_command_maps_optional_audio_and_forces_compatible_video(tmp_path: Path):

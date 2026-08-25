@@ -102,8 +102,13 @@ def get_track(track_id: str) -> dict[str, Any]:
 
 
 def ensure_source_track(task_id: str, *, force: bool = False) -> dict[str, Any]:
+    cues, source_fingerprint, origin = _load_source_cues(task_id)
+    if not cues:
+        raise ValueError("当前任务没有可用的结构化转写或时间戳 Markdown")
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         if not connection.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone():
+            connection.rollback()
             raise ValueError("任务不存在")
         existing = connection.execute(
             """
@@ -113,25 +118,25 @@ def ensure_source_track(task_id: str, *, force: bool = False) -> dict[str, Any]:
             """,
             (task_id,),
         ).fetchone()
-
-    cues, source_fingerprint, origin = _load_source_cues(task_id)
-    if not cues:
-        raise ValueError("当前任务没有可用的结构化转写或时间戳 Markdown")
-    if existing and existing["source_fingerprint"] == source_fingerprint and existing["active_revision_id"]:
-        return get_track(existing["id"])
-    if existing and existing["has_manual_edits"] and not force:
-        with get_connection() as connection:
+        if (
+            existing
+            and existing["source_fingerprint"] == source_fingerprint
+            and existing["active_revision_id"]
+        ):
+            track_id = str(existing["id"])
+            connection.commit()
+            return get_track(track_id)
+        if existing and existing["has_manual_edits"] and not force:
             connection.execute(
                 "UPDATE subtitle_tracks SET sync_status = 'pending_source_refresh', updated_at = ? WHERE id = ?",
                 (_now_iso(), existing["id"]),
             )
             connection.commit()
-        return get_track(existing["id"])
+            return get_track(str(existing["id"]))
 
-    now = _now_iso()
-    track_id = existing["id"] if existing else uuid4().hex
-    with get_connection() as connection:
-        connection.execute("BEGIN IMMEDIATE")
+        now = _now_iso()
+        track_id = str(existing["id"]) if existing else uuid4().hex
+        base_revision_id = str(existing["active_revision_id"] or "") if existing else ""
         if not existing:
             connection.execute(
                 """
@@ -149,20 +154,31 @@ def ensure_source_track(task_id: str, *, force: bool = False) -> dict[str, Any]:
             track_id,
             cues,
             origin=origin,
-            parent_revision_id=existing["active_revision_id"] if existing else None,
+            parent_revision_id=base_revision_id or None,
             status="draft",
             note="从结构化转写生成原片主时间轴" if origin == "asr" else "从旧版 Markdown 兼容生成",
-            activate=True,
+            activate=False,
         )
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE subtitle_tracks
             SET source_fingerprint = ?, active_revision_id = ?, sync_status = 'up_to_date',
                 has_manual_edits = 0, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND is_active = 1
+              AND ((active_revision_id = ?) OR (active_revision_id IS NULL AND ? = ''))
             """,
-            (source_fingerprint, revision["id"], now, track_id),
+            (
+                source_fingerprint,
+                revision["id"],
+                now,
+                track_id,
+                base_revision_id,
+                base_revision_id,
+            ),
         )
+        if cursor.rowcount != 1:
+            connection.rollback()
+            raise SubtitleRevisionConflict("原片字幕已产生新版本，请刷新后重试")
         connection.commit()
 
     with get_connection() as connection:
@@ -179,6 +195,7 @@ def ensure_clip_track(task_id: str, output_clip_id: str) -> dict[str, Any]:
     source_track = ensure_source_track(task_id)
     output = ensure_output_clip_snapshot(task_id, output_clip_id)
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         existing = connection.execute(
             """
             SELECT * FROM subtitle_tracks
@@ -209,57 +226,92 @@ def ensure_clip_track(task_id: str, output_clip_id: str) -> dict[str, Any]:
                     now,
                 ),
             )
-            connection.commit()
         else:
             track_id = existing["id"]
+        connection.commit()
     sync_clip_track(track_id, force=False)
     return get_track(track_id)
 
 
 def sync_clip_track(track_id: str, *, force: bool = False) -> dict[str, Any]:
-    track = get_track(track_id)
-    if track["track_type"] != "clip":
+    track_hint = get_track(track_id)
+    if track_hint["track_type"] != "clip":
         raise ValueError("只有切片字幕轨可以从原片同步")
-    source_track = get_track(track["source_track_id"])
-    source_revision_id = source_track.get("active_revision_id")
-    if not source_revision_id:
-        raise ValueError("原片字幕还没有可同步 revision")
-    if track.get("has_manual_edits") and not force:
-        if track.get("source_revision_id") != source_revision_id:
-            with get_connection() as connection:
+    ensure_output_clip_snapshot(track_hint["task_id"], track_hint["output_clip_id"])
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        track_row = connection.execute(
+            "SELECT * FROM subtitle_tracks WHERE id = ? AND is_active = 1",
+            (track_id,),
+        ).fetchone()
+        if not track_row:
+            connection.rollback()
+            raise ValueError("字幕轨不存在或已停用")
+        track = dict(track_row)
+        if track["track_type"] != "clip":
+            connection.rollback()
+            raise ValueError("只有切片字幕轨可以从原片同步")
+        source_track_row = connection.execute(
+            "SELECT * FROM subtitle_tracks WHERE id = ? AND track_type = 'source' AND is_active = 1",
+            (track["source_track_id"],),
+        ).fetchone()
+        if not source_track_row or not source_track_row["active_revision_id"]:
+            connection.rollback()
+            raise ValueError("原片字幕还没有可同步 revision")
+        source_track = dict(source_track_row)
+        source_revision_id = str(source_track["active_revision_id"])
+        if track.get("has_manual_edits") and not force:
+            if track.get("source_revision_id") != source_revision_id:
                 connection.execute(
                     "UPDATE subtitle_tracks SET sync_status = 'pending_sync', updated_at = ? WHERE id = ?",
                     (_now_iso(), track_id),
                 )
-                connection.commit()
-        return get_track(track_id)
+            connection.commit()
+            return get_track(track_id)
+        if track.get("source_revision_id") == source_revision_id and track.get("active_revision_id"):
+            connection.commit()
+            return get_track(track_id)
 
-    if track.get("source_revision_id") == source_revision_id and track.get("active_revision_id"):
-        return track
-
-    output = ensure_output_clip_snapshot(track["task_id"], track["output_clip_id"])
-    source_start_ms = int(output["source_start_ms"])
-    source_end_ms = int(output["source_end_ms"])
-    source_cues = _fetch_all_revision_cues(source_revision_id)
-    local_cues = inherit_cues_for_clip(source_cues, source_start_ms, source_end_ms)
-    with get_connection() as connection:
-        connection.execute("BEGIN IMMEDIATE")
+        output = connection.execute(
+            """
+            SELECT source_start_ms, source_end_ms
+            FROM output_clip WHERE id = ? AND task_id = ?
+            """,
+            (track["output_clip_id"], track["task_id"]),
+        ).fetchone()
+        if not output or output["source_start_ms"] is None or output["source_end_ms"] is None:
+            connection.rollback()
+            raise ValueError("切片记录缺少原片时间范围")
+        source_cues = [
+            dict(row)
+            for row in connection.execute(
+                "SELECT * FROM subtitle_cues WHERE revision_id = ? ORDER BY cue_index ASC",
+                (source_revision_id,),
+            ).fetchall()
+        ]
+        local_cues = inherit_cues_for_clip(
+            source_cues,
+            int(output["source_start_ms"]),
+            int(output["source_end_ms"]),
+        )
+        base_revision_id = str(track.get("active_revision_id") or "")
         revision = _insert_revision_with_connection(
             connection,
             track_id,
             local_cues,
             origin="source_sync",
-            parent_revision_id=track.get("active_revision_id"),
+            parent_revision_id=base_revision_id or None,
             status="draft",
             note=f"继承原片 revision {source_revision_id}",
-            activate=True,
+            activate=False,
         )
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE subtitle_tracks
             SET source_revision_id = ?, source_fingerprint = ?, active_revision_id = ?,
                 sync_status = 'up_to_date', has_manual_edits = 0, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND is_active = 1
+              AND ((active_revision_id = ?) OR (active_revision_id IS NULL AND ? = ''))
             """,
             (
                 source_revision_id,
@@ -267,8 +319,13 @@ def sync_clip_track(track_id: str, *, force: bool = False) -> dict[str, Any]:
                 revision["id"],
                 _now_iso(),
                 track_id,
+                base_revision_id,
+                base_revision_id,
             ),
         )
+        if cursor.rowcount != 1:
+            connection.rollback()
+            raise SubtitleRevisionConflict("切片字幕已产生新版本，请刷新后重试同步")
         connection.commit()
     return get_track(track_id)
 
@@ -349,12 +406,20 @@ def create_manual_revision(
     cues: Iterable[Any],
     note: str = "",
 ) -> dict[str, Any]:
-    track = get_track(track_id)
-    if (track.get("active_revision_id") or None) != (base_revision_id or None):
-        raise SubtitleRevisionConflict("字幕已产生新版本，请刷新后再保存，当前编辑没有覆盖新版本")
     normalized = [_cue_input_to_dict(cue) for cue in cues]
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        track_row = connection.execute(
+            "SELECT * FROM subtitle_tracks WHERE id = ? AND is_active = 1",
+            (track_id,),
+        ).fetchone()
+        if not track_row:
+            connection.rollback()
+            raise ValueError("字幕轨不存在或已停用")
+        track = dict(track_row)
+        if (track.get("active_revision_id") or None) != (base_revision_id or None):
+            connection.rollback()
+            raise SubtitleRevisionConflict("字幕已产生新版本，请刷新后再保存，当前编辑没有覆盖新版本")
         revision = _insert_revision_with_connection(
             connection,
             track_id,
@@ -363,18 +428,22 @@ def create_manual_revision(
             parent_revision_id=base_revision_id,
             status="draft",
             note=note or "字幕编辑器自动保存",
-            activate=True,
+            activate=False,
         )
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE subtitle_tracks
             SET active_revision_id = ?, has_manual_edits = 1,
                 sync_status = CASE WHEN track_type = 'clip' THEN 'manual' ELSE sync_status END,
                 updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND is_active = 1
+              AND ((active_revision_id = ?) OR (active_revision_id IS NULL AND ? IS NULL))
             """,
-            (revision["id"], _now_iso(), track_id),
+            (revision["id"], _now_iso(), track_id, base_revision_id, base_revision_id),
         )
+        if cursor.rowcount != 1:
+            connection.rollback()
+            raise SubtitleRevisionConflict("字幕已产生新版本，请刷新后再保存，当前编辑没有覆盖新版本")
         connection.commit()
     if track["track_type"] == "source":
         _sync_dependent_clip_tracks(track["task_id"])
@@ -477,25 +546,85 @@ def get_revision_cues(
 
 
 def approve_revision(track_id: str, revision_id: str) -> dict[str, Any]:
-    get_track(track_id)
-    revision = get_revision(revision_id, include_cues=True)
-    if revision["track_id"] != track_id:
-        raise ValueError("revision 不属于当前字幕轨")
-    if int((revision.get("quality") or {}).get("error_count") or 0) > 0:
-        raise ValueError("当前字幕仍有时间重叠错误，请修正后再审核")
-    now = _now_iso()
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        connection.execute(
-            "UPDATE subtitle_revisions SET status = 'approved', approved_at = ? WHERE id = ?",
-            (now, revision_id),
-        )
-        connection.execute(
-            "UPDATE subtitle_tracks SET active_revision_id = ?, updated_at = ? WHERE id = ?",
-            (revision_id, now, track_id),
+        approve_revisions_with_connection(
+            connection,
+            [(track_id, revision_id)],
+            require_non_empty=False,
         )
         connection.commit()
     return get_revision(revision_id, include_cues=True)
+
+
+def approve_revisions_with_connection(
+    connection,
+    approvals: Iterable[tuple[str, str]],
+    *,
+    require_non_empty: bool = True,
+) -> list[dict[str, Any]]:
+    """在调用方事务内重新校验并批准一组当前 active revision。"""
+    now = _now_iso()
+    approved: list[dict[str, Any]] = []
+    for track_id, revision_id in approvals:
+        track = connection.execute(
+            "SELECT id, active_revision_id FROM subtitle_tracks WHERE id = ? AND is_active = 1",
+            (track_id,),
+        ).fetchone()
+        if not track:
+            raise ValueError("字幕轨不存在或已停用")
+        if str(track["active_revision_id"] or "") != revision_id:
+            raise SubtitleRevisionConflict("字幕已产生新版本，请刷新后重新审核")
+
+        revision = connection.execute(
+            "SELECT id, track_id, status, cue_count FROM subtitle_revisions WHERE id = ?",
+            (revision_id,),
+        ).fetchone()
+        if not revision:
+            raise ValueError("字幕 revision 不存在")
+        if revision["track_id"] != track_id:
+            raise ValueError("revision 不属于当前字幕轨")
+        if require_non_empty and int(revision["cue_count"] or 0) <= 0:
+            raise ValueError("当前字幕没有可审核内容")
+
+        cues = [
+            dict(row)
+            for row in connection.execute(
+                "SELECT * FROM subtitle_cues WHERE revision_id = ? ORDER BY cue_index ASC",
+                (revision_id,),
+            ).fetchall()
+        ]
+        if int(evaluate_subtitle_quality(cues).get("error_count") or 0) > 0:
+            raise ValueError("当前字幕仍有时间重叠错误，请修正后再审核")
+
+        cursor = connection.execute(
+            """
+            UPDATE subtitle_revisions
+            SET status = 'approved', approved_at = COALESCE(approved_at, ?)
+            WHERE id = ? AND track_id = ?
+            """,
+            (now, revision_id, track_id),
+        )
+        if cursor.rowcount != 1:
+            raise SubtitleRevisionConflict("字幕 revision 已变化，请刷新后重新审核")
+        cursor = connection.execute(
+            """
+            UPDATE subtitle_tracks SET active_revision_id = ?, updated_at = ?
+            WHERE id = ? AND active_revision_id = ? AND is_active = 1
+            """,
+            (revision_id, now, track_id, revision_id),
+        )
+        if cursor.rowcount != 1:
+            raise SubtitleRevisionConflict("字幕已产生新版本，请刷新后重新审核")
+        approved.append(
+            {
+                "id": revision_id,
+                "track_id": track_id,
+                "status": "approved",
+                "cue_count": int(revision["cue_count"] or 0),
+            }
+        )
+    return approved
 
 
 def create_suggestion_revision(
@@ -645,23 +774,40 @@ def import_subtitle_text(
         for event in document.events
         if event.type == "Dialogue" and event.end > event.start and event.plaintext.strip()
     ]
-    track = get_track(track_id)
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        track_row = connection.execute(
+            "SELECT * FROM subtitle_tracks WHERE id = ? AND is_active = 1",
+            (track_id,),
+        ).fetchone()
+        if not track_row:
+            connection.rollback()
+            raise ValueError("字幕轨不存在或已停用")
+        track = dict(track_row)
+        base_revision_id = str(track.get("active_revision_id") or "")
         revision = _insert_revision_with_connection(
             connection,
             track_id,
             cues,
             origin="import",
-            parent_revision_id=track.get("active_revision_id"),
+            parent_revision_id=base_revision_id or None,
             status="draft",
             note=note or f"导入 {format_name.upper()} 字幕",
-            activate=True,
+            activate=False,
         )
-        connection.execute(
-            "UPDATE subtitle_tracks SET active_revision_id = ?, has_manual_edits = 1, sync_status = 'manual', updated_at = ? WHERE id = ?",
-            (revision["id"], _now_iso(), track_id),
+        cursor = connection.execute(
+            """
+            UPDATE subtitle_tracks
+            SET active_revision_id = ?, has_manual_edits = 1,
+                sync_status = 'manual', updated_at = ?
+            WHERE id = ? AND is_active = 1
+              AND ((active_revision_id = ?) OR (active_revision_id IS NULL AND ? = ''))
+            """,
+            (revision["id"], _now_iso(), track_id, base_revision_id, base_revision_id),
         )
+        if cursor.rowcount != 1:
+            connection.rollback()
+            raise SubtitleRevisionConflict("字幕已产生新版本，请刷新后重新导入")
         connection.commit()
     if track["track_type"] == "source":
         _sync_dependent_clip_tracks(track["task_id"])
@@ -1268,6 +1414,7 @@ __all__ = [
     "SubtitleRevisionConflict",
     "apply_revision_operations",
     "approve_revision",
+    "approve_revisions_with_connection",
     "create_manual_revision",
     "ensure_clip_track",
     "ensure_output_clip_snapshot",

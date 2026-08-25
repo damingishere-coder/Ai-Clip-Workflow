@@ -631,86 +631,51 @@
    ],
    "loc": 2409,
    "contentHash": "fb31a5d9516731fe561cbfdeaae24f92b052ca23194294b4972664716f93d32e",
-   "score": 70,
+   "score": 69,
    "grade": "C",
    "tags": [
     "fallback",
     "silent-except",
     "legacy",
+    "duplication",
     "bloat",
-    "god-component",
-    "monkeypatch"
+    "god-component"
    ],
    "findings": [
     {
      "sev": "MED",
-     "loc": "app/services/subtitle_data_service.py:352",
-     "text": "手工 revision 的 active/base 检查在事务外，并发编辑可覆盖 active 选择。"
+     "loc": "app/services/subtitle_auto_workflow_service.py:42",
+     "text": "prepare_task_subtitle_review 先提交 ensure_source_track/ensure_clip_track 的数据库副作用，之后才在 BEGIN IMMEDIATE 中检查活动 Job、lease 和 Task 状态。并发状态变化或冲突 Job 会使入口失败，但已生成的字幕 revision/track 变更无法回滚。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/subtitle_data_service.py:489",
-     "text": "批准 revision 在事务外校验，并发或重放旧请求可回退 active 版本。"
+     "loc": "app/services/subtitle_data_service.py:1222",
+     "text": "_sync_dependent_clip_tracks 逐条调用 sync_clip_track、逐条提交。源轨 revision 已提交后，任一切片同步失败会留下部分 up_to_date、部分 pending_sync 的状态。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/subtitle_data_service.py:135",
-     "text": "source/clip track 先查后插，NULL output_clip_id 约束不足，并发可能重复源轨。"
+     "loc": "app/services/subtitle_data_service.py:1017",
+     "text": "_load_source_cues 对 checksum 不匹配、JSON 损坏或非法 segment 直接跳过；只要仍有有效 cue 就返回部分 ASR 字幕，可能生成静默缺句的 revision。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/subtitle_auto_workflow_service.py:87",
-     "text": "批量批准逐 clip 独立提交，Job 后创建；中途失败会留下部分批准。"
+     "loc": "app/services/subtitle_data_service.py:1341",
+     "text": "_probe_media_dimensions 在 ffprobe 不存在、超时、输出损坏或尺寸缺失时静默回退 1080x1920，真实媒体故障不可见。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/subtitle_data_service.py:168",
-     "text": "source revision 提交后逐 clip 独立同步，异常会形成混合版本。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/subtitle_workflow_service.py:475",
-     "text": "字幕 job 完成与激活分两次写入，迟到 worker 仍可能激活旧成片。"
+     "loc": "app/services/subtitle_data_service.py:1322",
+     "text": "字幕数据层仍集中承担 revision/cue 持久化、导入导出、ASS、波形与 ffprobe，约 1434 行；默认样式加载存在重复实现，修改影响面偏大。"
     },
     {
      "sev": "LOW",
-     "loc": "app/services/subtitle_auto_workflow_service.py:273",
-     "text": "auto_config_json 损坏时静默降为空并写回，可能丢弃其他配置。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/subtitle_data_service.py:1045",
-     "text": "字幕数据服务聚合 track、revision、cue、导入导出、波形和渲染辅助，回归半径大。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "app/services/subtitle_workflow_service.py:312",
-     "text": "统一 revision 外仍保留旧调用方适配，存在历史口径漂移成本。"
-    },
-    {
-     "sev": "MED",
-     "loc": "tests/test_subtitle_editor.py:189",
-     "text": "缺并发 save/approve/ensure track 与批处理中途失败测试。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "tests/test_subtitle_auto_workflow.py:172",
-     "text": "核心真实渲染在 FFmpeg/FFprobe 缺失时会跳过，异常 Provider 证据不足。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "app/services/subtitle_data_service.py:761",
-     "text": "波形处理把完整 PCM 捕获到内存，超长媒体存在时长线性内存峰值。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "app/services/subtitle_data_service.py:1024",
-     "text": "单条字幕文本可接近文件上限，放大渲染、导出和 Prompt 资源消耗。"
+     "loc": "app/services/subtitle_workflow_service.py:237",
+     "text": "旧版 _activate_subtitle_job 仍可无 lease/revision/status 校验激活记录；正常生产渲染路径已不再调用，但遗留兼容入口仍有风险。"
     }
    ],
    "auditedHash": "fb31a5d9516731fe561cbfdeaae24f92b052ca23194294b4972664716f93d32e",
-   "auditedAt": "2026-08-24",
-   "auditedRev": "9ae8440d80d0527c7dd296fe1331b63aac2818ea"
+   "auditedAt": "2026-08-25",
+   "auditedRev": "2a2774dd248cc80377dd7edf8e1f98e8ec2f4a20"
   },
   {
    "id": "pipeline_queue",
@@ -742,30 +707,29 @@
    ],
    "loc": 3350,
    "contentHash": "79bcc0b7de14b28318a7578e71d5281909254180ff351895b72fb10cefb87c68",
-   "score": 88,
+   "score": 87,
    "grade": "B",
    "tags": [
     "god-component",
     "bloat",
-    "legacy",
     "glue",
-    "over-fit"
+    "legacy"
    ],
    "findings": [
     {
      "sev": "LOW",
-     "loc": "app/services/pipeline_engine.py:977-1073",
-     "text": "PUBLISH_JOB_CREATING 尚无专用 reconcile 分支，恢复主要依赖重复创建的幂等去重。"
+     "loc": "app/services/pipeline_engine.py:1135",
+     "text": "PUBLISH_JOB_CREATING 重启恢复已具备 source、workflow_job_id、active output 和文件证据校验，但 provisional 仍把全部 recovered_ids 归入 created，skipped 恒为空；混合批次恢复后的计数和取消语义可能与原批次不同。"
     },
     {
-     "sev": "LOW",
-     "loc": "tests/test_pipeline_checkpoint.py:358-625; tests/test_pipeline_state_stability.py:275-313",
-     "text": "仍缺真实进程重启、lease 过期边界及发布内容证据变更的进程级回归测试。"
+     "sev": "MED",
+     "loc": "app/services/pipeline_engine.py:87",
+     "text": "PipelineEngine 约1810行、46个方法，继续集中9步执行、checkpoint/reconcile、发布证据、取消清理和失败收口；lease、旧checkpoint、切片与发布协议高度耦合，维护及回归面仍偏大。"
     }
    ],
    "auditedHash": "79bcc0b7de14b28318a7578e71d5281909254180ff351895b72fb10cefb87c68",
-   "auditedAt": "2026-08-24",
-   "auditedRev": ""
+   "auditedAt": "2026-08-25",
+   "auditedRev": "2a2774dd248cc80377dd7edf8e1f98e8ec2f4a20"
   },
   {
    "id": "publish_center",

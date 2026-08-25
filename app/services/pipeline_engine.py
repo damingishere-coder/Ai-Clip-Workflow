@@ -491,13 +491,17 @@ class PipelineEngine:
         with get_connection() as connection:
             rows = connection.execute(
                 f"""
-                SELECT id, output_clip_id, platform, publish_mode, video_source,
-                       video_file_path, cover_file_path, scheduled_at, status,
-                       title, description, caption, tags, hashtags, cover_text,
-                       error_code, provider_response
-                FROM publish_jobs
-                WHERE task_id = ? AND id IN ({placeholders})
-                ORDER BY id
+                SELECT pj.id, pj.output_clip_id, pj.platform, pj.publish_mode, pj.video_source,
+                       pj.video_file_path, pj.cover_file_path, pj.scheduled_at, pj.status,
+                       pj.title, pj.description, pj.caption, pj.tags, pj.hashtags, pj.cover_text,
+                       pj.error_code, pj.provider_response,
+                       oc.status AS output_status, oc.is_active AS output_is_active,
+                       oc.cut_run_id, cr.status AS cut_run_status, cr.is_active AS cut_run_is_active
+                FROM publish_jobs pj
+                LEFT JOIN output_clip oc ON oc.id = pj.output_clip_id AND oc.task_id = pj.task_id
+                LEFT JOIN cut_runs cr ON cr.id = oc.cut_run_id AND cr.task_id = oc.task_id
+                WHERE pj.task_id = ? AND pj.id IN ({placeholders})
+                ORDER BY pj.id
                 """,
                 (task_id, *normalized_ids),
             ).fetchall()
@@ -514,6 +518,13 @@ class PipelineEngine:
                 raise PipelineCheckpointError("发布任务 provider_response 已损坏") from exc
             if not isinstance(provider_response, dict):
                 raise PipelineCheckpointError("发布任务 provider_response 不是对象")
+            if str(row["output_status"] or "") != "completed" or not bool(row["output_is_active"]):
+                raise PipelineCheckpointError("发布任务对应的切片已失活或未完成")
+            if row["cut_run_id"] and (
+                str(row["cut_run_status"] or "") not in {"completed", "completed_with_errors"}
+                or not bool(row["cut_run_is_active"])
+            ):
+                raise PipelineCheckpointError("发布任务对应的切片批次已失活或未完成")
             status = str(row["status"] or "").upper()
             if status not in allowed_statuses and not (
                 status == "CANCELLED" and str(row["error_code"] or "") == "user_removed"
@@ -544,6 +555,16 @@ class PipelineEngine:
                 raise PipelineCheckpointError("发布草稿的封面文件无效")
             from app.services.transcription_checkpoint_service import fingerprint_file
 
+            video_fingerprint = fingerprint_file(video_path)
+            cover_fingerprint = fingerprint_file(cover_path)
+            if (
+                int(provider_response.get("video_file_size") or -1) != video_path.stat().st_size
+                or str(provider_response.get("video_file_fingerprint") or "") != video_fingerprint
+                or int(provider_response.get("cover_file_size") or -1) != cover_path.stat().st_size
+                or str(provider_response.get("cover_file_fingerprint") or "") != cover_fingerprint
+            ):
+                raise PipelineCheckpointError("发布草稿媒体与创建时指纹不一致")
+
             evidence.append(
                 {
                     "id": str(row["id"]),
@@ -553,7 +574,7 @@ class PipelineEngine:
                     "video_source": video_source,
                     "video_file_path": str(video_path.resolve()),
                     "video_file_size": int(video_path.stat().st_size),
-                    "video_file_fingerprint": fingerprint_file(video_path),
+                    "video_file_fingerprint": video_fingerprint,
                     "cover_file_path": str(cover_path.resolve()),
                     "cover_file": self._file_evidence(cover_path),
                     "subtitle_delivery_mode": str(
@@ -1075,6 +1096,50 @@ class PipelineEngine:
                 outputs = self._checkpoint_outputs(task_id, step, provisional)
                 return self._restore_checkpoint_step(task_id, step, outputs)
             return None
+        if step == TaskStatus.PUBLISH_JOB_CREATING:
+            schedule_path = paths["analysis_path"].parent / "auto_publish_schedule.json"
+            baseline_schedule = (
+                baseline.get("schedule") if isinstance(baseline.get("schedule"), dict) else {}
+            )
+            if not baseline_schedule or self._safe_file_evidence(schedule_path) != baseline_schedule:
+                return None
+            lease = job_service.current_job_lease()
+            if not lease:
+                raise job_service.JobLeaseLostError("发布草稿恢复缺少当前 Workflow Job 租约")
+            with get_connection() as connection:
+                rows = connection.execute(
+                    "SELECT id, provider_response FROM publish_jobs WHERE task_id = ?",
+                    (task_id,),
+                ).fetchall()
+            recovered_ids: list[str] = []
+            for row in rows:
+                try:
+                    provider_response = json.loads(str(row["provider_response"] or "{}"))
+                except json.JSONDecodeError:
+                    continue
+                if (
+                    isinstance(provider_response, dict)
+                    and str(provider_response.get("source") or "") == "auto_pipeline"
+                    and str(provider_response.get("workflow_job_id") or "") == lease[0]
+                ):
+                    recovered_ids.append(str(row["id"]))
+            if not recovered_ids:
+                return None
+            try:
+                job_evidence = self._publish_job_evidence(task_id, recovered_ids)
+                self._verify_publish_schedule_pairs(schedule_path, job_evidence)
+            except PipelineCheckpointError:
+                return None
+            from app.services.publish_service import get_publish_job
+
+            provisional = {
+                "created": [get_publish_job(job_id) for job_id in recovered_ids],
+                "skipped": [],
+                "created_count": len(recovered_ids),
+                "skipped_count": 0,
+            }
+            outputs = self._checkpoint_outputs(task_id, step, provisional)
+            return self._restore_checkpoint_step(task_id, step, outputs)
 
         artifact_by_step = {
             TaskStatus.PREPARING_SOURCE: paths["task_dir"] / "source" / "source_reference.json",

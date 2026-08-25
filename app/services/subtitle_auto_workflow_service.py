@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from pathlib import Path
 from typing import Any
 
 from app.db.database import get_connection
@@ -10,7 +12,8 @@ from app.models.task import TaskStatus
 from app.services import job_service
 from app.services.storage_service import get_artifact_paths, resolve_video_file_path
 from app.services.subtitle_data_service import (
-    approve_revision,
+    SubtitleRevisionConflict,
+    approve_revisions_with_connection,
     ensure_clip_track,
     ensure_source_track,
     get_revision,
@@ -29,6 +32,13 @@ def prepare_task_subtitle_review(task_id: str) -> dict[str, Any]:
     task = task_service.get_task(task_id, include_video_probe=False)
     if not task:
         raise ValueError("任务不存在")
+    allowed_statuses = {
+        TaskStatus.VIDEO_CUTTING.value,
+        TaskStatus.SUBTITLE_DRAFTING.value,
+        TaskStatus.PENDING_SUBTITLE_REVIEW.value,
+    }
+    if task.get("status") not in allowed_statuses:
+        raise ValueError("当前任务状态不能进入字幕审核，请刷新后重试")
     source_track = ensure_source_track(task_id)
     output_clips = [
         item
@@ -38,7 +48,64 @@ def prepare_task_subtitle_review(task_id: str) -> dict[str, Any]:
     if not output_clips:
         raise ValueError("没有可生成字幕草稿的成功切片")
     tracks = [ensure_clip_track(task_id, item["id"]) for item in output_clips]
-    task_service.update_task_status(task_id, TaskStatus.PENDING_SUBTITLE_REVIEW)
+    lease = job_service.current_job_lease()
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        active_job = connection.execute(
+            """
+            SELECT id FROM workflow_jobs
+            WHERE task_id = ? AND status IN (?, ?)
+              AND (? = '' OR id != ?)
+            LIMIT 1
+            """,
+            (
+                task_id,
+                job_service.JOB_STATUS_QUEUED,
+                job_service.JOB_STATUS_RUNNING,
+                lease[0] if lease else "",
+                lease[0] if lease else "",
+            ),
+        ).fetchone()
+        if active_job:
+            connection.rollback()
+            raise ValueError("任务已有其他后台 Job，不能重复进入字幕审核")
+        lease_condition = ""
+        lease_params: tuple[str, ...] = ()
+        if lease:
+            lease_condition = """
+                AND EXISTS (
+                    SELECT 1 FROM workflow_jobs
+                    WHERE id = ? AND task_id = ? AND status = 'running'
+                      AND lease_owner = ? AND lease_token = ?
+                      AND lease_expires_at > strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
+                      AND cancel_requested = 0
+                )
+            """
+            lease_params = (lease[0], task_id, lease[1], lease[2])
+        cursor = connection.execute(
+            f"""
+            UPDATE tasks
+            SET status = ?, progress = ?, error_message = NULL, last_error = NULL, updated_at = ?
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+              AND status IN (?, ?, ?) {lease_condition}
+            """,
+            (
+                TaskStatus.PENDING_SUBTITLE_REVIEW.value,
+                task_service.STATUS_PROGRESS[TaskStatus.PENDING_SUBTITLE_REVIEW.value],
+                task_service._now_iso(),
+                task_id,
+                TaskStatus.VIDEO_CUTTING.value,
+                TaskStatus.SUBTITLE_DRAFTING.value,
+                TaskStatus.PENDING_SUBTITLE_REVIEW.value,
+                *lease_params,
+            ),
+        )
+        if cursor.rowcount != 1:
+            connection.rollback()
+            if lease:
+                raise job_service.JobLeaseLostError("字幕草稿提交前 Workflow Job 租约已失效")
+            raise ValueError("任务状态已变化，不能进入字幕审核")
+        connection.commit()
     append_task_log(task_id, f"字幕草稿已生成：{len(tracks)} 条，流水线暂停等待人工审核")
     return {
         "status": "pending_subtitle_review",
@@ -76,18 +143,16 @@ def enqueue_task_subtitle_render(
         raise ValueError("没有可烧录字幕的成功切片")
 
     items = []
+    approvals: list[tuple[str, str]] = []
     for output_clip in output_clips:
         track = ensure_clip_track(task_id, output_clip["id"])
         revision_id = str(track.get("active_revision_id") or "")
         if not revision_id:
             raise ValueError(f"{output_clip.get('output_file_name') or output_clip['id']} 没有字幕 revision")
-        revision = get_revision(revision_id, include_cues=True)
+        revision = get_revision(revision_id)
         if int(revision.get("cue_count") or 0) <= 0:
             raise ValueError(f"{output_clip.get('output_file_name') or output_clip['id']} 没有可烧录的字幕内容")
-        if approve_active_revisions:
-            revision = approve_revision(track["id"], revision_id)
-        if revision.get("status") != "approved":
-            raise ValueError(f"{output_clip.get('output_file_name') or output_clip['id']} 的字幕尚未审核")
+        approvals.append((str(track["id"]), revision_id))
         items.append(
             {
                 "output_clip_id": output_clip["id"],
@@ -96,19 +161,63 @@ def enqueue_task_subtitle_render(
             }
         )
 
-    job, created = job_service.create_or_get_active_job(
-        task_id=task_id,
-        job_type=job_service.JOB_TYPE_SUBTITLE,
-        payload={
-            "items": items,
-            "continue_pipeline": continue_pipeline,
-            "subtitle_delivery_mode": "subtitled",
-        },
-    )
-    if continue_pipeline and not bool((job.get("payload_json") or {}).get("continue_pipeline")):
-        raise ValueError("已有单条字幕任务正在运行，请等待完成或取消后再启动批量烧录")
-    if continue_pipeline:
-        _set_subtitle_delivery_mode(task_id, "subtitled")
+    job_payload = {
+        "items": items,
+        "continue_pipeline": continue_pipeline,
+        "subtitle_delivery_mode": "subtitled",
+    }
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        if continue_pipeline:
+            current_task = connection.execute(
+                "SELECT status FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+                (task_id,),
+            ).fetchone()
+            if not current_task or current_task["status"] != TaskStatus.PENDING_SUBTITLE_REVIEW.value:
+                connection.rollback()
+                raise ValueError("当前任务已离开字幕审核暂停状态，请刷新后重试")
+            active_resume = connection.execute(
+                """
+                SELECT 1 FROM workflow_jobs
+                WHERE task_id = ? AND job_type = ? AND status IN (?, ?)
+                LIMIT 1
+                """,
+                (
+                    task_id,
+                    job_service.JOB_TYPE_AUTO_PIPELINE,
+                    job_service.JOB_STATUS_QUEUED,
+                    job_service.JOB_STATUS_RUNNING,
+                ),
+            ).fetchone()
+            if active_resume:
+                connection.rollback()
+                raise ValueError("后续自动流水线已排队或运行，不能重复执行字幕烧录")
+        if approve_active_revisions:
+            approve_revisions_with_connection(connection, approvals)
+        else:
+            _validate_approved_revisions_with_connection(connection, approvals)
+        job_id, created = job_service.create_or_get_active_job_with_connection(
+            connection,
+            task_id=task_id,
+            job_type=job_service.JOB_TYPE_SUBTITLE,
+            payload=job_payload,
+        )
+        existing_payload_row = connection.execute(
+            "SELECT payload_json FROM workflow_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        try:
+            existing_payload = json.loads(existing_payload_row["payload_json"] or "{}")
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("已有字幕 Job 的 payload 已损坏，请先处理该任务") from exc
+        if existing_payload != job_payload:
+            raise ValueError("已有不同内容的字幕任务正在排队或运行，请等待完成或取消后重试")
+        if continue_pipeline:
+            _set_subtitle_delivery_mode_with_connection(connection, task_id, "subtitled")
+        connection.commit()
+    job = job_service.get_job(job_id)
+    if not job:
+        raise RuntimeError("字幕 Job 创建后无法读取")
     append_task_log(
         task_id,
         f"字幕批量烧录{'已加入队列' if created else '已在队列中'}：{len(items)} 条",
@@ -149,23 +258,28 @@ def skip_task_subtitles_to_review(task_id: str) -> dict[str, Any]:
         active_subtitle_job = connection.execute(
             """
             SELECT 1 FROM workflow_jobs
-            WHERE task_id = ? AND job_type = ? AND status IN (?, ?)
+            WHERE task_id = ? AND job_type IN (?, ?) AND status IN (?, ?)
             LIMIT 1
             """,
             (
                 task_id,
                 job_service.JOB_TYPE_SUBTITLE,
+                job_service.JOB_TYPE_AUTO_PIPELINE,
                 job_service.JOB_STATUS_QUEUED,
                 job_service.JOB_STATUS_RUNNING,
             ),
         ).fetchone()
         if active_subtitle_job:
             connection.rollback()
-            raise ValueError("字幕烧录仍在运行，请先取消并等待停止后再选择跳过字幕")
+            raise ValueError("字幕烧录或后续自动流水线仍在运行，请先取消并等待停止后再选择跳过字幕")
         try:
             config = json.loads(task["auto_config_json"] or "{}")
-        except json.JSONDecodeError:
-            config = {}
+        except (TypeError, json.JSONDecodeError) as exc:
+            connection.rollback()
+            raise ValueError("任务字幕配置已损坏，请先修复配置后重试") from exc
+        if not isinstance(config, dict):
+            connection.rollback()
+            raise ValueError("任务字幕配置格式无效，请先修复配置后重试")
         config["subtitle_delivery_mode"] = "original"
         config["subtitle_decided_at"] = now
         connection.execute(
@@ -203,6 +317,7 @@ def execute_subtitle_render_job(job_id: str, task_id: str, payload: dict[str, An
     items = payload.get("items") or []
     if not isinstance(items, list) or not items:
         raise ValueError("字幕 Job 没有待渲染条目")
+    reconcile_interrupted_subtitle_job(job_id)
     job = job_service.get_job(job_id) or {}
     checkpoint = job.get("checkpoint_json") if isinstance(job.get("checkpoint_json"), dict) else {}
     completed = dict(checkpoint.get("completed") or {})
@@ -213,6 +328,19 @@ def execute_subtitle_render_job(job_id: str, task_id: str, payload: dict[str, An
         if not output_clip_id or not revision_id:
             raise ValueError("字幕 Job 条目缺少 output_clip_id 或 revision_id")
         if _checkpoint_result_is_valid(task_id, output_clip_id, revision_id, completed.get(output_clip_id)):
+            continue
+        recovered = _find_recoverable_subtitle_result(
+            task_id,
+            output_clip_id,
+            revision_id,
+            workflow_job_id=job_id,
+        )
+        if recovered:
+            completed[output_clip_id] = recovered
+            job_service.update_job_checkpoint(
+                job_id,
+                {"completed": completed, "completed_count": len(completed), "total_count": total},
+            )
             continue
         if job_service.is_cancel_requested(job_id):
             raise SubtitleRenderCancelled("用户已取消字幕批量烧录")
@@ -241,16 +369,13 @@ def execute_subtitle_render_job(job_id: str, task_id: str, payload: dict[str, An
             {"completed": completed, "completed_count": len(completed), "total_count": total},
         )
 
-    resume_job = None
-    if payload.get("continue_pipeline"):
-        resume_job, _ = _enqueue_pipeline_resume(task_id)
-        append_task_log(task_id, "字幕成片全部验证通过，已排队恢复自动文案与发送中心流程")
     return {
         "task_id": task_id,
         "completed_count": len(completed),
         "total_count": total,
         "completed": completed,
-        "resume_job_id": resume_job["id"] if resume_job else "",
+        "resume_requested": bool(payload.get("continue_pipeline")),
+        "resume_job_id": "",
     }
 
 
@@ -265,9 +390,9 @@ def cleanup_interrupted_subtitle_job(
     """父 Worker 强制终止子进程后，修正从属字幕记录并清理精确临时文件。"""
     from app.services.task_service import _now_iso
 
-    now = _now_iso()
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        now = _now_iso()
         row = connection.execute(
             """
             SELECT task_id FROM workflow_jobs
@@ -287,13 +412,102 @@ def cleanup_interrupted_subtitle_job(
             """,
             (status, message, now, workflow_job_id),
         )
-        directory = get_artifact_paths(str(row["task_id"]))["subtitled_dir"]
-        if directory.exists():
-            for path in directory.glob(f"*.{workflow_job_id}.part.mp4"):
-                if path.is_file():
-                    path.unlink(missing_ok=True)
         connection.commit()
+    _, failures = _cleanup_subtitle_attempt_files(str(row["task_id"]), workflow_job_id)
+    if failures:
+        append_task_log(
+            str(row["task_id"]),
+            f"字幕中断产物有 {len(failures)} 个暂时无法删除，将在下次接管时重试：{'; '.join(failures)}",
+        )
     return True
+
+
+def reconcile_interrupted_subtitle_job(workflow_job_id: str) -> dict[str, Any]:
+    """新执行接管后收口旧 processing 记录，并再次清理本 Job 的临时文件。"""
+    from app.services.task_service import _now_iso
+
+    lease = job_service.current_job_lease()
+    if not lease or lease[0] != workflow_job_id:
+        raise job_service.JobLeaseLostError(f"字幕 Job 缺少当前执行租约：{workflow_job_id}")
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        now = _now_iso()
+        row = connection.execute(
+            """
+            SELECT task_id FROM workflow_jobs
+            WHERE id = ? AND status = 'running' AND lease_owner = ? AND lease_token = ?
+              AND lease_expires_at > ? AND cancel_requested = 0
+            """,
+            (workflow_job_id, lease[1], lease[2], now),
+        ).fetchone()
+        if not row:
+            connection.rollback()
+            raise job_service.JobLeaseLostError(f"字幕 Job 接管前租约已失效：{workflow_job_id}")
+        cursor = connection.execute(
+            """
+            UPDATE subtitle_jobs
+            SET status = 'failed', error_message = '上一次执行中断，已由当前 Worker 接管', updated_at = ?
+            WHERE workflow_job_id = ? AND status IN ('processing', 'queued') AND is_active = 0
+            """,
+            (now, workflow_job_id),
+        )
+        interrupted_count = cursor.rowcount
+        connection.commit()
+    deleted_count, failures = _cleanup_subtitle_attempt_files(str(row["task_id"]), workflow_job_id)
+    if failures:
+        append_task_log(
+            str(row["task_id"]),
+            f"字幕接管时有 {len(failures)} 个中断产物仍被占用，将保留为非活跃残留：{'; '.join(failures)}",
+        )
+    return {
+        "interrupted_count": interrupted_count,
+        "deleted_artifact_count": deleted_count,
+        "cleanup_failures": failures,
+    }
+
+
+def _cleanup_subtitle_attempt_files(task_id: str, workflow_job_id: str) -> tuple[int, list[str]]:
+    directory = get_artifact_paths(task_id)["subtitled_dir"]
+    if not directory.exists() or not directory.is_dir():
+        return 0, []
+    workflow_marker = hashlib.sha256(workflow_job_id.encode("utf-8")).hexdigest()[:12]
+    expected_temp_suffixes = {
+        f".{workflow_job_id}.part.mp4",
+        f".{workflow_marker}.part.mp4",
+    }
+    expected_final_marker = f"_subtitled_{workflow_marker}_"
+    with get_connection() as connection:
+        referenced_names = {
+            Path(str(row["output_file_path"])).name
+            for row in connection.execute(
+                """
+                SELECT output_file_path FROM subtitle_jobs
+                WHERE task_id = ? AND COALESCE(output_file_path, '') != ''
+                """,
+                (task_id,),
+            ).fetchall()
+        }
+    deleted = 0
+    failures: list[str] = []
+    try:
+        candidates = list(directory.iterdir())
+    except OSError as exc:
+        return 0, [f"{directory.name}: {exc}"]
+    for path in candidates:
+        try:
+            is_owned_temp = any(path.name.endswith(suffix) for suffix in expected_temp_suffixes)
+            is_owned_orphan_final = (
+                expected_final_marker in path.name
+                and path.name.endswith(".mp4")
+                and path.name not in referenced_names
+            )
+            if (not is_owned_temp and not is_owned_orphan_final) or not path.is_file():
+                continue
+            path.unlink(missing_ok=True)
+            deleted += 1
+        except OSError as exc:
+            failures.append(f"{path.name}: {exc}")
+    return deleted, failures
 
 
 def _checkpoint_result_is_valid(
@@ -312,7 +526,7 @@ def _checkpoint_result_is_valid(
             """
             SELECT output_file_path FROM subtitle_jobs
             WHERE id = ? AND task_id = ? AND output_clip_id = ? AND revision_id = ?
-              AND status = 'completed' AND validation_status = 'verified'
+              AND status = 'completed' AND validation_status = 'verified' AND is_active = 1
             """,
             (subtitle_job_id, task_id, output_clip_id, revision_id),
         ).fetchone()
@@ -320,32 +534,83 @@ def _checkpoint_result_is_valid(
     return bool(path and path.exists() and path.is_file())
 
 
-def _set_subtitle_delivery_mode(task_id: str, mode: str) -> None:
+def _find_recoverable_subtitle_result(
+    task_id: str,
+    output_clip_id: str,
+    revision_id: str,
+    *,
+    workflow_job_id: str,
+) -> dict[str, str] | None:
+    """恢复“DB 已提交但 checkpoint 尚未写入”的同一执行结果。"""
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT sj.id, sj.output_file_path
+            FROM subtitle_jobs sj
+            JOIN subtitle_tracks st
+              ON st.task_id = sj.task_id AND st.output_clip_id = sj.output_clip_id
+             AND st.track_type = 'clip' AND st.is_active = 1
+            JOIN subtitle_revisions sr ON sr.id = sj.revision_id AND sr.track_id = st.id
+            WHERE sj.task_id = ? AND sj.output_clip_id = ? AND sj.revision_id = ?
+              AND sj.workflow_job_id = ? AND sj.status = 'completed'
+              AND sj.validation_status = 'verified' AND sj.is_active = 1
+              AND st.active_revision_id = sj.revision_id AND sr.status = 'approved'
+            ORDER BY sj.updated_at DESC LIMIT 1
+            """,
+            (task_id, output_clip_id, revision_id, workflow_job_id),
+        ).fetchone()
+    path = resolve_video_file_path(row["output_file_path"]) if row else None
+    if not path or not path.exists() or not path.is_file():
+        return None
+    return {
+        "revision_id": revision_id,
+        "subtitle_job_id": str(row["id"]),
+        "output_file_path": str(row["output_file_path"]),
+    }
+
+
+def _validate_approved_revisions_with_connection(
+    connection,
+    approvals: list[tuple[str, str]],
+) -> None:
+    for track_id, revision_id in approvals:
+        row = connection.execute(
+            """
+            SELECT st.active_revision_id, sr.track_id, sr.status, sr.cue_count
+            FROM subtitle_tracks st
+            JOIN subtitle_revisions sr ON sr.id = ?
+            WHERE st.id = ? AND st.is_active = 1
+            """,
+            (revision_id, track_id),
+        ).fetchone()
+        if not row or row["track_id"] != track_id:
+            raise ValueError("字幕 revision 不属于当前字幕轨")
+        if str(row["active_revision_id"] or "") != revision_id:
+            raise SubtitleRevisionConflict("字幕已产生新版本，请刷新后重新烧录")
+        if row["status"] != "approved":
+            raise ValueError("存在尚未审核的字幕 revision")
+        if int(row["cue_count"] or 0) <= 0:
+            raise ValueError("存在没有可烧录内容的字幕 revision")
+
+
+def _set_subtitle_delivery_mode_with_connection(connection, task_id: str, mode: str) -> None:
     if mode not in {"subtitled", "original"}:
         raise ValueError("字幕交付模式无效")
     from app.services.task_service import _now_iso
 
     now = _now_iso()
-    with get_connection() as connection:
-        row = connection.execute("SELECT auto_config_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        if not row:
-            raise ValueError("任务不存在")
-        try:
-            config = json.loads(row["auto_config_json"] or "{}")
-        except json.JSONDecodeError:
-            config = {}
-        config["subtitle_delivery_mode"] = mode
-        config["subtitle_decided_at"] = now
-        connection.execute(
-            "UPDATE tasks SET auto_config_json = ?, updated_at = ? WHERE id = ?",
-            (json.dumps(config, ensure_ascii=False), now, task_id),
-        )
-        connection.commit()
-
-
-def _enqueue_pipeline_resume(task_id: str) -> tuple[dict[str, Any], bool]:
-    return job_service.create_or_get_active_job(
-        task_id=task_id,
-        job_type=job_service.JOB_TYPE_AUTO_PIPELINE,
-        payload={"retry": False, "start_step": TaskStatus.METADATA_GENERATING.value},
+    row = connection.execute("SELECT auto_config_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if not row:
+        raise ValueError("任务不存在")
+    try:
+        config = json.loads(row["auto_config_json"] or "{}")
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("任务字幕配置已损坏，请先修复配置后重试") from exc
+    if not isinstance(config, dict):
+        raise ValueError("任务字幕配置格式无效，请先修复配置后重试")
+    config["subtitle_delivery_mode"] = mode
+    config["subtitle_decided_at"] = now
+    connection.execute(
+        "UPDATE tasks SET auto_config_json = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(config, ensure_ascii=False), now, task_id),
     )

@@ -3,6 +3,7 @@
 从 task_service 中拆分出来的字幕样式、ASS 渲染和字幕烧录函数。
 """
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -253,23 +254,54 @@ def _activate_subtitle_job(task_id: str, output_clip_id: str, job_id: str) -> No
         connection.commit()
 
 
-def _update_subtitle_job_status(job_id: str, status: str, error_message: str = "") -> None:
+def _update_subtitle_job_status(
+    job_id: str,
+    status: str,
+    error_message: str = "",
+    *,
+    workflow_job_id: str | None = None,
+) -> None:
     """更新字幕任务状态（不改变 is_active）"""
     from app.db.database import get_connection
     from app.services.task_service import _now_iso
 
-    now = _now_iso()
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        now = _now_iso()
+        lease = job_service.current_job_lease() if workflow_job_id else None
+        if workflow_job_id:
+            if not lease or lease[0] != workflow_job_id:
+                connection.rollback()
+                raise job_service.JobLeaseLostError(f"字幕 Job 缺少当前执行租约：{workflow_job_id}")
+            active = connection.execute(
+                """
+                SELECT 1 FROM workflow_jobs
+                WHERE id = ? AND status = 'running' AND lease_owner = ? AND lease_token = ?
+                  AND lease_expires_at > ?
+                """,
+                (workflow_job_id, lease[1], lease[2], now),
+            ).fetchone()
+            if not active:
+                connection.rollback()
+                raise job_service.JobLeaseLostError(f"字幕 Job 租约已失效：{workflow_job_id}")
+        condition = "id = ?"
+        params: tuple[str, ...] = (job_id,)
+        if workflow_job_id:
+            condition += " AND workflow_job_id = ? AND is_active = 0"
+            params = (job_id, workflow_job_id)
         if error_message:
-            connection.execute(
-                "UPDATE subtitle_jobs SET status = ?, error_message = ?, updated_at = ? WHERE id = ?",
-                (status, error_message, now, job_id),
+            cursor = connection.execute(
+                f"UPDATE subtitle_jobs SET status = ?, error_message = ?, updated_at = ? WHERE {condition}",
+                (status, error_message, now, *params),
             )
         else:
-            connection.execute(
-                "UPDATE subtitle_jobs SET status = ?, updated_at = ? WHERE id = ?",
-                (status, now, job_id),
+            cursor = connection.execute(
+                f"UPDATE subtitle_jobs SET status = ?, updated_at = ? WHERE {condition}",
+                (status, now, *params),
             )
+        if workflow_job_id and cursor.rowcount != 1:
+            connection.rollback()
+            raise job_service.JobLeaseLostError(f"字幕子任务已被其他执行收口：{job_id}")
         connection.commit()
 
 
@@ -371,6 +403,10 @@ class SubtitleRenderCancelled(RuntimeError):
     pass
 
 
+def _workflow_file_marker(workflow_job_id: str) -> str:
+    return hashlib.sha256(workflow_job_id.encode("utf-8")).hexdigest()[:12]
+
+
 def render_subtitles_for_output_clip(
     task_id: str,
     output_clip_id: str,
@@ -409,9 +445,10 @@ def render_subtitles_for_output_clip(
         raise ValueError("只有已审核的字幕 revision 才能烧录")
     paths = get_artifact_paths(task_id)
     paths["subtitled_dir"].mkdir(parents=True, exist_ok=True)
-    render_token = uuid4().hex[:10]
+    workflow_marker = _workflow_file_marker(workflow_job_id) if workflow_job_id else ""
+    render_token = f"{workflow_marker}_{uuid4().hex[:10]}" if workflow_marker else uuid4().hex[:10]
     output_path = paths["subtitled_dir"] / f"{input_path.stem}_subtitled_{render_token}.mp4"
-    temp_owner = workflow_job_id or render_token
+    temp_owner = workflow_marker or render_token
     temporary_path = output_path.with_name(f".{output_path.stem}.{temp_owner}.part.mp4")
 
     # === 版本化：创建新的字幕 job，不覆盖旧的 ===
@@ -449,52 +486,45 @@ def render_subtitles_for_output_clip(
             source_duration=float(source_probe.get("duration") or 0),
             source_has_audio=bool(source_probe.get("has_audio")),
         )
-        temporary_path.replace(output_path)
+        _finalize_subtitle_job(
+            task_id=task_id,
+            output_clip_id=output_clip_id,
+            revision_id=selected_revision_id,
+            subtitle_job_id=job["id"],
+            workflow_job_id=workflow_job_id,
+            subtitle_path=subtitle_path,
+            temporary_path=temporary_path,
+            output_path=output_path,
+            validation=validation,
+            encoder=encoder,
+            audio_mode=audio_mode,
+        )
     except job_service.JobLeaseLostError:
         temporary_path.unlink(missing_ok=True)
         raise
     except SubtitleRenderCancelled as exc:
         temporary_path.unlink(missing_ok=True)
-        _update_subtitle_job_status(job["id"], "cancelled", error_message=str(exc))
+        _update_subtitle_job_status(
+            job["id"],
+            "cancelled",
+            error_message=str(exc),
+            workflow_job_id=workflow_job_id,
+        )
         append_task_log(task_id, f"字幕烧录已取消：{input_path.name}")
         raise
     except Exception as exc:
         temporary_path.unlink(missing_ok=True)
         error = str(exc)
         # 失败时：标记当前 job 为 failed，不激活，旧字幕保持 active
-        _update_subtitle_job_status(job["id"], "failed", error_message=error)
+        _update_subtitle_job_status(
+            job["id"],
+            "failed",
+            error_message=error,
+            workflow_job_id=workflow_job_id,
+        )
         append_task_log(task_id, f"自动加字幕失败：{input_path.name}，原因：{error}")
         raise
 
-    # 成功：更新 job 信息并切换为 active
-    # 验证成功后才写入最终路径并激活，失败时旧 active 字幕成片保持不变。
-    from app.db.database import get_connection
-    from app.services.task_service import _now_iso
-
-    now = _now_iso()
-    with get_connection() as connection:
-        connection.execute(
-            """
-            UPDATE subtitle_jobs
-            SET status = 'completed', subtitle_file_path = ?, output_file_path = ?,
-                error_message = '', validation_status = 'verified', validation_json = ?,
-                encoder = ?, verified_at = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                str(subtitle_path),
-                str(output_path),
-                json.dumps({**validation, "audio_mode": audio_mode}, ensure_ascii=False),
-                encoder,
-                now,
-                now,
-                job["id"],
-            ),
-        )
-        connection.commit()
-
-    # 激活当前字幕 job，旧字幕 job 标记为非活跃
-    _activate_subtitle_job(task_id, output_clip_id, job["id"])
     append_task_log(task_id, f"自动加字幕完成：{output_path.name}")
 
     job = _subtitle_job_for_output(task_id, output_clip_id, active_only=False) or job
@@ -505,6 +535,132 @@ def render_subtitles_for_output_clip(
         "output_clip": get_output_clip(task_id, output_clip_id),
         "media_url": f"/media/tasks/{task_id}/subtitled-clips/{output_clip_id}",
     }
+
+
+def _finalize_subtitle_job(
+    *,
+    task_id: str,
+    output_clip_id: str,
+    revision_id: str,
+    subtitle_job_id: str,
+    workflow_job_id: str | None,
+    subtitle_path: Path,
+    temporary_path: Path,
+    output_path: Path,
+    validation: dict[str, Any],
+    encoder: str,
+    audio_mode: str,
+) -> None:
+    """在 lease/当前 revision 保护下原子切换最终文件与 active 字幕记录。"""
+    from app.db.database import get_connection
+    from app.services.task_service import _now_iso
+
+    lease = job_service.current_job_lease() if workflow_job_id else None
+    if workflow_job_id and (not lease or lease[0] != workflow_job_id):
+        raise job_service.JobLeaseLostError(f"字幕 Job 缺少当前执行租约：{workflow_job_id}")
+    final_file_created = False
+    try:
+        with get_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            now = _now_iso()
+            if workflow_job_id:
+                active_lease = connection.execute(
+                    """
+                    SELECT 1 FROM workflow_jobs
+                    WHERE id = ? AND status = 'running' AND lease_owner = ? AND lease_token = ?
+                      AND lease_expires_at > ? AND cancel_requested = 0
+                    """,
+                    (workflow_job_id, lease[1], lease[2], now),
+                ).fetchone()
+                if not active_lease:
+                    raise job_service.JobLeaseLostError(f"字幕 Job 最终提交前租约已失效：{workflow_job_id}")
+            current_revision = connection.execute(
+                """
+                SELECT sr.status
+                FROM subtitle_tracks st
+                JOIN subtitle_revisions sr ON sr.id = st.active_revision_id
+                WHERE st.task_id = ? AND st.output_clip_id = ? AND st.track_type = 'clip'
+                  AND st.is_active = 1 AND st.active_revision_id = ? AND sr.track_id = st.id
+                """,
+                (task_id, output_clip_id, revision_id),
+            ).fetchone()
+            if not current_revision or current_revision["status"] != "approved":
+                raise ValueError("字幕 revision 已变化，旧渲染结果不会被激活")
+            subtitle_job = connection.execute(
+                """
+                SELECT 1 FROM subtitle_jobs
+                WHERE id = ? AND task_id = ? AND output_clip_id = ? AND revision_id = ?
+                  AND status = 'processing' AND is_active = 0
+                  AND ((? IS NULL AND workflow_job_id IS NULL) OR workflow_job_id = ?)
+                """,
+                (
+                    subtitle_job_id,
+                    task_id,
+                    output_clip_id,
+                    revision_id,
+                    workflow_job_id,
+                    workflow_job_id,
+                ),
+            ).fetchone()
+            if not subtitle_job:
+                raise RuntimeError("字幕子任务已被其他执行收口，拒绝激活旧结果")
+            if output_path.exists():
+                raise RuntimeError("字幕最终输出路径已存在，拒绝覆盖")
+            temporary_path.replace(output_path)
+            final_file_created = True
+            connection.execute(
+                """
+                UPDATE subtitle_jobs SET is_active = 0, updated_at = ?
+                WHERE task_id = ? AND output_clip_id = ? AND id != ?
+                """,
+                (now, task_id, output_clip_id, subtitle_job_id),
+            )
+            cursor = connection.execute(
+                """
+                UPDATE subtitle_jobs
+                SET status = 'completed', subtitle_file_path = ?, output_file_path = ?,
+                    error_message = '', validation_status = 'verified', validation_json = ?,
+                    encoder = ?, verified_at = ?, updated_at = ?, is_active = 1
+                WHERE id = ? AND task_id = ? AND output_clip_id = ? AND revision_id = ?
+                  AND status = 'processing' AND is_active = 0
+                """,
+                (
+                    str(subtitle_path),
+                    str(output_path),
+                    json.dumps({**validation, "audio_mode": audio_mode}, ensure_ascii=False),
+                    encoder,
+                    now,
+                    now,
+                    subtitle_job_id,
+                    task_id,
+                    output_clip_id,
+                    revision_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("字幕最终状态提交冲突，拒绝激活旧结果")
+            connection.commit()
+    except Exception as exc:
+        if final_file_created:
+            try:
+                with get_connection() as verification_connection:
+                    persisted = verification_connection.execute(
+                        """
+                        SELECT 1 FROM subtitle_jobs
+                        WHERE id = ? AND status = 'completed' AND validation_status = 'verified'
+                          AND is_active = 1 AND output_file_path = ?
+                        """,
+                        (subtitle_job_id, str(output_path)),
+                    ).fetchone()
+            except Exception as verification_exc:
+                exc.add_note(f"无法确认字幕最终提交是否持久化，已保留文件供恢复：{verification_exc}")
+            else:
+                if not persisted:
+                    try:
+                        output_path.unlink(missing_ok=True)
+                    except OSError as cleanup_exc:
+                        exc.add_note(f"回滚字幕最终文件失败：{cleanup_exc}")
+        raise
 
 
 def _probe_media(path: Path) -> dict[str, Any]:
