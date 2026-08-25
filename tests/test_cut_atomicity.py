@@ -310,6 +310,7 @@ def test_each_cut_run_uses_a_distinct_output_directory(tmp_path):
 def test_process_cut_commits_batch_and_returns_run_directory(monkeypatch):
     import app.services.task_service as task_service
     import app.services.video_cut_workflow_service as workflow
+    from app.services import ai_analysis_workflow_service
 
     task_id = "test-atomic-process"
     _create_task(task_id)
@@ -329,6 +330,23 @@ def test_process_cut_commits_batch_and_returns_run_directory(monkeypatch):
         task_service,
         "get_task",
         lambda value, include_video_probe=True: original_get_task(value, include_video_probe=False),
+    )
+    monkeypatch.setattr(
+        ai_analysis_workflow_service,
+        "get_task_ai_analysis_meta",
+        lambda _task_id: {
+            "schema_version": 2,
+            "selection_profile": "general",
+            "analysis_incomplete": False,
+            "quality_degraded": False,
+            "coverage_ratio": 1.0,
+            "coverage_percent": 100.0,
+            "expected_units": 1,
+            "completed_units": 1,
+            "failed_units": 0,
+            "failed_stages": [],
+            "invalid_item_count": 0,
+        },
     )
 
     def fake_cut_clips(*, source_video, clips, output_dir, strategy):

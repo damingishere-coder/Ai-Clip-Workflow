@@ -811,6 +811,7 @@ class PipelineEngine:
             }
         if step == TaskStatus.AI_ANALYZING:
             analysis_path = paths["analysis_path"]
+            task_service.ensure_task_ai_analysis_artifact(task_id)
             self._verify_file_evidence(
                 paths["transcript_path"],
                 outputs.get("input_transcript") or {},
@@ -1027,6 +1028,7 @@ class PipelineEngine:
         baseline = record.get("baseline") if isinstance(record.get("baseline"), dict) else {}
         paths = get_artifact_paths(task_id)
         if step == TaskStatus.AI_ANALYZING:
+            task_service.ensure_task_ai_analysis_artifact(task_id)
             baseline_transcript = (
                 baseline.get("input_transcript")
                 if isinstance(baseline.get("input_transcript"), dict)
@@ -1384,14 +1386,32 @@ class PipelineEngine:
     def _select_clips(self, task_id: str, context: dict) -> dict:
         task = self._get_task(task_id)
         config = context["config"]
-        if task.get("selection_profile") == "long_live_talk":
-            meta = task_service.get_task_ai_analysis_meta(task_id)
-            if meta.get("analysis_incomplete") or float(meta.get("coverage_ratio") or 0) < 0.90:
-                coverage = float(meta.get("coverage_percent") or 0)
-                raise ValueError(
-                    f"长直播分析覆盖率仅 {coverage:.2f}%，低于 90%；"
-                    "请重试 AI 分析补齐缺失窗口，当前不会进入自动切片或发送中心。"
-                )
+        meta = task_service.get_task_ai_analysis_meta(task_id)
+        profile = str(task.get("selection_profile") or "general")
+        if not meta:
+            raise ValueError(
+                "AI 分析缺少可信的完整性元数据；请重新分析或恢复可信历史，"
+                "当前不会进入自动切片或发送中心。"
+            )
+        meta = task_service.validate_ai_analysis_meta_for_cut(meta, profile)
+        coverage = float(meta.get("coverage_percent") or 0)
+        if profile == "long_live_talk" and (
+            meta.get("analysis_incomplete") or float(meta.get("coverage_ratio") or 0) < 0.90
+        ):
+            raise ValueError(
+                f"长直播分析覆盖率仅 {coverage:.2f}%，低于 90%；"
+                "请重试 AI 分析补齐缺失窗口，当前不会进入自动切片或发送中心。"
+            )
+        if meta.get("analysis_incomplete"):
+            raise ValueError(
+                f"{profile} AI 分析存在未完成单元，当前覆盖率 {coverage:.2f}%；"
+                "请重试 AI 分析补齐失败单元，当前不会进入自动切片或发送中心。"
+            )
+        if meta.get("quality_degraded"):
+            raise ValueError(
+                f"{profile} AI 分析质量评审未完整通过；"
+                "候选可供人工检查，但当前不会进入自动切片或发送中心。"
+            )
         candidates = self._list_raw_candidates(task_id)
         if not candidates:
             latest_run = task_service.get_latest_ai_analysis_run(task_id)

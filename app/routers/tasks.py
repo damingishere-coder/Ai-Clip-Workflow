@@ -284,7 +284,13 @@ async def process_ai_analysis(
     provider: str | None = Query(default=None, pattern="^(codex|remote|local)$"),
 ) -> dict:
     try:
-        return await run_in_threadpool(task_service.process_task_ai_analysis, task_id, provider=provider)
+        job, created = task_service.queue_task_ai_analysis(task_id, provider=provider)
+        return {
+            "status": job["status"],
+            "message": "AI 分析任务已加入持久化队列" if created else "已有 AI 分析任务正在排队或运行",
+            "job_id": job["id"],
+            "job": job,
+        }
     except task_service.AIAnalysisConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:

@@ -388,6 +388,14 @@ def test_local_gate_keeps_health_public_and_blocks_cross_site_writes() -> None:
     )
     assert response.status_code == 403
 
+    for external_origin in ("https://creator.douyin.com", "https://members.bilibili.com"):
+        response = client.post(
+            "/api/settings/ai",
+            headers={"Host": "127.0.0.1", "Origin": external_origin},
+            json={},
+        )
+        assert response.status_code == 403
+
 
 def test_dynamic_frontend_text_is_not_written_with_inner_html() -> None:
     app_script = (PROJECT_ROOT / "app/static/js/app.js").read_text(encoding="utf-8")

@@ -93,6 +93,11 @@ def test_manual_ai_endpoint_returns_409_while_auto_pipeline_is_active(monkeypatc
     assert response.status_code == 409
     assert "全自动流水线正在处理" in response.json()["detail"]
     assert get_task(task_id, include_video_probe=False)["status"] == TaskStatus.pending_ai.value
+    assert not [
+        job
+        for job in job_service.list_jobs(task_id=task_id)
+        if job.get("job_type") == job_service.JOB_TYPE_AI_ANALYSIS
+    ]
 
 
 def test_manual_ai_endpoint_returns_409_after_clips_are_materialized(monkeypatch):
@@ -580,7 +585,7 @@ def test_prepare_source_uses_pathlib_and_writes_reference():
     assert reference_path.exists()
 
 
-def test_auto_selection_uses_candidate_count_and_task_max_duration():
+def test_auto_selection_uses_candidate_count_and_task_max_duration(monkeypatch):
     task_id = "test-auto-selection-rules"
     video = _fake_video(f"{task_id}.mp4")
     payload = TaskCreate(
@@ -615,6 +620,23 @@ def test_auto_selection_uses_candidate_count_and_task_max_duration():
                 (f"{task_id}_{clip_id}", task_id, clip_id, clip_id, start_time, end_time, confidence, now, now),
             )
         connection.commit()
+
+    monkeypatch.setattr(
+        "app.services.pipeline_engine.task_service.get_task_ai_analysis_meta",
+        lambda _task_id: {
+            "schema_version": 2,
+            "selection_profile": "general",
+            "analysis_incomplete": False,
+            "quality_degraded": False,
+            "coverage_ratio": 1.0,
+            "coverage_percent": 100.0,
+            "expected_units": 1,
+            "completed_units": 1,
+            "failed_units": 0,
+            "failed_stages": [],
+            "invalid_item_count": 0,
+        },
+    )
 
     result = PipelineEngine()._select_clips(task_id, {"config": {}})
 

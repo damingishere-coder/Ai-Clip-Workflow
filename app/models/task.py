@@ -444,3 +444,4 @@ class AIClipAnalysisResult(BaseModel):
     task_id: str | int = ""
     analysis_summary: str = ""
     clips: list[AIClipItem] = Field(default_factory=list)
+    analysis_meta: dict[str, Any] = Field(default_factory=dict)

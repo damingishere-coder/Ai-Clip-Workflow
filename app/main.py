@@ -30,6 +30,17 @@ _ALLOWED_CORS_ORIGINS = {
     "http://127.0.0.1:5173",
 }
 
+# 静态媒体可读 Origin 与管理 API 可写 Origin 必须分离。平台创作者中心
+# 只需要读取受控媒体，不能因此获得本地管理写权限。
+_TRUSTED_WRITE_ORIGINS = {
+    "http://localhost:8001",
+    "http://127.0.0.1:8001",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+}
+
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _PUBLIC_PATHS = {"/health", "/favicon.ico"}
@@ -48,7 +59,7 @@ def _build_allow_origin_header(origin: str) -> str:
 
 
 def _is_local_origin(origin: str) -> bool:
-    return _is_origin_allowed(origin)
+    return origin in _TRUSTED_WRITE_ORIGINS
 
 
 def _is_same_origin(request: Request, origin: str) -> bool:

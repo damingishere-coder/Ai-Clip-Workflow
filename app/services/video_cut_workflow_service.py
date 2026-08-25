@@ -525,18 +525,42 @@ def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> 
     if not task:
         raise ValueError("任务不存在")
 
-    if task.get("selection_profile") == "long_live_talk":
-        from app.services.ai_analysis_workflow_service import get_task_ai_analysis_meta
+    from app.services.ai_analysis_workflow_service import (
+        get_task_ai_analysis_meta,
+        validate_ai_analysis_meta_for_cut,
+    )
 
-        meta = get_task_ai_analysis_meta(task_id)
-        if meta.get("analysis_incomplete") or float(meta.get("coverage_ratio") or 0) < 0.90:
-            coverage = float(meta.get("coverage_percent") or 0)
-            error = (
-                f"长直播分析覆盖率仅 {coverage:.2f}%，低于 90%；"
-                "请先重试 AI 分析补齐缺失窗口，当前不会生成切片或同步发送中心。"
-            )
-            append_task_log(task_id, f"视频切割已阻止：{error}")
-            raise ValueError(error)
+    meta = get_task_ai_analysis_meta(task_id)
+    profile = str(task.get("selection_profile") or "general")
+    if not meta:
+        error = "AI 分析缺少可信的完整性元数据；请重新分析或恢复可信历史，当前不会生成切片。"
+        append_task_log(task_id, f"视频切割已阻止：{error}")
+        raise ValueError(error)
+    meta = validate_ai_analysis_meta_for_cut(meta, profile)
+    coverage = float(meta.get("coverage_percent") or 0)
+    if profile == "long_live_talk" and (
+        meta.get("analysis_incomplete") or float(meta.get("coverage_ratio") or 0) < 0.90
+    ):
+        error = (
+            f"长直播分析覆盖率仅 {coverage:.2f}%，低于 90%；"
+            "请先重试 AI 分析补齐缺失窗口，当前不会生成切片或同步发送中心。"
+        )
+        append_task_log(task_id, f"视频切割已阻止：{error}")
+        raise ValueError(error)
+    if meta.get("analysis_incomplete"):
+        error = (
+            f"{profile} AI 分析存在未完成单元，当前覆盖率 {coverage:.2f}%；"
+            "请先重试 AI 分析补齐失败单元，当前不会生成切片或同步发送中心。"
+        )
+        append_task_log(task_id, f"视频切割已阻止：{error}")
+        raise ValueError(error)
+    if meta.get("quality_degraded"):
+        error = (
+            f"{profile} AI 分析质量评审未完整通过；"
+            "候选可供人工检查，但当前不会生成切片或同步发送中心。"
+        )
+        append_task_log(task_id, f"视频切割已阻止：{error}")
+        raise ValueError(error)
 
     source_path = get_source_video_path(task)
     valid, error_message = validate_source_video_path(str(source_path) if source_path else None)

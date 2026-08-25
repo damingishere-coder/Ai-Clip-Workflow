@@ -1271,3 +1271,21 @@
 - 新增密钥不回显、空值保留、远程门禁、跨站写入、验证错误不回显原输入、发布 Token DTO、恶意 URL 和动态 XSS 回归。所有测试只使用临时 SQLite 与 mock，不读取 `.env`，不调用真实 Provider、Chrome 或平台。
 - 修复安全门禁误拒随机本机端口同源 POST 的回归：现在只有 Origin 与请求自身的 scheme/host/port 完全一致才按同源放行，不重新开放任意 localhost 跨域。
 - 最终隔离验收收集 751 项，排除 3 个真实 FFmpeg 参数实例后 `748 passed`、0 失败、10 个依赖告警；Ruff、Compileall、两个 JavaScript 语法检查、三套 Docker Compose 配置和 `git diff --check` 全部通过。活动库 `data/workflow.sqlite3` 前后大小均为 `7041024` bytes，SHA256 均为 `7AA6BE7955B46CA66A4A255A712E945832BA91E453BE73013699AEE1D4413E7F`。
+
+## 2026-08-25 稳定 V1 P1.4b AI 结果一致性与跨进程恢复
+
+- 人工 `/process/ai` 不再在 Web 请求线程直接调用 Provider，改为原子创建/复用持久化 `ai_analysis` Workflow Job；页面轮询 Job 状态，完成后重新读取分析摘要和历史。
+- AI Worker 复用现有子进程、heartbeat、owner/token 和过期 lease 接管；候选、active run 与任务 `pending_review` 在最终 SQLite 事务内重新验证 lease，旧 Worker 不能提交结果或覆盖新执行。
+- `clip_candidates` 替换、旧 run 取消激活、新 run 插入和任务终态改为一个 `BEGIN IMMEDIATE` 事务；任一步失败都会回滚到旧候选和旧 active run。
+- `candidate_clips.json` 改为由 `ai_analysis_runs.analysis_payload_json` 重建的派生缓存；同一 Workflow Job 在数据库已提交后中断，会复用已提交 run 并重建文件，不再次调用 Provider。
+- general 分段和 variety recall/expansion 新增结构化 `analysis_meta`：记录期望/完成/失败单元、无结果单元、无效条目、覆盖率、失败阶段和质量降级。
+- 合法空窗口继续视为成功；超时、HTTP/坏 JSON、坏结构或无效条目会标记分析不完整。全部单元失败继续 hard fail；部分成功保留候选供人工检查。
+- 自动流水线和手动“生成切片”都对三种 profile 统一检查 `analysis_incomplete`；长直播继续保留 90% 覆盖率门槛，普通/综艺局部失败也不能进入切片或发送中心。
+- Codemap 首轮复核新增的重复计费边界也已封口：普通分段、综艺召回/扩展/全局评审在调用前写入 Job 内单元 checkpoint，成功结果带 checksum；接管只复用已确认结果，发现上次请求已开始但未落账时进入 `uncertain`，不自动再次计费。自动流水线步骤 checkpoint 会保留这组恢复证据。
+- 长直播不再把 `clips/candidates` 当作 `moments`，显式空数组仍是合法空窗口；坏条目、缺字段或前次请求结果不确定都会标记失败/不完整。综艺全局评审必须覆盖全部候选，`quality_degraded` 与 `analysis_incomplete` 均锁定自动切片。
+- AI Job 取消会把仍在 AI 阶段的 Task 收口为可重试的 `pending_ai`；父 Worker 失败会写入明确失败态。停机 release 原子区分 queued/cancelled，不能再产生 `queued + cancel_requested=1`；进程树终止失败会保留 lease 并重试，不再杀死 Worker 线程。
+- 失败或取消后的人工重试会原位重新排队同一个 AI Job，保留已确认结果与 `billing_uncertain` 单元账本；切换按钮参数也不会绕过旧账本创建新 Job。Provider 的实际 model、endpoint、protocol 和实现类型进入输入指纹，避免配置变化后误把旧模型结果标成新模型。
+- active run JSON、`analysis_meta`、Schema、选片模式、布尔质量标记、有限覆盖率及 ratio/percent 对应关系统一 fail closed；缺失、NaN/Inf、bool 冒充数字或模式漂移都不能进入手动/自动切片。
+- 最终安全交叉复审把静态媒体 CORS 与管理 API 写入 Origin 拆开；抖音/B站创作者中心仍可按白名单读取受控媒体，但不能据此跨站写本地管理 API。
+- 新增人工 Job 去重、Worker 完成、事务回滚、旧 lease fencing、DB 已提交后接管、单元 checkpoint 复用/计费不确定、自动 checkpoint 共存、坏长直播结构、质量门禁和父进程收尾测试。最终独立全量验收 `785 passed, 3 deselected`；Ruff、Compileall、`app.js`/`publish-center.js` 语法、三套 Compose 合并配置和 `git diff --check` 全部通过。
+- Pytest 使用进程级 `niuma-pytest-*\data\test_workflow.sqlite3`，未触碰活动库。活动服务继续由 `127.0.0.1:8001` 的 Uvicorn PID `56576` 持有；只读数据库检查为 `integrity_check=ok`、`foreign_key_check=0`。活动库哈希随常驻服务 WAL 写入发生变化，未为取得静态哈希而停止正式服务。

@@ -12,6 +12,7 @@ import pytest
 from app.db.database import get_connection
 from app.models.task import TaskCreate, TaskStatus
 from app.services import job_service, task_service
+from app.services.ai import unit_checkpoint
 from app.services.pipeline_checkpoint_service import (
     AUTO_PIPELINE_CHECKPOINT_KIND,
     AutoPipelineCheckpoint,
@@ -185,6 +186,28 @@ def test_auto_pipeline_checkpoint_is_versioned_and_fenced() -> None:
     with job_service.job_lease_context(job["id"], "old-owner", "old-token"):
         with pytest.raises(job_service.JobLeaseLostError):
             checkpoint.begin_step(TaskStatus.TRANSCRIBING.value)
+
+
+def test_auto_pipeline_checkpoint_preserves_ai_unit_recovery_evidence() -> None:
+    task = _create_auto_task("test-pipeline-checkpoint-ai-units")
+    job = _claim_auto_job(task["id"], TaskStatus.AI_ANALYZING, "ai-unit-owner")
+    with job_service.job_lease_context(job["id"], "ai-unit-owner", job["lease_token"]):
+        checkpoint = _checkpoint(PipelineEngine(), task, job, TaskStatus.AI_ANALYZING)
+        checkpoint.begin_step(TaskStatus.AI_ANALYZING.value, baseline={})
+        unit_checkpoint.execute_checkpointed_ai_unit(
+            task_id=task["id"],
+            namespace="general_chunks",
+            input_fingerprint="stable-input",
+            unit_id="chunk_001",
+            operation=lambda: {"clips": [{"clip_id": "confirmed"}]},
+        )
+        checkpoint.fail_step(TaskStatus.AI_ANALYZING.value, "模拟最终提交前中断")
+
+    stored = job_service.get_job(job["id"])["checkpoint_json"]
+    assert stored["kind"] == AUTO_PIPELINE_CHECKPOINT_KIND
+    assert stored["steps"][TaskStatus.AI_ANALYZING.value]["state"] == "failed"
+    unit = stored["_ai_analysis_units_v1"]["namespaces"]["general_chunks"]["units"]["chunk_001"]
+    assert unit["status"] == "completed"
 
 
 @pytest.mark.parametrize(

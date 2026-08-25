@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
+import hashlib
 import math
 import json
 import re
@@ -21,6 +22,11 @@ from app.services.ai.base import (
 from app.services.ai.codex_cli_provider import CodexCliConfig, CodexCliProvider
 from app.services.ai.local_model_provider import LocalModelProvider
 from app.services.ai.remote_responses_provider import RemoteResponsesProvider
+from app.services.ai.unit_checkpoint import (
+    build_unit_fingerprint,
+    execute_checkpointed_ai_unit,
+    provider_fingerprint_fields,
+)
 
 
 PROMPT_PATH = settings.project_root / "prompts" / "clip_analysis_prompt.txt"
@@ -103,7 +109,20 @@ def _analyze_task_transcript_in_chunks(
         raise AIAnalysisError("AI 分段分析失败：没有从转写文本中解析到可分析的时间戳正文")
 
     clips = []
-    failures: list[str] = []
+    failures: list[dict[str, Any]] = []
+    empty_units = 0
+    unit_fingerprint = build_unit_fingerprint(
+        {
+            "profile": "general",
+            "transcript_sha256": hashlib.sha256(transcript_text.encode("utf-8")).hexdigest(),
+            "provider": request.provider_name,
+            "provider_identity": provider_fingerprint_fields(provider),
+            "prompt_template": request.prompt_template or "",
+            "ai_preference": request.ai_preference,
+            "target_clip_count": request.target_clip_count,
+            "max_clip_duration_minutes": request.max_clip_duration_minutes,
+        }
+    )
     per_chunk_target = max(1, min(3, math.ceil(request.target_clip_count / len(chunks)) + 1))
     for chunk in chunks:
         prompt = _render_prompt(
@@ -113,22 +132,53 @@ def _analyze_task_transcript_in_chunks(
             transcript_text=chunk.text,
             prompt_template=request.prompt_template,
         )
-        try:
+        def analyze_chunk() -> dict[str, Any]:
             raw_text = generate_json_with_safe_retry(provider, prompt)
             chunk_result = _parse_and_validate(raw_text, task_id=request.task_id)
             _validate_clip_constraints(chunk_result, request, transcript_bounds)
-            clips.extend(chunk_result.clips)
-        except Exception as exc:
-            error_text = exc.checkpoint_message() if isinstance(exc, AIProviderError) else str(exc)
+            return result_to_jsonable(chunk_result)
+
+        execution = execute_checkpointed_ai_unit(
+            task_id=request.task_id or "",
+            namespace="general_chunks",
+            input_fingerprint=unit_fingerprint,
+            unit_id=f"chunk_{chunk.index:03d}",
+            operation=analyze_chunk,
+        )
+        if execution.status != "completed" or not isinstance(execution.payload, dict):
             failures.append(
-                f"第 {chunk.index}/{chunk.total} 段失败，"
-                f"时间范围 {_seconds_to_time(chunk.start_seconds)}-{_seconds_to_time(chunk.end_seconds)}，"
-                f"prompt 约 {len(prompt)} 字：{error_text}"
+                {
+                    "stage": "chunk",
+                    "unit_id": f"chunk_{chunk.index:03d}",
+                    "start_time": _seconds_to_time(chunk.start_seconds),
+                    "end_time": _seconds_to_time(chunk.end_seconds),
+                    "outcome": execution.status,
+                    "message": " ".join(str(execution.error or "AI 分段失败").split())[:500],
+                }
             )
+            continue
+        try:
+            chunk_result = AIClipAnalysisResult(**execution.payload)
+            _validate_clip_constraints(chunk_result, request, transcript_bounds)
+        except Exception as exc:
+            failures.append(
+                {
+                    "stage": "chunk",
+                    "unit_id": f"chunk_{chunk.index:03d}",
+                    "start_time": _seconds_to_time(chunk.start_seconds),
+                    "end_time": _seconds_to_time(chunk.end_seconds),
+                    "outcome": "invalid_checkpoint",
+                    "message": " ".join(str(exc or "AI checkpoint 结构无效").split())[:500],
+                }
+            )
+            continue
+        if not chunk_result.clips:
+            empty_units += 1
+        clips.extend(chunk_result.clips)
 
     merged_clips = _dedupe_and_rank_clips(clips, request.target_clip_count)
     if not merged_clips:
-        failure_text = "；".join(failures[:5]) if failures else "没有候选片段"
+        failure_text = "；".join(item["message"] for item in failures[:5]) if failures else "没有候选片段"
         raise AIAnalysisError(f"AI 分段分析没有生成可用候选片段：{failure_text}")
 
     for index, clip in enumerate(merged_clips, start=1):
@@ -144,7 +194,28 @@ def _analyze_task_transcript_in_chunks(
     summary = f"{provider_label} 已按 {len(chunks)} 个小段完成分段分析，并合并为 {len(merged_clips)} 条候选片段。"
     if failures:
         summary += f" 有 {len(failures)} 个小段失败，已跳过失败小段。"
-    result = AIClipAnalysisResult(task_id=request.task_id, analysis_summary=summary, clips=merged_clips)
+    expected_units = len(chunks)
+    completed_units = expected_units - len(failures)
+    coverage_ratio = completed_units / expected_units if expected_units else 0.0
+    result = AIClipAnalysisResult(
+        task_id=request.task_id,
+        analysis_summary=summary,
+        clips=merged_clips,
+        analysis_meta={
+            "schema_version": 2,
+            "coverage_basis": "chunk_count",
+            "expected_units": expected_units,
+            "completed_units": completed_units,
+            "failed_units": len(failures),
+            "empty_unit_count": empty_units,
+            "invalid_item_count": 0,
+            "coverage_ratio": round(coverage_ratio, 6),
+            "coverage_percent": round(coverage_ratio * 100, 2),
+            "analysis_incomplete": bool(failures),
+            "quality_degraded": False,
+            "failed_stages": failures,
+        },
+    )
     _validate_clip_constraints(result, request, transcript_bounds)
     return result
 

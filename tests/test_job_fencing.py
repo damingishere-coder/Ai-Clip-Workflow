@@ -11,6 +11,7 @@ import pytest
 
 from app.db.database import get_connection, init_db
 from app.services import job_service, job_worker
+from app.services.managed_process_service import ProcessTerminationError
 
 
 def _create_task_and_job(*, max_attempts: int = 3) -> tuple[str, dict]:
@@ -149,6 +150,56 @@ def test_worker_marks_job_failed_when_subprocess_cannot_start(monkeypatch) -> No
         assert "无法启动 Job 子进程：spawn denied" in failed["error_message"]
         assert failed["lease_owner"] is None
         assert failed["lease_token"] is None
+    finally:
+        _cleanup(task_id)
+
+
+def test_parent_worker_failure_settles_auto_pipeline_task_state() -> None:
+    task_id, created = _create_task_and_job()
+    try:
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE workflow_jobs SET job_type = ? WHERE id = ?",
+                (job_service.JOB_TYPE_AUTO_PIPELINE, created["id"]),
+            )
+            connection.execute(
+                "UPDATE tasks SET status = ? WHERE id = ?",
+                ("AI_ANALYZING", task_id),
+            )
+            connection.commit()
+        claimed = job_service.claim_job(created["id"], "auto-parent-owner")
+        job_service.mark_job_failed(
+            created["id"],
+            "子进程异常退出",
+            lease_owner="auto-parent-owner",
+            lease_token=claimed["lease_token"],
+        )
+        with get_connection() as connection:
+            status = connection.execute(
+                "SELECT status FROM tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()["status"]
+        assert status == "FAILED_AI_ANALYZING"
+    finally:
+        _cleanup(task_id)
+
+
+def test_process_termination_error_is_contained_and_job_remains_recoverable(monkeypatch) -> None:
+    task_id, created = _create_task_and_job()
+    runner = job_worker.WorkflowJobRunner()
+    try:
+        claimed = job_service.claim_job(created["id"], runner.owner)
+        monkeypatch.setattr(
+            job_worker,
+            "terminate_process_tree",
+            lambda _process: (_ for _ in ()).throw(ProcessTerminationError("taskkill failed")),
+        )
+
+        assert runner._terminate_process(object(), created["id"], claimed["lease_token"], "取消任务") is False
+        current = job_service.get_job(created["id"])
+        assert current["status"] == job_service.JOB_STATUS_RUNNING
+        assert current["lease_owner"] == runner.owner
+        assert "将继续重试" in current["message"]
     finally:
         _cleanup(task_id)
 

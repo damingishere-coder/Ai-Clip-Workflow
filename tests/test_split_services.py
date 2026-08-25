@@ -192,7 +192,8 @@ class TestAIAnalysisEntry:
 
     def test_missing_transcript_triggers_error(self):
         """没有转写文件时 AI 分析应报错"""
-        from app.services.ai_analysis_workflow_service import process_task_ai_analysis
+        from app.services import job_service
+        from app.services.ai_analysis_workflow_service import process_task_ai_analysis, queue_task_ai_analysis
         from app.services.task_lifecycle_service import create_task_record
         from app.models.task import TaskCreate
 
@@ -208,8 +209,13 @@ class TestAIAnalysisEntry:
         create_task_record(payload, task_id="test-ai-001")
         update_task_status("test-ai-001", TaskStatus.pending_ai)
 
-        with pytest.raises(ValueError, match="转写"):
-            process_task_ai_analysis("test-ai-001")
+        job, created = queue_task_ai_analysis("test-ai-001")
+        assert created is True
+        claimed = job_service.claim_job(job["id"], "test-ai-owner")
+        assert claimed
+        with job_service.job_lease_context(job["id"], "test-ai-owner", claimed["lease_token"]):
+            with pytest.raises(ValueError, match="转写"):
+                process_task_ai_analysis("test-ai-001")
 
     def test_analysis_status_idle(self):
         """刚创建的任务 AI 分析状态应为 idle"""
@@ -371,7 +377,7 @@ class TestAIAnalysisEntry:
 
     def test_manual_ai_reentry_is_blocked_before_status_change(self):
         from app.db.database import get_connection
-        from app.services.ai_analysis_workflow_service import AIAnalysisConflictError, process_task_ai_analysis
+        from app.services.ai_analysis_workflow_service import AIAnalysisConflictError, queue_task_ai_analysis
         from app.services.task_service import get_task
 
         task_id = "test-ai-manual-reentry"
@@ -391,7 +397,7 @@ class TestAIAnalysisEntry:
         before = get_task(task_id, include_video_probe=False)
 
         with pytest.raises(AIAnalysisConflictError, match="已经生成切片"):
-            process_task_ai_analysis(task_id)
+            queue_task_ai_analysis(task_id)
 
         after = get_task(task_id, include_video_probe=False)
         assert after["status"] == before["status"]

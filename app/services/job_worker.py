@@ -61,6 +61,8 @@ def execute_job(
                 _execute_video_cut(job_id, task_id)
             elif job_type == job_service.JOB_TYPE_TRANSCRIPT:
                 _execute_transcript(job_id, task_id, job.get("payload_json") or {})
+            elif job_type == job_service.JOB_TYPE_AI_ANALYSIS:
+                _execute_ai_analysis(job_id, task_id, job.get("payload_json") or {})
             elif job_type == job_service.JOB_TYPE_AUTO_PIPELINE:
                 _execute_auto_pipeline(job_id, task_id, job.get("payload_json") or {})
             elif job_type == job_service.JOB_TYPE_SUBTITLE:
@@ -133,6 +135,28 @@ def _execute_transcript(job_id: str, task_id: str, payload: dict) -> None:
     job_service.mark_job_completed(
         job_id,
         {"task_id": task_id, "transcript_status": progress.get("status"), "checkpoint_retained": True},
+    )
+
+
+def _execute_ai_analysis(job_id: str, task_id: str, payload: dict) -> None:
+    job_service.update_job_progress(job_id, 5, "正在准备 AI 分析与恢复检查")
+    result = task_service.process_task_ai_analysis(task_id, provider=payload.get("provider"))
+    if job_service.is_cancel_requested(job_id):
+        job_service.mark_job_cancelled(job_id, "AI 分析已取消")
+        return
+    job_service.update_job_progress(job_id, 95, "AI 结果已原子落库，正在完成 Job")
+    meta = (result.get("analysis_run") or {}).get("analysis_meta") or {}
+    job_service.mark_job_completed(
+        job_id,
+        {
+            "task_id": task_id,
+            "message": result.get("message") or "AI 分析完成",
+            "analysis_run_id": result.get("analysis_run_id") or "",
+            "clip_count": len(result.get("clips") or []),
+            "review_url": result.get("review_url") or f"/tasks/{task_id}/clips/review",
+            "analysis_incomplete": bool(meta.get("analysis_incomplete")),
+            "coverage_percent": float(meta.get("coverage_percent") or 0),
+        },
     )
 
 
@@ -210,7 +234,7 @@ class WorkflowJobRunner:
     def stop(self) -> None:
         self._stop_event.set()
         if self._thread:
-            self._thread.join(timeout=5)
+            self._thread.join(timeout=25)
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
@@ -218,7 +242,26 @@ class WorkflowJobRunner:
             if not job:
                 self._stop_event.wait(self.poll_seconds)
                 continue
-            self._run_job_subprocess(job["id"])
+            try:
+                self._run_job_subprocess(job["id"])
+            except Exception as exc:
+                current = job_service.get_job(job["id"])
+                if (
+                    current
+                    and current.get("status") == job_service.JOB_STATUS_RUNNING
+                    and current.get("lease_owner") == self.owner
+                    and current.get("lease_token")
+                ):
+                    try:
+                        job_service.mark_job_failed(
+                            job["id"],
+                            f"Worker 收尾异常：{exc}",
+                            lease_owner=self.owner,
+                            lease_token=str(current["lease_token"]),
+                        )
+                    except job_service.JobLeaseLostError:
+                        pass
+                self._stop_event.wait(self.poll_seconds)
 
     def _run_job_subprocess(self, job_id: str) -> None:
         job_before_start = job_service.get_job(job_id) or {}
@@ -258,7 +301,9 @@ class WorkflowJobRunner:
         )
         while process.poll() is None:
             if self._stop_event.wait(1):
-                terminate_process_tree(process)
+                if not self._terminate_process(process, job_id, lease_token, "应用停止"):
+                    time.sleep(1)
+                    continue
                 if job_before_start.get("job_type") == job_service.JOB_TYPE_SUBTITLE:
                     from app.services.subtitle_auto_workflow_service import cleanup_interrupted_subtitle_job
 
@@ -279,17 +324,21 @@ class WorkflowJobRunner:
                 return
             job = job_service.get_job(job_id)
             if not job:
-                terminate_process_tree(process)
+                self._terminate_process(process, job_id, lease_token, "Job 记录已消失")
                 return
             if (
                 job.get("status") != job_service.JOB_STATUS_RUNNING
                 or job.get("lease_owner") != self.owner
                 or job.get("lease_token") != lease_token
             ):
-                terminate_process_tree(process)
-                return
+                if self._terminate_process(process, job_id, lease_token, "Workflow Job 租约已改变"):
+                    return
+                time.sleep(1)
+                continue
             if job_service.is_cancel_requested(job_id):
-                terminate_process_tree(process)
+                if not self._terminate_process(process, job_id, lease_token, "取消任务"):
+                    time.sleep(1)
+                    continue
                 if job.get("job_type") == job_service.JOB_TYPE_SUBTITLE:
                     from app.services.subtitle_auto_workflow_service import cleanup_interrupted_subtitle_job
 
@@ -318,7 +367,9 @@ class WorkflowJobRunner:
                 previous_progress = progress_state
                 last_progress_at = time.monotonic()
             if time.monotonic() - last_progress_at > no_progress_timeout:
-                terminate_process_tree(process)
+                if not self._terminate_process(process, job_id, lease_token, "任务无进展超时"):
+                    time.sleep(1)
+                    continue
                 if job.get("job_type") == job_service.JOB_TYPE_SUBTITLE:
                     from app.services.subtitle_auto_workflow_service import cleanup_interrupted_subtitle_job
 
@@ -346,8 +397,10 @@ class WorkflowJobRunner:
                 try:
                     job_service.heartbeat_job(job_id, self.owner, lease_token)
                 except job_service.JobLeaseLostError:
-                    terminate_process_tree(process)
-                    return
+                    if self._terminate_process(process, job_id, lease_token, "Workflow Job 心跳租约已失效"):
+                        return
+                    time.sleep(1)
+                    continue
                 last_heartbeat = time.monotonic()
         final_job = job_service.validate_job_lease(job_id, self.owner, lease_token)
         owns_final_lease = bool(final_job)
@@ -404,3 +457,27 @@ class WorkflowJobRunner:
                 lease_owner=self.owner,
                 lease_token=lease_token,
             )
+
+    def _terminate_process(
+        self,
+        process: subprocess.Popen,
+        job_id: str,
+        lease_token: str,
+        reason: str,
+    ) -> bool:
+        """终止失败时保留 Job/lease 并继续重试，不能让 Worker 主线程退出。"""
+        try:
+            terminate_process_tree(process)
+            return True
+        except Exception as exc:
+            try:
+                job_service.update_job_progress(
+                    job_id,
+                    int((job_service.get_job(job_id) or {}).get("progress") or 0),
+                    f"{reason}时无法确认子进程已停止，将继续重试：{exc}",
+                    lease_owner=self.owner,
+                    lease_token=lease_token,
+                )
+            except (job_service.JobLeaseLostError, ValueError):
+                pass
+            return False

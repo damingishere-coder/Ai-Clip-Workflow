@@ -97,6 +97,41 @@ def current_job_lease() -> tuple[str, str, str] | None:
     return _active_job_lease.get()
 
 
+def require_job_lease_with_connection(
+    connection,
+    *,
+    task_id: str,
+    allowed_job_types: set[str] | frozenset[str],
+) -> dict:
+    """在业务事务使用的同一连接内验证当前 Job claim，防止 TOCTOU。"""
+    active = _active_job_lease.get()
+    if active is None:
+        raise JobLeaseLostError("AI 处理必须由持久化 Workflow Job 执行")
+    job_id, lease_owner, lease_token = active
+    placeholders = ", ".join("?" for _ in allowed_job_types)
+    row = connection.execute(
+        f"""
+        SELECT *
+        FROM workflow_jobs
+        WHERE id = ? AND task_id = ? AND job_type IN ({placeholders})
+          AND status = ? AND lease_owner = ? AND lease_token = ?
+          AND cancel_requested = 0
+          AND lease_expires_at > strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
+        """,
+        (
+            job_id,
+            task_id,
+            *sorted(allowed_job_types),
+            JOB_STATUS_RUNNING,
+            lease_owner,
+            lease_token,
+        ),
+    ).fetchone()
+    if not row:
+        raise JobLeaseLostError(f"Workflow Job 租约已失效：{job_id}")
+    return _row_to_dict(row)
+
+
 def _lease_write_condition(
     lease_owner: str | None = None,
     lease_token: str | None = None,
@@ -511,9 +546,26 @@ def update_job_checkpoint(
     now = _now_iso()
     condition, lease_params, fenced = _lease_write_condition(lease_owner, lease_token)
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        current = connection.execute(
+            "SELECT checkpoint_json FROM workflow_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        merged_checkpoint = dict(checkpoint)
+        if current:
+            try:
+                current_checkpoint = json.loads(str(current["checkpoint_json"] or "{}"))
+            except json.JSONDecodeError as exc:
+                connection.rollback()
+                raise ValueError("Workflow Job checkpoint_json 已损坏，拒绝覆盖 AI 恢复证据") from exc
+            if isinstance(current_checkpoint, dict) and "_ai_analysis_units_v1" in current_checkpoint:
+                merged_checkpoint.setdefault(
+                    "_ai_analysis_units_v1",
+                    current_checkpoint["_ai_analysis_units_v1"],
+                )
         cursor = connection.execute(
             f"UPDATE workflow_jobs SET checkpoint_json = ?, checkpoint_updated_at = ?, updated_at = ? WHERE {condition}",
-            (json.dumps(checkpoint, ensure_ascii=False), now, now, job_id, *lease_params),
+            (json.dumps(merged_checkpoint, ensure_ascii=False), now, now, job_id, *lease_params),
         )
         connection.commit()
     _raise_if_lease_lost(job_id, cursor.rowcount, fenced)
@@ -565,6 +617,14 @@ def request_job_cancel(job_id: str) -> dict | None:
                 WHERE id = ? AND COALESCE(is_deleted, 0) = 0
                 """,
                 (now, str(row["task_id"] or "")),
+            )
+        elif cursor and cursor.rowcount == 1 and row["job_type"] == JOB_TYPE_AI_ANALYSIS:
+            _sync_ai_task_state(
+                connection,
+                task_id=str(row["task_id"] or ""),
+                outcome="cancelled",
+                message="用户已取消 AI 分析",
+                now=now,
             )
         connection.commit()
     return get_job(job_id)
@@ -758,15 +818,49 @@ def release_job_lease(job_id: str, lease_owner: str, lease_token: str) -> bool:
     """Web 正常停止时释放子进程 Job，供新进程立即恢复。"""
     now = _now_iso()
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            """
+            SELECT task_id, job_type, cancel_requested
+            FROM workflow_jobs
+            WHERE id = ? AND status = ? AND lease_owner = ? AND lease_token = ?
+            """,
+            (job_id, JOB_STATUS_RUNNING, lease_owner, lease_token),
+        ).fetchone()
+        if not row:
+            connection.rollback()
+            return False
+        cancelled = bool(int(row["cancel_requested"] or 0))
         cursor = connection.execute(
             """
-            UPDATE workflow_jobs SET status = ?, message = '应用停止，等待新 worker 恢复',
+            UPDATE workflow_jobs
+            SET status = ?, message = ?, finished_at = CASE WHEN ? THEN ? ELSE finished_at END,
+                cancel_requested = CASE WHEN ? THEN 1 ELSE 0 END,
                 lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
                 heartbeat_at = NULL, updated_at = ?
             WHERE id = ? AND status = ? AND lease_owner = ? AND lease_token = ?
             """,
-            (JOB_STATUS_QUEUED, now, job_id, JOB_STATUS_RUNNING, lease_owner, lease_token),
+            (
+                JOB_STATUS_CANCELLED if cancelled else JOB_STATUS_QUEUED,
+                "任务已取消" if cancelled else "应用停止，等待新 worker 恢复",
+                1 if cancelled else 0,
+                now,
+                1 if cancelled else 0,
+                now,
+                job_id,
+                JOB_STATUS_RUNNING,
+                lease_owner,
+                lease_token,
+            ),
         )
+        if cursor.rowcount == 1 and row["job_type"] == JOB_TYPE_AI_ANALYSIS:
+            _sync_ai_task_state(
+                connection,
+                task_id=str(row["task_id"] or ""),
+                outcome="cancelled" if cancelled else "queued",
+                message="用户已取消 AI 分析" if cancelled else "应用停止，AI 分析等待恢复",
+                now=now,
+            )
         connection.commit()
     return cursor.rowcount == 1
 
@@ -923,6 +1017,11 @@ def mark_job_failed(
     now = _now_iso()
     condition, lease_params, fenced = _lease_write_condition(lease_owner, lease_token)
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT task_id, job_type FROM workflow_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
         cursor = connection.execute(
             f"""
             UPDATE workflow_jobs
@@ -941,6 +1040,21 @@ def mark_job_failed(
                 *lease_params,
             ),
         )
+        if cursor.rowcount == 1 and row and row["job_type"] == JOB_TYPE_AI_ANALYSIS:
+            _sync_ai_task_state(
+                connection,
+                task_id=str(row["task_id"] or ""),
+                outcome="failed",
+                message=error_message,
+                now=now,
+            )
+        elif cursor.rowcount == 1 and row and row["job_type"] == JOB_TYPE_AUTO_PIPELINE:
+            _sync_auto_pipeline_task_failed(
+                connection,
+                task_id=str(row["task_id"] or ""),
+                message=error_message,
+                now=now,
+            )
         connection.commit()
 
     _raise_if_lease_lost(job_id, cursor.rowcount, fenced)
@@ -959,6 +1073,11 @@ def mark_job_cancelled(
     now = _now_iso()
     condition, lease_params, fenced = _lease_write_condition(lease_owner, lease_token)
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT task_id, job_type FROM workflow_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
         cursor = connection.execute(
             f"""
             UPDATE workflow_jobs SET status = ?, message = ?, finished_at = ?, updated_at = ?,
@@ -967,6 +1086,86 @@ def mark_job_cancelled(
             """,
             (JOB_STATUS_CANCELLED, message, now, now, job_id, *lease_params),
         )
+        if cursor.rowcount == 1 and row and row["job_type"] == JOB_TYPE_AI_ANALYSIS:
+            _sync_ai_task_state(
+                connection,
+                task_id=str(row["task_id"] or ""),
+                outcome="cancelled",
+                message=message,
+                now=now,
+            )
         connection.commit()
     _raise_if_lease_lost(job_id, cursor.rowcount, fenced)
     return get_job(job_id) if cursor.rowcount else None
+
+
+def _sync_ai_task_state(
+    connection,
+    *,
+    task_id: str,
+    outcome: str,
+    message: str,
+    now: str,
+) -> None:
+    """AI Job 结束/释放时只收口仍属于 AI 阶段的 Task，不覆盖已提交结果。"""
+    if not task_id:
+        return
+    if outcome == "failed":
+        status = "failed"
+        progress = 0
+        error_message = " ".join(str(message or "AI 分析失败").split())[:1000]
+    else:
+        status = "pending_ai"
+        progress = 55
+        error_message = None
+    connection.execute(
+        """
+        UPDATE tasks
+        SET status = ?, progress = ?, error_message = ?, last_error = ?, updated_at = ?
+        WHERE id = ? AND status IN ('ai_analyzing', 'AI_ANALYZING')
+          AND COALESCE(is_deleted, 0) = 0
+        """,
+        (status, progress, error_message, error_message, now, task_id),
+    )
+
+
+def _sync_auto_pipeline_task_failed(
+    connection,
+    *,
+    task_id: str,
+    message: str,
+    now: str,
+) -> None:
+    """父 Worker 异常终止时，把仍在运行步骤的自动任务落到对应失败态。"""
+    if not task_id:
+        return
+    row = connection.execute(
+        "SELECT status FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+        (task_id,),
+    ).fetchone()
+    if not row:
+        return
+    failed_by_running = {
+        "CREATED": "FAILED_PREPARING_SOURCE",
+        "PREPARING_SOURCE": "FAILED_PREPARING_SOURCE",
+        "TRANSCRIBING": "FAILED_TRANSCRIBING",
+        "AI_ANALYZING": "FAILED_AI_ANALYZING",
+        "CLIP_SELECTING": "FAILED_CLIP_SELECTING",
+        "VIDEO_CUTTING": "FAILED_VIDEO_CUTTING",
+        "SUBTITLE_DRAFTING": "FAILED_SUBTITLE_DRAFTING",
+        "METADATA_GENERATING": "FAILED_METADATA_GENERATING",
+        "SCHEDULE_CREATING": "FAILED_SCHEDULE_CREATING",
+        "PUBLISH_JOB_CREATING": "FAILED_PUBLISH_JOB_CREATING",
+    }
+    failed_status = failed_by_running.get(str(row["status"] or ""))
+    if not failed_status:
+        return
+    error = " ".join(str(message or "自动流水线子进程异常退出").split())[:1000]
+    connection.execute(
+        """
+        UPDATE tasks
+        SET status = ?, error_message = ?, last_error = ?, updated_at = ?
+        WHERE id = ? AND status = ? AND COALESCE(is_deleted, 0) = 0
+        """,
+        (failed_status, error, error, now, task_id, str(row["status"])),
+    )

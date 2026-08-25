@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
+import hashlib
 import json
 import re
 
@@ -16,6 +17,7 @@ from app.services.ai.long_live_talk_analyzer import (
     LongLiveWindow,
     _get_or_create_checkpoint,
     _mark_checkpoint_running,
+    _parse_window_payload,
     analyze_long_live_talk,
     build_long_live_windows,
     calculate_window_coverage,
@@ -209,7 +211,35 @@ def test_cross_window_duplicate_uses_time_and_semantic_merge():
     assert merged["source_window_indexes"] == [1, 2]
 
 
-def test_ambiguous_window_failure_is_not_auto_retried_and_next_run_reuses_success(tmp_path):
+def test_long_live_window_schema_fails_closed_but_allows_explicit_empty_list():
+    window = LongLiveWindow(1, 1, 0, 120, tuple(_rows_for_duration(120)), "text")
+
+    with pytest.raises(Exception, match="缺少 moments"):
+        _parse_window_payload('{"clips": []}', window)
+    with pytest.raises(Exception, match="无效条目"):
+        _parse_window_payload(
+            json.dumps(
+                {
+                    "moments": [
+                        {
+                            "title": "有效观点",
+                            "start_time": "00:00:10",
+                            "end_time": "00:01:10",
+                            "key_time": "00:00:30",
+                        },
+                        "broken",
+                    ]
+                }
+            ),
+            window,
+        )
+    assert _parse_window_payload('{"moments": []}', window) == {
+        "moments": [],
+        "invalid_item_count": 0,
+    }
+
+
+def test_ambiguous_window_failure_is_not_retried_after_restart(tmp_path):
     task_id = f"{PREFIX}resume"
     _create_task(task_id)
     _write_transcript(task_id, 30 * 60)
@@ -227,16 +257,59 @@ def test_ambiguous_window_failure_is_not_auto_retried_and_next_run_reuses_succes
     assert first.meta["failed_window_count"] == 1
     checkpoints = list_long_live_window_checkpoints(task_id)
     failed = [item for item in checkpoints if item["window_index"] == 3][0]
-    assert failed["status"] == "failed"
+    assert failed["status"] == "uncertain"
     assert failed["attempt_count"] == 1
     assert "模拟窗口 3 网络失败" in failed["error_message"]
 
     second_provider = FakeWindowProvider()
     second = analyze_long_live_talk(request, provider=second_provider, sleep_fn=lambda _seconds: None)
-    assert second_provider.calls == Counter({3: 1})
-    assert second.meta["failed_window_count"] == 0
+    assert second_provider.calls == Counter()
+    assert second.meta["failed_window_count"] == 1
     assert second.meta["reused_window_count"] == second.meta["window_count"] - 1
-    assert second.meta["coverage_ratio"] == pytest.approx(1.0)
+    assert second.meta["analysis_incomplete"] is True
+
+
+def test_corrupt_completed_window_checkpoint_is_not_rebilled(tmp_path):
+    task_id = f"{PREFIX}corrupt-completed"
+    _create_task(task_id)
+    _write_transcript(task_id, 10 * 60)
+    request = LongLiveAnalysisRequest(
+        task_id=task_id,
+        transcript_path=get_artifact_paths(task_id)["transcript_path"],
+        provider_name="remote",
+        model_name="test-model",
+        density_per_hour=4,
+        total_limit=30,
+    )
+    first_provider = FakeWindowProvider()
+    analyze_long_live_talk(request, provider=first_provider, sleep_fn=lambda _seconds: None)
+    with get_connection() as connection:
+        checkpoint_id = connection.execute(
+            """
+            SELECT id FROM ai_analysis_windows
+            WHERE task_id = ? AND status = 'completed'
+            ORDER BY window_index LIMIT 1
+            """,
+            (task_id,),
+        ).fetchone()["id"]
+        invalid_result = json.dumps({"unexpected": []}, ensure_ascii=False, sort_keys=True)
+        invalid_checksum = hashlib.sha256(invalid_result.encode("utf-8")).hexdigest()
+        connection.execute(
+            "UPDATE ai_analysis_windows SET result_json = ?, result_checksum = ? WHERE id = ?",
+            (invalid_result, invalid_checksum, checkpoint_id),
+        )
+        connection.commit()
+
+    second_provider = FakeWindowProvider()
+    second = analyze_long_live_talk(request, provider=second_provider, sleep_fn=lambda _seconds: None)
+
+    assert second_provider.calls == Counter()
+    assert second.meta["analysis_incomplete"] is True
+    corrupted = [
+        item for item in list_long_live_window_checkpoints(task_id)
+        if item["id"] == checkpoint_id
+    ][0]
+    assert corrupted["status"] == "uncertain"
 
 
 def test_safe_rate_limit_window_is_retried_within_bound(tmp_path):

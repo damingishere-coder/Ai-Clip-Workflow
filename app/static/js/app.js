@@ -682,13 +682,20 @@ aiProcessButtons.forEach((button) => {
       if (!response.ok) {
         throw new Error(data.detail || "AI 分析失败");
       }
-      if (aiProcessResult) aiProcessResult.textContent = data.message || "AI 分析完成。";
+      if (!data.job_id) throw new Error("AI 分析队列没有返回 job_id");
+      if (aiProcessResult) aiProcessResult.textContent = data.message || "AI 分析已加入队列。";
+      const completedJob = await waitForAiAnalysisJob(data.job_id);
+      const result = completedJob.result_json || {};
+      if (aiProcessResult) aiProcessResult.textContent = result.message || completedJob.message || "AI 分析完成。";
       await pollAiAnalysisStatus(false).catch(() => {});
-      if (aiCandidateCountPill && Array.isArray(data.clips)) {
-        aiCandidateCountPill.textContent = `${data.clips.length} 条候选`;
+      if (aiCandidateCountPill && Number.isFinite(Number(result.clip_count))) {
+        aiCandidateCountPill.textContent = `${Number(result.clip_count)} 条候选`;
       }
-      renderAiAnalysisSummary(data.analysis_run || data);
-      renderAiAnalysisHistory(data.runs || aiAnalysisRuns);
+      const historyResponse = await fetch(`/api/tasks/${taskId}/ai-analysis-runs`);
+      const historyData = await historyResponse.json();
+      if (!historyResponse.ok) throw new Error(historyData.detail || "读取 AI 分析历史失败");
+      renderAiAnalysisSummary(historyData.latest || result);
+      renderAiAnalysisHistory(historyData.runs || aiAnalysisRuns);
     } catch (error) {
       if (aiProcessResult) aiProcessResult.textContent = `AI 分析失败：${summarizeErrorMessage(error.message)}`;
       await pollAiAnalysisStatus(false).catch(() => {});
@@ -1793,6 +1800,26 @@ function renderTaskLiveActions(data) {
   }
   const subtitleSkip = taskLiveActions.querySelector("[data-live-subtitle-skip]");
   if (subtitleSkip) subtitleSkip.hidden = primaryAction !== "subtitle_review";
+}
+
+async function waitForAiAnalysisJob(jobId) {
+  while (true) {
+    const response = await fetch(`/api/tasks/jobs/${jobId}`);
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.detail || "查询 AI 分析任务进度失败");
+    renderAiAnalysisProgress({
+      status: job.status,
+      percent: Number(job.progress || 0),
+      message: job.status === "failed"
+        ? (job.error_message || job.message || "AI 分析失败")
+        : (job.message || "AI 分析正在排队..."),
+    });
+    if (job.status === "completed") return job;
+    if (job.status === "failed" || job.status === "cancelled") {
+      throw new Error(job.error_message || job.message || "AI 分析任务未完成");
+    }
+    await wait(1000);
+  }
 }
 
 function renderTaskLiveStatus(data) {

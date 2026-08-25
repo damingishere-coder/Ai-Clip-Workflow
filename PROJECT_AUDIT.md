@@ -161,11 +161,46 @@ Codemap 最终独立复核真实保留了未完成项：`AI Selection 55/D` 中�
 
 本轮不读取或修改 `.env`，不迁移活动库，也不调用真实 AI、FFmpeg、Chrome 或平台。Codemap 在交叉复评 P1.4 时新增确认三条 AI 一致性 HIGH：候选/run/终态半提交、人工 AI 无持久 lease、普通/综艺局部失败仍可进入切片。因此此节点仍诚实维持 **可用 V1**，先完成独立 P1.4b 后再统一重算“稳定 V1”，不以安全项通过掩盖 AI 恢复缺口。
 
-## 1. Executive Summary
+## 0.10 P1.4b AI 结果一致性与稳定 V1 收口（2026-08-25）
+
+| P1.4b 项目 | 结果 | 验证证据 |
+| --- | --- | --- |
+| 人工 AI 持久执行 | 已封口 | `/process/ai` 只创建或复用持久 `ai_analysis` Job；Provider 在 Worker 子进程执行，候选、active run 与任务终态绑定当前 lease。 |
+| 数据库原子提交 | 已封口 | 候选替换、旧 run 失活、新 run 插入和 `pending_review` 在同一 `BEGIN IMMEDIATE` 中提交；派生 JSON 可从 active run 重建。 |
+| 单元计费账本 | 已封口（可证明范围） | 普通、综艺、长直播在请求前持久化单元状态；完成结果带 checksum。running、uncertain、未知/损坏状态、输入指纹变化或 completed payload 校验失败均不自动重发。 |
+| 重试与 Provider 切换 | 已封口 | failed/cancelled Job 原位重排队并保留 checkpoint；同一账本不能切换 Provider，避免借新 Job 丢弃旧不确定证据。 |
+| 不完整结果门禁 | 已封口 | 三种 profile 统一校验 Schema、模式、布尔质量标记、有限覆盖率、单元/窗口计数和失败清单；缺失、NaN/Inf、矛盾覆盖率或坏数组均 fail closed。 |
+| Worker/Task 收尾 | 已封口 | 取消、父进程失败、停机 release 和进程树终止失败均进入明确可恢复状态；不会留下 `queued + cancel_requested=1`。 |
+| 安全交叉回归 | 已封口 | 静态媒体 CORS 与管理 API 写入 Origin 分离；抖音/B站创作者中心不能跨站写本地管理接口。 |
+| 最终隔离验收 | 通过 | 收集 `788` 项，`785 passed, 3 deselected`；Ruff、Compileall、两个 JavaScript 语法检查、三套 Compose 和 `git diff --check` 全部通过。 |
+
+Codemap 已刷新全部 13 个模块，`needs_audit=0`。本轮直接相关模块最终为：`AI Selection 70/C`、`Pipeline & Job Queue 66/C`、`Task Review & Cut 68/C`、`API Runtime 63/C`、`Frontend UI 62/C`、`Media & Storage 78/B`；这些模块已无 HIGH。分数没有被人为拉高，因为 God Service、旧状态双协议、前端轮询/提示、历史兼容恢复和可观测性问题仍真实保留。
+
+仓库仍有一条 HIGH：`scripts/migrate_task_dirs_to_project_names.py` 使用非 WAL-aware 复制并先移动目录、后统一写库。它不在当前应用、Worker 或发布运行链路中，也没有本轮调用；在 P2 用安全迁移器替换前必须保持停用，绝不能用于活动库。原始 SonarQube 指标继续保留为审计快照，本轮没有为了 Quality Gate 或评分机械改代码。
+
+### 当前成熟度重算
+
+当前项目为 **78 / 100 · 稳定 V1**，限定范围是：**Windows 本机、单用户、SQLite、人工审核与真实发布人工风控边界**。它不是生产级 SaaS，也不等于真实 Provider、FFmpeg、Chrome 或平台故障演练已经完成。
+
+| 维度 | 当前分数 | 依据 |
+| --- | ---: | --- |
+| 架构合理性 | 7/10 | 本地单体与项目规模匹配；核心 God Service 仍大。 |
+| 业务逻辑 | 9/10 | 素材到待发布闭环完整，人工门禁、失败状态与恢复顺序明确。 |
+| 代码质量 | 6/10 | 高风险路径已收口，但大文件、兼容层、重复查询与 fallback 仍多。 |
+| 数据设计 | 8/10 | 原子批次、fencing、迁移账本与备份边界已建立；旧 helper 仍需渐进收编。 |
+| 稳定性 | 8/10 | 超时、取消、接管、部分成功和不确定计费已可恢复；真实外部故障演练仍不足。 |
+| 测试 | 9/10 | `785` 项隔离测试通过且活动库强制隔离；3 个真实 FFmpeg 参数实例未在本轮运行。 |
+| 安全性 | 8/10 | Secret、loopback/Bearer、Origin、URL 和 XSS 已收紧；仍是本地单用户模型。 |
+| 性能与资源 | 7/10 | 已处理明确超时和重复调用；God Service、全量扫描和大文件路径仍有证据化 P2 项。 |
+| 可观测性 | 7/10 | Job/Task 日志与不确定状态可诊断；子进程 stderr、静默 fallback 和健康指标仍不足。 |
+| 文档与可维护性 | 9/10 | Code Map、工程审计、开发日志、UI 参考和分轮任务文件同步；结构债仍需按 P2 小步处理。 |
+| **总分** | **78/100** | **已达到当前产品边界内的稳定 V1；尚未达到生产级。** |
+
+## 1. Executive Summary（2026-08-24 原始审计快照）
 
 ### 结论
 
-当前项目健康度为 **59 / 100**，成熟度属于 **可用 V1**。
+原始审计时项目健康度为 **59 / 100**，成熟度属于 **可用 V1**；完成 P0/P1 后的当前结论以 0.10 节 **78/100 · 稳定 V1** 为准。
 
 它已经明显超过 Demo：真实的素材接入、转写、AI 选片、人工审核、切片、字幕审核、内容准备、排期和 Windows Chrome Worker 发布链路都存在；当前本机的 FastAPI 服务和发布 Worker 也都在 `127.0.0.1` 正常监听并返回健康状态。500 项隔离测试全部通过，Ruff、Python 编译、前端 JavaScript 语法、PowerShell 脚本解析和 Docker Compose 配置检查也通过。
 

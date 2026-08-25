@@ -28,6 +28,7 @@ from app.services.ai.ai_clip_analyzer import (
     build_provider,
 )
 from app.services.ai.base import AIProvider, AIProviderError
+from app.services.ai.unit_checkpoint import provider_fingerprint_fields
 
 
 WINDOW_SECONDS = 300
@@ -100,21 +101,69 @@ def analyze_long_live_talk(
     transcript_fingerprint = hashlib.sha256(transcript_text.encode("utf-8")).hexdigest()
     provider = provider or build_provider(request.provider_name)
     preference = _preference_summary(request.prompt_template or "", request.ai_preference)
+    checkpoint_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "transcript_sha256": transcript_fingerprint,
+                "provider": request.provider_name,
+                "model": request.model_name,
+                "provider_identity": provider_fingerprint_fields(provider),
+                "preference": preference,
+                "density_per_hour": request.density_per_hour,
+                "total_limit": request.total_limit,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
     successful_payloads: list[dict[str, Any]] = []
     completed_windows: list[LongLiveWindow] = []
     failed_windows: list[dict[str, Any]] = []
+    invalid_item_count = 0
     reused_count = 0
 
     for window in windows:
-        checkpoint = _get_or_create_checkpoint(request, transcript_fingerprint, window)
-        if checkpoint.get("status") == "completed" and checkpoint.get("result_json"):
-            payload = _load_verified_checkpoint_payload(checkpoint)
+        checkpoint = _get_or_create_checkpoint(request, checkpoint_fingerprint, window)
+        if checkpoint.get("status") == "completed":
+            payload = _load_verified_checkpoint_payload(checkpoint, window=window)
             if isinstance(payload, dict):
                 successful_payloads.append(payload)
                 completed_windows.append(window)
+                invalid_item_count += int(payload.get("invalid_item_count") or 0)
                 reused_count += 1
                 _report_progress(progress_callback, window, "reused", len(completed_windows))
                 continue
+            error = "已完成的长直播窗口 checkpoint 校验失败，未自动重复请求"
+            _mark_checkpoint_failed(checkpoint["id"], error, 0, uncertain=True)
+            failed_windows.append(
+                {
+                    "window_index": window.index,
+                    "start_seconds": window.start_seconds,
+                    "end_seconds": window.end_seconds,
+                    "error": error,
+                    "outcome": "uncertain",
+                }
+            )
+            _report_progress(progress_callback, window, "failed", len(completed_windows))
+            continue
+        if checkpoint.get("status") in {"running", "uncertain"}:
+            error = str(
+                checkpoint.get("error_message")
+                or "上一次窗口请求已开始但结果未确认，未自动重复请求"
+            )
+            if checkpoint.get("status") == "running":
+                _mark_checkpoint_failed(checkpoint["id"], error, 0, uncertain=True)
+            failed_windows.append(
+                {
+                    "window_index": window.index,
+                    "start_seconds": window.start_seconds,
+                    "end_seconds": window.end_seconds,
+                    "error": error,
+                    "outcome": "uncertain",
+                }
+            )
+            _report_progress(progress_callback, window, "failed", len(completed_windows))
+            continue
 
         max_attempts = 3 if request.provider_name == "remote" else 1
         last_error = ""
@@ -129,6 +178,7 @@ def analyze_long_live_talk(
                 _mark_checkpoint_completed(checkpoint["id"], payload)
                 successful_payloads.append(payload)
                 completed_windows.append(window)
+                invalid_item_count += int(payload.get("invalid_item_count") or 0)
                 _report_progress(progress_callback, window, "completed", len(completed_windows))
                 break
             except Exception as exc:  # 每个窗口必须独立记录，不能丢失前面成功结果
@@ -143,7 +193,17 @@ def analyze_long_live_talk(
                 configured_delay = provider_error.retry_after_seconds if provider_error else None
                 delay_seconds = configured_delay if configured_delay is not None else 2 ** (attempt - 1)
                 delay_seconds = delay_seconds if should_retry else 0
-                _mark_checkpoint_failed(checkpoint["id"], last_error, delay_seconds)
+                uncertain = not bool(
+                    provider_error
+                    and provider_error.safe_to_retry
+                    and not provider_error.billing_uncertain
+                )
+                _mark_checkpoint_failed(
+                    checkpoint["id"],
+                    last_error,
+                    delay_seconds,
+                    uncertain=uncertain and not should_retry,
+                )
                 if should_retry:
                     sleep_fn(delay_seconds)
                 else:
@@ -179,7 +239,7 @@ def analyze_long_live_talk(
         transcript_start,
         transcript_end,
     )
-    incomplete = coverage_ratio < MIN_COMPLETE_COVERAGE
+    incomplete = coverage_ratio < MIN_COMPLETE_COVERAGE or bool(invalid_item_count or failed_windows)
     coverage_percent = round(coverage_ratio * 100, 2)
     summary = (
         f"长直播高光已完成 {len(completed_windows)}/{len(windows)} 个重叠窗口，"
@@ -196,6 +256,7 @@ def analyze_long_live_talk(
         "completed_window_count": len(completed_windows),
         "failed_window_count": len(failed_windows),
         "failed_windows": failed_windows,
+        "invalid_item_count": invalid_item_count,
         "reused_window_count": reused_count,
         "coverage_ratio": round(coverage_ratio, 6),
         "coverage_percent": coverage_percent,
@@ -372,7 +433,7 @@ def get_latest_long_live_window_status(task_id: str) -> dict[str, Any]:
         ).fetchall()
     items = [dict(row) for row in rows]
     completed = sum(1 for item in items if item["status"] == "completed")
-    failed = [item for item in items if item["status"] == "failed"]
+    failed = [item for item in items if item["status"] in {"failed", "uncertain"}]
     return {
         "provider": latest["provider"],
         "model": latest["model"],
@@ -473,7 +534,13 @@ def _mark_checkpoint_completed(checkpoint_id: str, payload: dict[str, Any]) -> N
         connection.commit()
 
 
-def _mark_checkpoint_failed(checkpoint_id: str, error: str, delay_seconds: float) -> None:
+def _mark_checkpoint_failed(
+    checkpoint_id: str,
+    error: str,
+    delay_seconds: float,
+    *,
+    uncertain: bool = False,
+) -> None:
     now = datetime.now().astimezone()
     next_retry_at = (now + timedelta(seconds=delay_seconds)).isoformat(timespec="seconds") if delay_seconds else None
     with get_connection() as connection:
@@ -482,10 +549,16 @@ def _mark_checkpoint_failed(checkpoint_id: str, error: str, delay_seconds: float
         connection.execute(
             """
             UPDATE ai_analysis_windows
-            SET status = 'failed', error_message = ?, next_retry_at = ?, updated_at = ?
+            SET status = ?, error_message = ?, next_retry_at = ?, updated_at = ?
             WHERE id = ?
             """,
-            (error, next_retry_at, now.isoformat(timespec="seconds"), checkpoint_id),
+            (
+                "uncertain" if uncertain else "failed",
+                error,
+                next_retry_at,
+                now.isoformat(timespec="seconds"),
+                checkpoint_id,
+            ),
         )
         connection.commit()
 
@@ -499,7 +572,7 @@ def _assert_current_job_lease(connection) -> None:
         """
         SELECT 1 FROM workflow_jobs
         WHERE id = ? AND status = 'running' AND lease_owner = ? AND lease_token = ?
-          AND lease_expires_at > ?
+          AND lease_expires_at > ? AND cancel_requested = 0
         """,
         (job_id, lease_owner, lease_token, _now_iso()),
     ).fetchone()
@@ -507,7 +580,11 @@ def _assert_current_job_lease(connection) -> None:
         raise job_service.JobLeaseLostError(f"Workflow Job 租约已失效：{job_id}")
 
 
-def _load_verified_checkpoint_payload(checkpoint: dict[str, Any]) -> dict[str, Any] | None:
+def _load_verified_checkpoint_payload(
+    checkpoint: dict[str, Any],
+    *,
+    window: LongLiveWindow | None = None,
+) -> dict[str, Any] | None:
     result_json = str(checkpoint.get("result_json") or "")
     expected_checksum = str(checkpoint.get("result_checksum") or "")
     if not result_json or not expected_checksum:
@@ -519,7 +596,55 @@ def _load_verified_checkpoint_payload(checkpoint: dict[str, Any]) -> dict[str, A
         payload = json.loads(result_json)
     except json.JSONDecodeError:
         return None
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    moments = payload.get("moments")
+    if not isinstance(moments, list) or type(payload.get("invalid_item_count")) is not int:
+        return None
+    if payload["invalid_item_count"] != 0:
+        return None
+    required = {
+        "title",
+        "start_seconds",
+        "end_seconds",
+        "key_seconds",
+        "summary",
+        "highlight_reason",
+        "suggested_editing",
+        "category",
+        "topic_key",
+        "score",
+        "source_window_indexes",
+    }
+    for item in moments:
+        if not isinstance(item, dict) or not required.issubset(item):
+            return None
+        if any(type(item[name]) not in (int, float) for name in ("start_seconds", "end_seconds", "key_seconds", "score")):
+            return None
+        start_seconds = float(item["start_seconds"])
+        end_seconds = float(item["end_seconds"])
+        key_seconds = float(item["key_seconds"])
+        score = float(item["score"])
+        if not all(math.isfinite(value) for value in (start_seconds, end_seconds, key_seconds, score)):
+            return None
+        if end_seconds <= start_seconds or not (15 <= end_seconds - start_seconds <= 300):
+            return None
+        if not (start_seconds <= key_seconds <= end_seconds) or not (0 <= score <= 100):
+            return None
+        if window and (start_seconds < window.start_seconds - 5 or end_seconds > window.end_seconds + 5):
+            return None
+        if item.get("category") not in ALLOWED_CATEGORIES:
+            return None
+        if not all(isinstance(item.get(name), str) and item.get(name) for name in (
+            "title", "summary", "highlight_reason", "suggested_editing", "topic_key"
+        )):
+            return None
+        indexes = item.get("source_window_indexes")
+        if not isinstance(indexes, list) or not all(type(index) is int for index in indexes):
+            return None
+        if window and window.index not in indexes:
+            return None
+    return payload
 
 
 def _parse_window_payload(raw: str, window: LongLiveWindow) -> dict[str, Any]:
@@ -529,18 +654,23 @@ def _parse_window_payload(raw: str, window: LongLiveWindow) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise AIAnalysisError("长直播窗口输出必须是 JSON 对象")
     moments = payload.get("moments")
-    if moments is None:
-        moments = payload.get("clips") or payload.get("candidates") or []
     if not isinstance(moments, list):
         raise AIAnalysisError("长直播窗口输出缺少 moments 数组")
     normalized: list[dict[str, Any]] = []
-    for item in moments[:WINDOW_RECALL_LIMIT]:
+    invalid_item_count = 0
+    for index, item in enumerate(moments):
         if not isinstance(item, dict):
+            invalid_item_count += 1
             continue
         moment = _normalize_moment(item, window=window)
         if moment:
-            normalized.append(moment)
-    return {"moments": normalized}
+            if index < WINDOW_RECALL_LIMIT:
+                normalized.append(moment)
+        else:
+            invalid_item_count += 1
+    if invalid_item_count:
+        raise AIAnalysisError(f"长直播窗口 moments 含 {invalid_item_count} 条无效条目")
+    return {"moments": normalized, "invalid_item_count": invalid_item_count}
 
 
 def _normalize_moment(
