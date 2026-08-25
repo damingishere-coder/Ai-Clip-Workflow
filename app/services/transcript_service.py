@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import queue
 import threading
@@ -18,7 +19,10 @@ from uuid import uuid4
 from app.core.config import settings
 from app.services import job_service
 from app.services.managed_process_service import popen_process_group, terminate_process_tree
-from app.services.transcription_checkpoint_service import TranscriptionCheckpoint
+from app.services.transcription_checkpoint_service import (
+    RemoteTranscriptionResultUncertainError,
+    TranscriptionCheckpoint,
+)
 
 
 TIME_TABLE_PATTERN = re.compile(
@@ -79,6 +83,31 @@ _CUDA_ERROR_MARKERS = (
     "nvidia",
 )
 _RESERVED_REMOTE_PROVIDERS = ("aliyun", "tencent", "xunfei")
+_REMOTE_SAFE_RETRY_ATTEMPTS = 3
+
+
+class RemoteTranscriptionError(RuntimeError):
+    """远程转写失败，并明确是否允许在本进程内安全重试。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str,
+        safe_to_retry: bool = False,
+        billing_uncertain: bool = False,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        suffix = "；本次是否计费不确定，未自动重试" if billing_uncertain else ""
+        super().__init__(f"[{category}] {message}{suffix}")
+        self.category = category
+        self.safe_to_retry = safe_to_retry
+        self.billing_uncertain = billing_uncertain
+        self.retry_after_seconds = retry_after_seconds
+
+
+class TranscriptCancelledError(RuntimeError):
+    """用户取消转写；必须穿透 Provider 包装并由工作流记为 cancelled。"""
 
 
 def run_ffmpeg_audio_extract(
@@ -181,6 +210,7 @@ def write_transcript_markdown(
     transcript_path: Path,
     progress_callback: Callable[[dict], None] | None = None,
     provider: str | None = None,
+    allow_uncertain_retry: bool = False,
 ) -> dict[str, str]:
     if not audio_path.exists():
         raise RuntimeError("未找到音频文件，请先提取音频")
@@ -191,16 +221,16 @@ def write_transcript_markdown(
     checkpoint = None
     task_id = str(task.get("id") or "").strip()
     if task_id:
-        source_path = task.get("original_video_path") or audio_path
         checkpoint = TranscriptionCheckpoint(
             task_id=task_id,
-            source_path=source_path,
+            source_path=audio_path,
             provider=_ACTIVE_TRANSCRIPTION_PROVIDER,
             model=_ACTIVE_TRANSCRIPTION_MODEL,
             device=_ACTIVE_TRANSCRIPTION_DEVICE,
             compute_type=_ACTIVE_TRANSCRIPTION_COMPUTE_TYPE,
             chunk_seconds=settings.transcription_chunk_seconds,
             overlap_seconds=settings.transcription_chunk_overlap_seconds,
+            allow_uncertain_retry=allow_uncertain_retry,
         )
     _emit_transcript_progress(
         progress_path,
@@ -262,6 +292,8 @@ def transcribe_audio_with_configured_provider(
         )
     except job_service.JobLeaseLostError:
         raise
+    except TranscriptCancelledError:
+        raise
     except Exception as exc:
         if allow_fallback and fallback_provider and fallback_provider != provider:
             _emit_transcript_progress(
@@ -282,6 +314,8 @@ def transcribe_audio_with_configured_provider(
                     progress_callback,
                 )
             except job_service.JobLeaseLostError:
+                raise
+            except TranscriptCancelledError:
                 raise
             except Exception as fallback_exc:
                 raise RuntimeError(
@@ -479,14 +513,24 @@ def transcribe_audio_with_volcengine(
                 percent=_chunk_start_percent(chunk.index, len(chunks)),
                 message=f"正在请求火山引擎转写第 {chunk.index}/{len(chunks)} 段",
             )
+            request_id = checkpoint.prepare_remote_request(chunk.index) if checkpoint else None
             try:
-                chunk_segments = transcribe_audio_with_volcengine_flash(chunk_path, allow_empty=True)
-                if checkpoint:
-                    checkpoint.save_completed(chunk.index, chunk_segments)
+                chunk_segments = transcribe_audio_with_volcengine_flash(
+                    chunk_path,
+                    allow_empty=True,
+                    request_id=request_id,
+                )
             except Exception as exc:
                 if checkpoint:
-                    checkpoint.save_failed(chunk.index, str(exc))
+                    if isinstance(exc, RemoteTranscriptionResultUncertainError) or (
+                        isinstance(exc, RemoteTranscriptionError) and exc.billing_uncertain
+                    ):
+                        checkpoint.save_uncertain(chunk.index, str(exc))
+                    else:
+                        checkpoint.save_failed(chunk.index, str(exc), attempt_already_counted=True)
                 raise
+            if checkpoint:
+                _save_remote_checkpoint_completed(checkpoint, chunk.index, chunk_segments)
             all_segments.extend(_offset_chunk_segments(chunk_segments, chunk, settings.transcription_chunk_overlap_seconds))
             _emit_transcript_progress(
                 progress_path,
@@ -505,10 +549,59 @@ def transcribe_audio_with_volcengine(
     return sorted(all_segments, key=lambda segment: (segment.start_seconds, segment.end_seconds))
 
 
-def transcribe_audio_with_volcengine_flash(audio_path: Path, allow_empty: bool = False) -> list[TranscriptSegment]:
+def _save_remote_checkpoint_completed(
+    checkpoint: TranscriptionCheckpoint,
+    chunk_index: int,
+    segments: list[TranscriptSegment],
+) -> None:
+    """Provider 已返回后若落账失败，保留 requesting/uncertain，绝不降为可自动重试。"""
+    try:
+        checkpoint.save_completed(chunk_index, segments, attempt_already_counted=True)
+    except job_service.JobLeaseLostError:
+        # 旧 worker 不得写回；requesting 会让新 owner 停止自动重发。
+        raise
+    except Exception as exc:
+        uncertain = RemoteTranscriptionResultUncertainError(
+            f"第 {chunk_index} 段远程转写已返回，但 checkpoint 保存失败；"
+            "结果与计费状态不确定，普通重试不会再次请求。"
+        )
+        try:
+            checkpoint.save_uncertain(chunk_index, str(uncertain))
+        except job_service.JobLeaseLostError:
+            raise
+        except Exception:
+            # 数据库仍不可写时保留请求前的 requesting，恢复端同样会 fail closed。
+            pass
+        raise uncertain from exc
+
+
+def transcribe_audio_with_volcengine_flash(
+    audio_path: Path,
+    allow_empty: bool = False,
+    *,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    request_id: str | None = None,
+) -> list[TranscriptSegment]:
     _ensure_volcengine_configured()
-    headers = _volcengine_headers()
+    headers = _volcengine_headers(request_id=request_id)
     payload = _build_volcengine_flash_payload(audio_path)
+    for attempt in range(1, _REMOTE_SAFE_RETRY_ATTEMPTS + 1):
+        try:
+            return _request_volcengine_transcript(payload, headers, allow_empty=allow_empty)
+        except RemoteTranscriptionError as exc:
+            if not exc.safe_to_retry or attempt >= _REMOTE_SAFE_RETRY_ATTEMPTS:
+                raise
+            delay = exc.retry_after_seconds if exc.retry_after_seconds is not None else 2 ** (attempt - 1)
+            sleep_fn(max(0.0, min(delay, 60.0)))
+    raise AssertionError("远程转写安全重试循环异常结束")
+
+
+def _request_volcengine_transcript(
+    payload: dict,
+    headers: dict[str, str],
+    *,
+    allow_empty: bool,
+) -> list[TranscriptSegment]:
     request = Request(
         settings.volcengine_asr_api_url,
         data=json.dumps(payload).encode("utf-8"),
@@ -523,27 +616,88 @@ def transcribe_audio_with_volcengine_flash(audio_path: Path, allow_empty: bool =
             log_id = response.headers.get("X-Tt-Logid", "")
     except HTTPError as exc:
         error_text = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"火山引擎接口返回 HTTP {exc.code}：{error_text[:500]}") from exc
+        retry_after = (
+            _parse_retry_after_seconds((exc.headers or {}).get("Retry-After"))
+            if exc.code == 429
+            else None
+        )
+        raise RemoteTranscriptionError(
+            f"火山引擎接口返回 HTTP {exc.code}：{error_text[:500]}",
+            category="rate_limited" if exc.code == 429 else "http_error",
+            safe_to_retry=exc.code == 429,
+            billing_uncertain=exc.code >= 500 or exc.code == 408,
+            retry_after_seconds=retry_after,
+        ) from exc
     except URLError as exc:
-        raise RuntimeError(f"无法连接火山引擎转写接口：{exc}") from exc
+        reason = exc.reason
+        is_timeout = isinstance(reason, TimeoutError)
+        is_preconnect_failure = isinstance(reason, (ConnectionRefusedError, socket.gaierror))
+        raise RemoteTranscriptionError(
+            "火山引擎转写接口连接超时" if is_timeout else f"无法连接火山引擎转写接口：{reason}",
+            category="timeout" if is_timeout else "network_error",
+            safe_to_retry=is_preconnect_failure,
+            billing_uncertain=not is_preconnect_failure,
+        ) from exc
+    except TimeoutError as exc:
+        raise RemoteTranscriptionError(
+            "火山引擎转写接口连接或读取超时",
+            category="timeout",
+            billing_uncertain=True,
+        ) from exc
+    except OSError as exc:
+        raise RemoteTranscriptionError(
+            f"火山引擎转写响应读取失败：{exc}",
+            category="network_error",
+            billing_uncertain=True,
+        ) from exc
 
     if status_code and status_code != "20000000":
         if allow_empty and status_code == "20000003":
             return []
-        raise RuntimeError(
+        raise RemoteTranscriptionError(
             "火山引擎接口返回业务错误："
-            f"code={status_code}, message={status_message or 'unknown'}, logid={log_id or 'unknown'}"
+            f"code={status_code}, message={status_message or 'unknown'}, logid={log_id or 'unknown'}",
+            category="business_error",
+            billing_uncertain=True,
         )
 
     try:
         payload = json.loads(response_text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"火山引擎接口返回的不是 JSON：{response_text[:500]}") from exc
+        raise RemoteTranscriptionError(
+            f"火山引擎接口返回的不是 JSON：{response_text[:500]}",
+            category="invalid_response_json",
+            billing_uncertain=True,
+        ) from exc
 
-    segments = parse_volcengine_transcript_segments(payload)
+    if not isinstance(payload, dict) or not isinstance(payload.get("result"), dict):
+        raise RemoteTranscriptionError(
+            "火山引擎成功响应缺少 result 对象",
+            category="invalid_response_schema",
+            billing_uncertain=True,
+        )
+    try:
+        segments = parse_volcengine_transcript_segments(payload)
+    except (TypeError, ValueError, KeyError, OverflowError) as exc:
+        raise RemoteTranscriptionError(
+            f"火山引擎成功响应的转写字段无效：{exc}",
+            category="invalid_response_schema",
+            billing_uncertain=True,
+        ) from exc
     if not segments and not allow_empty:
-        raise RuntimeError(f"火山引擎远程转写没有返回可用文本：{json.dumps(payload, ensure_ascii=False)[:500]}")
+        raise RemoteTranscriptionError(
+            f"火山引擎远程转写没有返回可用文本：{json.dumps(payload, ensure_ascii=False)[:500]}",
+            category="empty_model_output",
+            billing_uncertain=True,
+        )
     return segments
+
+
+def _parse_retry_after_seconds(value: str | None) -> float | None:
+    try:
+        return max(0.0, min(float(str(value or "").strip()), 60.0))
+    except ValueError:
+        return None
 
 
 def parse_volcengine_transcript_segments(payload: dict) -> list[TranscriptSegment]:
@@ -556,7 +710,7 @@ def parse_volcengine_transcript_segments(payload: dict) -> list[TranscriptSegmen
         segments = [_segment_from_volcengine_utterance(item) for item in utterances if isinstance(item, dict)]
         return [segment for segment in segments if segment and segment.text]
 
-    text = normalize_transcript_text(str(result.get("text") or result.get("message") or "")) if isinstance(result, dict) else ""
+    text = normalize_transcript_text(str(result.get("text") or "")) if isinstance(result, dict) else ""
     if text:
         return [TranscriptSegment(start_seconds=0, end_seconds=1, text=text)]
     return []
@@ -573,8 +727,20 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
         "default=noprint_wrappers=1:nokey=1",
         str(audio_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                            timeout=settings.ffprobe_timeout)
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=settings.ffprobe_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"FFprobe 读取音频时长超过 {settings.ffprobe_timeout} 秒") from exc
+    except OSError as exc:
+        raise RuntimeError(f"FFprobe 无法读取音频时长：{exc}") from exc
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "FFprobe 无法读取音频时长")
     try:
@@ -632,9 +798,25 @@ def _extract_audio_chunk(audio_path: Path, chunk_path: Path, chunk: TranscriptCh
         "1",
         str(chunk_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                            timeout=settings.ffmpeg_chunk_timeout)
+    chunk_path.unlink(missing_ok=True)
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=settings.ffmpeg_chunk_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        chunk_path.unlink(missing_ok=True)
+        raise RuntimeError(f"FFmpeg 音频分段超过 {settings.ffmpeg_chunk_timeout} 秒：第 {chunk.index} 段") from exc
+    except OSError as exc:
+        chunk_path.unlink(missing_ok=True)
+        raise RuntimeError(f"FFmpeg 无法执行音频分段：第 {chunk.index} 段：{exc}") from exc
     if result.returncode != 0:
+        chunk_path.unlink(missing_ok=True)
         raise RuntimeError(result.stderr.strip() or f"FFmpeg 音频分段失败：第 {chunk.index} 段")
 
 
@@ -661,9 +843,27 @@ def _extract_remote_audio_chunk(audio_path: Path, chunk_path: Path, chunk: Trans
         *codec_args,
         str(chunk_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                            timeout=settings.ffmpeg_chunk_timeout)
+    chunk_path.unlink(missing_ok=True)
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=settings.ffmpeg_chunk_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        chunk_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"FFmpeg 远程转写音频压缩超过 {settings.ffmpeg_chunk_timeout} 秒：第 {chunk.index} 段"
+        ) from exc
+    except OSError as exc:
+        chunk_path.unlink(missing_ok=True)
+        raise RuntimeError(f"FFmpeg 无法执行远程转写音频压缩：第 {chunk.index} 段：{exc}") from exc
     if result.returncode != 0:
+        chunk_path.unlink(missing_ok=True)
         raise RuntimeError(result.stderr.strip() or f"FFmpeg 远程转写音频压缩失败：第 {chunk.index} 段")
 
 
@@ -694,11 +894,11 @@ def _ensure_volcengine_configured() -> None:
         raise RuntimeError("缺少火山引擎资源 ID，请在系统状态页的“1. 音频转写”填写资源 ID")
 
 
-def _volcengine_headers() -> dict[str, str]:
+def _volcengine_headers(*, request_id: str | None = None) -> dict[str, str]:
     headers = {
         "Content-Type": "application/json",
         "X-Api-Resource-Id": settings.volcengine_asr_resource_id,
-        "X-Api-Request-Id": uuid4().hex,
+        "X-Api-Request-Id": request_id or uuid4().hex,
         "X-Api-Sequence": "-1",
     }
     if settings.volcengine_asr_api_key:

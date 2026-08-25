@@ -289,39 +289,38 @@
    ],
    "loc": 1614,
    "contentHash": "fb413a03c88a24dabe2769ec3146d04f4f3909ccc492b43d5dc623bf9ac65c6e",
-   "score": 84,
+   "score": 82,
    "grade": "B",
    "tags": [
     "legacy",
     "dual-format",
-    "glue",
     "fallback",
     "silent-except"
    ],
    "findings": [
     {
      "sev": "MED",
-     "loc": "app/services/storage_service.py:840-846",
-     "text": "move_task_directory_to_trash 明确传入 reserve=False，仍采用查询后检查目录的非原子分配；当前无运行时调用，属于遗留兼容入口，但未来恢复调用时仍可能并发复用同一回收站目录。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/storage_service.py:361-367",
-     "text": "通用 resolve_video_file_path 对已存在路径仍原样返回。媒体 HTTP 路由已增加任务边界，但 publish/auto-publish/subtitle/task 查询等非 HTTP 调用方仍可把数据库中的现有外部路径交给后续读取或上传逻辑。"
+     "loc": "app/services/storage_service.py:362-368,486-487",
+     "text": "resolve_video_file_path 对已存在路径直接返回，不验证任务受控目录；get_source_video_path 及 publish/subtitle/task 等非 HTTP 调用方共享该入口，输出路径异常时仍可能读取或上传外部文件。"
     },
     {
      "sev": "LOW",
-     "loc": "tests/test_storage_boundaries.py:14-32",
-     "text": "新增边界测试没有覆盖任务目录数据库读取在 sqlite3.Error、锁定或损坏数据库下显式失败的回归；代码已有保护但证据不足。"
+     "loc": "app/services/storage_service.py:839-853",
+     "text": "move_task_directory_to_trash 使用 reserve=False 的查询后分配，多个并发删除任务可能选中同一回收站目录；当前属于遗留兼容入口。"
     },
     {
      "sev": "LOW",
-     "loc": "app/services/storage_service.py:257-300",
-     "text": "reserve=True 会在数据库任务记录写入前创建目录；进程在预占后崩溃可能留下无数据库记录的空目录，虽不会覆盖数据，但会造成孤儿目录累积。"
+     "loc": "app/services/storage_service.py:256-301",
+     "text": "allocate_task_dir_name(reserve=True) 先创建目录、后写任务数据库记录，进程在两步之间崩溃会留下无记录孤儿目录。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/storage_service.py:503-518",
+     "text": "上传失败时删除部分文件是 best-effort，清理 OSError 被直接 pass；清理失败不会进入待处理清单，可能留下未引用的半成品源文件。"
     }
    ],
    "auditedHash": "fb413a03c88a24dabe2769ec3146d04f4f3909ccc492b43d5dc623bf9ac65c6e",
-   "auditedAt": "2026-08-24",
+   "auditedAt": "2026-08-25",
    "auditedRev": ""
   },
   {
@@ -347,77 +346,49 @@
    ],
    "loc": 1960,
    "contentHash": "72e92444271e00caa714f2618b716378bda97039d6dae89f2058c1f048fdf336",
-   "score": 59,
-   "grade": "D",
+   "score": 64,
+   "grade": "C",
    "tags": [
     "fallback",
     "silent-except",
-    "fake-output",
     "duplication",
-    "god-component",
-    "glue",
-    "over-fit"
+    "god-component"
    ],
    "findings": [
     {
-     "sev": "HIGH",
-     "loc": "app/services/transcript_workflow_service.py:317",
-     "text": "transcript Markdown 存在即返回 completed，未校验源指纹、Provider、进度状态或文件完整性。"
-    },
-    {
-     "sev": "HIGH",
-     "loc": "app/services/transcript_service.py:265",
-     "text": "JobLeaseLostError 已显式透传，但 TranscriptCancelledError 仍会被统一包装为 RuntimeError，取消可能落成 failed。"
-    },
-    {
-     "sev": "HIGH",
-     "loc": "app/services/transcript_service.py:516",
-     "text": "远程分块请求每次使用随机 request id，缺少持久化幂等键和超时后结果确认，重试可能重复计费。"
+     "sev": "MED",
+     "loc": "app/services/transcript_service.py:1099-1129,1159-1196",
+     "text": "faster-whisper 的 model.transcribe 与模型加载没有单次调用或绝对时限；模型/解码器卡住时只能依赖外层 Worker，直接转写路径可能长期占用。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/transcript_service.py:516",
-     "text": "HTTP 429、Retry-After、网络瞬断和可恢复服务错误缺少专门退避策略。"
+     "loc": "app/services/transcript_service.py:164-191",
+     "text": "FFmpeg 音频提取只有无进展 watchdog，没有绝对 wall-clock deadline；进程持续输出进度但实际不结束时仍可能无限运行。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/transcript_service.py:556",
-     "text": "响应 result.message 可能被当作 0-1 秒转写正文写入结果。"
+     "loc": "app/services/transcript_service.py:981-989",
+     "text": "进度文件损坏、读取失败或顶层非 dict 时统一返回空字典，静默丢失故障证据，恢复逻辑无法区分初始状态与持久化损坏。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/transcript_service.py:831",
-     "text": "进度文件 IO/JSON 损坏时静默返回空字典，可能隐藏故障并触发重复执行。"
+     "loc": "app/services/transcript_service.py:67-77,1259-1270",
+     "text": "活动 provider/model/device/compute_type 仍使用模块级可变全局；同一进程并发转写会互相覆盖运行元数据和进度展示。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/transcript_workflow_service.py:224",
-     "text": "运行和取消状态仍是进程内 set，多进程/重启时不能可靠去重或取消。"
+     "loc": "app/services/transcript_service.py:347-549",
+     "text": "本地与火山远程分片分别复制 chunk、checkpoint、进度和异常收口逻辑，两个实现继续存在维护分叉。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/transcript_service.py:325",
-     "text": "本地和远程转写复制分块、checkpoint、异常和进度循环，行为容易漂移。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/transcript_service.py:1088",
-     "text": "Provider/模型/设备为模块级可变全局，并发任务可能互相覆盖运行元数据。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/transcript_service.py:83",
-     "text": "约 1300 行文件混合 FFmpeg、本地模型、远程 HTTP、checkpoint、进度和 Markdown，职责过大。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "tests/test_long_live_foundation.py:65",
-     "text": "已覆盖失租 checkpoint 和异常透传，仍缺取消、429/坏响应、重复计费与真实 Markdown 闭环。"
+     "loc": "app/services/transcript_service.py:83-1395",
+     "text": "单文件仍混合 FFmpeg、faster-whisper、远程 HTTP、幂等 checkpoint、进度文件和 Markdown 生成，约 1400 行，职责边界和回归影响面偏大。"
     }
    ],
    "auditedHash": "72e92444271e00caa714f2618b716378bda97039d6dae89f2058c1f048fdf336",
-   "auditedAt": "2026-08-24",
-   "auditedRev": "9ae8440d80d0527c7dd296fe1331b63aac2818ea"
+   "auditedAt": "2026-08-25",
+   "auditedRev": ""
   },
   {
    "id": "ai_selection",
@@ -446,15 +417,13 @@
    ],
    "loc": 4420,
    "contentHash": "5315d1044880aa0ad4e0364cfeea5ce10122b740f2a8ddfe8ab3d237d46b6b8c",
-   "score": 63,
-   "grade": "C",
+   "score": 55,
+   "grade": "D",
    "tags": [
     "fallback",
     "silent-except",
     "legacy",
     "dual-format",
-    "stub",
-    "fake-output",
     "bloat",
     "duplication",
     "god-component"
@@ -462,83 +431,43 @@
    "findings": [
     {
      "sev": "HIGH",
-     "loc": "app/services/ai_config_service.py:318",
-     "text": "get_ai_config_context 返回含 AI/ASR Key 的完整 values，GET /api/settings/ai 无读取鉴权，页面也复用该上下文。"
+     "loc": "app/services/ai_config_service.py:321",
+     "text": "get_ai_config_context 直接返回包含 API Key 等敏感配置的完整 values；该结果由 app/routers/settings.py:7-12 的未认证 GET /api/settings/ai 暴露，仍是当前 P1.5 Secret 泄漏风险。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/ai/ai_clip_service.py:4",
-     "text": "generate_candidate_clips_placeholder 返回三条硬编码 ClipCandidate；虽当前无调用方，误接线会产生 fake output。"
+     "loc": "app/services/ai/long_live_talk_analyzer.py:493",
+     "text": "_assert_current_job_lease 只有在 ContextVar 存在 active lease 时才校验；/api/tasks/{task_id}/process/ai 直接调用 task_service.process_task_ai_analysis，未建立 Workflow Job lease，长直播 checkpoint 写入因此可无 owner fencing。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/ai/ai_clip_analyzer.py:131",
-     "text": "分段分析失败窗口被跳过，只要其他窗口有候选便返回；通用路径缺少最低覆盖率门槛。"
+     "loc": "app/services/ai/long_live_talk_analyzer.py:119",
+     "text": "每次 analyze_long_live_talk 调用都重新设置 max_attempts，未读取 checkpoint 的 attempt_count 或 next_retry_at；人工重试/进程重启会重复消耗远程模型调用和计费预算。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/ai/variety_comedy_analyzer.py:513",
-     "text": "全局评审失败时隐式降级到扩展阶段评分，Provider 失败仍可形成候选。"
+     "loc": "app/services/ai/ai_clip_analyzer.py:121",
+     "text": "分段分析捕获单段异常后继续执行；只要其他分段生成候选就返回成功，并将失败段写入 summary，没有覆盖率或失败比例门禁，可能把不完整分析当作完整结果。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/ai/local_model_provider.py:19",
-     "text": "fallback_protocol 对任意 AIProviderError 都执行第二协议，未区分限流、认证和协议错误，可能重复调用与计费。"
+     "loc": "app/services/ai/variety_comedy_analyzer.py:527",
+     "text": "_global_judge 捕获所有异常后返回空排序并降级到扩展阶段评分；全局评审失败会被转化为可继续执行的结果，真实 AI 失败与正常降级仍混在同一业务路径。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/ai_analysis_workflow_service.py:738",
-     "text": "候选事务替换、JSON 文件和 run 历史分步持久化，后续失败会形成数据库与文件/历史不一致。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/ai/long_live_talk_analyzer.py:427",
-     "text": "checkpoint 更新无 run/lease/owner fencing，并发或旧进程恢复可能互相覆盖窗口状态。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/ai_analysis_workflow_service.py:71",
-     "text": "分析元文件不存在、损坏或读取异常时静默返回空字典，无法区分未分析与产物损坏。"
+     "loc": "app/services/ai_analysis_workflow_service.py:923",
+     "text": "AI 分析先独立替换 clip_candidates，再写分析文件，随后独立插入 ai_analysis_runs；进程在任一边界崩溃时数据库候选、分析文件和历史 active run 可能互相不一致。"
     },
     {
      "sev": "LOW",
-     "loc": "app/services/ai/ai_clip_analyzer.py:456",
-     "text": "输出归一化同时接受多组历史字段并填大量默认值，兼容有效但维护成本高。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "app/services/ai_config_service.py:55",
-     "text": "旧 AI_REMOTE 与新分析/发布配置并存，运行时还改写全局 settings，形成双路径。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/ai_analysis_workflow_service.py:685",
-     "text": "单文件集中 profile、Provider、状态、候选、文件、历史与恢复，模块回归半径大。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/ai/ai_clip_analyzer.py:252",
-     "text": "多个分析器重复偏好摘要、时间转换、默认字段和 AI 输出解析逻辑。"
-    },
-    {
-     "sev": "MED",
-     "loc": "tests/test_split_services.py:200",
-     "text": "缺少真实 Provider 成功路径、文件写入失败一致性、并发运行和旧 checkpoint 覆盖测试。"
-    },
-    {
-     "sev": "MED",
-     "loc": "tests/test_codex_cli_provider.py:12",
-     "text": "Provider 测试主要 monkeypatch，缺少 HTTP 429/500/超时和协议 fallback 重复调用边界。"
-    },
-    {
-     "sev": "LOW",
-     "loc": "tests/test_variety_comedy_selection.py:291",
-     "text": "算法分支覆盖较好，但真实三阶段 Provider、资源消耗和全局评审降级未由集成测试锁定。"
+     "loc": "app/services/ai_analysis_workflow_service.py:76",
+     "text": "_read_analysis_meta 对文件不存在、读取失败或 JSON 损坏都静默返回空字典；损坏产物会被当作没有元数据，降低长直播覆盖率门禁和故障诊断的可见性。"
     }
    ],
    "auditedHash": "5315d1044880aa0ad4e0364cfeea5ce10122b740f2a8ddfe8ab3d237d46b6b8c",
-   "auditedAt": "2026-08-24",
-   "auditedRev": "38fd60386a609b6ea85a3eb511b83cb296f4d2a1"
+   "auditedAt": "2026-08-25",
+   "auditedRev": ""
   },
   {
    "id": "task_review_cut",
@@ -631,7 +560,7 @@
    ],
    "loc": 2409,
    "contentHash": "fb31a5d9516731fe561cbfdeaae24f92b052ca23194294b4972664716f93d32e",
-   "score": 69,
+   "score": 64,
    "grade": "C",
    "tags": [
     "fallback",
@@ -644,38 +573,38 @@
    "findings": [
     {
      "sev": "MED",
-     "loc": "app/services/subtitle_auto_workflow_service.py:42",
-     "text": "prepare_task_subtitle_review 先提交 ensure_source_track/ensure_clip_track 的数据库副作用，之后才在 BEGIN IMMEDIATE 中检查活动 Job、lease 和 Task 状态。并发状态变化或冲突 Job 会使入口失败，但已生成的字幕 revision/track 变更无法回滚。"
+     "loc": "app/services/subtitle_auto_workflow_service.py:42-50,51-108",
+     "text": "prepare_task_subtitle_review 先执行 ensure_source_track/ensure_clip_track 并提交 revision/track 副作用，之后才检查活动 Job 与当前 lease；旧 Worker 失租或并发冲突时仍可能留下字幕数据库变更。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/subtitle_data_service.py:1222",
-     "text": "_sync_dependent_clip_tracks 逐条调用 sync_clip_track、逐条提交。源轨 revision 已提交后，任一切片同步失败会留下部分 up_to_date、部分 pending_sync 的状态。"
+     "loc": "app/services/subtitle_data_service.py:1017-1074",
+     "text": "_load_source_cues 对 checksum、JSON 或 segment 错误直接跳过；只要其他 chunk 仍有 cue 就生成部分字幕 revision，损坏转写会被静默降级为缺句结果。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/subtitle_data_service.py:1017",
-     "text": "_load_source_cues 对 checksum 不匹配、JSON 损坏或非法 segment 直接跳过；只要仍有有效 cue 就返回部分 ASR 字幕，可能生成静默缺句的 revision。"
+     "loc": "app/services/subtitle_data_service.py:1222-1230,236-330",
+     "text": "_sync_dependent_clip_tracks 逐条调用各自事务的 sync_clip_track；源轨已提交后任一切片同步失败，会留下部分 up_to_date、部分 pending_sync 状态。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/subtitle_data_service.py:1341",
-     "text": "_probe_media_dimensions 在 ffprobe 不存在、超时、输出损坏或尺寸缺失时静默回退 1080x1920，真实媒体故障不可见。"
-    },
-    {
-     "sev": "MED",
-     "loc": "app/services/subtitle_data_service.py:1322",
-     "text": "字幕数据层仍集中承担 revision/cue 持久化、导入导出、ASS、波形与 ffprobe，约 1434 行；默认样式加载存在重复实现，修改影响面偏大。"
+     "loc": "app/services/subtitle_auto_workflow_service.py:513-569",
+     "text": "checkpoint 与 DB 恢复证据只检查 completed/verified、路径 exists 和 is_file，不检查非空、size/fingerprint 或可被 FFprobe 验证；截断或零字节最终文件仍可能被恢复为成功。"
     },
     {
      "sev": "LOW",
-     "loc": "app/services/subtitle_workflow_service.py:237",
-     "text": "旧版 _activate_subtitle_job 仍可无 lease/revision/status 校验激活记录；正常生产渲染路径已不再调用，但遗留兼容入口仍有风险。"
+     "loc": "app/services/subtitle_workflow_service.py:240-257",
+     "text": "遗留 _activate_subtitle_job 仍可无 lease、revision、status 或 task/output_clip 约束直接激活指定记录；当前主渲染路径未调用，但 task_service 仍导入并保留兼容入口。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/subtitle_data_service.py:1222-1230",
+     "text": "字幕数据层继续集中承担 revision/cue 持久化、导入导出、ASS、波形和 FFprobe，单文件约 1434 行，变更影响面和重复事务路径较大。"
     }
    ],
    "auditedHash": "fb31a5d9516731fe561cbfdeaae24f92b052ca23194294b4972664716f93d32e",
    "auditedAt": "2026-08-25",
-   "auditedRev": "2a2774dd248cc80377dd7edf8e1f98e8ec2f4a20"
+   "auditedRev": ""
   },
   {
    "id": "pipeline_queue",
@@ -707,29 +636,46 @@
    ],
    "loc": 3350,
    "contentHash": "79bcc0b7de14b28318a7578e71d5281909254180ff351895b72fb10cefb87c68",
-   "score": 87,
+   "score": 76,
    "grade": "B",
    "tags": [
-    "god-component",
+    "fallback",
+    "silent-except",
+    "legacy",
     "bloat",
-    "glue",
-    "legacy"
+    "god-component",
+    "glue"
    ],
    "findings": [
     {
-     "sev": "LOW",
-     "loc": "app/services/pipeline_engine.py:1135",
-     "text": "PUBLISH_JOB_CREATING 重启恢复已具备 source、workflow_job_id、active output 和文件证据校验，但 provisional 仍把全部 recovered_ids 归入 created，skipped 恒为空；混合批次恢复后的计数和取消语义可能与原批次不同。"
+     "sev": "MED",
+     "loc": "app/services/pipeline_engine.py:1529",
+     "text": "恢复文案时只按 output_clip_id、platform、request_fingerprint 复用 cached 项，没有排除 metadata.error 或失败状态；MetadataGenerator 会把 AI 失败的规则降级结果持久化，后续同指纹运行可能持续复用该失败结果，阻断真正重试。"
     },
     {
      "sev": "MED",
-     "loc": "app/services/pipeline_engine.py:87",
-     "text": "PipelineEngine 约1810行、46个方法，继续集中9步执行、checkpoint/reconcile、发布证据、取消清理和失败收口；lease、旧checkpoint、切片与发布协议高度耦合，维护及回归面仍偏大。"
+     "loc": "app/services/pipeline_engine.py:1592",
+     "text": "_write_json_atomic 在写临时文件前后各检查一次 lease，但最终 temporary_path.replace(path) 不在数据库锁或 owner 条件内；lease 在第二次检查后失效并被接管时，旧 worker 仍可能覆盖新 worker 的元数据文件。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/pipeline_engine.py:88",
+     "text": "PipelineEngine 仍集中承担步骤编排、checkpoint 恢复、文件证据、AI 分析、文案生成、发布任务恢复和状态推进，文件约 1800 行，单点修改 blast radius 大。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/pipeline_engine.py:1135",
+     "text": "PUBLISH_JOB_CREATING 恢复按当前 workflow_job_id 收集全部匹配 publish_jobs，并将 recovered_ids 全部作为 created 返回；若历史任务存在部分已创建/部分跳过，恢复结果仍可能把混合状态压成单一 created 计数。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/pipeline_engine.py:1790",
+     "text": "_read_json 对 OSError/JSONDecodeError 静默返回 fallback；排期或 checkpoint JSON 损坏时会被当作默认空结构，故障可见性和人工恢复依据不足。"
     }
    ],
    "auditedHash": "79bcc0b7de14b28318a7578e71d5281909254180ff351895b72fb10cefb87c68",
    "auditedAt": "2026-08-25",
-   "auditedRev": "2a2774dd248cc80377dd7edf8e1f98e8ec2f4a20"
+   "auditedRev": ""
   },
   {
    "id": "publish_center",

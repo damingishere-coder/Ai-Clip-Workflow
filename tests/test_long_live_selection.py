@@ -8,9 +8,14 @@ import re
 import pytest
 
 from app.db.database import get_connection, init_db
+from app.services import job_service
 from app.services.ai.ai_clip_analyzer import TranscriptRow
+from app.services.ai.base import AIProviderError
 from app.services.ai.long_live_talk_analyzer import (
     LongLiveAnalysisRequest,
+    LongLiveWindow,
+    _get_or_create_checkpoint,
+    _mark_checkpoint_running,
     analyze_long_live_talk,
     build_long_live_windows,
     calculate_window_coverage,
@@ -35,6 +40,7 @@ def cleanup_long_live_selection_rows():
 
 def _cleanup() -> None:
     with get_connection() as connection:
+        connection.execute("DELETE FROM workflow_jobs WHERE task_id LIKE ?", (f"{PREFIX}%",))
         connection.execute("DELETE FROM ai_analysis_windows WHERE task_id LIKE ?", (f"{PREFIX}%",))
         connection.execute("DELETE FROM clip_candidates WHERE task_id LIKE ?", (f"{PREFIX}%",))
         connection.execute("DELETE FROM ai_analysis_runs WHERE task_id LIKE ?", (f"{PREFIX}%",))
@@ -150,6 +156,23 @@ class FakeWindowProvider:
         )
 
 
+class SafeRetryWindowProvider(FakeWindowProvider):
+    def generate_json(self, prompt: str, retry_instruction: str | None = None) -> str:
+        match = re.search(r"窗口 (\d+)/(\d+)，范围", prompt)
+        assert match
+        index = int(match.group(1))
+        if index == 1 and self.calls[index] < 2:
+            self.calls[index] += 1
+            raise AIProviderError(
+                "模拟 429",
+                category="rate_limited",
+                http_status=429,
+                safe_to_retry=True,
+                retry_after_seconds=0,
+            )
+        return super().generate_json(prompt, retry_instruction)
+
+
 def test_six_hour_structured_timeline_window_coverage_density_and_total_limit():
     rows = _rows_for_duration(6 * 3600)
     windows = build_long_live_windows(rows)
@@ -186,7 +209,7 @@ def test_cross_window_duplicate_uses_time_and_semantic_merge():
     assert merged["source_window_indexes"] == [1, 2]
 
 
-def test_failed_window_retries_three_times_and_next_run_reuses_success(tmp_path):
+def test_ambiguous_window_failure_is_not_auto_retried_and_next_run_reuses_success(tmp_path):
     task_id = f"{PREFIX}resume"
     _create_task(task_id)
     _write_transcript(task_id, 30 * 60)
@@ -200,12 +223,12 @@ def test_failed_window_retries_three_times_and_next_run_reuses_success(tmp_path)
     )
     first_provider = FakeWindowProvider({3})
     first = analyze_long_live_talk(request, provider=first_provider, sleep_fn=lambda _seconds: None)
-    assert first_provider.calls[3] == 3
+    assert first_provider.calls[3] == 1
     assert first.meta["failed_window_count"] == 1
     checkpoints = list_long_live_window_checkpoints(task_id)
     failed = [item for item in checkpoints if item["window_index"] == 3][0]
     assert failed["status"] == "failed"
-    assert failed["attempt_count"] == 3
+    assert failed["attempt_count"] == 1
     assert "模拟窗口 3 网络失败" in failed["error_message"]
 
     second_provider = FakeWindowProvider()
@@ -214,6 +237,55 @@ def test_failed_window_retries_three_times_and_next_run_reuses_success(tmp_path)
     assert second.meta["failed_window_count"] == 0
     assert second.meta["reused_window_count"] == second.meta["window_count"] - 1
     assert second.meta["coverage_ratio"] == pytest.approx(1.0)
+
+
+def test_safe_rate_limit_window_is_retried_within_bound(tmp_path):
+    task_id = f"{PREFIX}safe-retry"
+    _create_task(task_id)
+    _write_transcript(task_id, 10 * 60)
+    request = LongLiveAnalysisRequest(
+        task_id=task_id,
+        transcript_path=get_artifact_paths(task_id)["transcript_path"],
+        provider_name="remote",
+        model_name="test-model",
+        density_per_hour=4,
+        total_limit=30,
+    )
+    provider = SafeRetryWindowProvider()
+    result = analyze_long_live_talk(request, provider=provider, sleep_fn=lambda _seconds: None)
+    assert provider.calls[1] == 3
+    assert result.meta["failed_window_count"] == 0
+
+
+def test_stale_worker_cannot_update_long_live_checkpoint():
+    task_id = f"{PREFIX}stale-worker"
+    _create_task(task_id)
+    request = LongLiveAnalysisRequest(
+        task_id=task_id,
+        transcript_path=get_artifact_paths(task_id)["transcript_path"],
+        provider_name="remote",
+        model_name="test-model",
+    )
+    window = LongLiveWindow(1, 1, 0, 60, tuple(_rows_for_duration(60)), "text")
+    checkpoint = _get_or_create_checkpoint(request, "fingerprint", window)
+    job = job_service.create_job(task_id, job_service.JOB_TYPE_AUTO_PIPELINE)
+    claimed = job_service.claim_job(job["id"], "old-worker")
+    assert claimed
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE workflow_jobs SET lease_expires_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", job["id"]),
+        )
+        connection.commit()
+    with job_service.job_lease_context(job["id"], "old-worker", claimed["lease_token"]):
+        with pytest.raises(job_service.JobLeaseLostError):
+            _mark_checkpoint_running(checkpoint["id"])
+    with get_connection() as connection:
+        status = connection.execute(
+            "SELECT status FROM ai_analysis_windows WHERE id = ?",
+            (checkpoint["id"],),
+        ).fetchone()["status"]
+    assert status == "queued"
 
 
 def test_pipeline_blocks_incomplete_long_live_before_candidate_selection():

@@ -30,8 +30,8 @@ from app.models.task import (
     PublishSendJobUpdate,
     TaskStatus,
 )
-from app.services.ai.ai_clip_analyzer import build_provider
-from app.services.ai.base import AIProviderError
+from app.services.ai.ai_clip_analyzer import build_provider, loads_ai_json
+from app.services.ai.base import AIProviderError, generate_json_with_safe_retry
 from app.services.database_backup_service import create_publish_migration_backup
 from app.services.publish_copy_rules import (
     BILIBILI_TITLE_MAX,
@@ -1387,7 +1387,9 @@ def generate_publish_metadata(item: dict, use_ai: bool = False, *, platform: str
 
     try:
         provider = build_provider(settings.ai_publish_provider, purpose="publish")
-        parsed = json.loads(provider.generate_json(_metadata_prompt(item, platform)))
+        parsed = loads_ai_json(generate_json_with_safe_retry(provider, _metadata_prompt(item, platform)))
+        if not isinstance(parsed, dict):
+            raise ValueError("AI 文案响应必须是 JSON 对象")
         provider_name = getattr(provider, "name", settings.ai_publish_provider)
         publish_model = (
             settings.ai_codex_model
@@ -1415,7 +1417,7 @@ def generate_publish_metadata(item: dict, use_ai: bool = False, *, platform: str
             "policy_version": PUBLISH_COPY_RULE_VERSION if platform == "douyin" else 0,
         }
     except (AIProviderError, json.JSONDecodeError, TypeError, ValueError) as exc:
-        metadata["error"] = str(exc)
+        metadata["error"] = exc.checkpoint_message() if isinstance(exc, AIProviderError) else str(exc)
         return metadata
 
 

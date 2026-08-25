@@ -26,6 +26,7 @@ from app.services.ai.long_live_talk_analyzer import (
     get_latest_long_live_window_status,
 )
 from app.services.ai.diagnostics import ensure_local_ai_ready
+from app.services.ai.base import AIProviderError
 from app.services.ai_prompt_preset_service import get_task_ai_prompt_preset
 from app.services.storage_service import get_artifact_paths
 from app.services.task_log_service import append_task_log, read_task_log_tail
@@ -891,7 +892,11 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
         try:
             analysis = _analyze_with_provider(task_id, task, paths, provider_name)
         except Exception as provider_exc:
-            provider_error = str(provider_exc)
+            provider_error = (
+                provider_exc.checkpoint_message()
+                if isinstance(provider_exc, AIProviderError)
+                else str(provider_exc)
+            )
             if provider_name == "remote":
                 raise AIAnalysisError(
                     "远程 AI 分析接口不可用，已暂停 AI 分析："

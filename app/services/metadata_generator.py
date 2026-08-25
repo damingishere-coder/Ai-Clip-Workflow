@@ -40,6 +40,9 @@ class MetadataGenerator:
             hashtags = normalize_douyin_tags(normalized["tags"])
         cover_text = self._cover_text(title)
         risk_flags = self._risk_flags(item, title, caption, hashtags)
+        metadata_error = str(metadata.get("error") or "")
+        if metadata_error:
+            risk_flags.append("AI 文案生成失败，已使用规则文案")
         return {
             "clip_id": item.get("output_clip_id") or item.get("id") or "",
             "clip_candidate_id": item.get("clip_candidate_id") or "",
@@ -51,7 +54,7 @@ class MetadataGenerator:
             "risk_flags": risk_flags,
             "status": "NEED_REVIEW" if risk_flags else "READY",
             "source": metadata.get("source") or "rule",
-            "error": metadata.get("error") or "",
+            "error": metadata_error,
             "recommend_reason": item.get("highlight_reason") or item.get("clip_summary") or "",
         }
 

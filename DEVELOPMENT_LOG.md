@@ -1237,3 +1237,15 @@
 - 源轨生成、切片轨同步、手工保存和字幕导入均在写锁内重读 active revision 并使用条件更新；迟到的旧读取不能覆盖较新的人工版本。“跳过字幕”也会拒绝已经排队的后续自动流水线。
 - Worker 子进程启动失败会明确写入 failed 而不是让队列线程退出；重启接管同时收口 processing/queued 字幕子记录，按 revision 复用的 ASS 缓存不会被误删。
 - 最终独立验收 Ruff、Compileall 通过，字幕/Job fencing/队列/自动流水线/checkpoint/状态机/发布关联/版本回滚共 `167 passed`。Pytest 明确使用临时 `test_workflow.sqlite3`；活动库前后 size 与 SHA256 完全一致。未调用 AI、Chrome 或真实平台投稿。
+
+## 2026-08-25 稳定 V1 P1.4 AI、转写与媒体失败边界
+
+- AI Provider 新增统一错误分类和计费不确定标记；429/确认未连接只做最多 3 次有限重试，5xx、408、超时、空响应、坏 JSON、坏 Schema 和空模型结果都不自动重发。
+- 普通选片与综艺选片删除“解析失败后再次调用模型”的旧逻辑；Markdown/代码围栏 JSON 只在本地解析层兼容。Codex CLI 超时/坏输出按计费不确定收口，本地模型只在 404/405 时切换协议。
+- 长直播窗口 checkpoint 的 running/completed/failed 写回绑定当前 Workflow lease，只有安全错误才在本次执行内重试；成功窗口在恢复时继续复用。
+- 火山引擎远程转写在请求前保存稳定 request id 和 `requesting` 状态；超时、5xx、坏响应或成功响应字段异常进入 `uncertain`。普通 Job 重试不再创建新请求，只有用户明确“重新生成转写”才创建新 run。
+- 修复取消异常被 Provider 通用异常包装的问题；用户取消现在由转写工作流记录为 cancelled，不会误显示为 Provider failed。
+- 自动流水线文案按切片与平台逐项写入带 request fingerprint 的原子 checkpoint；恢复必须完整覆盖 output×platform。AI 失败规则文案带风险标记并进入 `NEED_REVIEW`，不会作为 AI 成功静默发布。
+- 任务详情和媒体预检的 FFprobe 增加超时/OSError 边界；视频切片、音频提取和字幕烧录增加超时/停滞终止与 `.part` 原子切换/失败清理。独立 ASS 导出在无媒体时使用 1080×1920 画布，有媒体但探测失败时明确报错。
+- 新增 Provider 错误矩阵、重复调用、远程转写 uncertain、取消传播、媒体超时、部分文件清理和文案 checkpoint 恢复测试；重点回归 `67 passed`。最终独立验收 Ruff、Compileall 通过；全量收集 714 项，排除 3 个真实 FFmpeg 参数实例后 `711 passed`、0 失败、10 个弃用告警。
+- 未读取或修改 `.env`，未访问真实 AI、火山引擎、FFmpeg、Chrome 或平台，也未写入活动 SQLite。下一轮 P1.5 处理密钥响应、输入校验、XSS 与本地管理员接口门禁。

@@ -5,8 +5,11 @@
 
 import hashlib
 import json
+import queue
 import shutil
 import subprocess
+import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -816,10 +819,30 @@ def _run_ffmpeg_progress(
     )
     output_tail: list[str] = []
     assert process.stdout is not None
-    try:
+    output_queue: queue.Queue[str] = queue.Queue()
+
+    def read_output() -> None:
+        assert process.stdout is not None
         for raw_line in process.stdout:
+            output_queue.put(raw_line)
+
+    output_thread = threading.Thread(target=read_output, daemon=True)
+    output_thread.start()
+    started_at = time.monotonic()
+    last_progress_at = started_at
+    absolute_timeout = max(
+        float(settings.ffmpeg_subtitle_timeout),
+        float(duration_seconds) * 4 + 300,
+    )
+    try:
+        while process.poll() is None or not output_queue.empty():
+            try:
+                raw_line = output_queue.get(timeout=0.5)
+            except queue.Empty:
+                raw_line = ""
             line = raw_line.strip()
             if line:
+                last_progress_at = time.monotonic()
                 output_tail.append(line)
                 output_tail = output_tail[-40:]
             if workflow_job_id and job_service.is_cancel_requested(workflow_job_id):
@@ -833,6 +856,17 @@ def _run_ffmpeg_progress(
                 ratio = max(0.0, min(1.0, processed_seconds / duration_seconds))
                 progress = round(progress_start + (progress_end - progress_start) * ratio)
                 job_service.update_job_progress(workflow_job_id, progress, "正在烧录并验证字幕成片")
+            elapsed = time.monotonic() - started_at
+            stalled = time.monotonic() - last_progress_at
+            if stalled > settings.ffmpeg_subtitle_timeout:
+                terminate_process_tree(process)
+                raise RuntimeError(
+                    f"FFmpeg 字幕烧录连续 {settings.ffmpeg_subtitle_timeout} 秒没有进展，已终止进程树"
+                )
+            if elapsed > absolute_timeout:
+                terminate_process_tree(process)
+                raise RuntimeError(f"FFmpeg 字幕烧录超过 {round(absolute_timeout)} 秒，已终止进程树")
+        output_thread.join(timeout=2)
         return_code = process.wait(timeout=10)
     finally:
         if process.poll() is None:

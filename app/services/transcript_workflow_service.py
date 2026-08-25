@@ -13,6 +13,7 @@ from app.services import job_service
 from app.services.storage_service import get_artifact_paths, get_source_video_path, validate_source_video_path
 from app.services.task_log_service import append_task_log
 from app.services.transcript_service import (
+    TranscriptCancelledError,
     cleanup_transcript_chunk_dirs,
     read_transcript_preview,
     read_transcript_progress,
@@ -25,10 +26,6 @@ from app.services.transcript_service import (
 
 _RUNNING_TRANSCRIPT_TASKS: set[str] = set()
 _CANCEL_TRANSCRIPT_TASKS: set[str] = set()
-
-
-class TranscriptCancelledError(RuntimeError):
-    pass
 
 
 _TRANSCRIPT_STALE_AFTER = timedelta(minutes=10)
@@ -207,6 +204,7 @@ def process_task_transcript(
     background_tasks: Any | None = None,
     provider: str | None = None,
     job_id: str | None = None,
+    allow_uncertain_retry: bool = False,
 ) -> dict:
     from app.services.task_service import get_task, update_task_status  # noqa: F811
 
@@ -249,9 +247,15 @@ def process_task_transcript(
     _CANCEL_TRANSCRIPT_TASKS.discard(task_id)
     _RUNNING_TRANSCRIPT_TASKS.add(task_id)
     if background_tasks is not None:
-        background_tasks.add_task(_run_task_transcript_background, task_id, provider_name, job_id)
+        background_tasks.add_task(
+            _run_task_transcript_background,
+            task_id,
+            provider_name,
+            job_id,
+            allow_uncertain_retry,
+        )
     else:
-        _run_task_transcript_background(task_id, provider_name, job_id)
+        _run_task_transcript_background(task_id, provider_name, job_id, allow_uncertain_retry)
     return {
         "status": "started",
         "message": f"已开始{provider_label}分段转写，请稍后刷新查看进度。",
@@ -315,11 +319,13 @@ def process_task_transcript_workflow(
     paths = get_artifact_paths(task_id)
 
     if paths["transcript_path"].exists() and not force:
-        return {
-            "status": "completed",
-            "message": "转写 Markdown 已经生成，无需重复处理。如需重做，请点击\"重新生成转写\"。",
-            "task": get_task(task_id),
-        }
+        if read_transcript_preview(paths["transcript_path"], max_lines=1):
+            return {
+                "status": "completed",
+                "message": "转写 Markdown 已经生成，无需重复处理。如需重做，请点击\"重新生成转写\"。",
+                "task": get_task(task_id),
+            }
+        append_task_log(task_id, "检测到空白、截断或不可解析的转写 Markdown，本次不会误判为已完成")
 
     if not paths["audio_path"].exists():
         append_task_log(task_id, "一键处理：未发现音频文件，先自动提取音频")
@@ -329,7 +335,11 @@ def process_task_transcript_workflow(
         append_task_log(task_id, "用户明确要求重新生成转写 Markdown")
 
     return process_task_transcript(
-        task_id, background_tasks=background_tasks, provider=provider, job_id=job_id
+        task_id,
+        background_tasks=background_tasks,
+        provider=provider,
+        job_id=job_id,
+        allow_uncertain_retry=force,
     )
 
 
@@ -337,6 +347,7 @@ def _run_task_transcript_background(
     task_id: str,
     provider: str | None = None,
     job_id: str | None = None,
+    allow_uncertain_retry: bool = False,
 ) -> None:
     from app.services.task_service import get_task, update_task_status  # noqa: F811
 
@@ -376,6 +387,7 @@ def _run_task_transcript_background(
             paths["transcript_path"],
             progress_callback=progress_callback,
             provider=provider_name,
+            allow_uncertain_retry=allow_uncertain_retry,
         )
     except job_service.JobLeaseLostError:
         raise

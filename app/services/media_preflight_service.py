@@ -58,13 +58,18 @@ def _run_decode_sample(path: Path, start_seconds: float) -> None:
     command.extend(
         ["-i", str(path), "-t", "3", "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-"]
     )
-    completed = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=settings.ffprobe_timeout,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=settings.ffprobe_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f"视频解码抽样超过 {settings.ffprobe_timeout} 秒，文件可能损坏") from exc
+    except OSError as exc:
+        raise ValueError(f"FFmpeg 无法执行视频解码抽样：{exc}") from exc
     if completed.returncode != 0:
         message = (completed.stderr or completed.stdout or "未知解码错误").strip()
         raise ValueError(f"视频无法正常解码：{message[-500:]}")
@@ -94,6 +99,8 @@ def probe_media(path_value: str | Path) -> dict:
         )
     except subprocess.TimeoutExpired as exc:
         raise ValueError(f"媒体探测超过 {settings.ffprobe_timeout} 秒，文件可能损坏") from exc
+    except OSError as exc:
+        raise ValueError(f"FFprobe 无法执行媒体探测：{exc}") from exc
     if completed.returncode != 0:
         message = (completed.stderr or "FFprobe 无法读取文件").strip()
         raise ValueError(f"媒体探测失败：{message[-500:]}")

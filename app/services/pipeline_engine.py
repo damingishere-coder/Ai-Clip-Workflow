@@ -8,6 +8,7 @@ from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+from app.core.config import settings
 from app.db.database import get_connection
 from app.models.task import TaskStatus
 from app.services import job_service, task_service
@@ -958,12 +959,21 @@ class PipelineEngine:
                 raise PipelineCheckpointError("文案 checkpoint 与当前 active output 不一致")
             metadata_items = self._read_json_list(metadata_path)
             self._validate_metadata_items(metadata_items)
-            metadata_output_ids = {
-                str((item.get("output_clip") or {}).get("id") or "")
+            task = self._get_task(task_id)
+            metadata_pairs = {
+                (
+                    str((item.get("output_clip") or {}).get("id") or ""),
+                    str((item.get("metadata") or {}).get("platform") or ""),
+                )
                 for item in metadata_items
             }
-            if metadata_output_ids != set(self._active_output_ids(task_id)):
-                raise PipelineCheckpointError("文案 checkpoint 未完整覆盖当前 active output")
+            expected_pairs = {
+                (output_id, platform)
+                for output_id in self._active_output_ids(task_id)
+                for platform in platforms_for_task(task)
+            }
+            if metadata_pairs != expected_pairs:
+                raise PipelineCheckpointError("文案 checkpoint 未完整覆盖当前 active output 与平台")
             return {
                 "metadata_path": str(metadata_path),
                 "metadata_count": len(metadata_items),
@@ -1484,23 +1494,53 @@ class PipelineEngine:
         if not output_clips:
             raise ValueError("没有可生成文案的成功切片")
         generator = MetadataGenerator(use_ai=config["auto_metadata_use_ai"])
+        paths = get_artifact_paths(task_id)
+        metadata_path = paths["analysis_path"].parent / "auto_publish_metadata.json"
+        persisted_items = self._read_json(metadata_path, [])
+        persisted_items = persisted_items if isinstance(persisted_items, list) else []
+        reusable = {
+            (str((item.get("output_clip") or {}).get("id") or ""), str((item.get("metadata") or {}).get("platform") or ""), str(item.get("request_fingerprint") or "")): item
+            for item in persisted_items
+            if isinstance(item, dict)
+        }
         metadata_items = []
         for output_clip in output_clips:
-            cover = generate_publish_cover_for_item(
+            platforms = platforms_for_task(task)
+            existing_cover = next(
+                (
+                    item.get("cover")
+                    for item in persisted_items
+                    if str((item.get("output_clip") or {}).get("id") or "") == str(output_clip.get("id") or "")
+                    and isinstance(item.get("cover"), dict)
+                    and Path(str((item.get("cover") or {}).get("cover_file_path") or "")).is_file()
+                ),
+                None,
+            )
+            cover = existing_cover or generate_publish_cover_for_item(
                 output_clip,
                 preferred_time_seconds=output_clip.get("cover_time_seconds"),
             )
-            for platform in platforms_for_task(task):
+            for platform in platforms:
+                request_fingerprint = self._metadata_request_fingerprint(
+                    output_clip,
+                    platform,
+                    use_ai=bool(config["auto_metadata_use_ai"]),
+                )
+                cached = reusable.get((str(output_clip.get("id") or ""), platform, request_fingerprint))
+                if cached:
+                    metadata_items.append(cached)
+                    continue
+                job_service.require_active_job_lease()
                 metadata_items.append(
                     {
                         "output_clip": output_clip,
                         "metadata": generator.generate(output_clip, platform),
                         "cover": cover,
+                        "request_fingerprint": request_fingerprint,
                     }
                 )
-        paths = get_artifact_paths(task_id)
-        metadata_path = paths["analysis_path"].parent / "auto_publish_metadata.json"
-        metadata_path.write_text(json.dumps(metadata_items, ensure_ascii=False, indent=2), encoding="utf-8")
+                self._write_json_atomic(metadata_path, metadata_items)
+        self._write_json_atomic(metadata_path, metadata_items)
         self._write_clip_metadata(task_id, output_clips, metadata_items)
         need_review = [item for item in metadata_items if item["metadata"].get("risk_flags")]
         append_task_log(task_id, f"全自动标题文案生成完成：{len(metadata_items)} 条，需复核 {len(need_review)} 条")
@@ -1510,6 +1550,46 @@ class PipelineEngine:
             "need_review_count": len(need_review),
             "metadata_items": metadata_items,
         }
+
+    @staticmethod
+    def _metadata_request_fingerprint(output_clip: dict, platform: str, *, use_ai: bool) -> str:
+        provider = str(settings.ai_publish_provider or "").lower() if use_ai else "rule"
+        model = (
+            settings.ai_codex_model
+            if provider == "codex"
+            else settings.ai_local_model
+            if provider == "local"
+            else settings.ai_publish_remote_model
+            if use_ai
+            else ""
+        )
+        payload = {
+            "fingerprint_version": 1,
+            "output_clip_id": output_clip.get("id") or "",
+            "clip_candidate_id": output_clip.get("clip_candidate_id") or "",
+            "task_name": output_clip.get("task_name") or "",
+            "clip_title": output_clip.get("clip_title") or "",
+            "clip_summary": output_clip.get("clip_summary") or "",
+            "highlight_reason": output_clip.get("highlight_reason") or "",
+            "spread_value": output_clip.get("spread_value") or "",
+            "suggested_editing": output_clip.get("suggested_editing") or "",
+            "platform": platform,
+            "use_ai": use_ai,
+            "provider": provider,
+            "model": model,
+            "protocol": settings.ai_publish_remote_protocol if provider == "remote" else "",
+        }
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _write_json_atomic(path: Path, payload: Any) -> None:
+        job_service.require_active_job_lease()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = path.with_name(f"{path.name}.tmp")
+        temporary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        job_service.require_active_job_lease()
+        temporary_path.replace(path)
 
     def _create_schedule(self, task_id: str, context: dict) -> dict:
         metadata_result = context.get(TaskStatus.METADATA_GENERATING.value) or {}

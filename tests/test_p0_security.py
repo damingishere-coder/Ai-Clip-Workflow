@@ -2,11 +2,42 @@
 
 import io
 import importlib
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _restore_reloaded_runtime_modules():
+    """这些用例会 reload 全局配置；结束后恢复 pytest 隔离环境，避免污染后续模块。"""
+    names = (
+        "STORAGE_ROOT",
+        "TASKS_DIR",
+        "UPLOAD_TEMP_DIR",
+        "DATA_DIR",
+        "DATABASE_PATH",
+        "ALLOWED_MEDIA_ROOTS",
+        "MAX_UPLOAD_SIZE_BYTES",
+    )
+    original = {name: os.environ.get(name) for name in names}
+    yield
+    for name, value in original.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+    import app.core.config
+    import app.db.database
+    import app.services.publish_service
+    import app.services.storage_service
+
+    importlib.reload(app.core.config)
+    importlib.reload(app.db.database)
+    importlib.reload(app.services.storage_service)
+    importlib.reload(app.services.publish_service)
 
 # ── 辅助函数 ──
 

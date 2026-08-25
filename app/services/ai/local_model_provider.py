@@ -31,6 +31,8 @@ class LocalModelProvider:
                 raise AIProviderError(f"暂不支持本地 AI 协议：{protocol}")
             except AIProviderError as exc:
                 last_error = exc
+                if exc.http_status not in {404, 405}:
+                    break
 
         raise last_error or AIProviderError("本地 AI 调用失败")
 

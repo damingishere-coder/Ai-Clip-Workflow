@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from app.db.database import get_connection
 from app.models.task import AIClipAnalysisResult
+from app.services import job_service
 from app.services.ai.ai_clip_analyzer import (
     AIAnalysisError,
     TranscriptRow,
@@ -26,7 +27,7 @@ from app.services.ai.ai_clip_analyzer import (
     _time_to_seconds,
     build_provider,
 )
-from app.services.ai.base import AIProvider
+from app.services.ai.base import AIProvider, AIProviderError
 
 
 WINDOW_SECONDS = 300
@@ -131,12 +132,22 @@ def analyze_long_live_talk(
                 _report_progress(progress_callback, window, "completed", len(completed_windows))
                 break
             except Exception as exc:  # 每个窗口必须独立记录，不能丢失前面成功结果
-                last_error = " ".join(str(exc).split())[:1000] or "未知错误"
-                should_retry = attempt < max_attempts
-                delay_seconds = 2 ** (attempt - 1) if should_retry else 0
+                provider_error = exc if isinstance(exc, AIProviderError) else None
+                error_text = provider_error.checkpoint_message() if provider_error else str(exc)
+                last_error = " ".join(error_text.split())[:1000] or "未知错误"
+                should_retry = bool(
+                    provider_error
+                    and provider_error.safe_to_retry
+                    and attempt < max_attempts
+                )
+                configured_delay = provider_error.retry_after_seconds if provider_error else None
+                delay_seconds = configured_delay if configured_delay is not None else 2 ** (attempt - 1)
+                delay_seconds = delay_seconds if should_retry else 0
                 _mark_checkpoint_failed(checkpoint["id"], last_error, delay_seconds)
                 if should_retry:
                     sleep_fn(delay_seconds)
+                else:
+                    break
         if payload is None:
             failed_windows.append(
                 {
@@ -381,6 +392,8 @@ def _get_or_create_checkpoint(
     now = _now_iso()
     checkpoint_id = uuid4().hex
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        _assert_current_job_lease(connection)
         connection.execute(
             """
             INSERT OR IGNORE INTO ai_analysis_windows (
@@ -426,6 +439,8 @@ def _get_or_create_checkpoint(
 
 def _mark_checkpoint_running(checkpoint_id: str) -> None:
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        _assert_current_job_lease(connection)
         connection.execute(
             """
             UPDATE ai_analysis_windows
@@ -443,6 +458,8 @@ def _mark_checkpoint_completed(checkpoint_id: str, payload: dict[str, Any]) -> N
     result_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     checksum = hashlib.sha256(result_json.encode("utf-8")).hexdigest()
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        _assert_current_job_lease(connection)
         connection.execute(
             """
             UPDATE ai_analysis_windows
@@ -456,10 +473,12 @@ def _mark_checkpoint_completed(checkpoint_id: str, payload: dict[str, Any]) -> N
         connection.commit()
 
 
-def _mark_checkpoint_failed(checkpoint_id: str, error: str, delay_seconds: int) -> None:
+def _mark_checkpoint_failed(checkpoint_id: str, error: str, delay_seconds: float) -> None:
     now = datetime.now().astimezone()
     next_retry_at = (now + timedelta(seconds=delay_seconds)).isoformat(timespec="seconds") if delay_seconds else None
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        _assert_current_job_lease(connection)
         connection.execute(
             """
             UPDATE ai_analysis_windows
@@ -469,6 +488,23 @@ def _mark_checkpoint_failed(checkpoint_id: str, error: str, delay_seconds: int) 
             (error, next_retry_at, now.isoformat(timespec="seconds"), checkpoint_id),
         )
         connection.commit()
+
+
+def _assert_current_job_lease(connection) -> None:
+    active = job_service.current_job_lease()
+    if active is None:
+        return
+    job_id, lease_owner, lease_token = active
+    row = connection.execute(
+        """
+        SELECT 1 FROM workflow_jobs
+        WHERE id = ? AND status = 'running' AND lease_owner = ? AND lease_token = ?
+          AND lease_expires_at > ?
+        """,
+        (job_id, lease_owner, lease_token, _now_iso()),
+    ).fetchone()
+    if not row:
+        raise job_service.JobLeaseLostError(f"Workflow Job 租约已失效：{job_id}")
 
 
 def _load_verified_checkpoint_payload(checkpoint: dict[str, Any]) -> dict[str, Any] | None:

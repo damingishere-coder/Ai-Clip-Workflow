@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from app.services.ai.ai_clip_analyzer import build_provider, loads_ai_json
+from app.services.ai.base import generate_json_with_safe_retry
 from app.services.subtitle_data_service import (
     create_suggestion_revision,
     get_revision,
@@ -46,7 +47,7 @@ def generate_subtitle_suggestions(
     for offset in range(0, len(selected_ids), AI_BATCH_SIZE):
         batch_ids = selected_ids[offset : offset + AI_BATCH_SIZE]
         prompt = _build_prompt([cue_map[cue_id] for cue_id in batch_ids], instructions)
-        payload = loads_ai_json(resolved_provider.generate_json(prompt))
+        payload = loads_ai_json(generate_json_with_safe_retry(resolved_provider, prompt))
         suggestions.update(_validate_suggestion_payload(payload, allowed_ids=set(batch_ids)))
 
     suggestion_revision = create_suggestion_revision(

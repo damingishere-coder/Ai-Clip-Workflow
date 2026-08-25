@@ -14,8 +14,8 @@
 | Layer | Modules | Avg score |
 |---|--:|--:|
 | 界面 · API | 2 | 56 |
-| 业务编排 | 3 | 73 |
-| 媒体与 AI 处理 | 4 | 69 |
+| 业务编排 | 3 | 69 |
+| 媒体与 AI 处理 | 4 | 66 |
 | 外部执行边界 | 2 | 74 |
 | 持久化与运维 | 2 | 70 |
 
@@ -35,17 +35,17 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 | Module | LoC | Score | Tags |
 |---|--:|:--|:--|
 | Publish Center | 5,593 | 52 D | god-component, bloat, legacy, dual-format, fallback, silent-except, placeholder, duplication |
-| Pipeline & Job Queue | 3,350 | 88 B | god-component, bloat, legacy, glue, over-fit |
+| Pipeline & Job Queue | 3,350 | 76 B | fallback, silent-except, legacy, bloat, god-component, glue |
 | Task Review & Cut | 3,036 | 78 B | god-component, glue, fallback, dual-format, legacy, over-fit |
 
 ### 媒体与 AI 处理
 
 | Module | LoC | Score | Tags |
 |---|--:|:--|:--|
-| AI Selection | 4,420 | 63 C | fallback, silent-except, legacy, dual-format, stub, fake-output, bloat, duplication, god-component |
-| Subtitle | 2,409 | 70 C | fallback, silent-except, legacy, bloat, god-component, monkeypatch |
-| Transcription | 1,960 | 59 D | fallback, silent-except, fake-output, duplication, god-component, glue, over-fit |
-| Media & Storage | 1,614 | 84 B | legacy, dual-format, glue, fallback, silent-except |
+| AI Selection | 4,420 | 55 D | fallback, silent-except, legacy, dual-format, bloat, duplication, god-component |
+| Subtitle | 2,409 | 64 C | fallback, silent-except, legacy, duplication, bloat, god-component |
+| Transcription | 1,960 | 64 C | fallback, silent-except, duplication, god-component |
+| Media & Storage | 1,614 | 82 B | legacy, dual-format, fallback, silent-except |
 
 ### 外部执行边界
 
@@ -65,18 +65,18 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 
 - **API & Runtime (48/D)** — app/routers/settings.py:10: GET /api/settings/ai 未做鉴权，返回 ai_config_service.get_ai_config_context() 中的原始 values；该上下文会从 .env/环境变量读取 API key、token 等 Secret，并同时返回 env_path。前端或本地恶意页面可直接读取凭据。
 - **Publish Center (52/D)** — app/services/publish_service.py:570: _normalize_config/_normalize_account 仅新增 *_masked 字段，却保留 client_secret、access_token、refresh_token 原字段；GET /api/publish/platforms、/accounts 及保存配置/账号响应直接返回这些原始密钥，存在敏感凭据泄漏风险。
-- **Transcription (59/D)** — app/services/transcript_workflow_service.py:317: transcript Markdown 存在即返回 completed，未校验源指纹、Provider、进度状态或文件完整性。
-- **AI Selection (63/C)** — app/services/ai_config_service.py:318: get_ai_config_context 返回含 AI/ASR Key 的完整 values，GET /api/settings/ai 无读取鉴权，页面也复用该上下文。
+- **AI Selection (55/D)** — app/services/ai_config_service.py:321: get_ai_config_context 直接返回包含 API Key 等敏感配置的完整 values；该结果由 app/routers/settings.py:7-12 的未认证 GET /api/settings/ai 暴露，仍是当前 P1.5 Secret 泄漏风险。
+- **Transcription (64/C)** — app/services/transcript_service.py:1099-1129,1159-1196: faster-whisper 的 model.transcribe 与模型加载没有单次调用或绝对时限；模型/解码器卡住时只能依赖外层 Worker，直接转写路径可能长期占用。
+- **Subtitle (64/C)** — app/services/subtitle_auto_workflow_service.py:42-50,51-108: prepare_task_subtitle_review 先执行 ensure_source_track/ensure_clip_track 并提交 revision/track 副作用，之后才检查活动 Job 与当前 lease；旧 Worker 失租或并发冲突时仍可能留下字幕数据库变更。
 - **Frontend UI (65/C)** — app/static/js/app.js:211: 多个写请求绕过统一 apiFetch；启用 LOCAL_ADMIN_TOKEN 时可能缺失 Authorization 并被 API 拒绝。
 - **Ops & Delivery (68/C)** — scripts/migrate_task_dirs_to_project_names.py:211: 任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。
-- **Subtitle (70/C)** — app/services/subtitle_data_service.py:352: 手工 revision 的 active/base 检查在事务外，并发编辑可覆盖 active 选择。
 - **Publish Scheduler (71/C)** — app/services/publish_scheduler.py:756-785: recover_interrupted_jobs 每轮加载全部 PUBLISHING 任务，并对每个任务串行查询 Worker，没有批量上限、并发控制或退避；Worker 不可用或卡住任务较多时，单轮耗时按任务数乘以网络超时增长，会延迟后续排期处理。
 - **SQLite Persistence (73/C)** — app/db/database.py:607-608: schema_migrations 账本迁移在旧版兼容迁移和多处 executescript（996、1071、1155、1231、1754、1780）完成并提交后才执行；若历史 helper 或账本迁移失败，前面的 Schema/DML 已持久化而账本事务回滚，init_db 仍存在可重试但非原子的半迁移边界。
-- **Publishers & Worker (76/B)** — scripts/publish_host_worker.py:321: _prior_job_execution_requires_review 扫描旧 execution journal 时，若 journal 缺少 identity 或已损坏，直接 continue；跨 execution 无法确认其 job_id 时不会阻断新 execution。旧 Worker 在上传后崩溃并留下无身份/损坏日志时，仍存在重复投稿边界。
+- **Pipeline & Job Queue (76/B)** — app/services/pipeline_engine.py:1529: 恢复文案时只按 output_clip_id、platform、request_fingerprint 复用 cached 项，没有排除 metadata.error 或失败状态；MetadataGenerator 会把 AI 失败的规则降级结果持久化，后续同指纹运行可能持续复用该失败结果，阻断真正重试。
 
 ## All findings
 
-### HIGH (13)
+### HIGH (10)
 
 - **Frontend UI** · `app/static/js/app.js:211` — 多个写请求绕过统一 apiFetch；启用 LOCAL_ADMIN_TOKEN 时可能缺失 Authorization 并被 API 拒绝。
 - **Frontend UI** · `app/static/js/app.js:1729` — 接口或任务数据直接拼接到 innerHTML；publish-center.js:2152 有同类路径，存在本地 DOM XSS/页面结构破坏风险。
@@ -84,15 +84,12 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **API & Runtime** · `app/main.py:98` — 本地管理鉴权是可选的：只有 LOCAL_ADMIN_TOKEN 非空时才校验写请求；配置默认值为空，因此未配置 Token 时所有 POST/PUT/PATCH/DELETE API 均可被无认证调用。
 - **API & Runtime** · `app/routers/files.py:9` — 未鉴权的 /api/files/browse 调用 browse_video_directory，虽限制了根目录和路径穿越，但仍枚举 configured allowed roots 下的目录名、文件名、绝对路径、父路径和文件大小，造成本地媒体元数据泄露。
 - **API & Runtime** · `app/routers/tasks.py:223` — async 路由直接执行同步重任务：音频处理、转写、切片和任务详情 ffprobe 可阻塞 FastAPI event loop，影响无关请求。
-- **Transcription** · `app/services/transcript_workflow_service.py:317` — transcript Markdown 存在即返回 completed，未校验源指纹、Provider、进度状态或文件完整性。
-- **Transcription** · `app/services/transcript_service.py:265` — JobLeaseLostError 已显式透传，但 TranscriptCancelledError 仍会被统一包装为 RuntimeError，取消可能落成 failed。
-- **Transcription** · `app/services/transcript_service.py:516` — 远程分块请求每次使用随机 request id，缺少持久化幂等键和超时后结果确认，重试可能重复计费。
-- **AI Selection** · `app/services/ai_config_service.py:318` — get_ai_config_context 返回含 AI/ASR Key 的完整 values，GET /api/settings/ai 无读取鉴权，页面也复用该上下文。
+- **AI Selection** · `app/services/ai_config_service.py:321` — get_ai_config_context 直接返回包含 API Key 等敏感配置的完整 values；该结果由 app/routers/settings.py:7-12 的未认证 GET /api/settings/ai 暴露，仍是当前 P1.5 Secret 泄漏风险。
 - **Task Review & Cut** · `app/services/task_service.py:458-485,594-616` — 任务详情默认执行无 timeout 的 ffprobe，且未捕获 OSError/Path.stat 异常；NAS、损坏或卡死媒体可能阻塞详情请求或返回 500。明确延期至 P1.4。
 - **Publish Center** · `app/services/publish_service.py:570` — _normalize_config/_normalize_account 仅新增 *_masked 字段，却保留 client_secret、access_token、refresh_token 原字段；GET /api/publish/platforms、/accounts 及保存配置/账号响应直接返回这些原始密钥，存在敏感凭据泄漏风险。
 - **Ops & Delivery** · `scripts/migrate_task_dirs_to_project_names.py:211` — 任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。
 
-### MED (60)
+### MED (52)
 
 - **Frontend UI** · `app/templates/system_status.html:98` — 配置/API Key 字段进入 DOM，base.html:11 还承载本地管理 Token；需确认全链路始终掩码。
 - **Frontend UI** · `app/static/css/styles.css:870` — 使用多个未在 :root 定义的 CSS 自定义属性，相关声明可能失效。
@@ -101,37 +98,29 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **API & Runtime** · `app/routers/tasks.py:35` — 大量 async 路由直接调用同步数据库、文件和服务函数；仅少数入口使用 run_in_threadpool，异步边界不一致，容易出现请求串行化和响应抖动。
 - **API & Runtime** · `app/models/task.py:7-41` — TaskStatus 同时保留大写自动流水线状态和小写 legacy 状态；任意状态跳跃虽已修复，但模型、旧页面和 API 客户端仍需兼容两套值。
 - **API & Runtime** · `app/routers/tasks.py:35; app/routers/publish.py:1` — tasks.py 与 publish.py 聚合大量路由、异常映射、同步/异步调度和业务编排，新增流程的 blast radius 较大。
-- **Media & Storage** · `app/services/storage_service.py:840-846` — move_task_directory_to_trash 明确传入 reserve=False，仍采用查询后检查目录的非原子分配；当前无运行时调用，属于遗留兼容入口，但未来恢复调用时仍可能并发复用同一回收站目录。
-- **Media & Storage** · `app/services/storage_service.py:361-367` — 通用 resolve_video_file_path 对已存在路径仍原样返回。媒体 HTTP 路由已增加任务边界，但 publish/auto-publish/subtitle/task 查询等非 HTTP 调用方仍可把数据库中的现有外部路径交给后续读取或上传逻辑。
-- **Transcription** · `app/services/transcript_service.py:516` — HTTP 429、Retry-After、网络瞬断和可恢复服务错误缺少专门退避策略。
-- **Transcription** · `app/services/transcript_service.py:556` — 响应 result.message 可能被当作 0-1 秒转写正文写入结果。
-- **Transcription** · `app/services/transcript_service.py:831` — 进度文件 IO/JSON 损坏时静默返回空字典，可能隐藏故障并触发重复执行。
-- **Transcription** · `app/services/transcript_workflow_service.py:224` — 运行和取消状态仍是进程内 set，多进程/重启时不能可靠去重或取消。
-- **Transcription** · `app/services/transcript_service.py:325` — 本地和远程转写复制分块、checkpoint、异常和进度循环，行为容易漂移。
-- **Transcription** · `app/services/transcript_service.py:1088` — Provider/模型/设备为模块级可变全局，并发任务可能互相覆盖运行元数据。
-- **Transcription** · `app/services/transcript_service.py:83` — 约 1300 行文件混合 FFmpeg、本地模型、远程 HTTP、checkpoint、进度和 Markdown，职责过大。
-- **AI Selection** · `app/services/ai/ai_clip_service.py:4` — generate_candidate_clips_placeholder 返回三条硬编码 ClipCandidate；虽当前无调用方，误接线会产生 fake output。
-- **AI Selection** · `app/services/ai/ai_clip_analyzer.py:131` — 分段分析失败窗口被跳过，只要其他窗口有候选便返回；通用路径缺少最低覆盖率门槛。
-- **AI Selection** · `app/services/ai/variety_comedy_analyzer.py:513` — 全局评审失败时隐式降级到扩展阶段评分，Provider 失败仍可形成候选。
-- **AI Selection** · `app/services/ai/local_model_provider.py:19` — fallback_protocol 对任意 AIProviderError 都执行第二协议，未区分限流、认证和协议错误，可能重复调用与计费。
-- **AI Selection** · `app/services/ai_analysis_workflow_service.py:738` — 候选事务替换、JSON 文件和 run 历史分步持久化，后续失败会形成数据库与文件/历史不一致。
-- **AI Selection** · `app/services/ai/long_live_talk_analyzer.py:427` — checkpoint 更新无 run/lease/owner fencing，并发或旧进程恢复可能互相覆盖窗口状态。
-- **AI Selection** · `app/services/ai_analysis_workflow_service.py:71` — 分析元文件不存在、损坏或读取异常时静默返回空字典，无法区分未分析与产物损坏。
-- **AI Selection** · `app/services/ai_analysis_workflow_service.py:685` — 单文件集中 profile、Provider、状态、候选、文件、历史与恢复，模块回归半径大。
-- **AI Selection** · `app/services/ai/ai_clip_analyzer.py:252` — 多个分析器重复偏好摘要、时间转换、默认字段和 AI 输出解析逻辑。
-- **AI Selection** · `tests/test_split_services.py:200` — 缺少真实 Provider 成功路径、文件写入失败一致性、并发运行和旧 checkpoint 覆盖测试。
-- **AI Selection** · `tests/test_codex_cli_provider.py:12` — Provider 测试主要 monkeypatch，缺少 HTTP 429/500/超时和协议 fallback 重复调用边界。
+- **Media & Storage** · `app/services/storage_service.py:362-368,486-487` — resolve_video_file_path 对已存在路径直接返回，不验证任务受控目录；get_source_video_path 及 publish/subtitle/task 等非 HTTP 调用方共享该入口，输出路径异常时仍可能读取或上传外部文件。
+- **Transcription** · `app/services/transcript_service.py:1099-1129,1159-1196` — faster-whisper 的 model.transcribe 与模型加载没有单次调用或绝对时限；模型/解码器卡住时只能依赖外层 Worker，直接转写路径可能长期占用。
+- **Transcription** · `app/services/transcript_service.py:164-191` — FFmpeg 音频提取只有无进展 watchdog，没有绝对 wall-clock deadline；进程持续输出进度但实际不结束时仍可能无限运行。
+- **Transcription** · `app/services/transcript_service.py:981-989` — 进度文件损坏、读取失败或顶层非 dict 时统一返回空字典，静默丢失故障证据，恢复逻辑无法区分初始状态与持久化损坏。
+- **Transcription** · `app/services/transcript_service.py:67-77,1259-1270` — 活动 provider/model/device/compute_type 仍使用模块级可变全局；同一进程并发转写会互相覆盖运行元数据和进度展示。
+- **Transcription** · `app/services/transcript_service.py:347-549` — 本地与火山远程分片分别复制 chunk、checkpoint、进度和异常收口逻辑，两个实现继续存在维护分叉。
+- **Transcription** · `app/services/transcript_service.py:83-1395` — 单文件仍混合 FFmpeg、faster-whisper、远程 HTTP、幂等 checkpoint、进度文件和 Markdown 生成，约 1400 行，职责边界和回归影响面偏大。
+- **AI Selection** · `app/services/ai/long_live_talk_analyzer.py:493` — _assert_current_job_lease 只有在 ContextVar 存在 active lease 时才校验；/api/tasks/{task_id}/process/ai 直接调用 task_service.process_task_ai_analysis，未建立 Workflow Job lease，长直播 checkpoint 写入因此可无 owner fencing。
+- **AI Selection** · `app/services/ai/long_live_talk_analyzer.py:119` — 每次 analyze_long_live_talk 调用都重新设置 max_attempts，未读取 checkpoint 的 attempt_count 或 next_retry_at；人工重试/进程重启会重复消耗远程模型调用和计费预算。
+- **AI Selection** · `app/services/ai/ai_clip_analyzer.py:121` — 分段分析捕获单段异常后继续执行；只要其他分段生成候选就返回成功，并将失败段写入 summary，没有覆盖率或失败比例门禁，可能把不完整分析当作完整结果。
+- **AI Selection** · `app/services/ai/variety_comedy_analyzer.py:527` — _global_judge 捕获所有异常后返回空排序并降级到扩展阶段评分；全局评审失败会被转化为可继续执行的结果，真实 AI 失败与正常降级仍混在同一业务路径。
+- **AI Selection** · `app/services/ai_analysis_workflow_service.py:923` — AI 分析先独立替换 clip_candidates，再写分析文件，随后独立插入 ai_analysis_runs；进程在任一边界崩溃时数据库候选、分析文件和历史 active run 可能互相不一致。
 - **Task Review & Cut** · `app/services/task_lifecycle_service.py:373-401; tests/test_task_state_machine.py:69-82` — 公共状态转换前置条件只检查数据库字段或路径字符串，不验证源视频、候选产物和活跃 output 文件真实存在。明确延期至 P1.4。
 - **Task Review & Cut** · `app/services/task_service.py:1-98,1220-1273; app/services/task_query_service.py:16-24` — TaskService 仍集中承担大量业务、数据库和展示职责，并与 task_query_service 互相导入、保留包装函数，维护 blast radius 较大。建议作为 P2 延后拆分。
 - **Task Review & Cut** · `app/services/task_service.py:717-718` — 候选片段列表会直接解析每条历史时间字段，单条异常格式仍可能阻断整个审核列表。
-- **Subtitle** · `app/services/subtitle_data_service.py:352` — 手工 revision 的 active/base 检查在事务外，并发编辑可覆盖 active 选择。
-- **Subtitle** · `app/services/subtitle_data_service.py:489` — 批准 revision 在事务外校验，并发或重放旧请求可回退 active 版本。
-- **Subtitle** · `app/services/subtitle_data_service.py:135` — source/clip track 先查后插，NULL output_clip_id 约束不足，并发可能重复源轨。
-- **Subtitle** · `app/services/subtitle_auto_workflow_service.py:87` — 批量批准逐 clip 独立提交，Job 后创建；中途失败会留下部分批准。
-- **Subtitle** · `app/services/subtitle_data_service.py:168` — source revision 提交后逐 clip 独立同步，异常会形成混合版本。
-- **Subtitle** · `app/services/subtitle_workflow_service.py:475` — 字幕 job 完成与激活分两次写入，迟到 worker 仍可能激活旧成片。
-- **Subtitle** · `app/services/subtitle_data_service.py:1045` — 字幕数据服务聚合 track、revision、cue、导入导出、波形和渲染辅助，回归半径大。
-- **Subtitle** · `tests/test_subtitle_editor.py:189` — 缺并发 save/approve/ensure track 与批处理中途失败测试。
+- **Subtitle** · `app/services/subtitle_auto_workflow_service.py:42-50,51-108` — prepare_task_subtitle_review 先执行 ensure_source_track/ensure_clip_track 并提交 revision/track 副作用，之后才检查活动 Job 与当前 lease；旧 Worker 失租或并发冲突时仍可能留下字幕数据库变更。
+- **Subtitle** · `app/services/subtitle_data_service.py:1017-1074` — _load_source_cues 对 checksum、JSON 或 segment 错误直接跳过；只要其他 chunk 仍有 cue 就生成部分字幕 revision，损坏转写会被静默降级为缺句结果。
+- **Subtitle** · `app/services/subtitle_data_service.py:1222-1230,236-330` — _sync_dependent_clip_tracks 逐条调用各自事务的 sync_clip_track；源轨已提交后任一切片同步失败，会留下部分 up_to_date、部分 pending_sync 状态。
+- **Subtitle** · `app/services/subtitle_auto_workflow_service.py:513-569` — checkpoint 与 DB 恢复证据只检查 completed/verified、路径 exists 和 is_file，不检查非空、size/fingerprint 或可被 FFprobe 验证；截断或零字节最终文件仍可能被恢复为成功。
+- **Subtitle** · `app/services/subtitle_data_service.py:1222-1230` — 字幕数据层继续集中承担 revision/cue 持久化、导入导出、ASS、波形和 FFprobe，单文件约 1434 行，变更影响面和重复事务路径较大。
+- **Pipeline & Job Queue** · `app/services/pipeline_engine.py:1529` — 恢复文案时只按 output_clip_id、platform、request_fingerprint 复用 cached 项，没有排除 metadata.error 或失败状态；MetadataGenerator 会把 AI 失败的规则降级结果持久化，后续同指纹运行可能持续复用该失败结果，阻断真正重试。
+- **Pipeline & Job Queue** · `app/services/pipeline_engine.py:1592` — _write_json_atomic 在写临时文件前后各检查一次 lease，但最终 temporary_path.replace(path) 不在数据库锁或 owner 条件内；lease 在第二次检查后失效并被接管时，旧 worker 仍可能覆盖新 worker 的元数据文件。
+- **Pipeline & Job Queue** · `app/services/pipeline_engine.py:88` — PipelineEngine 仍集中承担步骤编排、checkpoint 恢复、文件证据、AI 分析、文案生成、发布任务恢复和状态推进，文件约 1800 行，单点修改 blast radius 大。
 - **Publish Center** · `app/services/publish_service.py:266` — publish_service.py 当前约4750行，混合配置/账号/OAuth、文案与封面、队列同步、历史、旧 OpenCLI 脚本、API Provider 和页面上下文，形成高耦合 God Component，任一发布流程改动的 blast radius 很大。
 - **Publish Center** · `app/services/publish_service.py:2941` — 历史查询 SQL 只按 PUBLISH_HISTORY_STATUSES 的大写值过滤，之后才调用 _normalize_publish_status；LEGACY_STATUS_MAP 支持旧小写状态但旧记录会在 SQL 层被提前排除，历史页可能漏数据。
 - **Publish Center** · `app/services/publish_service.py:2144` — sync_task_publish_jobs 封面生成失败时只把 {'cover_error': ...} 放入 item_covers，仍继续插入 WAITING 任务且不计入 errors；同步可能返回 ok，但生成的任务实际无法通过 local_browser readiness。
@@ -155,24 +144,18 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **Ops & Delivery** · `tests/test_native_scripts.py:11` — 启停测试主要是源码字符串断言，Windows smoke 不做实际 restore/冲突/清理失败与恢复后健康验证。
 - **Ops & Delivery** · `scripts/seed_demo_data.py:32` — 缺 FFmpeg 时仍插入无媒体路径 Demo 数据并成功退出，数量检查通过但媒体 smoke 不可信。
 
-### LOW (29)
+### LOW (23)
 
 - **Frontend UI** · `app/static/js/subtitle-editor.js:171` — 字幕编辑器已有 escapeHtml、虚拟列表、竞态 token 与自动保存版本控制，是可保留的正向实现。
 - **Frontend UI** · `app/static/js/publish-center.js:4` — 前端明确只创建抖音任务，B站保留后端兼容；这是当前产品边界而非应机械删除的代码。
-- **Media & Storage** · `tests/test_storage_boundaries.py:14-32` — 新增边界测试没有覆盖任务目录数据库读取在 sqlite3.Error、锁定或损坏数据库下显式失败的回归；代码已有保护但证据不足。
-- **Media & Storage** · `app/services/storage_service.py:257-300` — reserve=True 会在数据库任务记录写入前创建目录；进程在预占后崩溃可能留下无数据库记录的空目录，虽不会覆盖数据，但会造成孤儿目录累积。
-- **Transcription** · `tests/test_long_live_foundation.py:65` — 已覆盖失租 checkpoint 和异常透传，仍缺取消、429/坏响应、重复计费与真实 Markdown 闭环。
-- **AI Selection** · `app/services/ai/ai_clip_analyzer.py:456` — 输出归一化同时接受多组历史字段并填大量默认值，兼容有效但维护成本高。
-- **AI Selection** · `app/services/ai_config_service.py:55` — 旧 AI_REMOTE 与新分析/发布配置并存，运行时还改写全局 settings，形成双路径。
-- **AI Selection** · `tests/test_variety_comedy_selection.py:291` — 算法分支覆盖较好，但真实三阶段 Provider、资源消耗和全局评审降级未由集成测试锁定。
+- **Media & Storage** · `app/services/storage_service.py:839-853` — move_task_directory_to_trash 使用 reserve=False 的查询后分配，多个并发删除任务可能选中同一回收站目录；当前属于遗留兼容入口。
+- **Media & Storage** · `app/services/storage_service.py:256-301` — allocate_task_dir_name(reserve=True) 先创建目录、后写任务数据库记录，进程在两步之间崩溃会留下无记录孤儿目录。
+- **Media & Storage** · `app/services/storage_service.py:503-518` — 上传失败时删除部分文件是 best-effort，清理 OSError 被直接 pass；清理失败不会进入待处理清单，可能留下未引用的半成品源文件。
+- **AI Selection** · `app/services/ai_analysis_workflow_service.py:76` — _read_analysis_meta 对文件不存在、读取失败或 JSON 损坏都静默返回空字典；损坏产物会被当作没有元数据，降低长直播覆盖率门禁和故障诊断的可见性。
 - **Task Review & Cut** · `app/services/task_lifecycle_service.py:139-225` — 任务目录预占后若后续数据库写入失败，仍缺少统一释放空目录的补偿路径，可能留下少量孤儿目录。
-- **Subtitle** · `app/services/subtitle_auto_workflow_service.py:273` — auto_config_json 损坏时静默降为空并写回，可能丢弃其他配置。
-- **Subtitle** · `app/services/subtitle_workflow_service.py:312` — 统一 revision 外仍保留旧调用方适配，存在历史口径漂移成本。
-- **Subtitle** · `tests/test_subtitle_auto_workflow.py:172` — 核心真实渲染在 FFmpeg/FFprobe 缺失时会跳过，异常 Provider 证据不足。
-- **Subtitle** · `app/services/subtitle_data_service.py:761` — 波形处理把完整 PCM 捕获到内存，超长媒体存在时长线性内存峰值。
-- **Subtitle** · `app/services/subtitle_data_service.py:1024` — 单条字幕文本可接近文件上限，放大渲染、导出和 Prompt 资源消耗。
-- **Pipeline & Job Queue** · `app/services/pipeline_engine.py:977-1073` — PUBLISH_JOB_CREATING 尚无专用 reconcile 分支，恢复主要依赖重复创建的幂等去重。
-- **Pipeline & Job Queue** · `tests/test_pipeline_checkpoint.py:358-625; tests/test_pipeline_state_stability.py:275-313` — 仍缺真实进程重启、lease 过期边界及发布内容证据变更的进程级回归测试。
+- **Subtitle** · `app/services/subtitle_workflow_service.py:240-257` — 遗留 _activate_subtitle_job 仍可无 lease、revision、status 或 task/output_clip 约束直接激活指定记录；当前主渲染路径未调用，但 task_service 仍导入并保留兼容入口。
+- **Pipeline & Job Queue** · `app/services/pipeline_engine.py:1135` — PUBLISH_JOB_CREATING 恢复按当前 workflow_job_id 收集全部匹配 publish_jobs，并将 recovered_ids 全部作为 created 返回；若历史任务存在部分已创建/部分跳过，恢复结果仍可能把混合状态压成单一 created 计数。
+- **Pipeline & Job Queue** · `app/services/pipeline_engine.py:1790` — _read_json 对 OSError/JSONDecodeError 静默返回 fallback；排期或 checkpoint JSON 损坏时会被当作默认空结构，故障可见性和人工恢复依据不足。
 - **Publish Center** · `app/services/publish_providers.py:204` — _post_multipart 先 file_path.read_bytes() 再 b''.join(chunks)，完整视频和完整 multipart body 同时驻留内存，大文件发布存在约双倍峰值。
 - **Publish Center** · `app/services/publish_service.py:1569` — _batch_find_publish_jobs 对每条记录直接调用 _normalize_job(row)，未传入预取 accounts；_normalize_job 会逐条触发 readiness/account 查询，发布中心批量切片时形成 N+1 查询。
 - **Publish Center** · `tests/test_publish_history.py:111` — 现有定向测试未覆盖原始 Secret/Token 响应、旧小写历史状态、同步封面 partial、批量无效 ID，以及 API 超时后已接收的重复投稿边界。

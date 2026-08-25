@@ -9,7 +9,7 @@ import re
 from typing import Any
 
 from app.models.task import AIClipAnalysisResult
-from app.services.ai.base import AIProvider
+from app.services.ai.base import AIProvider, generate_json_with_safe_retry
 from app.services.ai.ai_clip_analyzer import (
     AIAnalysisError,
     TranscriptRow,
@@ -560,20 +560,12 @@ def _to_clip_payload(item: dict, index: int) -> dict:
 
 
 def _generate_payload(provider: AIProvider, prompt: str, *, expected_key: str) -> dict:
-    raw = provider.generate_json(prompt)
-    try:
-        payload = _loads_ai_json(raw)
-    except AIAnalysisError as first_error:
-        raw = provider.generate_json(
-            prompt,
-            retry_instruction=f"上一次输出无法解析。只返回严格 JSON，并确保包含 {expected_key} 数组。",
-        )
-        try:
-            payload = _loads_ai_json(raw)
-        except AIAnalysisError as second_error:
-            raise AIAnalysisError(str(second_error)) from first_error
+    raw = generate_json_with_safe_retry(provider, prompt)
+    payload = _loads_ai_json(raw)
     if not isinstance(payload, dict):
         raise AIAnalysisError("AI 输出必须是 JSON 对象")
+    if not isinstance(payload.get(expected_key), list):
+        raise AIAnalysisError(f"AI 输出缺少 {expected_key} 数组")
     return payload
 
 

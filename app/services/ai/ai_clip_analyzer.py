@@ -12,7 +12,12 @@ from pydantic import ValidationError
 
 from app.core.config import settings
 from app.models.task import AIClipAnalysisResult
-from app.services.ai.base import AIProvider, AIProviderError, ProviderConfig
+from app.services.ai.base import (
+    AIProvider,
+    AIProviderError,
+    ProviderConfig,
+    generate_json_with_safe_retry,
+)
 from app.services.ai.codex_cli_provider import CodexCliConfig, CodexCliProvider
 from app.services.ai.local_model_provider import LocalModelProvider
 from app.services.ai.remote_responses_provider import RemoteResponsesProvider
@@ -109,30 +114,16 @@ def _analyze_task_transcript_in_chunks(
             prompt_template=request.prompt_template,
         )
         try:
-            raw_text = provider.generate_json(prompt)
-            try:
-                chunk_result = _parse_and_validate(raw_text, task_id=request.task_id)
-            except AIAnalysisError as first_error:
-                retry_instruction = (
-                    "上一次输出无法被程序解析或校验。请重新输出严格 JSON，"
-                    "不要 Markdown，不要解释文字。每个 clips 项必须包含："
-                    "clip_id、title、start_time、end_time、duration_seconds、cover_time_seconds、summary、"
-                    "highlight_reason、spread_value、suggested_editing、confidence_score、selected_by_default。"
-                    "cover_time_seconds 是相对于短视频开头的秒数，必须大于或等于 0 且小于 duration_seconds。"
-                    "spread_value 只能是“高”“中”“低”。片段时长不能超限。"
-                )
-                raw_text = provider.generate_json(prompt, retry_instruction=retry_instruction)
-                try:
-                    chunk_result = _parse_and_validate(raw_text, task_id=request.task_id)
-                except AIAnalysisError as second_error:
-                    raise AIAnalysisError(f"AI 返回非法 JSON，安全重试后仍失败：{second_error}") from first_error
+            raw_text = generate_json_with_safe_retry(provider, prompt)
+            chunk_result = _parse_and_validate(raw_text, task_id=request.task_id)
             _validate_clip_constraints(chunk_result, request, transcript_bounds)
             clips.extend(chunk_result.clips)
         except Exception as exc:
+            error_text = exc.checkpoint_message() if isinstance(exc, AIProviderError) else str(exc)
             failures.append(
                 f"第 {chunk.index}/{chunk.total} 段失败，"
                 f"时间范围 {_seconds_to_time(chunk.start_seconds)}-{_seconds_to_time(chunk.end_seconds)}，"
-                f"prompt 约 {len(prompt)} 字：{exc}"
+                f"prompt 约 {len(prompt)} 字：{error_text}"
             )
 
     merged_clips = _dedupe_and_rank_clips(clips, request.target_clip_count)

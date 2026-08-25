@@ -1339,10 +1339,15 @@ def _get_default_style() -> dict[str, Any]:
 
 
 def _probe_media_dimensions(media_path: Path | None) -> tuple[int, int]:
-    if not media_path or not media_path.exists() or not shutil.which("ffprobe"):
+    if not media_path or not media_path.is_file():
+        # 独立导出 ASS 时可能没有绑定媒体；此时保留可移植的竖屏画布。
+        # 一旦媒体存在，后续任何探测错误都必须显式失败，不能静默套用错误尺寸。
         return 1080, 1920
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise RuntimeError("FFprobe 不可用，无法确定 ASS 画布尺寸")
     command = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        ffprobe, "-v", "error", "-select_streams", "v:0",
         "-show_entries", "stream=width,height", "-of", "json", str(media_path),
     ]
     try:
@@ -1355,15 +1360,19 @@ def _probe_media_dimensions(media_path: Path | None) -> tuple[int, int]:
             timeout=settings.ffprobe_timeout,
             check=False,
         )
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or "FFprobe 无法读取视频尺寸").strip()[-500:])
         payload = json.loads(result.stdout or "{}")
         stream = (payload.get("streams") or [{}])[0]
         width = int(stream.get("width") or 0)
         height = int(stream.get("height") or 0)
         if width > 0 and height > 0:
             return width, height
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError, IndexError):
-        pass
-    return 1080, 1920
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"FFprobe 读取视频尺寸超过 {settings.ffprobe_timeout} 秒") from exc
+    except (OSError, json.JSONDecodeError, ValueError, IndexError) as exc:
+        raise RuntimeError(f"FFprobe 返回的视频尺寸无效：{exc}") from exc
+    raise RuntimeError("FFprobe 没有返回有效的视频尺寸")
 
 
 def _resolve_font(font_family: str) -> str:

@@ -454,33 +454,42 @@ def _format_seconds_as_time(seconds: int) -> str:
 
 
 def _probe_video(path: Path | None) -> dict[str, str]:
-    if not path or not path.exists():
+    if not path:
         return {"duration": "尚未读取", "video_size": "尚未读取"}
+    try:
+        file_size = path.stat().st_size
+    except OSError:
+        return {"duration": "读取失败", "video_size": "读取失败"}
     duration = None
     ffprobe = shutil.which("ffprobe")
     if ffprobe:
-        result = subprocess.run(
-            [
-                ffprobe,
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        if result.returncode == 0:
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=settings.ffprobe_timeout,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if result and result.returncode == 0:
             try:
                 duration = float(result.stdout.strip())
             except ValueError:
                 duration = None
-    return {"duration": _format_duration(duration), "video_size": _format_file_size(path.stat().st_size)}
+    return {"duration": _format_duration(duration), "video_size": _format_file_size(file_size)}
 
 
 def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
