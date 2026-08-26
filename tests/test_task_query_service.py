@@ -399,8 +399,9 @@ class TestClipsOverviewContext:
         assert context["tasks"] == []
 
         stat_labels = {s["label"] for s in context["stats"]}
-        expected_labels = {"待 AI 分析", "待检查", "可生成切片", "已完成", "异常任务"}
+        expected_labels = {"累计审核任务", "已通过视频", "已完成任务"}
         assert stat_labels == expected_labels
+        assert all(stat["value"] == 0 for stat in context["stats"])
 
     def test_clips_overview_with_tasks_and_clips(self):
         """有任务和候选片段时统计字段正确"""
@@ -433,6 +434,12 @@ class TestClipsOverviewContext:
         assert task["review_ready"] is True
         assert task["can_cut"] is False  # source_exists 为 False
 
+        stat_map = {stat["label"]: stat for stat in context["stats"]}
+        assert stat_map["累计审核任务"]["value"] == 1
+        assert stat_map["已通过视频"]["value"] == 2
+        assert stat_map["已通过视频"]["note"] == "当前启用的视频片段"
+        assert stat_map["已完成任务"]["value"] == 0
+
     def test_clips_overview_with_deleted_clips(self):
         """已删除的候选片段不计入统计"""
         task_id = uuid4().hex[:12]
@@ -449,20 +456,50 @@ class TestClipsOverviewContext:
         assert task["enabled_clip_count"] == 1
 
     def test_clips_overview_stats_correct(self):
-        """统计卡片数值正确"""
+        """累计审核、启用片段和完成任务统计正确，且排除已删除数据"""
         task_id_1 = uuid4().hex[:12]
         task_id_2 = uuid4().hex[:12]
+        task_id_3 = uuid4().hex[:12]
+        task_id_4 = uuid4().hex[:12]
         today = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-        _insert_test_task(task_id_1, "待AI", status="pending_ai", created_at=today)
-        _insert_test_task(task_id_2, "失败", status="failed", created_at=today)
+        _insert_test_task(task_id_1, "待检查", status="pending_review", created_at=today)
+        _insert_test_task(task_id_2, "大写完成", status="COMPLETED", created_at=today)
+        _insert_test_task(
+            task_id_3,
+            "部分完成",
+            status="completed_with_errors",
+            created_at=today,
+        )
+        _insert_test_task(
+            task_id_4,
+            "已删除任务",
+            status="completed",
+            is_deleted=1,
+            created_at=today,
+        )
+        _insert_test_clip_candidate("clip_stats_1", task_id_1, "启用片段", enabled=1)
+        _insert_test_clip_candidate("clip_stats_2", task_id_1, "未启用片段", enabled=0)
+        _insert_test_clip_candidate("clip_stats_3", task_id_2, "完成片段", enabled=1)
+        _insert_test_clip_candidate("clip_stats_4", task_id_4, "已删除任务片段", enabled=1)
+        _insert_test_clip_candidate(
+            "clip_stats_5",
+            task_id_1,
+            "已删除片段",
+            enabled=1,
+            is_deleted=1,
+        )
 
         context = get_clips_overview_context()
         stat_map = {s["label"]: s["value"] for s in context["stats"]}
+        task_map = {task["id"]: task for task in context["tasks"]}
 
-        assert stat_map["待 AI 分析"] == 1
-        assert stat_map["待检查"] == 0
-        assert stat_map["异常任务"] == 1
+        assert stat_map == {
+            "累计审核任务": 2,
+            "已通过视频": 2,
+            "已完成任务": 2,
+        }
+        assert task_map[task_id_2]["review_stage"] == "已完成"
 
 
 # ── Subtitle Workflow Context ──────────────────────────────────────

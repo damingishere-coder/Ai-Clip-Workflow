@@ -6,18 +6,18 @@
   <div>
     <p class="eyebrow">Clip Review</p>
     <h1>片段审核工作台</h1>
-    <p>按工作流查看每个任务是否已经进入 AI 分析、人工审核、切片生成或异常排查阶段。</p>
+    <p>集中查看累计审核任务、通过视频和已完成任务，并继续进入单任务审核。</p>
   </div>
   <a class="primary-button" href="/tasks/new">新建任务</a>
 </section>
 
-<section class="stat-grid review-stat-grid" aria-label="片段审核统计">
+<section class="stat-grid review-stat-grid clip-review-stat-grid" aria-label="片段审核统计">
   {% for item in stats %}
   <article class="stat-card tone-{{ item.tone }}">
     <div class="stat-icon"></div>
     <span>{{ item.label }}</span>
     <strong>{{ item.value }}</strong>
-    <small>来自当前任务库</small>
+    <small>{{ item.note }}</small>
   </article>
   {% endfor %}
 </section>

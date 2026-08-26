@@ -320,19 +320,20 @@ def get_clips_overview_context() -> dict:
         enabled_count = counts["enabled"]
         review_ready = clip_count > 0
         can_cut = enabled_count > 0 and task["source_exists"]
-        if task["status"] == TaskStatus.failed.value:
+        normalized_status = str(task.get("status") or "").lower()
+        if normalized_status == TaskStatus.failed.value:
             review_stage = "异常"
             review_tone = "red"
-        elif task["status"] == TaskStatus.completed.value:
+        elif normalized_status == TaskStatus.completed.value:
             review_stage = "已完成"
             review_tone = "green"
-        elif task["status"] == TaskStatus.completed_with_errors.value:
+        elif normalized_status == TaskStatus.completed_with_errors.value:
             review_stage = "部分完成"
             review_tone = "amber"
-        elif task["status"] == TaskStatus.pending_review.value or review_ready:
+        elif normalized_status == TaskStatus.pending_review.value or review_ready:
             review_stage = "待检查"
             review_tone = "purple"
-        elif task["status"] in {TaskStatus.pending_ai.value, TaskStatus.ai_analyzing.value}:
+        elif normalized_status in {TaskStatus.pending_ai.value, TaskStatus.ai_analyzing.value}:
             review_stage = "待 AI"
             review_tone = "blue"
         else:
@@ -351,41 +352,38 @@ def get_clips_overview_context() -> dict:
             }
         )
 
+    completed_statuses = {
+        TaskStatus.completed.value,
+        TaskStatus.completed_with_errors.value,
+    }
+    reviewed_task_count = sum(1 for task in enriched_tasks if task["real_clip_count"] > 0)
+    passed_clip_count = sum(task["enabled_clip_count"] for task in enriched_tasks)
+    completed_task_count = sum(
+        1
+        for task in tasks
+        if str(task.get("status") or "").lower() in completed_statuses
+    )
+
     return {
         "tasks": enriched_tasks,
         "stats": [
             {
-                "label": "待 AI 分析",
-                "value": sum(
-                    1
-                    for task in tasks
-                    if task["status"] in {TaskStatus.pending_ai.value, TaskStatus.ai_analyzing.value}
-                ),
+                "label": "累计审核任务",
+                "value": reviewed_task_count,
+                "note": "已进入候选片段审核流程",
                 "tone": "blue",
             },
             {
-                "label": "待检查",
-                "value": sum(1 for task in enriched_tasks if task["review_stage"] == "待检查"),
-                "tone": "purple",
-            },
-            {
-                "label": "可生成切片",
-                "value": sum(1 for task in enriched_tasks if task["can_cut"]),
+                "label": "已通过视频",
+                "value": passed_clip_count,
+                "note": "当前启用的视频片段",
                 "tone": "green",
             },
             {
-                "label": "已完成",
-                "value": sum(
-                    1
-                    for task in tasks
-                    if task["status"] in {TaskStatus.completed.value, TaskStatus.completed_with_errors.value}
-                ),
+                "label": "已完成任务",
+                "value": completed_task_count,
+                "note": "含手动与全自动完成状态",
                 "tone": "green",
-            },
-            {
-                "label": "异常任务",
-                "value": sum(1 for task in tasks if task["status"] == TaskStatus.failed.value),
-                "tone": "red",
             },
         ],
     }

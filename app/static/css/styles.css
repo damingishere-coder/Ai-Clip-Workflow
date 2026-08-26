@@ -1809,6 +1809,10 @@ button:disabled {
   grid-template-columns: repeat(5, minmax(150px, 1fr));
 }
 
+.clip-review-stat-grid {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
 .review-board {
   display: grid;
   gap: 12px;
