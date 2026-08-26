@@ -4,24 +4,28 @@
 不参与任务生命周期、状态变更等核心逻辑。
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import shutil
 
 from app.core.config import settings
 from app.db.database import get_connection
 from app.models.task import TaskStatus
 from app.services.ai_config_service import get_ai_config_context
+from app.services.publish_domain import TERMINAL_PUBLISH_STATUSES
+from app.services.publish_time import app_zone, parse_datetime
 from app.services.storage_service import resolve_video_file_path
 from app.services.subtitle_workflow_service import SUBTITLE_STATUS_LABELS
 from app.services.task_service import (
     OUTPUT_STATUS_LABELS,
-    WORKFLOW_STEPS,
     _parse_time_to_seconds,
     get_default_subtitle_style,
     get_task,
     list_output_clips,
     list_tasks,
 )
+
+
+DASHBOARD_WEEKDAY_LABELS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
 
 def _batch_output_clip_counts(task_ids: list[str]) -> dict[str, int]:
@@ -58,6 +62,97 @@ def _batch_completed_output_clip_counts(task_ids: list[str]) -> dict[str, int]:
             task_ids,
         ).fetchall()
     return {row["task_id"]: int(row["cnt"] or 0) for row in rows}
+
+
+def _dashboard_pending_publish_counts(task_ids: list[str]) -> dict[str, int]:
+    """统计仍有有效切片未进入发布终态的任务和切片。"""
+    if not task_ids:
+        return {"task_count": 0, "clip_count": 0}
+
+    task_placeholders = ",".join("?" for _ in task_ids)
+    terminal_statuses = sorted(TERMINAL_PUBLISH_STATUSES)
+    terminal_placeholders = ",".join("?" for _ in terminal_statuses)
+    with get_connection() as connection:
+        row = connection.execute(
+            f"""
+            WITH latest_publish_job AS (
+                SELECT
+                    output_clip_id,
+                    UPPER(status) AS status,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY output_clip_id
+                        ORDER BY created_at DESC, updated_at DESC, id DESC
+                    ) AS row_number
+                FROM publish_jobs
+            )
+            SELECT
+                COUNT(DISTINCT output_clip.task_id) AS task_count,
+                COUNT(*) AS clip_count
+            FROM output_clip
+            LEFT JOIN latest_publish_job
+              ON latest_publish_job.output_clip_id = output_clip.id
+             AND latest_publish_job.row_number = 1
+            WHERE output_clip.task_id IN ({task_placeholders})
+              AND output_clip.status = 'completed'
+              AND output_clip.is_active = 1
+              AND (
+                    latest_publish_job.status IS NULL
+                    OR latest_publish_job.status NOT IN ({terminal_placeholders})
+              )
+            """,
+            [*task_ids, *terminal_statuses],
+        ).fetchone()
+    return {
+        "task_count": int(row["task_count"] or 0) if row else 0,
+        "clip_count": int(row["clip_count"] or 0) if row else 0,
+    }
+
+
+def _dashboard_weekly_chart(tasks: list[dict], *, now: datetime | None = None) -> dict:
+    """按应用时区生成本周一至周日的每日新增任务统计。"""
+    zone = app_zone(settings.app_timezone)
+    current = now or datetime.now(zone)
+    current = current.replace(tzinfo=zone) if current.tzinfo is None else current.astimezone(zone)
+    week_start = (current - timedelta(days=current.weekday())).replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    week_end = week_start + timedelta(days=7)
+    counts = [0] * 7
+
+    for task in tasks:
+        raw_created_at = task.get("created_at_raw")
+        if not raw_created_at:
+            continue
+        try:
+            created_at = parse_datetime(raw_created_at, settings.app_timezone).astimezone(zone)
+        except ValueError:
+            continue
+        if week_start <= created_at < week_end:
+            counts[(created_at.date() - week_start.date()).days] += 1
+
+    highest_count = max(counts, default=0)
+    days = []
+    for index, count in enumerate(counts):
+        date_value = week_start + timedelta(days=index)
+        days.append(
+            {
+                "label": DASHBOARD_WEEKDAY_LABELS[index],
+                "date": date_value.strftime("%m/%d"),
+                "count": count,
+                "percent": round((count / highest_count) * 100) if highest_count else 0,
+                "is_today": date_value.date() == current.date(),
+            }
+        )
+
+    return {
+        "days": days,
+        "total": sum(counts),
+        "range_label": f"{week_start:%m.%d} - {(week_end - timedelta(days=1)):%m.%d}",
+        "timezone_label": settings.app_timezone,
+    }
 
 
 def _batch_clip_candidate_counts(task_ids: list[str]) -> dict[str, dict[str, int]]:
@@ -172,61 +267,44 @@ def _batch_all_output_clips(task_ids: list[str]) -> dict[str, list[dict]]:
     return result
 
 
-def get_dashboard_context() -> dict:
+def get_dashboard_context(*, now: datetime | None = None) -> dict:
     """Dashboard 首页统计上下文"""
     tasks = list_tasks()
-    today = datetime.now().date()
-    today_count = 0
-    for task in tasks:
-        raw_created_at = task.get("created_at_raw")
-        if not raw_created_at:
-            continue
-        try:
-            if datetime.fromisoformat(raw_created_at).astimezone().date() == today:
-                today_count += 1
-        except ValueError:
-            continue
-
-    pending_count = sum(
+    task_ids = [task["id"] for task in tasks]
+    weekly_chart = _dashboard_weekly_chart(tasks, now=now)
+    completed_oc_map = _batch_completed_output_clip_counts(task_ids)
+    completed_task_count = sum(1 for task in tasks if completed_oc_map.get(task["id"], 0) > 0)
+    completed_clip_count = sum(completed_oc_map.values())
+    pending_publish = _dashboard_pending_publish_counts(task_ids)
+    failed_count = sum(
         1
         for task in tasks
-        if task["status"] in {TaskStatus.pending_video.value, TaskStatus.pending_processing.value}
+        if task["status"] == TaskStatus.failed.value or str(task["status"]).startswith("FAILED_")
     )
-    review_count = sum(
-        1
-        for task in tasks
-        if task["status"]
-        in {
-            TaskStatus.pending_review.value,
-            TaskStatus.PENDING_SUBTITLE_REVIEW.value,
-        }
-    )
-    completed_count = sum(
-        1
-        for task in tasks
-        if task["status"] in {TaskStatus.completed.value, TaskStatus.completed_with_errors.value}
-    )
-    output_clip_count = sum(int(task.get("output_clip_count") or 0) for task in tasks)
-    completed_oc_map = _batch_completed_output_clip_counts([task["id"] for task in tasks])
-    ready_for_subtitle_count = sum(completed_oc_map.get(task["id"], 0) for task in tasks)
-    failed_count = sum(1 for task in tasks if task["status"] == TaskStatus.failed.value)
 
     return {
         "stats": [
-            {"label": "今日新增任务", "value": today_count, "note": "来自 SQLite", "tone": "blue"},
-            {"label": "待处理", "value": pending_count, "note": "可继续推进", "tone": "amber"},
-            {"label": "待检查", "value": review_count, "note": "包含选片和字幕审核", "tone": "purple"},
-            {"label": "已切片任务", "value": completed_count, "note": f"输出 {output_clip_count} 条切片", "tone": "green"},
-            {"label": "待加字幕", "value": ready_for_subtitle_count, "note": "切片后工作流", "tone": "blue"},
-            {"label": "待推送", "value": ready_for_subtitle_count, "note": "需字幕和发布确认", "tone": "red"},
+            {
+                "label": "本周新增任务",
+                "value": weekly_chart["total"],
+                "note": f"{weekly_chart['range_label']} · 上海时间",
+                "tone": "blue",
+            },
+            {
+                "label": "已切片任务",
+                "value": completed_task_count,
+                "note": f"共 {completed_clip_count} 条有效切片",
+                "tone": "green",
+            },
+            {
+                "label": "待推送任务",
+                "value": pending_publish["task_count"],
+                "note": f"涉及 {pending_publish['clip_count']} 条待发送或复核切片",
+                "tone": "amber",
+            },
             {"label": "失败任务", "value": failed_count, "note": "需排查", "tone": "red"},
         ],
-        "focus_stats": [
-            {"label": "输出切片", "value": output_clip_count, "description": "条短视频已生成记录"},
-            {"label": "待加字幕", "value": ready_for_subtitle_count, "description": "条切片可进入字幕工作台"},
-            {"label": "待推送", "value": ready_for_subtitle_count, "description": "条切片等待发布前确认"},
-        ],
-        "workflow_steps": WORKFLOW_STEPS,
+        "weekly_chart": weekly_chart,
         "recent_tasks": tasks[:5],
     }
 

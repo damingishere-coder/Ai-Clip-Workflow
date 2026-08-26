@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -155,6 +156,27 @@ def _insert_test_output_clip(
         connection.commit()
 
 
+def _insert_test_publish_job(
+    job_id: str,
+    task_id: str,
+    output_clip_id: str,
+    status: str,
+    *,
+    created_at: str,
+) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO publish_jobs (
+                id, task_id, output_clip_id, platform, publish_mode,
+                status, created_at, updated_at
+            ) VALUES (?, ?, ?, 'douyin', 'local_browser', ?, ?, ?)
+            """,
+            (job_id, task_id, output_clip_id, status, created_at, created_at),
+        )
+        connection.commit()
+
+
 def _insert_test_subtitle_job(
     job_id: str,
     task_id: str,
@@ -239,15 +261,13 @@ class TestDashboardContext:
 
         # 顶层字段
         assert "stats" in context
-        assert "focus_stats" in context
-        assert "workflow_steps" in context
+        assert "weekly_chart" in context
         assert "recent_tasks" in context
 
         # stats 列表结构
         stat_labels = {s["label"] for s in context["stats"]}
         expected_labels = {
-            "今日新增任务", "待处理", "待检查", "已切片任务",
-            "待加字幕", "待推送", "失败任务",
+            "本周新增任务", "已切片任务", "待推送任务", "失败任务",
         }
         assert stat_labels == expected_labels
 
@@ -256,20 +276,11 @@ class TestDashboardContext:
             assert "value" in stat
             assert "tone" in stat
 
-        # focus_stats 列表结构
-        focus_labels = {s["label"] for s in context["focus_stats"]}
-        assert focus_labels == {"输出切片", "待加字幕", "待推送"}
-
-        for stat in context["focus_stats"]:
-            assert "label" in stat
-            assert "value" in stat
-            assert "description" in stat
+        assert context["weekly_chart"]["total"] == 0
+        assert len(context["weekly_chart"]["days"]) == 7
 
         # recent_tasks 为空列表
         assert context["recent_tasks"] == []
-
-        # workflow_steps 不为空
-        assert len(context["workflow_steps"]) > 0
 
     def test_dashboard_counts_with_tasks(self):
         """有任务时统计数值正确"""
@@ -281,14 +292,15 @@ class TestDashboardContext:
         _insert_test_task(task_id_1, "任务1", status="pending_video", created_at=today)
         _insert_test_task(task_id_2, "任务2", status="pending_review", created_at=today)
         _insert_test_task(task_id_3, "任务3", status="completed", created_at="2020-01-01T00:00:00")
+        _insert_test_clip_candidate("clip-dashboard-completed", task_id_3)
+        _insert_test_output_clip("output-dashboard-completed", task_id_3, "clip-dashboard-completed")
 
         context = get_dashboard_context()
 
         stat_map = {s["label"]: s["value"] for s in context["stats"]}
-        assert stat_map["今日新增任务"] == 2  # task_1 + task_2 (today)
-        assert stat_map["待处理"] == 1  # task_1
-        assert stat_map["待检查"] == 1  # task_2
+        assert stat_map["本周新增任务"] == 2
         assert stat_map["已切片任务"] == 1  # task_3
+        assert stat_map["待推送任务"] == 1  # 已切片但还没有发布记录
         assert stat_map["失败任务"] == 0
 
         # recent_tasks 最多 5 条
@@ -307,6 +319,69 @@ class TestDashboardContext:
 
         stat_map = {s["label"]: s["value"] for s in context["stats"]}
         assert stat_map["失败任务"] == 2
+
+    def test_dashboard_week_uses_shanghai_monday_boundary(self):
+        now = datetime(2026, 8, 26, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        _insert_test_task(
+            "week-before", "上周日任务", created_at="2026-08-23T15:59:59+00:00"
+        )
+        _insert_test_task(
+            "week-monday", "本周一任务", created_at="2026-08-23T16:00:00+00:00"
+        )
+        _insert_test_task(
+            "week-after", "下周一任务", created_at="2026-08-30T16:00:00+00:00"
+        )
+
+        context = get_dashboard_context(now=now)
+
+        assert context["weekly_chart"]["range_label"] == "08.24 - 08.30"
+        assert context["weekly_chart"]["total"] == 1
+        assert [day["count"] for day in context["weekly_chart"]["days"]] == [1, 0, 0, 0, 0, 0, 0]
+        assert context["weekly_chart"]["days"][2]["is_today"] is True
+
+    def test_dashboard_pending_publish_uses_latest_job_state(self):
+        task_id = "dashboard-publish-state"
+        _insert_test_task(task_id, "发布状态任务", status="completed")
+        for index in range(1, 4):
+            candidate_id = f"dashboard-publish-candidate-{index}"
+            output_id = f"dashboard-publish-output-{index}"
+            _insert_test_clip_candidate(candidate_id, task_id)
+            _insert_test_output_clip(output_id, task_id, candidate_id)
+
+        _insert_test_publish_job(
+            "dashboard-job-waiting-old",
+            task_id,
+            "dashboard-publish-output-1",
+            "WAITING",
+            created_at="2026-08-26T01:00:00+00:00",
+        )
+        _insert_test_publish_job(
+            "dashboard-job-published-new",
+            task_id,
+            "dashboard-publish-output-1",
+            "PUBLISHED",
+            created_at="2026-08-26T02:00:00+00:00",
+        )
+        _insert_test_publish_job(
+            "dashboard-job-published-old",
+            task_id,
+            "dashboard-publish-output-2",
+            "PUBLISHED",
+            created_at="2026-08-26T01:00:00+00:00",
+        )
+        _insert_test_publish_job(
+            "dashboard-job-scheduled-new",
+            task_id,
+            "dashboard-publish-output-2",
+            "SCHEDULED",
+            created_at="2026-08-26T02:00:00+00:00",
+        )
+
+        context = get_dashboard_context()
+        stat_map = {s["label"]: s for s in context["stats"]}
+
+        assert stat_map["待推送任务"]["value"] == 1
+        assert "2 条" in stat_map["待推送任务"]["note"]
 
 
 # ── Clips Overview Context ─────────────────────────────────────────
