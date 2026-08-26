@@ -645,6 +645,19 @@ tbody tr:last-child td {
   font-size: 30px;
 }
 
+.live-progress-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.live-progress-summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .toolbar {
   flex-wrap: wrap;
   justify-content: flex-start;
@@ -1112,6 +1125,65 @@ fieldset input.visually-hidden-file {
 
 .status-overview-card {
   min-height: 210px;
+}
+
+.live-current-operation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 14px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(37, 111, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(37, 111, 255, 0.06);
+}
+
+.live-current-operation div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.live-current-operation div span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.live-current-operation > strong {
+  color: var(--blue);
+  font-size: 18px;
+}
+
+.live-current-operation p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.live-current-operation[data-status="attention"],
+.live-current-operation[data-status="failed"] {
+  border-color: rgba(230, 159, 0, 0.24);
+  background: rgba(230, 159, 0, 0.08);
+}
+
+.live-current-operation[data-status="attention"] > strong,
+.live-current-operation[data-status="failed"] > strong {
+  color: var(--amber);
+}
+
+[data-task-live-status-pill][data-status="running"] {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+[data-task-live-status-pill][data-status="failed"] {
+  background: var(--amber-soft);
+  color: var(--amber);
 }
 
 .metro-timeline {
@@ -3980,6 +4052,15 @@ body.transcript-drawer-open .main-panel {
 
   .metro-timeline {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .live-current-operation {
+    grid-template-columns: 1fr;
+  }
+
+  .live-current-operation > strong,
+  .live-current-operation p {
+    grid-column: 1;
   }
 
   .segmented,

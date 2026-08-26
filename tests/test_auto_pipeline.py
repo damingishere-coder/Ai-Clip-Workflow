@@ -720,6 +720,100 @@ def test_live_status_endpoint_returns_completed_actions(monkeypatch):
     assert all(step["state"] == "done" for step in payload["workflow_steps"])
 
 
+def test_live_status_endpoint_tracks_manual_workflow_job():
+    task_id = "test-auto-manual-live-job"
+    create_task_record(
+        TaskCreate(task_name="手动任务实时进度", selection_profile="general"),
+        task_id=task_id,
+    )
+    update_task_status(task_id, TaskStatus.ai_analyzing)
+    job = job_service.create_job(task_id, job_service.JOB_TYPE_AI_ANALYSIS)
+    claimed = job_service.claim_job(job["id"], "live-status-test-worker")
+    job_service.update_job_progress(
+        job["id"],
+        61,
+        "正在分析第 14/23 段",
+        lease_owner="live-status-test-worker",
+        lease_token=claimed["lease_token"],
+    )
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/tasks/{task_id}/live-status", headers=_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["should_poll"] is True
+    assert payload["active_operation"]["kind"] == job_service.JOB_TYPE_AI_ANALYSIS
+    assert payload["active_operation"]["progress"] == 61
+    assert payload["active_operation"]["message"] == "正在分析第 14/23 段"
+    assert payload["workflow_steps"][3]["state"] == "current"
+
+
+def test_live_status_endpoint_maps_lowercase_status_inside_auto_pipeline():
+    task = _create_auto_task("test-auto-live-lowercase")
+    update_task_status(task["id"], TaskStatus.transcribing)
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/tasks/{task['id']}/live-status", headers=_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["should_poll"] is True
+    assert payload["workflow_steps"][2]["state"] == "current"
+    assert payload["workflow_steps"][0]["state"] == "done"
+
+
+def test_live_status_endpoint_combines_publish_progress_with_task_timeline():
+    task = _create_auto_task("test-auto-live-publish")
+    update_task_status(task["id"], TaskStatus.COMPLETED)
+    now = datetime.now(timezone.utc).isoformat()
+    statuses = ("PUBLISHED", "SCHEDULED", "NEED_REVIEW")
+    with get_connection() as connection:
+        for index, status in enumerate(statuses, start=1):
+            output_id = f"{task['id']}-output-{index}"
+            connection.execute(
+                """
+                INSERT INTO output_clip (
+                    id, task_id, output_file_path, output_file_name,
+                    status, is_active, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'completed', 1, ?, ?)
+                """,
+                (output_id, task["id"], f"clip-{index}.mp4", f"clip-{index}.mp4", now, now),
+            )
+            connection.execute(
+                """
+                INSERT INTO publish_jobs (
+                    id, task_id, output_clip_id, platform, publish_mode,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, 'douyin', 'local_browser', ?, ?, ?)
+                """,
+                (f"{task['id']}-publish-{index}", task["id"], output_id, status, now, now),
+            )
+        connection.commit()
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/tasks/{task['id']}/live-status", headers=_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == TaskStatus.COMPLETED.value
+    assert payload["task_progress"] == 100
+    assert payload["progress"] == 93
+    assert payload["status_label"] == "发布需处理 · 1 条"
+    assert payload["publish"]["total"] == 3
+    assert payload["publish"]["success"] == 1
+    assert payload["publish"]["pending"] == 1
+    assert payload["publish"]["need_review"] == 1
+    assert payload["active_operation"]["kind"] == "publish"
+    assert payload["active_operation"]["progress"] == 33
+    assert payload["workflow_steps"][-1] == {
+        "name": "平台发布",
+        "index": "11",
+        "state": "warning",
+    }
+    assert payload["should_poll"] is True
+
+
 def test_live_status_endpoint_returns_404_for_missing_task():
     with TestClient(app) as client:
         response = client.get("/api/tasks/test-auto-missing/live-status", headers=_headers())
@@ -737,8 +831,17 @@ def test_task_detail_live_status_frontend_uses_partial_refresh():
     ]
 
     assert "data-task-live-overview" in template
+    assert "data-task-live-operation" in template
     assert "data-live-task-actions" in template
     assert "/live-status" in live_script
     assert "TASK_LIVE_STATUS_INTERVAL_MS = 3000" in script
     assert 'document.addEventListener("visibilitychange"' in live_script
+    assert "taskLiveStatusRequestInFlight" in live_script
+    assert "renderRuntimeLog(data);" in live_script
     assert "window.location.reload" not in live_script
+
+    ai_poll_script = script[
+        script.index("async function pollAiAnalysisStatus"):
+        script.index("function stopAiAnalysisStatusPolling")
+    ]
+    assert "renderRuntimeLog" not in ai_poll_script

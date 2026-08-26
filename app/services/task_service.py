@@ -49,6 +49,7 @@ from app.services.storage_service import (
     get_source_video_path,
     resolve_video_file_path,
 )
+from app.services.publish_domain import TERMINAL_PUBLISH_STATUSES
 from app.services.task_lifecycle_service import (
     TaskStatusConflictError,
     create_task_record,
@@ -289,6 +290,12 @@ def get_task_workflow_steps(task: dict) -> list[dict[str, str]]:
             TaskStatus.FAILED_SCHEDULE_CREATING.value: 9,
             TaskStatus.FAILED_PUBLISH_JOB_CREATING.value: 10,
             TaskStatus.pending_review.value: 5,
+            TaskStatus.pending_processing.value: 2,
+            TaskStatus.audio_extracting.value: 2,
+            TaskStatus.transcribing.value: 3,
+            TaskStatus.pending_ai.value: 4,
+            TaskStatus.ai_analyzing.value: 4,
+            TaskStatus.cutting.value: 6,
             TaskStatus.completed.value: 11,
             TaskStatus.completed_with_errors.value: 11,
             TaskStatus.failed.value: 1,
@@ -626,6 +633,170 @@ def get_task(
     return _row_to_task(row, include_video_probe=include_video_probe) if row else None
 
 
+def _get_active_workflow_job(task_id: str) -> dict:
+    from app.services import job_service
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, job_type, status, progress, message, updated_at
+            FROM workflow_jobs
+            WHERE task_id = ? AND status IN (?, ?)
+            ORDER BY
+                CASE status WHEN ? THEN 0 ELSE 1 END,
+                updated_at DESC,
+                created_at DESC,
+                id DESC
+            LIMIT 1
+            """,
+            (
+                task_id,
+                job_service.JOB_STATUS_RUNNING,
+                job_service.JOB_STATUS_QUEUED,
+                job_service.JOB_STATUS_RUNNING,
+            ),
+        ).fetchone()
+    if not row:
+        return {}
+    job = dict(row)
+    job["job_type_label"] = job_service.JOB_TYPE_LABELS.get(job["job_type"], job["job_type"])
+    job["status_label"] = job_service.JOB_STATUS_LABELS.get(job["status"], job["status"])
+    return job
+
+
+def _get_publish_live_summary(task_id: str) -> dict:
+    terminal_statuses = {status.upper() for status in TERMINAL_PUBLISH_STATUSES}
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            WITH latest_publish_job AS (
+                SELECT
+                    publish_jobs.status,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY publish_jobs.output_clip_id, publish_jobs.platform
+                        ORDER BY publish_jobs.created_at DESC,
+                                 publish_jobs.updated_at DESC,
+                                 publish_jobs.id DESC
+                    ) AS row_number
+                FROM publish_jobs
+                INNER JOIN output_clip
+                  ON output_clip.id = publish_jobs.output_clip_id
+                 AND output_clip.task_id = ?
+                 AND output_clip.status = 'completed'
+                 AND output_clip.is_active = 1
+            )
+            SELECT UPPER(status) AS status, COUNT(*) AS count
+            FROM latest_publish_job
+            WHERE row_number = 1
+            GROUP BY UPPER(status)
+            """,
+            (task_id,),
+        ).fetchall()
+
+    statuses = {str(row["status"] or "").upper(): int(row["count"] or 0) for row in rows}
+    total = sum(statuses.values())
+    success = sum(statuses.get(status, 0) for status in {"PUBLISHED", "EXPORTED"})
+    cancelled = statuses.get("CANCELLED", 0)
+    resolved = sum(statuses.get(status, 0) for status in terminal_statuses)
+    pending = sum(statuses.get(status, 0) for status in {"DRAFT", "WAITING", "SCHEDULED"})
+    publishing = statuses.get("PUBLISHING", 0)
+    failed = statuses.get("FAILED", 0)
+    need_review = statuses.get("NEED_REVIEW", 0)
+    attention = failed + need_review
+    progress = round(success / total * 100) if total else 0
+
+    if not total:
+        state = "none"
+        label = "尚未创建发布任务"
+        message = "处理完成后可同步到发送中心。"
+    elif attention:
+        state = "attention"
+        label = f"发布需处理 · {attention} 条"
+        message = f"已成功 {success}/{total} 条，另有 {attention} 条失败或需要人工复核。"
+    elif publishing:
+        state = "publishing"
+        label = f"正在发布 · {success}/{total}"
+        message = f"平台正在处理 {publishing} 条，已成功 {success}/{total} 条。"
+    elif pending:
+        state = "scheduled"
+        label = f"托管发布中 · {success}/{total}"
+        message = f"已成功 {success}/{total} 条，另有 {pending} 条正在等待排期发送。"
+    elif resolved == total and success == total:
+        state = "completed"
+        label = f"发布完成 · {success}/{total}"
+        message = f"全部 {total} 条发布任务均已完成。"
+    else:
+        state = "resolved"
+        label = f"发布已结束 · {success}/{total}"
+        message = f"已成功 {success}/{total} 条，取消 {cancelled} 条。"
+
+    return {
+        "state": state,
+        "label": label,
+        "message": message,
+        "progress": progress,
+        "total": total,
+        "success": success,
+        "resolved": resolved,
+        "pending": pending,
+        "publishing": publishing,
+        "failed": failed,
+        "need_review": need_review,
+        "cancelled": cancelled,
+        "should_poll": bool(pending or publishing),
+    }
+
+
+def _build_live_activity(task: dict, active_job: dict, publish: dict) -> dict:
+    status = task["status"]
+    transcript = task.get("transcript_progress") or {}
+    publish_task_statuses = {
+        TaskStatus.READY_TO_PUBLISH.value,
+        TaskStatus.COMPLETED.value,
+        TaskStatus.completed.value,
+        TaskStatus.completed_with_errors.value,
+    }
+
+    if publish["total"] and status in publish_task_statuses:
+        return {
+            "kind": "publish",
+            "label": "托管发布",
+            "status": publish["state"],
+            "progress": publish["progress"],
+            "message": publish["message"],
+            "updated_at": "",
+        }
+
+    if status in {TaskStatus.TRANSCRIBING.value, TaskStatus.transcribing.value} and transcript:
+        return {
+            "kind": "transcript",
+            "label": "转写文本",
+            "status": str(transcript.get("status") or "running"),
+            "progress": max(0, min(100, int(transcript.get("percent") or 0))),
+            "message": str(transcript.get("message") or "正在转写文本"),
+            "updated_at": str(transcript.get("updated_at") or ""),
+        }
+
+    if active_job:
+        return {
+            "kind": str(active_job.get("job_type") or "workflow"),
+            "label": str(active_job.get("job_type_label") or "后台任务"),
+            "status": str(active_job.get("status") or "running"),
+            "progress": max(0, min(100, int(active_job.get("progress") or 0))),
+            "message": str(active_job.get("message") or active_job.get("status_label") or "正在处理"),
+            "updated_at": str(active_job.get("updated_at") or ""),
+        }
+
+    return {
+        "kind": "task",
+        "label": task["status_label"],
+        "status": status,
+        "progress": max(0, min(100, int(task.get("progress") or 0))),
+        "message": task.get("error_message") or f"当前阶段：{task['status_label']}",
+        "updated_at": str(task.get("updated_at_raw") or ""),
+    }
+
+
 def get_task_live_status(task_id: str) -> dict:
     task = get_task(task_id, include_video_probe=False)
     if not task:
@@ -633,10 +804,40 @@ def get_task_live_status(task_id: str) -> dict:
 
     status = task["status"]
     auto_mode = bool(task.get("auto_mode"))
-    is_running = auto_mode and status in AUTO_PIPELINE_RUNNING_STATUSES
+    active_job = _get_active_workflow_job(task_id)
+    publish = _get_publish_live_summary(task_id)
+    activity = _build_live_activity(task, active_job, publish)
+    task_is_running = status in AUTO_PIPELINE_RUNNING_STATUSES
+    is_running = bool(task_is_running or active_job or publish["should_poll"])
     should_poll = is_running
     candidate_count = count_clip_candidates(task_id)
     output_clip_count = int(task.get("output_clip_count") or 0)
+    workflow_steps = get_task_workflow_steps(task)
+
+    publish_task_statuses = {
+        TaskStatus.READY_TO_PUBLISH.value,
+        TaskStatus.COMPLETED.value,
+        TaskStatus.completed.value,
+        TaskStatus.completed_with_errors.value,
+    }
+    display_status_label = task["status_label"]
+    overall_progress = int(task.get("progress") or 0)
+    if publish["total"] and status in publish_task_statuses:
+        display_status_label = publish["label"]
+        overall_progress = 100 if publish["state"] == "completed" else min(
+            99,
+            90 + round(publish["progress"] * 0.09),
+        )
+        if workflow_steps:
+            workflow_steps[-1]["name"] = "平台发布"
+            if publish["state"] == "attention":
+                workflow_steps[-1]["state"] = "warning"
+            elif publish["state"] in {"scheduled", "publishing"}:
+                workflow_steps[-1]["state"] = "current"
+
+    runtime_status = "running" if should_poll else ("completed" if overall_progress >= 100 else "idle")
+    if task.get("error_message") or publish["state"] == "attention":
+        runtime_status = "failed"
 
     primary_action = "none"
     if auto_mode:
@@ -657,14 +858,21 @@ def get_task_live_status(task_id: str) -> dict:
 
     return {
         "task_id": task_id,
+        "snapshot_at": _now_iso(),
         "status": status,
-        "status_label": task["status_label"],
-        "progress": int(task.get("progress") or 0),
+        "status_label": display_status_label,
+        "task_status_label": task["status_label"],
+        "progress": overall_progress,
+        "task_progress": int(task.get("progress") or 0),
         "updated_at": task["updated_at"],
         "error_message": task.get("error_message") or "",
         "is_running": is_running,
         "should_poll": should_poll,
-        "workflow_steps": get_task_workflow_steps(task),
+        "runtime_status": runtime_status,
+        "runtime_status_label": display_status_label,
+        "workflow_steps": workflow_steps,
+        "active_operation": activity,
+        "publish": publish,
         "log_lines": _read_task_log_tail(task_id),
         "counts": {
             "candidates": candidate_count,

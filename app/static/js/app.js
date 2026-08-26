@@ -119,6 +119,7 @@ async function handleProcessAction(button) {
       if (result) result.textContent = data.message || "处理完成，正在刷新页面...";
       if (button.dataset.endpoint.includes("/process/transcript")) {
         startTranscriptPolling(true);
+        startTaskLiveStatusPolling(true);
         if (data.status === "completed") {
           window.setTimeout(() => window.location.reload(), 600);
         }
@@ -364,11 +365,16 @@ const taskLiveUpdatedAt = document.querySelector("[data-task-live-updated-at]");
 const taskLiveCandidateCount = document.querySelector("[data-task-live-candidate-count]");
 const taskLiveOutputCount = document.querySelector("[data-task-live-output-count]");
 const taskLiveActions = document.querySelector("[data-live-task-actions]");
+const taskLiveOperation = document.querySelector("[data-task-live-operation]");
+const taskLiveOperationLabel = document.querySelector("[data-task-live-operation-label]");
+const taskLiveOperationProgress = document.querySelector("[data-task-live-operation-progress]");
+const taskLiveOperationMessage = document.querySelector("[data-task-live-operation-message]");
 let aiStatusPollingTimer = null;
 let isAiAnalysisBusy = false;
 let aiAnalysisControlStates = new Map();
 let taskLiveStatusTimer = null;
 let taskLiveForcedPollingUntil = 0;
+let taskLiveStatusRequestInFlight = false;
 const TASK_LIVE_STATUS_INTERVAL_MS = 3000;
 
 function setAiAnalysisControlsDisabled(disabled) {
@@ -665,10 +671,7 @@ aiProcessButtons.forEach((button) => {
       percent: 18,
       message: "正在保存 Prompt 方案并启动 AI 分析...",
     });
-    renderRuntimeLog({
-      status: "running",
-      log_lines: ["正在启动 AI 分析，请稍等..."],
-    });
+    startTaskLiveStatusPolling(true);
 
     try {
       await saveTaskAiPromptSettings();
@@ -1762,8 +1765,13 @@ function renderRuntimeLog(status) {
       completed: "已完成",
       failed: "失败",
     };
-    runtimeLogState.textContent = status.status_label || labelMap[status.status] || status.task_status_label || "已刷新";
-    runtimeLogState.dataset.status = status.status || "idle";
+    const runtimeStatus = status.runtime_status || status.status || "idle";
+    runtimeLogState.textContent = status.runtime_status_label
+      || labelMap[runtimeStatus]
+      || status.status_label
+      || status.task_status_label
+      || "已刷新";
+    runtimeLogState.dataset.status = runtimeStatus;
   }
   if (!runtimeLogLines) return;
   const lines = Array.isArray(status.log_lines) ? status.log_lines : [];
@@ -1826,6 +1834,7 @@ function renderTaskLiveStatus(data) {
   const progress = Math.max(0, Math.min(100, Number(data.progress || 0)));
   document.querySelectorAll("[data-task-live-status-label]").forEach((node) => {
     node.textContent = data.status_label || data.status || "状态未知";
+    node.dataset.status = data.runtime_status || (data.should_poll ? "running" : "completed");
   });
   const headerStatus = document.querySelector("[data-task-live-header-status]");
   if (headerStatus) headerStatus.textContent = data.status_label || data.status || "状态未知";
@@ -1838,6 +1847,18 @@ function renderTaskLiveStatus(data) {
   if (taskLiveCandidateCount) taskLiveCandidateCount.textContent = `${candidateCount} 条`;
   if (taskLiveOutputCount) taskLiveOutputCount.textContent = `${outputCount} 条`;
   if (aiCandidateCountPill) aiCandidateCountPill.textContent = `${candidateCount} 条候选`;
+
+  const operation = data.active_operation || {};
+  const operationProgress = Math.max(0, Math.min(100, Number(operation.progress || 0)));
+  if (taskLiveOperation) taskLiveOperation.dataset.status = operation.status || "idle";
+  if (taskLiveOperationLabel) {
+    taskLiveOperationLabel.textContent = operation.label || data.task_status_label || "当前任务";
+  }
+  if (taskLiveOperationProgress) taskLiveOperationProgress.textContent = `${operationProgress}%`;
+  if (taskLiveOperationMessage) {
+    taskLiveOperationMessage.textContent = operation.message
+      || `当前阶段：${data.task_status_label || data.status_label || "状态未知"}`;
+  }
 
   const allowedStepStates = new Set(["done", "current", "pending", "warning"]);
   (Array.isArray(data.workflow_steps) ? data.workflow_steps : []).forEach((step) => {
@@ -1858,6 +1879,7 @@ function renderTaskLiveStatus(data) {
     autoPipelineMonitor.dataset.running = data.should_poll ? "true" : "false";
   }
   if (taskLiveNote) {
+    taskLiveNote.dataset.snapshotAt = data.snapshot_at || "";
     if (data.error_message) {
       taskLiveNote.dataset.state = "error";
       taskLiveNote.textContent = `流程已暂停：${summarizeErrorMessage(data.error_message)}`;
@@ -1881,6 +1903,7 @@ function scheduleTaskLiveStatusPolling() {
 
 async function pollTaskLiveStatus() {
   if (!autoPipelineMonitor) return null;
+  if (taskLiveStatusRequestInFlight) return null;
   const taskId = autoPipelineMonitor.dataset.taskId;
   if (!taskId) return null;
   if (taskLiveStatusTimer) {
@@ -1888,6 +1911,7 @@ async function pollTaskLiveStatus() {
     taskLiveStatusTimer = null;
   }
 
+  taskLiveStatusRequestInFlight = true;
   try {
     const data = await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/live-status`);
     renderTaskLiveStatus(data);
@@ -1903,6 +1927,8 @@ async function pollTaskLiveStatus() {
     }
     scheduleTaskLiveStatusPolling();
     return null;
+  } finally {
+    taskLiveStatusRequestInFlight = false;
   }
 }
 
@@ -1933,7 +1959,6 @@ async function pollAiAnalysisStatus(keepPolling = false) {
     throw new Error(data.detail || "读取 AI 分析状态失败");
   }
   renderAiAnalysisProgress(data);
-  renderRuntimeLog(data);
   if (aiStatusPollingTimer) {
     window.clearTimeout(aiStatusPollingTimer);
     aiStatusPollingTimer = null;
