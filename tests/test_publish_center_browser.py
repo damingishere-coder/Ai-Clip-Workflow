@@ -253,8 +253,9 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             group_select.check()
             assert first_content.locator("[data-publish-select]").is_checked()
             assert second_content.locator("[data-publish-select]").is_checked()
+            assert page.locator("[data-batch-ai]").inner_text() == "AI 重写已选文案"
             page.locator("[data-batch-ai]").click()
-            page.locator("#send-center-message").filter(has_text="批量 AI 重写完成：成功 2 条").wait_for()
+            page.locator("#send-center-message").filter(has_text="已选文案 AI 重写完成：成功 2 条").wait_for()
             assert first_content.locator('[name="description"]').input_value() == "陈汉典刚说自己像潘玮柏，小S立刻给出另一答案"
             assert second_content.locator('[name="tags"]').input_value() == "综艺,高光,小S,反转"
             first_content.locator("[data-publish-select]").uncheck()
@@ -272,6 +273,7 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             group_select.uncheck()
 
             page.locator('[data-center-tab="schedule"]').click()
+            assert page.locator("[data-batch-ai]").is_hidden()
             assert page.locator('[data-schedule-calendar] .publish-calendar-day').count() == 42
             assert "抖音" in page.locator("[data-calendar-title]").inner_text()
             assert page.locator(

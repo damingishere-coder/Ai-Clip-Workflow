@@ -236,7 +236,7 @@ output_clip 生成成功
    └─ opencli_publish → 显式兼容开关 → PUBLISHED / FAILED / NEED_REVIEW
 ```
 
-`platform` 只能是 `douyin` / `bilibili`；`publish_mode` 只能表示执行方式，禁止互相混用。发送中心的“补充缺失任务”只补缺，不覆盖已有任务的执行方式。
+`platform` 只能是 `douyin` / `bilibili`；`publish_mode` 只能表示执行方式，禁止互相混用。发送中心内容准备区的“同步遗漏切片”固定使用 `use_ai=false`，只补建尚未进入发送中心的草稿与默认封面，不覆盖已有任务的执行方式或文案。AI 文案仅由内容卡“AI 重写本条文案”或明确勾选后的“AI 重写已选文案”触发；页面加载、排期计划和执行记录不会调用 AI 重写。
 
 ### 发送任务状态（publish_jobs.status）
 

@@ -33,6 +33,13 @@
         <button type="button" class="text-button danger" data-dismiss-job>移出内容准备</button>
       </div>
     </div>
+    <div class="publish-copy-toolbar">
+      <div>
+        <strong>发布文案</strong>
+        <small>AI 重写会立即生成并保存本条标题、话题和简介</small>
+      </div>
+      <button type="button" class="secondary-button" data-generate-metadata>AI 重写本条文案</button>
+    </div>
     <div class="publish-content-grid">
       <label>
         <span class="publish-copy-label"><span>标题</span><small data-copy-count="title">{{ job.title|length }}/30</small></span>
@@ -59,7 +66,6 @@
     </div>
     <div class="button-row">
       <button type="submit" class="primary-button">保存草稿</button>
-      <button type="button" class="secondary-button" data-generate-metadata>AI 重写文案</button>
       <button type="button" class="secondary-button" data-generate-cover data-task-id="{{ job.task_id }}" data-clip-id="{{ job.output_clip_id }}" data-video-source="{{ job.video_source or 'original' }}">生成 / 更换封面帧</button>
       <button type="button" class="secondary-button" data-add-to-plan>{{ "调整排期" if job.status == "SCHEDULED" else "加入发布计划" }}</button>
       <span class="form-hint" data-editor-result></span>
@@ -145,7 +151,7 @@
 ></div>
 <section class="page-heading send-heading">
   <div><p class="eyebrow">Publish Center</p><h1>发送中心</h1><p>先准备内容，再按北京时间排期，最后在执行记录中确认平台结果。</p></div>
-  <div class="button-row"><button type="button" class="secondary-button" data-open-account-drawer>账号管理</button><button type="button" class="secondary-button" data-supplement-publish-jobs>补充缺失任务</button></div>
+  <div class="button-row"><button type="button" class="secondary-button" data-open-account-drawer>账号管理</button></div>
 </section>
 
 <section id="send-center-message" class="inline-alert tone-blue" hidden></section>
@@ -183,17 +189,30 @@
   {% set initial_platform = "douyin" %}
   {% set initial_missing_cover_count = missing_cover_counts.get(initial_platform, 0) %}
   <div class="panel-header publish-content-header">
-    <div><h2>内容准备</h2><p>这里不展示历史错误；内容、平台和账号完整后再加入排期。</p></div>
+    <div><h2>内容准备</h2><p>逐条编辑文案，或勾选多条后批量重写；内容、平台和账号完整后再加入排期。</p></div>
+  </div>
+  <aside class="publish-content-maintenance" aria-label="内容同步与封面维护">
+    <div>
+      <p class="eyebrow">Content Maintenance</p>
+      <strong>内容同步与封面维护</strong>
+      <small>只补建遗漏草稿和默认封面，不调用 AI，也不修改已有文案。</small>
+    </div>
     <div class="publish-content-header-actions">
+      <button
+        type="button"
+        class="secondary-button"
+        data-supplement-publish-jobs
+        title="扫描已完成切片，仅补建尚未进入发送中心的发布草稿"
+      >同步遗漏切片</button>
       <button
         type="button"
         class="secondary-button"
         data-backfill-covers
         data-missing-count="{{ initial_missing_cover_count }}"
         {% if not initial_missing_cover_count %}disabled{% endif %}
-      >一键补充抖音缺失封面{% if initial_missing_cover_count %}（{{ initial_missing_cover_count }}）{% endif %}</button>
+      >补齐抖音缺失封面{% if initial_missing_cover_count %}（{{ initial_missing_cover_count }}）{% endif %}</button>
     </div>
-  </div>
+  </aside>
   <div class="publish-content-list">
     {% for group in publish_task_groups %}
     <section class="publish-task-group" data-publish-task-group data-task-id="{{ group.task_id }}" data-expanded="{{ 'true' if loop.first else 'false' }}">
@@ -318,7 +337,7 @@
   <span class="status-pill tone-blue">仅限 <b data-selection-platform>抖音</b></span>
   <select data-batch-account aria-label="批量账号">{{ account_options({}) }}</select>
   <button type="button" class="secondary-button" data-apply-batch-target>批量设置当前平台账号</button>
-  <button type="button" class="secondary-button" data-batch-ai>批量 AI 重写文案</button>
+  <button type="button" class="secondary-button" data-batch-ai title="立即重写并保存当前勾选内容的标题、话题和简介">AI 重写已选文案</button>
   <button type="button" class="primary-button" data-open-schedule-drawer>设置排期</button>
   <button type="button" class="text-button" data-clear-selection>取消选择</button>
 </div>
