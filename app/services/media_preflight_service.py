@@ -63,6 +63,8 @@ def _run_decode_sample(path: Path, start_seconds: float) -> None:
             command,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=settings.ffprobe_timeout,
             check=False,
         )
@@ -94,6 +96,8 @@ def probe_media(path_value: str | Path) -> dict:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=settings.ffprobe_timeout,
             check=False,
         )

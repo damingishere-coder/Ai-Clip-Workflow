@@ -1348,3 +1348,9 @@
 - 最终安全交叉复审把静态媒体 CORS 与管理 API 写入 Origin 拆开；抖音/B站创作者中心仍可按白名单读取受控媒体，但不能据此跨站写本地管理 API。
 - 新增人工 Job 去重、Worker 完成、事务回滚、旧 lease fencing、DB 已提交后接管、单元 checkpoint 复用/计费不确定、自动 checkpoint 共存、坏长直播结构、质量门禁和父进程收尾测试。最终独立全量验收 `785 passed, 3 deselected`；Ruff、Compileall、`app.js`/`publish-center.js` 语法、三套 Compose 合并配置和 `git diff --check` 全部通过。
 - Pytest 使用进程级 `niuma-pytest-*\data\test_workflow.sqlite3`，未触碰活动库。活动服务继续由 `127.0.0.1:8001` 的 Uvicorn PID `56576` 持有；只读数据库检查为 `integrity_check=ok`、`foreign_key_check=0`。活动库哈希随常驻服务 WAL 写入发生变化，未为取得静态哈希而停止正式服务。
+
+## 2026-08-26 修复中文路径视频预检误判
+
+- 修复 Windows 默认 GBK 解码 FFprobe/FFmpeg UTF-8 输出时，中文文件路径触发解码异常并被误报为“源文件没有视频轨”的问题。
+- 媒体创建预检与首尾解码抽样统一显式使用 UTF-8，并以替换非法字节的方式保留可诊断输出；真正缺少视频轨或音轨的素材仍继续拒绝创建。
+- 增加中文文件名编码回归和真正无视频轨回归测试；不修改上传目录、任务数据库、页面结构或原始视频文件。

@@ -18,13 +18,33 @@ from app.services.transcript_service import (
 from app.services.transcription_checkpoint_service import TranscriptionCheckpoint
 
 
-def _ffprobe_payload(*, duration: float = 3600, include_audio: bool = True) -> str:
-    streams = [
-        {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080, "avg_frame_rate": "30/1"},
-    ]
+def _ffprobe_payload(
+    *,
+    duration: float = 3600,
+    include_video: bool = True,
+    include_audio: bool = True,
+    filename: str = "",
+) -> str:
+    streams = []
+    if include_video:
+        streams.append(
+            {
+                "codec_type": "video",
+                "codec_name": "h264",
+                "width": 1920,
+                "height": 1080,
+                "avg_frame_rate": "30/1",
+            }
+        )
     if include_audio:
         streams.append({"codec_type": "audio", "codec_name": "aac", "channels": 2, "sample_rate": "48000"})
-    return json.dumps({"streams": streams, "format": {"duration": str(duration), "size": "1048576"}})
+    return json.dumps(
+        {
+            "streams": streams,
+            "format": {"duration": str(duration), "size": "1048576", "filename": filename},
+        },
+        ensure_ascii=False,
+    )
 
 
 def test_media_preflight_collects_streams_and_six_hour_warning(monkeypatch, tmp_path):
@@ -59,6 +79,53 @@ def test_media_preflight_rejects_missing_audio(monkeypatch, tmp_path):
         lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=_ffprobe_payload(include_audio=False), stderr=""),
     )
     with pytest.raises(ValueError, match="没有音轨"):
+        probe_media(source)
+
+
+def test_media_preflight_uses_utf8_for_chinese_filename(monkeypatch, tmp_path):
+    source = tmp_path / "康熙来了.mp4"
+    source.write_bytes(b"video")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if "-show_streams" in command:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=_ffprobe_payload(duration=20, filename=str(source)),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.services.media_preflight_service.shutil.which", lambda name: name)
+    monkeypatch.setattr("app.services.media_preflight_service.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "app.services.media_preflight_service.shutil.disk_usage",
+        lambda _path: SimpleNamespace(free=100 * 1024 ** 3),
+    )
+
+    result = preflight_media(source, total_output_limit=12)
+
+    assert result.video_codec == "h264"
+    assert len(calls) == 3
+    assert all(kwargs["encoding"] == "utf-8" for _command, kwargs in calls)
+    assert all(kwargs["errors"] == "replace" for _command, kwargs in calls)
+
+
+def test_media_preflight_rejects_missing_video(monkeypatch, tmp_path):
+    source = tmp_path / "audio-only.mp4"
+    source.write_bytes(b"audio")
+    monkeypatch.setattr("app.services.media_preflight_service.shutil.which", lambda name: name)
+    monkeypatch.setattr(
+        "app.services.media_preflight_service.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=_ffprobe_payload(include_video=False),
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="没有视频轨"):
         probe_media(source)
 
 
