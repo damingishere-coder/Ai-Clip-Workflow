@@ -8,10 +8,10 @@
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', path='img/brand/niuma-studio-favicon-32.png') }}?v=20260604-favicon">
     <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', path='img/brand/niuma-studio-apple-touch-icon.png') }}?v=20260604-favicon">
     <meta name="theme-color" content="#f6f9ff">
-    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260823-release-21">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260826-motion-v4">
     {% block extra_head %}{% endblock %}
   </head>
-  <body>
+  <body data-page="{{ active_page or '' }}">
     <div class="app-shell">
       <aside class="sidebar">
         <a class="brand" href="/">
@@ -62,5 +62,6 @@
 
     <script src="{{ url_for('static', path='js/app.js') }}?v=20260825-ai-job"></script>
     {% block extra_scripts %}{% endblock %}
+    <script src="{{ url_for('static', path='js/motion.js') }}?v=20260826-motion-v2"></script>
   </body>
 </html>

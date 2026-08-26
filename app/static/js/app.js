@@ -27,6 +27,12 @@ async function apiFetch(url, options = {}) {
 
 window.apiFetch = apiFetch;
 
+function preferredScrollBehavior() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+}
+
+window.preferredScrollBehavior = preferredScrollBehavior;
+
 const newTaskForm = document.querySelector("#new-task-form");
 const newTaskAutoMode = newTaskForm?.querySelector("input[name='auto_mode']");
 const newTaskSubmitButton = document.querySelector("#new-task-submit-button");
@@ -1355,7 +1361,7 @@ function ensureClipPreviewVisible() {
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
   const isVisible = rect.top >= 0 && rect.top < viewportHeight * 0.72 && rect.bottom > Math.min(120, viewportHeight);
   if (isVisible) return;
-  previewTarget.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
+  previewTarget.scrollIntoView({ behavior: preferredScrollBehavior(), block: "start", inline: "nearest" });
 }
 
 function closeTranscriptDrawer() {

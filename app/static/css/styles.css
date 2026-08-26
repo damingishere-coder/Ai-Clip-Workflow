@@ -5023,6 +5023,33 @@ td a,
   .system-chip {
     display: none;
   }
+
+  .review-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-layout > * {
+    min-width: 0;
+  }
+
+  .clip-list > * {
+    min-width: 0;
+  }
+
+  .clip-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .clip-card > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .preview-panel {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
 }
 
 @media (max-width: 860px) {
@@ -6439,5 +6466,190 @@ td a,
 
   .weekly-bar-track {
     min-height: 92px;
+  }
+}
+
+/* Motion system: page-specific, local-only and safe to ignore when JS is unavailable. */
+body.motion-enabled {
+  --motion-duration: 420ms;
+  --motion-fast: 260ms;
+  --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.motion-enabled .motion-pending {
+  opacity: 0;
+  will-change: opacity, transform;
+}
+
+.motion-enabled .motion-pending.motion-rise {
+  transform: translate3d(0, 10px, 0);
+}
+
+.motion-enabled .motion-pending.motion-soft {
+  transform: translate3d(0, 4px, 0);
+}
+
+.motion-enabled .motion-pending.motion-in {
+  animation: motion-rise-in var(--motion-duration) var(--motion-ease) both;
+  animation-delay: calc(min(var(--motion-order, 0), 9) * 36ms);
+}
+
+.motion-enabled .motion-pending.motion-soft.motion-in {
+  animation-name: motion-soft-in;
+  animation-duration: 360ms;
+}
+
+.motion-enabled[data-motion-page="dashboard"] .weekly-bar-column[data-motion-seen="true"] .weekly-bar-fill {
+  animation: motion-chart-grow 560ms var(--motion-ease) both;
+  animation-delay: calc(120ms + min(var(--motion-order, 0), 9) * 38ms);
+  transform-origin: center bottom;
+}
+
+.motion-enabled :is(.progress, .large-progress) > span,
+.motion-enabled [data-task-live-progress-bar],
+.motion-enabled #cut-job-progress-bar,
+.motion-enabled #subtitle-batch-progress-bar {
+  transition: width 360ms var(--motion-ease);
+}
+
+.motion-enabled :is(.metro-step, .status-pill, .publish-calendar-day, .publish-plan-row, .publish-content-card) {
+  transition:
+    color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease;
+}
+
+.motion-enabled :is(.primary-button, .secondary-button, .icon-button, .text-button, .link-button):not(:disabled):active {
+  transform: translateY(0) scale(0.985);
+}
+
+.motion-enabled .motion-data-updated {
+  animation: motion-data-highlight 620ms ease-out both;
+}
+
+.motion-enabled .motion-item-added {
+  animation: motion-item-added 360ms var(--motion-ease) both;
+  animation-delay: calc(min(var(--motion-order, 0), 7) * 28ms);
+}
+
+.motion-enabled .motion-confirm {
+  animation: motion-confirm 480ms var(--motion-ease) both;
+}
+
+.motion-enabled .motion-panel-activated,
+.motion-enabled.motion-settled .publish-calendar-day-detail:not([hidden]),
+.motion-enabled.motion-settled .subtitle-batch-job:not([hidden]) {
+  animation: motion-panel-swap 300ms var(--motion-ease) both;
+}
+
+.motion-enabled .clip-card.is-removing {
+  transition: opacity 180ms ease, transform 180ms ease;
+  transform: scale(0.995);
+}
+
+@media (hover: hover) {
+  .motion-enabled :is(.review-task-row, table tbody tr) {
+    transition: background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+  }
+
+  .motion-enabled .review-task-row:hover {
+    border-color: rgba(37, 111, 255, 0.2);
+    box-shadow: 0 10px 28px rgba(24, 39, 75, 0.07);
+    transform: translateY(-1px);
+  }
+
+  .motion-enabled table tbody tr:hover {
+    background: rgba(234, 242, 255, 0.38);
+  }
+}
+
+.motion-enabled.motion-settled .modal-backdrop:not([hidden]),
+.motion-enabled.motion-settled .source-monitor-backdrop:not([hidden]),
+.motion-enabled.motion-settled .schedule-drawer-backdrop:not([hidden]) {
+  animation: motion-overlay-in 220ms ease-out both;
+}
+
+.motion-enabled.motion-settled .modal-backdrop:not([hidden]) > .modal-panel,
+.motion-enabled.motion-settled .source-monitor-backdrop:not([hidden]) > .source-monitor-panel {
+  animation: motion-dialog-in 300ms var(--motion-ease) both;
+}
+
+.motion-enabled.motion-settled .transcript-drawer:not([hidden]),
+.motion-enabled.motion-settled .schedule-drawer:not([hidden]) {
+  animation: motion-drawer-in 320ms var(--motion-ease) both;
+}
+
+.motion-enabled.motion-settled details[open] > :not(summary) {
+  animation: motion-soft-in 240ms ease-out both;
+}
+
+@keyframes motion-rise-in {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes motion-soft-in {
+  from { opacity: 0; transform: translate3d(0, 4px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes motion-chart-grow {
+  from { opacity: 0.2; transform: scaleY(0.08); }
+  to { opacity: 1; transform: scaleY(1); }
+}
+
+@keyframes motion-data-highlight {
+  0% { box-shadow: 0 0 0 4px rgba(37, 111, 255, 0.12); filter: saturate(1.12); }
+  100% { box-shadow: 0 0 0 0 rgba(37, 111, 255, 0); filter: saturate(1); }
+}
+
+@keyframes motion-item-added {
+  from { opacity: 0; transform: translate3d(0, 7px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes motion-confirm {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 160, 107, 0); }
+  45% { border-color: rgba(34, 160, 107, 0.42); box-shadow: 0 0 0 5px rgba(34, 160, 107, 0.1); }
+}
+
+@keyframes motion-panel-swap {
+  from { opacity: 0; transform: translate3d(0, 5px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes motion-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes motion-dialog-in {
+  from { opacity: 0; transform: translate3d(0, 10px, 0) scale(0.985); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes motion-drawer-in {
+  from { opacity: 0; transform: translate3d(18px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@media print, (prefers-reduced-motion: reduce) {
+  html:focus-within {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+
+  .send-publishing-spinner {
+    animation: none !important;
   }
 }

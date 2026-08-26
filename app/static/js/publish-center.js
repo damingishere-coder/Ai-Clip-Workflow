@@ -270,7 +270,7 @@ if (publishCenterRoot) {
       `[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(jobId || "")}"]`,
     );
     if (!row || row.hidden) return;
-    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
     row.classList.add("is-calendar-focus");
     window.setTimeout(() => row.classList.remove("is-calendar-focus"), 1600);
   }
@@ -1339,7 +1339,7 @@ if (publishCenterRoot) {
     const readiness = effectiveReadiness(row);
     if (readiness.action === "start_worker") {
       document.querySelector("[data-worker-help]")?.removeAttribute("hidden");
-      document.querySelector("[data-scheduler-health]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      document.querySelector("[data-scheduler-health]")?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
       await refreshSchedulerHealth(true);
       return;
     }
@@ -1377,7 +1377,7 @@ if (publishCenterRoot) {
       }
       switchTab("content");
       const editorRow = document.querySelector(`[data-publish-row][data-section="content"][data-job-id="${CSS.escape(row.dataset.jobId)}"]`);
-      editorRow?.scrollIntoView({ behavior: "smooth", block: "center" });
+      editorRow?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
       editorRow?.querySelector("[data-account-select]")?.focus();
       showMessage("请在内容准备中选择本次使用的同平台账号并保存。", "error");
       return;
@@ -1386,7 +1386,7 @@ if (publishCenterRoot) {
       switchTab("content");
       const editorRow = document.querySelector(`[data-publish-row][data-section="content"][data-job-id="${CSS.escape(row.dataset.jobId)}"]`);
       if (editorRow && !editorRow.hidden) {
-        editorRow.scrollIntoView({ behavior: "smooth", block: "center" });
+        editorRow.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
         editorRow.querySelector("input, textarea, select")?.focus();
       }
       showMessage(readiness.message || "请先补齐发布内容并保存。", "error");
@@ -1480,7 +1480,7 @@ if (publishCenterRoot) {
     if (!cell) return;
     selectedCalendarDate = cell.dataset.calendarDate || "";
     renderCalendar();
-    calendarDayDetail?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    calendarDayDetail?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "nearest" });
   });
   calendarNode?.addEventListener("keydown", (event) => {
     const cell = event.target.closest("[data-calendar-date]");
@@ -1814,7 +1814,7 @@ if (publishCenterRoot) {
         );
         setTaskGroupExpanded(contentRow?.closest("[data-publish-task-group]"), true);
         switchTab("content");
-        contentRow?.scrollIntoView({ behavior: "smooth", block: "center" });
+        contentRow?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
         showMessage(data.message || "已取消发送并返回内容准备。", "success");
       } catch (error) {
         showMessage(`取消发送失败：${error.message}`, "error");
@@ -2206,7 +2206,7 @@ if (publishCenterRoot) {
     );
     if (group && !group.hidden) {
       setTaskGroupExpanded(group, true);
-      group.scrollIntoView({ behavior: "smooth", block: "start" });
+      group.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "start" });
     } else {
       showMessage("已定位到该处理任务，但当前没有可准备的抖音新版本内容。可返回任务页重新同步。");
     }
