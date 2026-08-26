@@ -18,7 +18,7 @@
       <h2 id="weekly-overview-title">本周任务概览</h2>
       <p>周一至周日统计，发布终态内容不会重复计入待推送。</p>
     </div>
-    <span class="dashboard-week-chip">{{ weekly_chart.range_label }} · 上海时间</span>
+    <span class="dashboard-week-chip">{{ weekly_summary.range_label }} · 上海时间</span>
   </div>
 
   <div class="dashboard-stat-strip" role="list" aria-label="本周核心统计">
@@ -29,37 +29,6 @@
       <small>{{ item.note }}</small>
     </article>
     {% endfor %}
-  </div>
-
-  <div class="dashboard-chart-section">
-    <div class="dashboard-chart-summary">
-      <div>
-        <p class="eyebrow">Task trend</p>
-        <h3>本周每日新增任务</h3>
-        <p>柱高按本周最高单日任务数计算，数据来自 SQLite。</p>
-      </div>
-      <div class="dashboard-chart-total">
-        <strong>{{ weekly_chart.total }}</strong>
-        <span>本周累计</span>
-      </div>
-    </div>
-
-    <div
-      class="weekly-bar-chart"
-      role="img"
-      aria-label="本周每日新增任务：{% for day in weekly_chart.days %}{{ day.label }} {{ day.count }} 条{% if not loop.last %}，{% endif %}{% endfor %}"
-    >
-      {% for day in weekly_chart.days %}
-      <div class="weekly-bar-column{% if day.is_today %} is-today{% endif %}">
-        <span class="weekly-bar-value">{{ day.count }}</span>
-        <div class="weekly-bar-track" aria-hidden="true">
-          <span class="weekly-bar-fill" style="--bar-height: {{ day.percent }}%"></span>
-        </div>
-        <strong>{{ day.label }}</strong>
-        <small>{{ day.date }}</small>
-      </div>
-      {% endfor %}
-    </div>
   </div>
 </section>
 

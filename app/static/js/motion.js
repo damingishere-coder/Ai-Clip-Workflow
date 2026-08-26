@@ -14,7 +14,6 @@
       matches: () => path === "/",
       reveals: [
         [".dashboard-stat-item", "soft", 5],
-        [".weekly-bar-column", "soft", 7],
       ],
     },
     {

@@ -261,7 +261,7 @@ class TestDashboardContext:
 
         # 顶层字段
         assert "stats" in context
-        assert "weekly_chart" in context
+        assert "weekly_summary" in context
         assert "recent_tasks" in context
 
         # stats 列表结构
@@ -276,8 +276,8 @@ class TestDashboardContext:
             assert "value" in stat
             assert "tone" in stat
 
-        assert context["weekly_chart"]["total"] == 0
-        assert len(context["weekly_chart"]["days"]) == 7
+        assert context["weekly_summary"]["total"] == 0
+        assert "days" not in context["weekly_summary"]
 
         # recent_tasks 为空列表
         assert context["recent_tasks"] == []
@@ -334,10 +334,9 @@ class TestDashboardContext:
 
         context = get_dashboard_context(now=now)
 
-        assert context["weekly_chart"]["range_label"] == "08.24 - 08.30"
-        assert context["weekly_chart"]["total"] == 1
-        assert [day["count"] for day in context["weekly_chart"]["days"]] == [1, 0, 0, 0, 0, 0, 0]
-        assert context["weekly_chart"]["days"][2]["is_today"] is True
+        assert context["weekly_summary"]["range_label"] == "08.24 - 08.30"
+        assert context["weekly_summary"]["total"] == 1
+        assert "days" not in context["weekly_summary"]
 
     def test_dashboard_pending_publish_uses_latest_job_state(self):
         task_id = "dashboard-publish-state"

@@ -25,9 +25,6 @@ from app.services.task_service import (
 )
 
 
-DASHBOARD_WEEKDAY_LABELS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
-
-
 def _batch_output_clip_counts(task_ids: list[str]) -> dict[str, int]:
     """一次查询获得多个任务的 output_clip 总数。"""
     if not task_ids:
@@ -108,8 +105,8 @@ def _dashboard_pending_publish_counts(task_ids: list[str]) -> dict[str, int]:
     }
 
 
-def _dashboard_weekly_chart(tasks: list[dict], *, now: datetime | None = None) -> dict:
-    """按应用时区生成本周一至周日的每日新增任务统计。"""
+def _dashboard_weekly_summary(tasks: list[dict], *, now: datetime | None = None) -> dict:
+    """按应用时区生成本周新增任务总数和日期范围。"""
     zone = app_zone(settings.app_timezone)
     current = now or datetime.now(zone)
     current = current.replace(tzinfo=zone) if current.tzinfo is None else current.astimezone(zone)
@@ -120,7 +117,7 @@ def _dashboard_weekly_chart(tasks: list[dict], *, now: datetime | None = None) -
         microsecond=0,
     )
     week_end = week_start + timedelta(days=7)
-    counts = [0] * 7
+    weekly_total = 0
 
     for task in tasks:
         raw_created_at = task.get("created_at_raw")
@@ -131,27 +128,11 @@ def _dashboard_weekly_chart(tasks: list[dict], *, now: datetime | None = None) -
         except ValueError:
             continue
         if week_start <= created_at < week_end:
-            counts[(created_at.date() - week_start.date()).days] += 1
-
-    highest_count = max(counts, default=0)
-    days = []
-    for index, count in enumerate(counts):
-        date_value = week_start + timedelta(days=index)
-        days.append(
-            {
-                "label": DASHBOARD_WEEKDAY_LABELS[index],
-                "date": date_value.strftime("%m/%d"),
-                "count": count,
-                "percent": round((count / highest_count) * 100) if highest_count else 0,
-                "is_today": date_value.date() == current.date(),
-            }
-        )
+            weekly_total += 1
 
     return {
-        "days": days,
-        "total": sum(counts),
+        "total": weekly_total,
         "range_label": f"{week_start:%m.%d} - {(week_end - timedelta(days=1)):%m.%d}",
-        "timezone_label": settings.app_timezone,
     }
 
 
@@ -271,7 +252,7 @@ def get_dashboard_context(*, now: datetime | None = None) -> dict:
     """Dashboard 首页统计上下文"""
     tasks = list_tasks()
     task_ids = [task["id"] for task in tasks]
-    weekly_chart = _dashboard_weekly_chart(tasks, now=now)
+    weekly_summary = _dashboard_weekly_summary(tasks, now=now)
     completed_oc_map = _batch_completed_output_clip_counts(task_ids)
     completed_task_count = sum(1 for task in tasks if completed_oc_map.get(task["id"], 0) > 0)
     completed_clip_count = sum(completed_oc_map.values())
@@ -286,8 +267,8 @@ def get_dashboard_context(*, now: datetime | None = None) -> dict:
         "stats": [
             {
                 "label": "本周新增任务",
-                "value": weekly_chart["total"],
-                "note": f"{weekly_chart['range_label']} · 上海时间",
+                "value": weekly_summary["total"],
+                "note": f"{weekly_summary['range_label']} · 上海时间",
                 "tone": "blue",
             },
             {
@@ -304,7 +285,7 @@ def get_dashboard_context(*, now: datetime | None = None) -> dict:
             },
             {"label": "失败任务", "value": failed_count, "note": "需排查", "tone": "red"},
         ],
-        "weekly_chart": weekly_chart,
+        "weekly_summary": weekly_summary,
         "recent_tasks": tasks[:5],
     }
 

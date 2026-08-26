@@ -6206,14 +6206,12 @@ td a,
   padding: 22px 24px 18px;
 }
 
-.dashboard-overview-header h2,
-.dashboard-chart-summary h3 {
+.dashboard-overview-header h2 {
   margin: 0;
   color: #111827;
 }
 
-.dashboard-overview-header > div > p:last-child,
-.dashboard-chart-summary > div > p:last-child {
+.dashboard-overview-header > div > p:last-child {
   margin: 7px 0 0;
   color: var(--muted);
   font-size: 13px;
@@ -6236,7 +6234,7 @@ td a,
   z-index: 1;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin: 0 24px;
+  margin: 0 24px 24px;
   overflow: hidden;
   border: 1px solid rgba(31, 45, 71, 0.08);
   border-radius: 14px;
@@ -6288,120 +6286,6 @@ td a,
   overflow-wrap: anywhere;
 }
 
-.dashboard-chart-section {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.42fr) minmax(520px, 1.58fr);
-  gap: 26px;
-  align-items: stretch;
-  margin-top: 20px;
-  padding: 22px 24px 24px;
-  border-top: 1px solid rgba(31, 45, 71, 0.08);
-}
-
-.dashboard-chart-summary {
-  display: flex;
-  justify-content: space-between;
-  flex-direction: column;
-  gap: 22px;
-}
-
-.dashboard-chart-summary h3 {
-  font-size: 17px;
-}
-
-.dashboard-chart-total {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-}
-
-.dashboard-chart-total strong {
-  color: var(--blue);
-  font-size: 42px;
-  line-height: 1;
-}
-
-.dashboard-chart-total span {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.weekly-bar-chart {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(48px, 1fr));
-  gap: clamp(8px, 1.25vw, 18px);
-  min-height: 210px;
-}
-
-.weekly-bar-column {
-  display: grid;
-  grid-template-rows: 24px minmax(120px, 1fr) auto auto;
-  gap: 5px;
-  align-items: end;
-  min-width: 0;
-  text-align: center;
-}
-
-.weekly-bar-value {
-  color: #263650;
-  font-size: 12px;
-  font-weight: 760;
-}
-
-.weekly-bar-track {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 120px;
-  overflow: hidden;
-  border-radius: 10px;
-  background: linear-gradient(180deg, rgba(226, 234, 246, 0.48), rgba(238, 243, 250, 0.9));
-}
-
-.weekly-bar-track::before,
-.weekly-bar-track::after {
-  position: absolute;
-  right: 0;
-  left: 0;
-  height: 1px;
-  background: rgba(125, 146, 177, 0.13);
-  content: "";
-}
-
-.weekly-bar-track::before { top: 33.333%; }
-.weekly-bar-track::after { top: 66.666%; }
-
-.weekly-bar-fill {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: max(5px, var(--bar-height));
-  border-radius: 10px 10px 5px 5px;
-  background: linear-gradient(180deg, #6ba6ff, #2676ff);
-  box-shadow: 0 8px 18px rgba(38, 118, 255, 0.18);
-}
-
-.weekly-bar-column.is-today .weekly-bar-track {
-  outline: 2px solid rgba(31, 111, 255, 0.16);
-  outline-offset: 2px;
-}
-
-.weekly-bar-column.is-today > strong {
-  color: var(--blue);
-}
-
-.weekly-bar-column > strong {
-  color: #2a3850;
-  font-size: 12px;
-}
-
-.weekly-bar-column > small {
-  color: var(--muted);
-  font-size: 11px;
-}
-
 @media (max-width: 1180px) {
   .dashboard-stat-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6415,19 +6299,10 @@ td a,
     border-top: 1px solid rgba(31, 45, 71, 0.08);
   }
 
-  .dashboard-chart-section {
-    grid-template-columns: 1fr;
-  }
-
-  .dashboard-chart-summary {
-    align-items: flex-end;
-    flex-direction: row;
-  }
 }
 
 @media (max-width: 640px) {
-  .dashboard-overview-header,
-  .dashboard-chart-summary {
+  .dashboard-overview-header {
     align-items: stretch;
     flex-direction: column;
   }
@@ -6441,32 +6316,13 @@ td a,
   }
 
   .dashboard-stat-strip {
-    margin: 0 16px;
+    margin: 0 16px 20px;
   }
 
   .dashboard-stat-item {
     padding: 16px;
   }
 
-  .dashboard-chart-section {
-    gap: 18px;
-    padding: 18px 16px 20px;
-  }
-
-  .weekly-bar-chart {
-    gap: 6px;
-    min-height: 170px;
-    overflow-x: auto;
-  }
-
-  .weekly-bar-column {
-    grid-template-rows: 22px minmax(92px, 1fr) auto auto;
-    min-width: 42px;
-  }
-
-  .weekly-bar-track {
-    min-height: 92px;
-  }
 }
 
 /* Motion system: page-specific, local-only and safe to ignore when JS is unavailable. */
@@ -6497,12 +6353,6 @@ body.motion-enabled {
 .motion-enabled .motion-pending.motion-soft.motion-in {
   animation-name: motion-soft-in;
   animation-duration: 360ms;
-}
-
-.motion-enabled[data-motion-page="dashboard"] .weekly-bar-column[data-motion-seen="true"] .weekly-bar-fill {
-  animation: motion-chart-grow 560ms var(--motion-ease) both;
-  animation-delay: calc(120ms + min(var(--motion-order, 0), 9) * 38ms);
-  transform-origin: center bottom;
 }
 
 .motion-enabled :is(.progress, .large-progress) > span,
@@ -6592,11 +6442,6 @@ body.motion-enabled {
 @keyframes motion-soft-in {
   from { opacity: 0; transform: translate3d(0, 4px, 0); }
   to { opacity: 1; transform: translate3d(0, 0, 0); }
-}
-
-@keyframes motion-chart-grow {
-  from { opacity: 0.2; transform: scaleY(0.08); }
-  to { opacity: 1; transform: scaleY(1); }
 }
 
 @keyframes motion-data-highlight {

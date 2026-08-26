@@ -63,7 +63,6 @@ def test_styles_disable_nonessential_motion_when_user_requests_it() -> None:
     assert "animation-duration: 1ms !important" in styles
     assert "transition-duration: 1ms !important" in styles
     assert ".send-publishing-spinner" in styles
-    assert "@keyframes motion-chart-grow" in styles
     assert "@keyframes motion-drawer-in" in styles
 
 
