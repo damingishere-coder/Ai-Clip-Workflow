@@ -1,4 +1,4 @@
-# v2.1.0 Release 检查清单
+# v2.2.0 Release 检查清单
 
 本清单用于发布牛马片场正式版本。只有代码检查、Windows 实机验收、备份保护和文档核对均通过后，才创建 Git Tag 与 GitHub Release。
 
@@ -11,7 +11,8 @@
 - [ ] 备份、恢复、回滚和损坏包保护测试通过
 - [ ] Windows host smoke test 通过并生成日志 Artifact
 - [ ] 最终 Docker 镜像能启动并通过 `/health`
-- [ ] Docker 镜像中的工作台、任务列表、片段总览和发送中心返回 200
+- [ ] Docker 镜像中的工作台、任务列表、片段总览、发送中心和内容复盘返回 200
+- [ ] `/api/system/readiness?deep=1` 不返回 `not_ready`
 - [ ] `pip check` 无依赖冲突
 - [ ] 敏感文件、备份 ZIP 和本地验收报告检查无异常
 
@@ -44,6 +45,7 @@ git pull --ff-only
 - [ ] `doctor.ps1` 输出无阻塞项
 - [ ] Demo 容器状态为 `healthy`
 - [ ] 工作台、任务列表、片段总览和发送中心均返回 200
+- [ ] 内容复盘页面在桌面与 390px 宽度下无整页横向溢出
 - [ ] Demo 出现 3 条任务、6 条候选片段、6 条 `manual_export` 草稿
 - [ ] Demo 能正常停止
 - [ ] `.env` 在验收前后哈希一致
@@ -72,7 +74,7 @@ git pull --ff-only
 确认输出：
 
 ```text
-=== v2.1.0 发布门禁通过 ===
+=== v2.2.0 发布门禁通过 ===
 ```
 
 门禁会阻止以下情况发布：
@@ -85,7 +87,7 @@ git pull --ff-only
 - 当前分支不是 `master`
 - 验收报告对应旧 commit
 - Git 工作区不干净
-- 应用、README 或 Changelog 版本不是 `2.1.0`
+- 应用、README 或 Changelog 版本不是 `2.2.0`
 
 将经过人工检查的 `acceptance-results/latest.md` 正文粘贴到 Issue #23。不要上传整个目录、完整日志、`.env`、SQLite 或视频。
 
@@ -101,7 +103,7 @@ git pull --ff-only
 
 - [ ] 备份包保存在 `backups/` 或指定的可信目录
 - [ ] 备份输出的任务、候选片段、输出片段和发布任务数量合理
-- [ ] `python -m scripts.backup_restore verify <备份包>` 通过
+- [ ] `python -m scripts.backup_restore_runtime verify <备份包>` 通过
 - [ ] 包含 `.env` 的备份没有上传到公开位置
 - [ ] 损坏的测试备份不会覆盖现有数据库
 - [ ] 恢复前会生成 `pre-restore` 回滚包
@@ -123,13 +125,17 @@ git pull --ff-only
 - [ ] 人工审核与保存成功
 - [ ] 生成至少一个本地短视频文件
 - [ ] 发送中心能创建 `manual_export` 草稿
+- [ ] 审片保存会自动形成保留/淘汰反馈，重复保存不增加重复事件
+- [ ] 附件日汇总只能作为未归因账号基线，预览后才允许确认导入
+- [ ] 最近 50 条同步遇到登录、验证码、限流或页面变化时立即停止且不自动重试
+- [ ] 未匹配/冲突作品不进入 Prompt 主结论；不足 3 周期或 30 条时显示数据不足
 
 真实平台发布不作为基础安装通过条件。抖音与 B站验证单独跟踪在 Issue #25，并且 Release 中必须明确“逐账号灰度验证”。
 
 ## 6. 文档和版本一致性
 
-- [ ] `app/main.py` 版本为 `2.1.0`
-- [ ] README 中英文版本徽章为 `2.1.0`
+- [ ] `app/main.py` 版本为 `2.2.0`
+- [ ] README 中英文版本徽章为 `2.2.0`
 - [ ] `CHANGELOG.md` 包含本次版本的重要变化
 - [ ] `README.md` 快速开始命令可复制执行
 - [ ] `.env.example` 没有个人绝对路径和真实密钥
@@ -158,21 +164,21 @@ git pull --ff-only
 建议填写：
 
 ```text
-Tag: v2.1.0
+Tag: v2.2.0
 Target: master
-Title: NiuMa Studio v2.1.0 — Local AI Highlight Production Workflow
+Title: NiuMa Studio v2.2.0 — Douyin Content Review and Prompt Attribution
 Latest release: Yes
 Pre-release: No
 ```
 
-发布正文以 `CHANGELOG.md` 的 2.1.0 内容为基础，并明确：
+发布正文以 `CHANGELOG.md` 的 2.2.0 内容为基础，并明确：
 
 - Windows 本地单用户工具
 - Demo 不连接真实账号
 - 抖音与 B站发布需要逐账号灰度验证
 - 不绕过登录、验证码或平台风控
 - 升级前应使用 `pre_upgrade.ps1` 创建本地回滚包
-- v2.1.0 的 Windows 10/11 + Docker Desktop 验收日期和对应 commit
+- v2.2.0 的 Windows 10/11 + Docker Desktop 验收日期和对应 commit
 
 GitHub 会自动提供源码 ZIP 和 tar.gz。当前没有经过签名和实机验证的 Windows 安装包时，不要上传名为“安装包”的临时压缩文件。
 

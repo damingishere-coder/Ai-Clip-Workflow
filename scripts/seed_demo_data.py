@@ -10,6 +10,7 @@ import subprocess
 
 from app.core.config import settings
 from app.db.database import get_connection, init_db
+from app.services.ai_prompt_preset_service import ensure_ai_prompt_version_with_connection
 
 
 DEMO_TASK_ID = "demo_task_variety_001"
@@ -72,10 +73,10 @@ def _clear_demo_rows(connection) -> None:
         "subtitle_jobs",
         "output_clip",
         "clip_feedback",
-        "ai_analysis_runs",
         "workflow_jobs",
         "cut_runs",
         "clip_candidates",
+        "ai_analysis_runs",
         "tasks",
     ):
         connection.execute(f"DELETE FROM {table} WHERE id LIKE 'demo_%'")
@@ -269,13 +270,28 @@ def seed_demo_data(*, reset: bool) -> None:
             tasks,
         )
 
+        prompt_preset = connection.execute(
+            "SELECT id, name, prompt_text FROM ai_prompt_presets WHERE id = ?",
+            ("preset_002",),
+        ).fetchone()
+        if prompt_preset is None:
+            raise RuntimeError("演示数据缺少 preset_002 Prompt 方案")
+        prompt_version = ensure_ai_prompt_version_with_connection(
+            connection,
+            preset_id=str(prompt_preset["id"]),
+            preset_name=str(prompt_preset["name"] or ""),
+            prompt_text=str(prompt_preset["prompt_text"] or ""),
+            now=now_iso,
+        )
+
         connection.execute(
             """
             INSERT INTO ai_analysis_runs (
                 id, task_id, run_number, provider, provider_label, model,
-                ai_prompt_preset_id, ai_prompt_preset_name, requested_clip_count,
+                ai_prompt_preset_id, ai_prompt_preset_name,
+                prompt_version_id, prompt_text_sha256, requested_clip_count,
                 clip_count, analysis_summary, analysis_payload_json, created_at, is_active
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "demo_analysis_001",
@@ -286,6 +302,8 @@ def seed_demo_data(*, reset: bool) -> None:
                 "demo-highlight-model",
                 "preset_002",
                 "综艺笑点优先",
+                prompt_version["id"],
+                prompt_version["prompt_sha256"],
                 12,
                 len(candidates),
                 "演示数据：用于查看候选片段、审核和发送中心，不调用真实 AI。",
@@ -310,8 +328,8 @@ def seed_demo_data(*, reset: bool) -> None:
                     text_quality_score, humor_score, completeness_score,
                     audio_reaction_score, topic_key, key_moment_time,
                     quality_evidence_json, rejection_reason, selected_by_default,
-                    enabled, reviewed, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    enabled, reviewed, source_analysis_run_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item["id"],
@@ -341,6 +359,7 @@ def seed_demo_data(*, reset: bool) -> None:
                     item["enabled"],
                     item["enabled"],
                     1,
+                    "demo_analysis_001",
                     now_iso,
                     now_iso,
                 ),

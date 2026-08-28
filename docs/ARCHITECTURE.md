@@ -65,7 +65,7 @@ clip subtitle_track   → immutable subtitle_revision → SRT/VTT/ASS/编辑器
 
 ### 1.1 架构形态
 
-当前 v2.1.0 保持 **FastAPI 单体应用 + SQLite + Windows 发布 Worker**。视频、AI、页面和调度器仍在同一个应用中；只有必须使用宿主系统 Chrome 的真实发布动作由 Windows Worker 执行，不引入 Redis、Celery 或微服务。
+当前 v2.2.0 保持 **FastAPI 单体应用 + SQLite + Windows 发布 Worker**。视频、AI、页面、内容复盘和调度器仍在同一个应用中；只有必须使用宿主系统 Chrome 的真实发布与作品指标同步动作由 Windows Worker 执行，不引入 Redis、Celery 或微服务。
 
 v2.1 的架构目标不是云端多租户，而是把一台 Windows 电脑上的长视频生产与发布链路做完整、可恢复、可审计。SQLite 是唯一业务事实来源，E 盘任务目录保存大文件，浏览器 Profile 和平台登录态只保留在本机且不进入 Git。
 

@@ -87,7 +87,9 @@ def test_clip_select_all_reuses_batch_save_payload() -> None:
     assert "function getClipEnableCheckboxes()" in script
     assert "function updateClipSelectAllUi()" in script
     assert "getClipEnableCheckboxes().forEach" in script
-    assert 'enabled: card.querySelector("[name=\'enabled\']").checked' in script
+    assert 'const enabled = card.querySelector("[name=\'enabled\']").checked' in script
+    assert "feedback_reason_code: enabled ? null" in script
+    assert "body: JSON.stringify({ clips: collectClipReviewPayload() })" in script
     assert "请点击“保存修改”写入数据库" in script
 
 

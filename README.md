@@ -9,7 +9,7 @@ Windows 本地运行的 AI 视频高光生产工作台，面向直播录像、�
 [中文](README.md) · [English](README.en.md) · [快速开始](docs/PROJECT_GUIDE.md) · [通用启动](docs/PORTABLE_SETUP.md) · [备份恢复](docs/BACKUP_AND_RESTORE.md) · [技术说明](docs/TECHNICAL_REFERENCE.md) · [路线图](ROADMAP.md)
 
 ![CI](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml/badge.svg)
-![Version](https://img.shields.io/badge/version-2.1.0-0969da)
+![Version](https://img.shields.io/badge/version-2.2.0-0969da)
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4)
 ![FastAPI](https://img.shields.io/badge/backend-FastAPI-009688)
@@ -91,6 +91,7 @@ flowchart LR
 | 语音转写 | 火山引擎远程转写、faster-whisper 本地转写 | ✅ 可用 |
 | AI 选片 | 通用内容价值、综艺笑点优先、长内容分段分析 | ✅ 可用 |
 | 审核切片 | 编辑候选、保存选择、按需生成新切片版本 | ✅ 可用 |
+| 内容复盘 | 抖音日汇总导入、近 50 条作品同步、归因链和 Prompt 对比 | ✅ 可用 |
 | 内容准备 | 标题、简介、话题、封面帧、账号和可见范围 | ✅ 可用 |
 | 排期计划 | 批量预览、跨午夜窗口、月历、续接最晚排期 | ✅ 可用 |
 | 数据保护 | SQLite 一致性备份、清单校验、恢复前回滚与升级保护 | ✅ 可用 |

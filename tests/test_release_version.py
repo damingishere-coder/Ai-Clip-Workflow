@@ -6,7 +6,7 @@ from scripts.publish_host_worker import create_worker_app
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "2.1.0"
+EXPECTED_VERSION = "2.2.0"
 
 
 def test_runtime_versions_match_release_version() -> None:
