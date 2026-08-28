@@ -11,6 +11,8 @@ import pytest
 from app.db.database import get_connection, init_db
 from app.main import app
 from app.services import content_review_service
+from app.services.publishers.base import PublishError
+from app.services.publishers.worker_client import PublishWorkerClient
 
 
 PREFIX = "test-content-review-"
@@ -357,3 +359,60 @@ def test_content_review_page_and_import_api_flow():
     summary = client.get(f"/api/content-review/summary?account_id={account_id}&days=28")
     assert summary.status_code == 200
     assert summary.json()["current_period"]["play_count"] == 1472
+
+
+def test_sync_api_stages_sanitized_worker_items(monkeypatch):
+    account_id = _insert_account()
+
+    def worker_sync(_self, *, account_id, limit):
+        assert limit == 50
+        return {
+            "captured_at": "2026-08-28T12:00:00+08:00",
+            "items": [
+                {
+                    "aweme_id": "sync-api-1",
+                    "title": "同步测试",
+                    "published_at": "2026-08-28T10:00:00+08:00",
+                    "duration_seconds": 60,
+                    "play_count": 123,
+                    "like_count": 8,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(PublishWorkerClient, "analytics_sync", worker_sync)
+    response = TestClient(app).post(
+        "/api/content-review/douyin/sync-preview",
+        json={"account_id": account_id, "limit": 50},
+    )
+    assert response.status_code == 200
+    assert response.json()["row_count"] == 1
+    with get_connection() as connection:
+        item = connection.execute(
+            """
+            SELECT aweme_id, title, play_count, like_count
+            FROM douyin_item_metric_snapshots WHERE account_id = ?
+            """,
+            (account_id,),
+        ).fetchone()
+    assert dict(item) == {
+        "aweme_id": "sync-api-1",
+        "title": "同步测试",
+        "play_count": 123,
+        "like_count": 8,
+    }
+
+
+def test_sync_api_preserves_fixed_worker_error_code(monkeypatch):
+    account_id = _insert_account()
+
+    def rate_limited(_self, *, account_id, limit):
+        raise PublishError("rate limited", "RATE_LIMITED")
+
+    monkeypatch.setattr(PublishWorkerClient, "analytics_sync", rate_limited)
+    response = TestClient(app).post(
+        "/api/content-review/douyin/sync-preview",
+        json={"account_id": account_id, "limit": 50},
+    )
+    assert response.status_code == 429
+    assert response.json()["detail"]["error_code"] == "RATE_LIMITED"

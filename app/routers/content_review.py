@@ -67,8 +67,16 @@ async def sync_douyin_items(payload: DouyinAnalyticsSyncPreviewRequest) -> dict:
         _raise_content_review_http(exc)
     except (PublishError, PublishWorkerUnavailable) as exc:
         error_code = str(getattr(exc, "error_code", "") or "WORKER_UNAVAILABLE")
+        status_code = {
+            "LOGIN_REQUIRED": 409,
+            "VERIFICATION_REQUIRED": 409,
+            "RATE_LIMITED": 429,
+            "PAGE_CHANGED": 422,
+            "WORKER_UNAVAILABLE": 503,
+            "publish_worker_unavailable": 503,
+        }.get(error_code, 409)
         raise HTTPException(
-            status_code=409,
+            status_code=status_code,
             detail={"message": str(exc), "error_code": error_code},
         ) from exc
 
