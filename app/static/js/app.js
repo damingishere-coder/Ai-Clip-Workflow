@@ -920,14 +920,18 @@ function updateClipReviewActionState() {
 
 function collectClipReviewPayload() {
   const cards = getClipReviewCards();
-  return cards.map((card) => ({
-    id: card.dataset.clipId,
-    title: card.querySelector("[name='title']").value.trim(),
-    start_time: card.querySelector("[name='start_time']").value.trim(),
-    end_time: card.querySelector("[name='end_time']").value.trim(),
-    enabled: card.querySelector("[name='enabled']").checked,
-    summary: card.querySelector("[name='summary']").value.trim(),
-  }));
+  return cards.map((card) => {
+    const enabled = card.querySelector("[name='enabled']").checked;
+    return {
+      id: card.dataset.clipId,
+      title: card.querySelector("[name='title']").value.trim(),
+      start_time: card.querySelector("[name='start_time']").value.trim(),
+      end_time: card.querySelector("[name='end_time']").value.trim(),
+      enabled,
+      summary: card.querySelector("[name='summary']").value.trim(),
+      feedback_reason_code: enabled ? null : (card.dataset.feedbackReason || null),
+    };
+  });
 }
 
 async function persistClipReviewChanges() {
@@ -981,38 +985,11 @@ async function deleteClipCard(card, button) {
   }
 }
 
-async function saveClipFeedback(card, button) {
-  if (!clipReviewForm || !card || !button) return;
-  const taskId = clipReviewForm.dataset.taskId;
-  const clipId = card.dataset.clipId;
-  const decision = button.dataset.feedbackDecision;
-  const reasonCode = button.dataset.feedbackReason;
-  const feedbackButtons = Array.from(card.querySelectorAll("[data-feedback-decision]"));
-  feedbackButtons.forEach((item) => { item.disabled = true; });
-  showClipReviewMessage("正在记录你的审片判断...", "info");
-
-  try {
-    const response = await fetch(`/api/tasks/${taskId}/clips/${clipId}/feedback`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision, reason_code: reasonCode }),
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.detail || "保存反馈失败");
-    }
-    feedbackButtons.forEach((item) => {
-      item.classList.toggle("is-active", item === button);
-      item.setAttribute("aria-pressed", item === button ? "true" : "false");
-    });
-    const enabledInput = card.querySelector("[name='enabled']");
-    if (enabledInput) enabledInput.checked = Boolean(data.enabled);
-    showClipReviewMessage(data.message || "反馈已保存。", "success");
-  } catch (error) {
-    showClipReviewMessage(`保存反馈失败：${error.message}`, "error");
-  } finally {
-    feedbackButtons.forEach((item) => { item.disabled = false; });
-  }
+function syncRejectReasonVisibility(card) {
+  if (!card) return;
+  const enabledInput = card.querySelector("[name='enabled']");
+  const rejectFeedback = card.querySelector("[data-reject-feedback]");
+  if (rejectFeedback && enabledInput) rejectFeedback.hidden = enabledInput.checked;
 }
 
 function timeTextToSeconds(value) {
@@ -1302,7 +1279,10 @@ document.querySelectorAll("[data-clip-card] input[name='start_time'], [data-clip
 if (clipSelectAll) {
   clipSelectAll.addEventListener("change", () => {
     const shouldEnable = clipSelectAll.checked;
-    getClipEnableCheckboxes().forEach((checkbox) => { checkbox.checked = shouldEnable; });
+    getClipEnableCheckboxes().forEach((checkbox) => {
+      checkbox.checked = shouldEnable;
+      syncRejectReasonVisibility(checkbox.closest("[data-clip-card]"));
+    });
     updateClipSelectAllUi();
     showClipReviewMessage(
       shouldEnable
@@ -1314,7 +1294,10 @@ if (clipSelectAll) {
 }
 
 clipReviewForm?.addEventListener("change", (event) => {
-  if (event.target.matches("[data-clip-card] input[name='enabled']")) updateClipSelectAllUi();
+  if (event.target.matches("[data-clip-card] input[name='enabled']")) {
+    syncRejectReasonVisibility(event.target.closest("[data-clip-card]"));
+    updateClipSelectAllUi();
+  }
 });
 
 updateClipSelectAllUi();
@@ -1459,9 +1442,18 @@ document.querySelectorAll("[data-delete-trigger]").forEach((button) => {
   });
 });
 
-document.querySelectorAll("[data-feedback-decision]").forEach((button) => {
+document.querySelectorAll("[data-reject-reason]").forEach((button) => {
   button.addEventListener("click", () => {
-    saveClipFeedback(button.closest("[data-clip-card]"), button);
+    const card = button.closest("[data-clip-card]");
+    if (!card) return;
+    const selected = card.dataset.feedbackReason === button.dataset.rejectReason;
+    card.dataset.feedbackReason = selected ? "" : button.dataset.rejectReason;
+    card.querySelectorAll("[data-reject-reason]").forEach((item) => {
+      const active = !selected && item === button;
+      item.classList.toggle("is-active", active);
+      item.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    showClipReviewMessage("淘汰原因已暂存；点击“保存修改”后统一写入。", "info");
   });
 });
 

@@ -484,4 +484,4 @@ def test_selection_settings_api_and_review_page_expose_v2_controls():
     assert response.json()["task"]["final_clip_target"] == 4
     assert page.status_code == 200
     assert "不好笑" in page.text
-    assert "铺垫不足" in page.text
+    assert "铺垫缺失" in page.text
