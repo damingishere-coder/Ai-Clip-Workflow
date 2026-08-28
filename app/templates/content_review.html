@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block title %}内容复盘 · {{ settings.app_name }}{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', path='css/content-review.css') }}?v=20260828-v1">
+{% endblock %}
+
+{% block content %}
+<section class="page-heading content-review-heading">
+  <div>
+    <p class="eyebrow">Content Review</p>
+    <h1>内容复盘</h1>
+    <p>把账号趋势、发布记录、候选片段、AI 分析和 Prompt 版本放在同一条证据链上。</p>
+  </div>
+  <label class="content-review-account-picker">
+    <span>抖音账号</span>
+    <select id="content-review-account" {{ "disabled" if not accounts else "" }}>
+      {% if accounts %}
+      {% for account in accounts %}
+      <option value="{{ account.id }}">{{ account.account_name }}{% if account.account_uid %} · {{ account.account_uid }}{% endif %}</option>
+      {% endfor %}
+      {% else %}
+      <option value="">请先在发送中心添加账号</option>
+      {% endif %}
+    </select>
+  </label>
+</section>
+
+<div class="page-alert" id="content-review-message" hidden></div>
+
+{% if not accounts %}
+<section class="panel empty-state content-review-empty">
+  <p class="eyebrow">Account Required</p>
+  <h2>先添加一个抖音账号</h2>
+  <p>内容复盘必须明确数据属于哪个账号，避免把不同账号的表现混在一起。</p>
+  <a class="primary-button" href="/publish">前往发送中心</a>
+</section>
+{% else %}
+<section class="content-review-sync-grid">
+  <article class="panel content-review-sync-card">
+    <div class="content-review-card-title">
+      <div>
+        <p class="eyebrow">Weekly Baseline</p>
+        <h2>导入抖音数据表</h2>
+      </div>
+      <span class="status-pill" id="content-review-file-status">尚未选择</span>
+    </div>
+    <p>先预览校验，再确认导入。日汇总只作为账号级历史基线，不会强行归因到作品或 Prompt。</p>
+    <form id="content-review-import-form" class="content-review-import-form">
+      <input id="content-review-file" name="file" type="file" accept=".xlsx,.csv" required>
+      <button class="secondary-button" type="submit">预览数据</button>
+    </form>
+    <div class="content-review-preview" id="content-review-preview" hidden>
+      <dl>
+        <div><dt>文件</dt><dd data-preview-filename>—</dd></div>
+        <div><dt>范围</dt><dd data-preview-period>—</dd></div>
+        <div><dt>行数</dt><dd data-preview-rows>—</dd></div>
+        <div><dt>归因</dt><dd>未归因历史基线</dd></div>
+      </dl>
+      <button class="primary-button" id="content-review-commit" type="button">确认导入</button>
+    </div>
+  </article>
+
+  <article class="panel content-review-sync-card">
+    <div class="content-review-card-title">
+      <div>
+        <p class="eyebrow">Recent Works</p>
+        <h2>同步最近 50 条作品</h2>
+      </div>
+      <span class="status-pill" id="content-review-sync-age">尚未同步</span>
+    </div>
+    <p>复用 Windows Chrome Worker 的现有登录态。遇到登录失效、验证码、限流或页面变化会立即停止，不会自动重试。</p>
+    <button class="primary-button" id="content-review-sync" type="button">一键同步最近 50 条作品</button>
+  </article>
+</section>
+
+<section class="panel content-review-summary-panel">
+  <div class="section-heading content-review-section-heading">
+    <div>
+      <p class="eyebrow">7 Days vs Previous 7 Days</p>
+      <h2>账号趋势</h2>
+    </div>
+    <span class="status-pill" id="content-review-latest-date">暂无数据</span>
+  </div>
+  <div class="content-review-metric-grid" id="content-review-metrics">
+    {% for key, label in [
+      ('post_count', '投稿'), ('play_count', '播放'), ('interaction_count', '互动'),
+      ('five_second_completion_rate', '5 秒完播'), ('two_second_bounce_rate', '2 秒跳出'),
+      ('cover_click_rate', '封面点击'), ('average_watch_seconds', '平均播放时长')
+    ] %}
+    <article class="content-review-metric" data-metric="{{ key }}">
+      <span>{{ label }}</span>
+      <strong data-current>—</strong>
+      <small data-delta>等待数据</small>
+      <em>前 7 天 <span data-previous>—</span></em>
+    </article>
+    {% endfor %}
+  </div>
+  <div class="content-review-history-wrap">
+    <table class="content-review-table compact-table">
+      <thead><tr><th>日期</th><th>投稿</th><th>播放</th><th>互动</th><th>5 秒完播</th><th>2 秒跳出</th><th>封面点击</th><th>平均时长</th></tr></thead>
+      <tbody id="content-review-history"></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel content-review-works-panel">
+  <div class="section-heading content-review-section-heading">
+    <div>
+      <p class="eyebrow">Attribution Chain</p>
+      <h2>作品级归因</h2>
+    </div>
+    <span class="status-pill">多结果不强行匹配</span>
+  </div>
+  <div class="content-review-history-wrap">
+    <table class="content-review-table content-review-works-table">
+      <thead><tr><th>平台作品</th><th>真实表现</th><th>发布记录</th><th>候选 / 审核</th><th>AI / Prompt</th><th>匹配</th></tr></thead>
+      <tbody id="content-review-works"></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="content-review-bottom-grid">
+  <article class="panel">
+    <div class="section-heading content-review-section-heading">
+      <div><p class="eyebrow">Prompt Evidence</p><h2>Prompt 版本对比</h2></div>
+      <span class="status-pill" id="content-review-cycles">0 / 3 周期</span>
+    </div>
+    <p class="content-review-note" id="content-review-prompt-message">数据不足，暂不生成结论。</p>
+    <div id="content-review-prompts" class="content-review-prompt-list"></div>
+    <p class="content-review-causality">仅相关性，不代表因果；系统不会自动修改 Prompt。</p>
+  </article>
+
+  <article class="panel">
+    <div class="section-heading content-review-section-heading">
+      <div><p class="eyebrow">Import History</p><h2>同步记录</h2></div>
+    </div>
+    <div id="content-review-imports" class="content-review-import-list"></div>
+  </article>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+{% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260828-v1"></script>{% endif %}
+{% endblock %}
