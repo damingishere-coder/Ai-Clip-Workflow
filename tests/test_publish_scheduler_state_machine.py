@@ -280,6 +280,7 @@ def test_due_job_follows_publisher_outcome(tmp_path, outcome, expected):
         message="mock result",
         remote_video_id="remote-1" if outcome == PublishOutcome.PUBLISHED else "",
         platform_url="https://www.douyin.com/video/1" if outcome == PublishOutcome.PUBLISHED else "",
+        published_at=_iso() if outcome == PublishOutcome.PUBLISHED else "",
         error_code="mock_error" if outcome != PublishOutcome.PUBLISHED else "",
         needs_manual_review=outcome == PublishOutcome.NEED_REVIEW,
     )
@@ -289,6 +290,26 @@ def test_due_job_follows_publisher_outcome(tmp_path, outcome, expected):
     assert row["status"] == expected
     assert row["claimed_at"]
     assert row["finished_at"]
+
+
+def test_untrusted_provider_platform_url_requires_manual_review(tmp_path):
+    calls: list[str] = []
+    job_id = _job(tmp_path)
+    result = PublishResult(
+        outcome=PublishOutcome.PUBLISHED,
+        message="投稿成功但链接异常",
+        remote_video_id="remote-unsafe",
+        platform_url="javascript:alert(1)",
+        published_at=_iso(),
+    )
+
+    PublishScheduler(executor=_executor(result, calls)).run_once()
+
+    row = _raw(job_id)
+    assert calls == [job_id]
+    assert row["status"] == "NEED_REVIEW"
+    assert row["error_code"] == "invalid_platform_url"
+    assert row["platform_url"] in {None, ""}
 
 
 def test_published_job_is_never_executed_again(tmp_path):
@@ -302,7 +323,7 @@ def test_published_job_is_never_executed_again(tmp_path):
 def test_two_schedulers_atomically_claim_only_once(tmp_path):
     calls: list[str] = []
     job_id = _job(tmp_path)
-    executor = _executor(PublishResult(PublishOutcome.PUBLISHED), calls)
+    executor = _executor(PublishResult(PublishOutcome.PUBLISHED, published_at=_iso()), calls)
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: PublishScheduler(executor=executor).execute_job(job_id), range(2)))
     assert calls == [job_id]
@@ -340,6 +361,52 @@ def test_run_forever_retries_after_transient_database_error(monkeypatch):
     assert scheduler_module._SCHEDULER_HEALTH["last_error_code"] == ""
 
 
+def test_scheduler_background_task_is_tracked_and_awaited(monkeypatch):
+    async def scenario():
+        scheduler = PublishScheduler()
+        started = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def fake_run_forever():
+            started.set()
+            await stopped.wait()
+
+        def fake_stop():
+            stopped.set()
+
+        monkeypatch.setattr(scheduler, "run_forever", fake_run_forever)
+        monkeypatch.setattr(scheduler, "stop", fake_stop)
+        monkeypatch.setattr(scheduler_module, "PublishScheduler", lambda: scheduler)
+        original_enabled = scheduler_module.settings.publish_scheduler_enabled
+        object.__setattr__(scheduler_module.settings, "publish_scheduler_enabled", True)
+        try:
+            returned = await scheduler_module.start_scheduler_background()
+            await started.wait()
+
+            assert returned is scheduler
+            assert scheduler._background_task is not None
+            assert scheduler._background_task.get_name() == "niuma-publish-scheduler"
+
+            await scheduler.shutdown()
+            assert scheduler._background_task.done()
+        finally:
+            object.__setattr__(
+                scheduler_module.settings, "publish_scheduler_enabled", original_enabled
+            )
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_shutdown_before_background_task_initializes_does_not_hang():
+    async def scenario():
+        scheduler = PublishScheduler()
+        scheduler._background_task = asyncio.create_task(scheduler.run_forever())
+        await asyncio.wait_for(scheduler.shutdown(), timeout=3)
+        assert scheduler._background_task.done()
+
+    asyncio.run(scenario())
+
+
 def test_unexpected_job_error_does_not_block_later_due_jobs(monkeypatch):
     scheduler = PublishScheduler()
     calls: list[str] = []
@@ -358,9 +425,14 @@ def test_unexpected_job_error_does_not_block_later_due_jobs(monkeypatch):
 
     monkeypatch.setattr(scheduler, "execute_job", execute)
     monkeypatch.setattr(
+        scheduler.repository,
+        "get_job",
+        lambda job_id: {"id": job_id, "status": "SCHEDULED"},
+    )
+    monkeypatch.setattr(
         scheduler,
         "_mark_need_review",
-        lambda job_id, error_code, message: {
+        lambda job_id, error_code, message, **_kwargs: {
             "status": "need_review",
             "job_id": job_id,
             "error_code": error_code,

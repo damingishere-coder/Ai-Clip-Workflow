@@ -1,5 +1,59 @@
 # 数据库结构说明
 
+## 2026-08-24：字幕自动流水线字段
+
+`subtitle_jobs` 在原有不可变 revision 引用上增加：
+
+| 字段 | 说明 |
+| --- | --- |
+| `workflow_job_id` | 所属持久化字幕 Job，用于取消、恢复和精确清理临时文件 |
+| `validation_status` | `pending / verified`；旧记录默认为未验证，不能自动发布 |
+| `validation_json` | FFprobe 的编码、像素格式、音轨、时长和音频处理证据 |
+| `encoder` | 实际成功的 `h264_nvenc` 或 `libx264` |
+| `verified_at` | 输出验证通过时间 |
+
+- 全自动字幕交付决定保存在 `tasks.auto_config_json.subtitle_delivery_mode`，值仅允许 `original / subtitled`，并记录 `subtitle_decided_at`。
+- `workflow_jobs.payload_json` 固定保存每个 output clip 与 revision 的组合；`checkpoint_json.completed` 只复用对应字幕 job 仍为 `completed + verified` 且文件存在的条目。
+- 缺少新字段的已有数据库先创建 `subtitle-auto-workflow` SQLite 在线备份，再执行幂等列/索引迁移；旧字幕文件和 job 不删除，但未验证旧记录不会获得自动发布资格。
+
+## 2026-08-23：字幕 revision 数据结构
+
+- `output_clip` 新增 `source_start_ms / source_end_ms / source_duration_ms / source_fingerprint / snapshot_source`。新切片使用 `cut_commit`，旧切片第一次使用时可从候选边界生成 `legacy_inferred`；之后候选修改不会漂移已保存边界。
+- `subtitle_tracks`：任务级原片轨或切片轨，记录 `source_track_id / source_revision_id / active_revision_id / sync_status / has_manual_edits`。
+- `subtitle_revisions`：不可变内容版本，记录来源 `asr / markdown / source_sync / manual / import / ai_suggestion`、父版本、状态、cue 数和 checksum。
+- `subtitle_cues`：毫秒级 `start_ms / end_ms`、文字、置信度、手工说话人和 `source_cue_id`；按 revision 和时间查询。
+- `subtitle_jobs.revision_id` 固定渲染使用的版本；样式表新增描边宽度、阴影深度、安全区百分比与说话人样式 JSON。
+- 启动迁移保持幂等；已有数据库缺少上述结构时先通过 SQLite 在线 backup 创建 `subtitle-editor-rebuild` 迁移前快照，不删除旧字幕 job 或历史切片。
+
+## 2026-08-23：长直播 AI 窗口 checkpoint
+
+新增 `ai_analysis_windows`：
+
+| 字段 | 说明 |
+| --- | --- |
+| `task_id` | 所属任务 |
+| `transcript_fingerprint` | 完整转写内容 SHA-256；内容变化后不会复用旧窗口 |
+| `provider` / `model` | Provider 与模型隔离键 |
+| `window_index` | 当前窗口序号 |
+| `start_seconds` / `end_seconds` | 原片主时间轴范围 |
+| `status` | `queued / running / completed / failed` |
+| `attempt_count` | 累计真实请求次数 |
+| `result_json` / `result_checksum` | 成功结果与 SHA-256 校验和 |
+| `error_message` / `next_retry_at` | 最后错误与退避时间 |
+| `created_at / updated_at / completed_at` | 生命周期时间 |
+
+唯一键由任务、转写指纹、Provider、模型、窗口序号和起止时间组成。迁移使用 `CREATE TABLE/INDEX IF NOT EXISTS`，已有数据库在变更前继续执行 SQLite 在线备份。
+
+## 2026-08-23：长直播基础设施迁移
+
+- `tasks` 增加 `highlight_density_per_hour INTEGER NOT NULL DEFAULT 4` 与 `highlight_total_limit INTEGER NOT NULL DEFAULT 30`；历史任务模式和值不改写。
+- `selection_profile` 合法值扩展为 `general / variety_comedy / long_live_talk`，数据库继续保留 `DEFAULT 'general'` 兼容旧数据。
+- `workflow_jobs` 增加尝试、退避时间、lease、heartbeat、取消和 checkpoint 字段。
+- 新增 `transcription_runs`，按任务、源指纹、Provider、模型、设备、计算类型和分块参数标识一次转写。
+- 新增 `transcription_chunks`，逐块保存毫秒边界、状态、尝试次数、结构化 JSON、SHA-256 校验和与错误。
+- 新索引覆盖 Job 领取、任务类型状态、活跃转写 run 与转写块状态。
+- 已存在数据库缺少新结构时，迁移前使用 SQLite Online Backup API 写入 `data/backups/workflow-before-long-live-foundation-*.sqlite3`，通过 `PRAGMA quick_check` 后才执行幂等增量迁移。
+
 ## 2026-08-01：康熙笑点优先 V2 兼容迁移
 
 - `tasks` 新增 `selection_profile TEXT NOT NULL DEFAULT 'general'` 与 `final_clip_target INTEGER NOT NULL DEFAULT 5`。历史任务自动保持 `general`，不会改变原有分析行为。
@@ -65,7 +119,7 @@
 - `tasks` 表新增 `task_dir_name` 字段，用来记录任务在存储盘里的实际文件夹名。
 - `id` 仍是任务唯一 ID，用于数据库关联和网页地址；本地文件夹不再默认使用短 ID，而是使用 `task_dir_name`。
 - 新建任务时会根据 `task_name` 生成安全的 Windows 文件夹名；重名时自动追加序号，避免覆盖旧目录。
-- `DELETE /api/tasks/{task_id}` 会永久删除系统托管的任务目录和发布包，再把 `is_deleted` 设为 `1` 并写入 `deleted_at`；NAS 或任务目录外的原片不会删除。
+- `DELETE /api/tasks/{task_id}` 会永久删除系统托管的任务目录和发布包，再把 `is_deleted` 设为 `1` 并写入 `deleted_at`；任务目录外的原片不会删除。
 - 一次性迁移脚本为 `scripts/migrate_task_dirs_to_project_names.py`，默认 dry-run，带 `--apply` 才会移动文件夹并更新路径字段。
 
 ## 2026-05-25：发布后台新增表
@@ -219,10 +273,10 @@ data/workflow.sqlite3
 | `id` | TEXT | 任务唯一 ID，创建时自动生成 |
 | `task_name` | TEXT | 任务名称 |
 | `task_dir_name` | TEXT | 存储盘实际任务文件夹名；永久删除后保留原值作为隐藏历史记录，但对应目录不再存在 |
-| `source_type` | TEXT | 视频来源：`upload` 或 `nas` |
+| `source_type` | TEXT | 兼容字段；当前统一为 `upload`，新接口不再接受该参数 |
 | `platform` | TEXT | 平台类型：`douyin`、`bilibili`、`general` |
-| `original_video_path` | TEXT | 本地上传视频路径，后续接真实上传后写入 |
-| `nas_file_path` | TEXT | NAS / 本地已有视频路径 |
+| `original_video_path` | TEXT | 当前统一使用的本机上传视频路径 |
+| `nas_file_path` | TEXT | 旧版兼容字段；迁移后清空，新接口不再读写 |
 | `max_clip_duration` | INTEGER | 单条切片最长时长，单位：分钟；新建任务默认 10 分钟 |
 | `candidate_clip_count` | INTEGER | 希望 AI 输出的候选片段数量；新建任务默认 12 条 |
 | `ai_preference` | TEXT | AI 片段选择偏好 |
@@ -365,8 +419,9 @@ data/workflow.sqlite3
 早期项目骨架曾使用过 `title`、`source_path`、`max_clip_minutes`、`target_clip_count` 等草稿字段。当前初始化逻辑会自动补齐新字段，并把旧字段数据迁移到当前字段中。
 为了不破坏已有本地数据库，旧字段不会被强制删除。后续代码以本文件列出的当前字段为准。
 新任务默认值调整不会批量更新已有 `tasks` 记录；历史任务已经保存的最大时长和候选数量保持不变。
+账本迁移 `20260824_02_task_upload_only` 会在写入前创建 SQLite Online Backup：旧 `nas_file_path` 在 `original_video_path` 为空时归一到该字段，随后统一写为 `source_type='upload'` 并清空 `nas_file_path`。物理列继续保留，不删除或移动任何外部视频。
 
-任务删除采用“媒体永久删除、数据库历史隐藏保留”的方式：`DELETE /api/tasks/{task_id}` 只允许删除 `TASKS_DIR` 下与任务精确对应的目录、该任务的手动发布包和可确认归属的旧版项目 `tasks` 目录。删除成功后把 `is_deleted` 改为 `1` 并写入 `deleted_at`，候选片段、切片、字幕和发布历史仍留在 SQLite 中用于审计。NAS 或任务目录外的原片永远不参与删除；运行中的转写、切片或真实发送任务返回 409，避免后台进程重新生成文件。
+任务删除采用“媒体永久删除、数据库历史隐藏保留”的方式：`DELETE /api/tasks/{task_id}` 只允许删除 `TASKS_DIR` 下与任务精确对应的目录、该任务的手动发布包和可确认归属的旧版项目 `tasks` 目录。删除成功后把 `is_deleted` 改为 `1` 并写入 `deleted_at`，候选片段、切片、字幕和发布历史仍留在 SQLite 中用于审计。任务目录外的原片永远不参与删除；运行中的转写、切片或真实发送任务返回 409，避免后台进程重新生成文件。
 
 `clip_candidates.reason` 是早期推荐理由字段，当前审核页优先读取 `highlight_reason`。数据库初始化时会把已有 `reason` 自动补到 `highlight_reason`。
 

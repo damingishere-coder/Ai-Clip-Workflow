@@ -14,7 +14,31 @@ def test_selection_bar_has_no_legacy_batch_send_but_keeps_scheduling() -> None:
     assert "data-open-schedule-drawer" in selection_bar
     assert "data-apply-batch-target" in selection_bar
     assert "data-batch-ai" in selection_bar
+    assert "AI 重写已选文案" in selection_bar
     assert "data-publish-now" in template
+
+
+def test_publish_ai_and_maintenance_actions_are_scoped_to_content_preparation() -> None:
+    template = (PROJECT_ROOT / "app/templates/publish.html").read_text(encoding="utf-8")
+    publish_script = (PROJECT_ROOT / "app/static/js/publish-center.js").read_text(encoding="utf-8")
+    page_heading = template.split('<section class="page-heading send-heading">', 1)[1].split(
+        "</section>", 1
+    )[0]
+    content_panel = template.split('data-center-panel="content"', 1)[1].split(
+        'data-center-panel="schedule"', 1
+    )[0]
+    content_row_macro = template.split("{% macro content_row(job) %}", 1)[1].split(
+        "{% endmacro %}", 1
+    )[0]
+
+    assert "data-supplement-publish-jobs" not in page_heading
+    assert "data-supplement-publish-jobs" in content_panel
+    assert "同步遗漏切片" in content_panel
+    assert "不调用 AI，也不修改已有文案" in content_panel
+    assert "AI 重写本条文案" in content_row_macro
+    assert "use_ai=false" in publish_script
+    assert "/api/publish/jobs/metadata/upgrade-pending-douyin" not in publish_script
+    assert 'batchAiButton.hidden = tab !== "content"' in publish_script
 
 
 def test_legacy_publish_frontend_handlers_are_removed() -> None:

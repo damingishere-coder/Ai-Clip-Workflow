@@ -4,8 +4,14 @@ import mimetypes
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from app.services import task_service
-from app.services.storage_service import get_artifact_paths, get_source_video_path, resolve_video_file_path, validate_source_video_path
+from app.services import storage_service, task_service
+from app.services.storage_service import (
+    IMAGE_EXTENSIONS,
+    get_artifact_paths,
+    get_source_video_path,
+    resolve_task_media_file_path,
+    validate_source_video_path,
+)
 
 
 router = APIRouter(prefix="/media/tasks", tags=["media"])
@@ -37,7 +43,10 @@ async def get_task_source_video(task_id: str) -> FileResponse:
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    source_path = get_source_video_path(task)
+    try:
+        source_path = get_source_video_path(task)
+    except storage_service.StorageSafetyError as exc:
+        raise HTTPException(status_code=404, detail="源视频不存在") from exc
     valid, error_message = validate_source_video_path(str(source_path) if source_path else None)
     if not valid or source_path is None:
         raise HTTPException(status_code=404, detail=error_message or "源视频不存在")
@@ -55,8 +64,13 @@ async def get_task_output_clip(task_id: str, output_clip_id: str) -> FileRespons
     if not output_clip:
         raise HTTPException(status_code=404, detail="切片记录不存在")
 
-    output_path = resolve_video_file_path(output_clip.get("output_file_path")) or Path(output_clip.get("output_file_path") or "")
-    if not output_path.exists() or not output_path.is_file():
+    output_path = resolve_task_media_file_path(
+        output_clip.get("output_file_path"),
+        task_id=task_id,
+        task_dir_name=task.get("task_dir_name"),
+        allowed_subdirectories=("05_clips", "clips"),
+    )
+    if output_path is None or not output_path.exists() or not output_path.is_file():
         raise HTTPException(status_code=404, detail="切片视频文件不存在")
 
     return _video_response(output_path)
@@ -72,8 +86,13 @@ async def get_task_subtitled_clip(task_id: str, output_clip_id: str) -> FileResp
     if not output_clip:
         raise HTTPException(status_code=404, detail="切片记录不存在")
 
-    output_path = resolve_video_file_path(output_clip.get("subtitled_output_file_path")) or Path(output_clip.get("subtitled_output_file_path") or "")
-    if not output_path.exists() or not output_path.is_file():
+    output_path = resolve_task_media_file_path(
+        output_clip.get("subtitled_output_file_path"),
+        task_id=task_id,
+        task_dir_name=task.get("task_dir_name"),
+        allowed_subdirectories=("06_subtitled",),
+    )
+    if output_path is None or not output_path.exists() or not output_path.is_file():
         raise HTTPException(status_code=404, detail="带字幕视频文件不存在")
 
     return _video_response(output_path)
@@ -86,8 +105,18 @@ async def get_task_cover(task_id: str, file_name: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="任务不存在")
 
     safe_name = Path(file_name).name
-    cover_path = get_artifact_paths(task_id, task.get("task_dir_name"))["covers_dir"] / safe_name
-    if not cover_path.exists() or not cover_path.is_file():
+    try:
+        candidate_path = get_artifact_paths(task_id, task.get("task_dir_name"))["covers_dir"] / safe_name
+        cover_path = resolve_task_media_file_path(
+            str(candidate_path),
+            task_id=task_id,
+            task_dir_name=task.get("task_dir_name"),
+            allowed_subdirectories=("07_covers",),
+            allowed_extensions=IMAGE_EXTENSIONS,
+        )
+    except storage_service.StorageSafetyError as exc:
+        raise HTTPException(status_code=404, detail="封面文件不存在") from exc
+    if cover_path is None or not cover_path.exists() or not cover_path.is_file():
         raise HTTPException(status_code=404, detail="封面文件不存在")
 
     return _image_response(cover_path)

@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<!--
+  Functional Architecture Map (interactive). GENERATED from modules.json by the codemap skill.
+  Do not hand-edit — edit modules.json and re-run render.py.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Functional Architecture Map</title>
+<style>
+  :root{
+    --bg:#131517; --bg2:#0e1012; --panel:#1b1e21; --panel2:#202428;
+    --ink:#e8e6e3; --muted:#9aa1a8; --faint:#6b7280;
+    --border:#2a2e33; --border2:#363b41;
+    --accent:#f59e0b; --accent-dim:#b4730e; --accent-soft:rgba(245,158,11,.14);
+    --in:#7c8794; --out:#f59e0b;
+    --c-low:#525a62; --c-med:#7e8893; --c-high:#c9cdd2; --c-core:#f59e0b;
+    --mono:"SF Mono",ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);
+    color:var(--ink); font-family:var(--sans); -webkit-font-smoothing:antialiased; overflow:hidden;}
+  .app{display:grid; grid-template-columns:1fr 348px; grid-template-rows:auto 1fr; height:100vh}
+  header{grid-column:1/3; display:flex; align-items:center; gap:16px; padding:12px 20px;
+    border-bottom:1px solid var(--border); background:var(--bg);}
+  header .mark{width:22px;height:22px;border-radius:6px;flex:0 0 auto;background:var(--accent);}
+  header h1{font-size:14px;font-weight:600;margin:0;letter-spacing:.1px;white-space:nowrap}
+  header h1 span{color:var(--muted);font-weight:400}
+  header .sub{font-size:11.5px;color:var(--faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  header .spacer{flex:1}
+  .search{display:flex;align-items:center;gap:8px;background:var(--panel);
+    border:1px solid var(--border);border-radius:8px;padding:7px 11px;width:230px;}
+  .search:focus-within{border-color:var(--border2)}
+  .search input{background:none;border:none;outline:none;color:var(--ink);font-family:var(--sans);font-size:12.5px;width:100%;}
+  .search svg{flex:0 0 auto;opacity:.6}
+  .btn{font:inherit;font-size:12px;color:var(--muted);background:var(--panel);
+    border:1px solid var(--border);border-radius:8px;padding:7px 12px;cursor:pointer;transition:.12s;}
+  .btn:hover{color:var(--ink);border-color:var(--border2);background:var(--panel2)}
+  .btn.active{color:#0e0f11;background:var(--accent);border-color:var(--accent)}
+  .filt{font:inherit;font-size:12px;color:var(--muted);background:var(--panel);
+    border:1px solid var(--border);border-radius:8px;padding:7px 8px;cursor:pointer;max-width:150px}
+  .filt:hover{color:var(--ink);border-color:var(--border2);background:var(--panel2)}
+  .filt.on{color:#1a1a1a;background:var(--accent);border-color:var(--accent)}
+  .fcount{font-family:var(--mono);font-size:10.5px;color:var(--accent);white-space:nowrap;min-width:52px}
+  .board-wrap{position:relative;overflow:auto;background:var(--bg2)}
+  .board{position:relative;min-width:min-content;padding:26px 30px 60px}
+  svg.edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible}
+  .band{position:relative;z-index:2;margin-bottom:13px}
+  .band-head{display:flex;align-items:baseline;gap:10px;margin:0 2px 9px;position:sticky;left:0;}
+  .band-head .t{font-size:11px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:var(--ink)}
+  .band-head .d{font-size:11px;color:var(--faint)}
+  .band-head .num{font-size:9.5px;color:var(--faint);border:1px solid var(--border);border-radius:20px;padding:1px 7px;font-family:var(--mono)}
+  .band-head .gloc{color:var(--muted);border-color:transparent;padding-left:0}
+  .band-body{display:flex;flex-wrap:wrap;gap:7px}
+  .wire{position:relative;z-index:2;display:flex;align-items:center;gap:14px;margin:6px 2px 16px;color:var(--accent);}
+  .wire .line{flex:1;height:1px;background:linear-gradient(90deg,transparent,var(--accent-dim),transparent)}
+  .wire .lbl{font-family:var(--mono);font-size:10.5px;letter-spacing:1px;color:var(--accent);white-space:nowrap}
+  .node{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:9px;
+    padding:8px 30px 8px 12px;cursor:pointer;min-width:104px;
+    transition:transform .12s, border-color .12s, background .12s, box-shadow .12s, opacity .15s;user-select:none;}
+  .node::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:3px;background:var(--c-low);}
+  .node.c-med::before{background:var(--c-med)} .node.c-high::before{background:var(--c-high)}
+  .node.c-core::before{background:var(--c-core);box-shadow:0 0 8px var(--accent-soft)}
+  .node .lab{font-size:12px;font-weight:560;line-height:1.25;letter-spacing:.1px}
+  .node .meta{font-size:9.5px;color:var(--faint);font-family:var(--mono);margin-top:2px}
+  .node:hover{border-color:var(--border2);background:var(--panel2);transform:translateY(-1px)}
+  .node .chip{position:absolute;top:6px;right:7px;font-family:var(--mono);font-size:9px;font-weight:700;
+    line-height:1;padding:2px 4px;border-radius:4px;color:#0c0d0e;background:var(--h,#6b7280);opacity:0;transition:opacity .15s;}
+  .board.show-health .node::before{background:var(--h)!important;box-shadow:none}
+  .board.show-health .node .chip{opacity:1}
+  .board.show-health.has-sel .node:not(.lit) .chip{opacity:.25}
+  .board.has-sel .node{opacity:.26;filter:saturate(.7)}
+  .board.has-sel .node.lit{opacity:1;filter:none}
+  .node.sel{border-color:var(--accent);background:#241d12;box-shadow:0 0 0 1px var(--accent), 0 6px 22px rgba(245,158,11,.18);transform:translateY(-1px);}
+  .node.dep{border-color:var(--accent-dim)} .node.dependent{border-color:var(--in)}
+  aside{background:var(--panel);border-left:1px solid var(--border);overflow-y:auto;padding:20px 20px 40px;}
+  .empty-hint{color:var(--faint);font-size:12.5px;line-height:1.7} .empty-hint b{color:var(--muted);font-weight:600}
+  .legend{margin-top:22px} .legend h4,aside h4{font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);margin:0 0 10px}
+  .legend .row{display:flex;align-items:center;gap:9px;margin-bottom:7px;font-size:12px;color:var(--muted)}
+  .swatch{width:16px;height:9px;border-radius:3px;flex:0 0 auto}
+  .ln{width:26px;height:0;border-top-width:2px;border-top-style:solid;flex:0 0 auto}
+  .detail .kicker{font-family:var(--mono);font-size:10px;color:var(--accent);letter-spacing:.5px;text-transform:uppercase}
+  .detail h2{font-size:18px;margin:5px 0 3px;font-weight:650;line-height:1.2}
+  .detail .path{font-family:var(--mono);font-size:11px;color:var(--faint);word-break:break-all;margin-bottom:13px}
+  .pill-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:15px}
+  .pill{font-size:10.5px;border:1px solid var(--border2);border-radius:20px;padding:3px 9px;color:var(--muted);font-family:var(--mono)}
+  .pill.cpl{border-color:var(--accent-dim);color:var(--accent)}
+  .detail p.desc{font-size:13px;line-height:1.6;color:var(--ink);margin:0 0 16px}
+  .reltitle{font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);margin:16px 0 8px;display:flex;align-items:center;gap:7px}
+  .reltitle .dotc{width:7px;height:7px;border-radius:50%}
+  .rel{display:flex;flex-direction:column;gap:4px}
+  .rel button{text-align:left;font:inherit;font-size:12px;color:var(--muted);background:var(--panel);
+    border:1px solid var(--border);border-radius:7px;padding:6px 9px;cursor:pointer;transition:.13s;
+    display:flex;justify-content:space-between;align-items:center;gap:8px;}
+  .rel button:hover{color:var(--ink);border-color:var(--accent-dim);background:var(--panel2)}
+  .rel button .bnd{font-size:9px;font-family:var(--mono);color:var(--faint)}
+  .rel .none{font-size:11.5px;color:var(--faint);font-style:italic;padding:2px}
+  .clearbtn{margin-top:18px;width:100%}
+  .scorebox{display:flex;align-items:center;gap:12px;margin:2px 0 13px}
+  .scorebox .big{font-size:34px;font-weight:740;line-height:1;font-family:var(--mono)}
+  .scorebox .gr{font-size:13px;font-weight:700;border:1.5px solid;border-radius:7px;padding:3px 9px}
+  .scorebox .bar{flex:1;height:7px;border-radius:5px;background:#23272c;overflow:hidden}
+  .scorebox .bar i{display:block;height:100%;border-radius:5px}
+  .findings{display:flex;flex-direction:column;gap:7px;margin-top:4px}
+  .finding{border:1px solid var(--border);border-left-width:3px;border-radius:7px;padding:7px 9px;background:#16191c}
+  .finding .top{display:flex;align-items:center;gap:7px;margin-bottom:3px}
+  .finding .sev{font-family:var(--mono);font-size:8.5px;font-weight:700;padding:1px 5px;border-radius:4px;letter-spacing:.4px}
+  .finding .loc{font-family:var(--mono);font-size:10px;color:var(--muted);word-break:break-all}
+  .finding .txt{font-size:11.5px;line-height:1.5;color:#cfd3d8}
+  .sev-HIGH{background:#3a1714;color:#f0857a} .finding.sev-HIGH{border-left-color:#e0524b}
+  .sev-MED{background:#3a2c12;color:#e7b35e} .finding.sev-MED{border-left-color:#d9a441}
+  .sev-LOW{background:#23282d;color:#9aa1a8} .finding.sev-LOW{border-left-color:#525a62}
+  .tagchips{display:flex;flex-wrap:wrap;gap:5px;margin:0 0 13px}
+  .tg{font-size:9.5px;font-family:var(--mono);border-radius:5px;padding:2px 7px;background:#23282d;color:#aeb4bb;border:1px solid var(--border)}
+  .tg.bad{background:#2c1a17;color:#e88;border-color:#4a2420} .tg.ok{background:#1d2420;color:#8a9;border-color:#2a352e}
+  .report .stat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:14px 0 6px}
+  .report .stat{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:9px 6px;text-align:center}
+  .report .stat .n{font-family:var(--mono);font-size:18px;font-weight:740;line-height:1}
+  .report .stat .l{font-size:8.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.5px;margin-top:3px}
+  .report h3{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);margin:20px 0 8px}
+  .report .theme{font-size:12px;line-height:1.6;color:#cfd3d8;margin:0 0 9px;padding-left:11px;border-left:2px solid var(--accent-dim)}
+  .report .theme b{color:#fff;font-weight:600}
+  .grade-A{color:#76b39a;border-color:#3a5249} .grade-B{color:#b9c0c7;border-color:var(--border2)}
+  .grade-C{color:#d9a441;border-color:#5a4720} .grade-D{color:#e08a4a;border-color:#5a3a20} .grade-F{color:#e0524b;border-color:#5a2420}
+  .scrollnote{position:absolute;right:14px;bottom:12px;z-index:5;font-size:10.5px;color:var(--faint);font-family:var(--mono);pointer-events:none;background:#0e1012aa;padding:3px 8px;border-radius:6px;border:1px solid var(--border)}
+  .modal{position:fixed;inset:0;z-index:60;display:none;background:#0a0b0ccc;overflow:auto;padding:46px 20px}
+  .modal.open{display:block}
+  .modal .sheet{position:relative;max-width:740px;margin:0 auto;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:24px 26px 30px}
+  .modal .sheet h2{font-size:17px;font-weight:650;margin:0 0 3px;letter-spacing:.1px}
+  .modal .sheet .intro{font-size:12.5px;color:var(--faint);margin:0 0 6px;line-height:1.5}
+  .modal .xbtn{position:absolute;top:16px;right:16px}
+  .std-h4{font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);margin:22px 0 4px}
+  .std-row{display:flex;gap:13px;align-items:baseline;padding:8px 0;border-top:1px solid var(--border)}
+  .std-badge{flex:0 0 56px;font-family:var(--mono);font-weight:700;font-size:12px;text-align:center;border-radius:6px;padding:3px 0;color:#0c0d0e}
+  .std-range{flex:0 0 56px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .std-key{flex:0 0 116px}
+  .std-row .sev{font-family:var(--mono);font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;letter-spacing:.4px}
+  .std-row .tg[contenteditable]{outline:none;min-width:40px}
+  .std-desc[contenteditable]{outline:1px dashed var(--border2);outline-offset:2px;border-radius:3px}
+  .xrm{flex:0 0 auto;background:none;border:none;color:var(--faint);cursor:pointer;font-size:12px;padding:0 2px;line-height:1}
+  .xrm:hover{color:#e0524b}
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(8px);z-index:80;
+    background:var(--panel2);border:1px solid var(--border2);color:var(--ink);font-size:12.5px;
+    padding:9px 14px;border-radius:8px;opacity:0;pointer-events:none;transition:.18s;box-shadow:0 6px 20px #0007}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .std-desc{flex:1;font-size:12.5px;color:#cfd3d8;line-height:1.5}
+  ::-webkit-scrollbar{width:11px;height:11px}
+  ::-webkit-scrollbar-thumb{background:#2c3137;border-radius:6px;border:3px solid var(--bg2)}
+  ::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="mark"></div>
+    <div>
+      <h1 id="projTitle">Functional Architecture Map</h1>
+      <div class="sub" id="subLine"></div>
+    </div>
+    <div class="spacer"></div>
+    <div class="search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="search" placeholder="Find a module…" autocomplete="off"/>
+    </div>
+    <select class="filt" id="gradeFilter" title="Show only modules at/below this grade">
+      <option value="">All grades</option>
+      <option value="90">≤ B  (score &lt;90)</option>
+      <option value="75">≤ C  (&lt;75)</option>
+      <option value="60">≤ D  (&lt;60)</option>
+      <option value="40">F&nbsp;&nbsp;(&lt;40)</option>
+    </select>
+    <select class="filt" id="tagFilter" title="Show only modules with this issue"><option value="">Any issue</option></select>
+    <span class="fcount" id="fcount"></span>
+    <button class="btn" id="stdBtn">Standard</button>
+    <button class="btn" id="reportBtn">Audit report</button>
+    <button class="btn" id="healthBtn">Color: coupling</button>
+    <button class="btn" id="spineBtn">Data-flow spine</button>
+  </header>
+  <div class="board-wrap" id="boardWrap">
+    <div class="board" id="board">
+      <svg class="edges" id="edges">
+        <defs>
+          <marker id="ah-out" markerWidth="9" markerHeight="9" refX="7" refY="4.2" orient="auto"><path d="M0,0 L8,4.2 L0,8.4 Z" fill="var(--out)"/></marker>
+          <marker id="ah-in" markerWidth="9" markerHeight="9" refX="7" refY="4.2" orient="auto"><path d="M0,0 L8,4.2 L0,8.4 Z" fill="var(--in)"/></marker>
+        </defs>
+      </svg>
+    </div>
+    <div class="scrollnote">click a module · scroll to pan</div>
+  </div>
+  <aside id="aside"><div id="detail"></div></aside>
+</div>
+<div class="modal" id="stdModal"></div>
+
+<script>
+const DATA = {"meta": {"project": "NiuMa Studio", "lang": "zh", "subtitle": "牛马片场 · 本地 AI 高光生产后台工程体检", "generatedAt": "2026-08-24", "htmlPath": ".codemap/codemap.html", "mdPath": ".codemap/codemap.md", "spineDesc": "用户通过页面/API 创建素材任务，SQLite Job 驱动转写、AI 选片、审核切片和字幕，再由发送中心排期并交给 Windows Chrome Worker，所有状态与审计证据回写 SQLite。", "tracked_loc": 55768, "tracked_files": 132, "rev": "56f4d501087860145412fa6ecc411252ae8e877e"}, "bands": [{"id": "presentation", "tier": "fe", "t": "界面 · API", "d": "浏览器页面、前端交互、FastAPI 路由与运行配置"}, {"id": "wire1", "wire": true, "t": "HTTP / JSON / 文件上传"}, {"id": "workflow", "tier": "be", "t": "业务编排", "d": "任务、流水线、发送中心和状态机"}, {"id": "processing", "tier": "be", "t": "媒体与 AI 处理", "d": "转写、AI 选片、切片和字幕"}, {"id": "execution", "tier": "be", "t": "外部执行边界", "d": "调度、Publisher 与 Windows Chrome Worker"}, {"id": "persistence", "tier": "be", "t": "持久化与运维", "d": "SQLite Schema/迁移/备份与本地交付脚本"}], "spine": ["frontend_ui", "api_runtime", "pipeline_queue", "transcription", "ai_selection", "task_review_cut", "subtitle", "publish_center", "publish_scheduler", "publisher_worker", "persistence"], "reportThemes": [["本地单体架构是当前可运行的主要原因", "FastAPI + SQLite WAL + 文件产物 + 持久化 Job + Windows Worker 与个人本机规模匹配；不需要微服务化，现有恢复骨架应保留。"], ["P0 数据一致性与迁移入口已经 fail closed", "测试误删、活动库外键、媒体删除回滚、切片/字幕批次和迁移账本已处理；仍需在受控停机窗口首次正式迁移，并逐步把旧 helper 收编到账本。"], ["Job、发布执行和字幕恢复代际已封口", "Workflow lease token、Publish execution fencing、任务状态转换、取消恢复、切片与字幕原子提交已经完成；旧 Worker/旧 execution 不能覆盖新结果。"], ["P0/P1 运行时稳定线已经完成", "AI 候选/run/任务终态、持久 Job、单元计费账本、不完整结果门禁与本地安全边界已收口；当前可按本机单用户、人工复核范围判定为稳定 V1。"], ["本地安全边界已从隐式信任变为显式 fail closed", "AI/Publish Secret DTO、旧 Provider 结果脱敏、loopback client 校验、Docker 回环绑定、Origin 白名单、作品 URL 和动态 DOM XSS 已收紧；不扩大为多用户权限系统。"], ["复杂度集中而非全项目平均恶化", "publish_service.py、publish-center.js、app.js、publish_scheduler.py、subtitle_data_service.py 和 transcript_service.py 是主要 God Component；应按业务边界渐进拆分。"], ["测试已与活动数据隔离，但 Coverage 与真实故障闭环仍不足", "Pytest 已强制使用进程级 sandbox，P0/P1 失败矩阵持续扩充；Coverage 尚未采集，Playwright 可选跳过和真实平台/进程故障闭环仍需在 P2 补齐。"], ["遗留目录迁移脚本不得用于活动库", "scripts/migrate_task_dirs_to_project_names.py 仍是唯一 Codemap HIGH：它不属于当前运行链路，但缺少 WAL-aware 备份与文件补偿；在 P2 专项替换前必须保持停用。"]], "standard": {"rubric": [{"grade": "A", "score": 95, "range": "90–100", "en": "clean, well-scoped, idiomatic", "zh": "干净、职责单一、地道"}, {"grade": "B", "score": 82, "range": "75–89", "en": "minor issues: a documented shim, mild bloat", "zh": "小问题：有文档的兼容、轻微臃肿"}, {"grade": "C", "score": 67, "range": "60–74", "en": "notable hacks / fallbacks / bloat / duplication", "zh": "明显的 hack / 回退 / 臃肿 / 重复"}, {"grade": "D", "score": 50, "range": "40–59", "en": "significant legacy / stubs / duplication, or a protocol violation", "zh": "严重的遗留 / 占位 / 重复，或协议违规"}, {"grade": "F", "score": 25, "range": "0–39", "en": "broken, fake output, or unfinished-but-wired", "zh": "损坏、伪造输出，或未完成却已接线"}], "severities": [{"key": "HIGH", "en": "wrong / dangerous / fake, a protocol or security issue, or a genuine maintenance hazard", "zh": "错误 / 危险 / 伪造、协议或安全问题，或真正的维护地雷"}, {"key": "MED", "en": "a real smell a maintainer should fix", "zh": "维护者该修的真坏味"}, {"key": "LOW", "en": "a documented shim, a cosmetic cast, benign bloat — worth noting, not urgent", "zh": "有文档的兼容、装饰性 cast、良性臃肿 —— 值得记、不紧急"}], "coupling": [{"key": "core", "en": "system spine — central to almost everything", "zh": "系统主线 —— 几乎牵连一切"}, {"key": "high", "en": "many connections", "zh": "连接很多"}, {"key": "med", "en": "moderate", "zh": "中等"}, {"key": "low", "en": "leaf / self-contained", "zh": "叶子 / 自洽"}], "tags": [{"id": "monkeypatch", "label": "monkeypatch", "labelZh": "猴补丁", "bad": true, "en": "runtime mutation of another module / stdlib / vendor; reflection or prototype patching", "zh": "运行时改写别的模块/标准库/依赖；反射或原型补丁"}, {"id": "fallback", "label": "fallback", "labelZh": "回退兜底", "bad": true, "en": "'try the real thing, then fake/degrade'; a||b||c chains that hide which value is real", "zh": "“先试真的再退化/造假”；a||b||c 掩盖哪个是真值"}, {"id": "silent-except", "label": "silent-except", "labelZh": "静默吞错", "bad": true, "en": "swallowed errors: empty catch / except:pass / ignored return codes", "zh": "吞掉错误：空 catch / except:pass / 忽略返回码"}, {"id": "legacy", "label": "legacy", "labelZh": "遗留", "bad": true, "en": "deprecated/back-compat shims, dead-but-shipped code, parallel old+new paths", "zh": "遗留/兼容垫片、已发布的死代码、新旧并存"}, {"id": "dual-format", "label": "dual-format", "labelZh": "双格式", "bad": true, "en": "accepting two shapes for one field (snake||camel), patched through the code", "zh": "同一字段接受两种形态（snake||camel）并散落各处"}, {"id": "stub", "label": "stub", "labelZh": "占位桩", "bad": true, "en": "NotImplemented / TODO / dead buttons / demo scripts presented as real", "zh": "未实现/TODO/死按钮/演示脚本当成品"}, {"id": "fake-output", "label": "fake-output", "labelZh": "伪造输出", "bad": true, "en": "returns random/canned/hardcoded results where real work is implied", "zh": "本应真算的地方返回随机/写死结果"}, {"id": "duplication", "label": "duplication", "labelZh": "重复", "bad": true, "en": "copy-pasted logic, or an existing shared abstraction not reused", "zh": "复制粘贴，或已有共享抽象却不复用"}, {"id": "bloat", "label": "bloat", "labelZh": "臃肿", "bad": true, "en": "oversized file / function; too many responsibilities in one unit", "zh": "超大文件/函数；单元职责过多"}, {"id": "glue", "label": "glue", "labelZh": "胶水", "bad": true, "en": "valueless pass-through: rows of thin forwarders / no-op adapters", "zh": "无价值透传：成片薄包装 / 零转换适配器"}, {"id": "any-escape", "label": "any-escape", "labelZh": "类型逃逸", "bad": true, "en": "bypassing the type system: as any / @ts-ignore / dynamic / void* / reinterpret_cast / unsafe", "zh": "绕过类型系统：as any / @ts-ignore / dynamic / void* / reinterpret_cast / unsafe"}, {"id": "over-fit", "label": "over-fit", "labelZh": "过度特化", "bad": true, "en": "hardcoded to one case where a small generalization was expected", "zh": "硬编码单一情况，本应小幅泛化"}, {"id": "god-component", "label": "god-component", "labelZh": "上帝组件", "bad": true, "en": "one component/class/file doing far too much", "zh": "一个组件/类/文件做太多事"}, {"id": "placeholder", "label": "placeholder", "labelZh": "占位", "bad": true, "en": "unfinished UI / data presented as if complete", "zh": "未完成的 UI/数据当作已完成"}, {"id": "clean", "label": "clean", "labelZh": "干净", "bad": false, "en": "no material issues — well-scoped", "zh": "无实质问题 —— 职责单一"}]}, "modules": [{"id": "frontend_ui", "label": "Frontend UI", "band": "presentation", "path": "app/templates + app/static", "desc": "用 Jinja2、原生 JavaScript 和 CSS 提供任务、审核、字幕与发送中心界面。", "coupling": "high", "deps": ["api_runtime"], "loc": 13764, "score": 62, "grade": "C", "tags": ["bloat", "glue", "fallback", "silent-except", "legacy", "over-fit"], "findings": [{"sev": "MED", "loc": "app/templates/clip_review.html:154; app/static/js/app.js:103-132", "text": "片段审核空状态的“运行 Codex CLI 分析”仍绑定通用 handleProcessAction；/process/ai 现在返回持久化 job_id 后，该处理器没有等待或轮询 Job，而是在收到排队响应后直接 window.location.reload()。用户会看到仍无候选片段的旧页面，并可能在后台任务未完成时再次点击，造成重复请求或重复计费边界。"}, {"sev": "MED", "loc": "app/static/js/app.js:437-490; app/templates/clip_review.html:194-198", "text": "AI 结果卡片始终按“AI 分析完成”渲染并显示“去检查并生成切片”，片段审核页只按是否存在 clips 启用生成切片和同步发送中心按钮；前端没有读取或展示 analysis_incomplete、quality_degraded、partial 等结果标记。后端虽可拒绝不合格切片，但页面会把降级/不完整结果呈现为正常结果，用户仍会尝试后续操作。"}, {"sev": "MED", "loc": "app/static/js/app.js:1927-1945", "text": "AI 状态轮询只在成功读取后安排下一次定时器；fetch、JSON 解析或临时网络异常会被调用方 catch(() => {}) 静默吞掉，且不会重新调度，导致页面永久停止刷新而无提示。轮询恢复没有退避、重试上限或明确的读取失败状态。"}, {"sev": "MED", "loc": "app/static/js/app.js:1805-1822", "text": "waitForAiAnalysisJob 是无限 while 循环，每秒直接 fetch，没有 AbortController、总超时或网络错误重试；一次临时读取异常就会跳到外层“AI 分析失败”，但服务端 Job 仍可能继续执行，前端重新启用按钮，用户可能再次发起请求并误判任务已失败。"}, {"sev": "MED", "loc": "app/static/js/app.js:711-718; app/static/js/app.js:1927-1946", "text": "页面重新打开时只轮询 AI 状态和运行日志；当后台 Job 在该页面生命周期内完成后，轮询停止，但不会自动重新读取 ai-analysis-runs 或渲染最新结果。跨页面/跨进程恢复场景可能显示 100%/已完成，却仍保留旧候选片段和旧历史，必须人工刷新历史或整页刷新。"}, {"sev": "LOW", "loc": "app/static/js/app.js:374-386; app/static/js/app.js:721-776", "text": "AI 分析期间禁用的控件集合不包含动态生成的历史结果恢复按钮，也不包含显示/刷新历史按钮；用户仍可在新分析运行时恢复旧结果或刷新历史，与后台新 Job 的最终写回形成前端竞态。后端若拒绝该操作，页面仍会额外发出冲突请求。"}]}, {"id": "api_runtime", "label": "API & Runtime", "band": "presentation", "path": "app/main.py + core/models/routers", "desc": "加载配置、初始化应用与安全中间件，并把页面/API 请求路由到业务服务。", "coupling": "core", "deps": ["media_storage", "transcription", "ai_selection", "task_review_cut", "subtitle", "pipeline_queue", "publish_center", "publish_scheduler", "persistence"], "loc": 2948, "score": 63, "grade": "C", "tags": ["fallback", "legacy", "dual-format", "bloat", "glue"], "findings": [{"sev": "MED", "loc": "app/routers/publish.py:59", "text": "OAuth URL 与 callback 仍捕获 broad Exception，并把 str(exc) 直接放入 HTTP detail 或重定向查询参数；tasks.py、subtitles.py 也存在同类映射。异常文本可能包含本地路径、数据库、FFmpeg 或第三方接口诊断，形成浏览器可见的信息泄漏。"}, {"sev": "MED", "loc": "app/routers/tasks.py:212", "text": "async process_audio 直接调用同步的 process_task_audio，服务层会执行 FFmpeg/文件与数据库操作；process_video_cuts:392-400 同样直接调用同步切片流程。长请求会阻塞 FastAPI event loop，使轮询、健康检查和其他 API 排队，并增加超时后的重复请求风险。"}, {"sev": "MED", "loc": "app/models/task.py:38", "text": "TaskStatus 同时保留 uppercase 自动流程状态与 lowercase legacy 状态（pending_processing、ai_analyzing、completed 等），同一业务状态存在双协议；API、数据库查询和状态转换需要维护两套值，容易出现状态筛选和迁移口径不一致。"}, {"sev": "MED", "loc": "app/models/task.py:243", "text": "批量输入列表缺少统一上限：PublishBatchScheduleUpdate.job_ids/confirmed_schedule、PublishBatchJobCreate.output_clip_ids:287、ClipCandidateBatchUpdate.clips:406 与 PublishBatchTargetUpdate.job_ids 均可任意增长。对应路由会逐项执行数据库、文件或发布操作，缺少请求级资源上限，异常大请求可造成内存和处理时间消耗。"}, {"sev": "LOW", "loc": "app/core/config.py:93", "text": "新分域 AI_ANALYSIS_REMOTE_* / AI_PUBLISH_REMOTE_* 配置仍通过 _env_first 回退到 AI_REMOTE_*，同时 Settings 继续保留完整旧字段组；兼容来源有文档说明但长期存在来源漂移和配置行为不一致风险。"}, {"sev": "LOW", "loc": "app/routers/tasks.py:1", "text": "tasks.py 约 537 行、publish.py 约 514 行，包含大量重复的 try/except 与一行式 service 转发；路由、错误映射、同步/异步边界和兼容规则集中在大型 glue 文件中，修改入口时 blast radius 较大。"}]}, {"id": "media_storage", "label": "Media & Storage", "band": "processing", "path": "storage/media/FFmpeg services", "desc": "管理 E 盘任务目录、路径安全、素材预检、FFmpeg/FFprobe 与受控子进程。", "coupling": "high", "deps": ["persistence"], "loc": 1635, "score": 78, "grade": "B", "tags": ["fallback", "legacy", "dual-format", "silent-except"], "findings": [{"sev": "MED", "loc": "app/services/storage_service.py:693", "text": "任务媒体删除已写入 manifest 并分阶段移动，但没有跨进程扫描、加载或恢复入口。进程在暂存完成、数据库提交前崩溃会使数据库仍可见任务的原目录已被移走；数据库提交后、finalize 前崩溃则 cleanup_pending 只存在于本次响应，重启后不会自动清理或恢复。"}, {"sev": "MED", "loc": "app/services/storage_service.py:362", "text": "resolve_video_file_path 对已存在路径直接返回，不验证路径是否位于允许根目录；get_source_video_path 及多个非 HTTP 调用方复用该入口，数据库中的异常视频/产物路径仍可能被发布、字幕或任务查询流程读取为本地任意文件。HTTP 媒体路由已有更严格的任务目录校验，但共享原语本身仍不安全。"}, {"sev": "LOW", "loc": "app/services/storage_service.py:256", "text": "allocate_task_dir_name(reserve=True) 先独占创建目录，再由调用方写入 tasks 记录；进程在两步之间退出会留下没有数据库记录的孤儿任务目录，当前没有启动扫描或清理机制。"}, {"sev": "LOW", "loc": "app/services/storage_service.py:503", "text": "上传直接写入最终 source 文件；上传或后续建档失败时的 unlink 异常被静默忽略，进程在上传中途退出也没有跨进程清理清单，可能留下未被任务引用的半成品媒体。"}, {"sev": "LOW", "loc": "app/services/storage_service.py:842", "text": "遗留 move_task_directory_to_trash 使用 reserve=False 的存在性检查后分配回收站目录，没有独占预占；并发删除同名任务可能选择相同目标目录并发生移动冲突。当前未发现运行时调用，但兼容入口仍可被恢复使用。"}, {"sev": "LOW", "loc": "app/services/video_cut_service.py:185", "text": "cut_single_clip 在 FFmpeg 成功前先删除 plan.output_path；若重复执行同一 CutPlan 后发生超时、启动失败或输出切换失败，之前已经有效的成片会先被删除，临时文件原子替换无法保护旧结果。"}]}, {"id": "transcription", "label": "Transcription", "band": "processing", "path": "transcript services", "desc": "提取音频，调用火山引擎或 faster-whisper，并以分块 checkpoint 生成时间戳转写。", "coupling": "high", "deps": ["media_storage", "persistence"], "loc": 2276, "score": 64, "grade": "C", "tags": ["fallback", "silent-except", "duplication", "god-component"], "findings": [{"sev": "MED", "loc": "app/services/transcript_service.py:1099-1129,1159-1196", "text": "faster-whisper 的 model.transcribe 与模型加载没有单次调用或绝对时限；模型/解码器卡住时只能依赖外层 Worker，直接转写路径可能长期占用。"}, {"sev": "MED", "loc": "app/services/transcript_service.py:164-191", "text": "FFmpeg 音频提取只有无进展 watchdog，没有绝对 wall-clock deadline；进程持续输出进度但实际不结束时仍可能无限运行。"}, {"sev": "MED", "loc": "app/services/transcript_service.py:981-989", "text": "进度文件损坏、读取失败或顶层非 dict 时统一返回空字典，静默丢失故障证据，恢复逻辑无法区分初始状态与持久化损坏。"}, {"sev": "MED", "loc": "app/services/transcript_service.py:67-77,1259-1270", "text": "活动 provider/model/device/compute_type 仍使用模块级可变全局；同一进程并发转写会互相覆盖运行元数据和进度展示。"}, {"sev": "MED", "loc": "app/services/transcript_service.py:347-549", "text": "本地与火山远程分片分别复制 chunk、checkpoint、进度和异常收口逻辑，两个实现继续存在维护分叉。"}, {"sev": "MED", "loc": "app/services/transcript_service.py:83-1395", "text": "单文件仍混合 FFmpeg、faster-whisper、远程 HTTP、幂等 checkpoint、进度文件和 Markdown 生成，约 1400 行，职责边界和回归影响面偏大。"}]}, {"id": "ai_selection", "label": "AI Selection", "band": "processing", "path": "AI providers and analyzers", "desc": "选择 Codex/远程/本地 Provider，解析不稳定 AI 输出并生成通用、综艺或长直播候选片段。", "coupling": "core", "deps": ["transcription", "persistence"], "loc": 6031, "score": 70, "grade": "C", "tags": ["fallback", "legacy", "dual-format", "placeholder", "fake-output", "bloat", "god-component"], "findings": [{"sev": "MED", "loc": "app/services/ai_analysis_workflow_service.py:1273-1320,1322-1360", "text": "active run 的 payload clips、clip_candidates 和 analysis.json 分开读取；恢复/返回路径未校验三者的数量、ID、内容及代际一致性，候选账本漂移时仍可能把 active run 当作可信结果继续展示或恢复。"}, {"sev": "LOW", "loc": "app/services/ai_analysis_workflow_service.py:878-925", "text": "数据库没有历史 run 时会从 analysis.json 兼容合成 active run，当前只检查 JSON 对象和基础 meta 类型，不验证 checksum、完整 schema、selection_profile、候选字段或文件与数据库代际一致性。"}, {"sev": "MED", "loc": "app/services/ai/ai_clip_analyzer.py:414-490,597-615", "text": "AI JSON 解析通过别名映射、literal_eval 和默认值补齐缺失标题、摘要、理由、置信度等字段；模型 schema 退化时仍可能被合成为看似完整的候选结果。"}, {"sev": "MED", "loc": "app/services/ai_analysis_workflow_service.py:1-1470", "text": "单文件约 1400 行，同时承担 Provider 编排、任务状态、租约、候选替换、文件落盘、历史 run、恢复和 API 返回；职责与测试边界过宽，修改 blast radius 较大。"}, {"sev": "LOW", "loc": "app/services/ai/ai_clip_service.py:4-39", "text": "generate_candidate_clips_placeholder 仍返回固定 fake output；当前未发现主流程调用，但误调用会产生伪造候选，属于 legacy/placeholder dead code。"}]}, {"id": "task_review_cut", "label": "Task Review & Cut", "band": "workflow", "path": "task and cut workflow services", "desc": "维护任务状态与视图，保存候选审核选择，生成切片版本并同步发送中心。", "coupling": "core", "deps": ["media_storage", "ai_selection", "publish_center", "persistence"], "loc": 3094, "score": 68, "grade": "C", "tags": ["god-component", "glue", "duplication", "fallback", "dual-format", "legacy"], "findings": [{"sev": "MED", "loc": "app/services/video_cut_workflow_service.py:516-582; app/services/video_cut_workflow_service.py:87-105", "text": "process_task_video_cuts 创建切片批次前仍未校验任务必须处于允许切片的状态，也未检查同一任务是否已有其他 queued/running workflow job；_create_cut_run 只排除 CANCELLED，能够把任意非取消任务写成 cutting。同步切片、AI 候选替换和异步切片并发时仍存在过期候选和状态互相覆盖风险。"}, {"sev": "MED", "loc": "app/services/task_lifecycle_service.py:373-406", "text": "公共状态转换的完成前置条件仍只查询 output_clip 数据库记录，不验证 output_file_path 对应文件真实存在，也不核对当前 active cut_run。残留或损坏的 output_clip 索引可以让任务被标记为 completed，主状态与实际产物不一致。"}, {"sev": "MED", "loc": "app/services/task_query_service.py:234-272", "text": "片段总览的 can_cut 仍只依据 enabled_count 和 source_exists，不读取已统一校验的 analysis_incomplete/quality_degraded，也不排除 AI_ANALYZING 等运行状态。后端已阻止质量降级或不完整分析切片时，页面仍会显示可生成切片。"}, {"sev": "MED", "loc": "app/services/task_query_service.py:204-208; app/services/task_query_service.py:245-304; app/services/task_query_service.py:417-428", "text": "Dashboard、片段总览和系统状态统计只识别 lowercase completed/completed_with_errors，而全自动流水线使用 uppercase COMPLETED 状态，自动完成任务可能漏计或显示为待前置/待检查，继续保留两套状态格式的展示不一致。"}, {"sev": "MED", "loc": "app/services/task_service.py:687-744", "text": "list_clip_candidates 对每条历史候选直接解析 start_time/end_time 及多个评分字段，单条坏时间或坏数值格式会让整个审核列表抛 ValueError，阻断人工检查和后续修复。"}, {"sev": "MED", "loc": "app/services/task_service.py:926-960", "text": "_active_outputs_match_enabled_candidates 只比较启用候选 ID、数量和 output_file_path 是否存在，不验证文件内容、大小、可播放性或 source_fingerprint。路径存在但文件损坏或被外部替换时，审核同步可能错误跳过重新切片。"}, {"sev": "MED", "loc": "app/services/task_service.py:1-101; app/services/task_service.py:1246-1299; app/services/task_query_service.py:89-172", "text": "TaskService 仍约 1,300 行，同时承担任务状态、AI、字幕、转写、切片、数据库写入和页面查询；底部保留多组只转发到 task_query_service 的包装函数，而 task_query_service 又复制 list_output_clips 的路径解析、字幕状态和发布就绪逻辑，核心修改的 blast radius 仍较大。"}, {"sev": "LOW", "loc": "app/services/task_lifecycle_service.py:159-164; app/services/task_lifecycle_service.py:182-229", "text": "create_task_record 在数据库 INSERT 前预创建任务目录；若随后数据库写入失败，服务层本身没有补偿删除空目录的路径，直接调用服务函数时仍可能留下孤儿目录。"}]}, {"id": "subtitle", "label": "Subtitle", "band": "processing", "path": "subtitle services", "desc": "维护字幕轨、不可变 revision、cue、AI 建议、渲染验证与自动流水线交付决定。", "coupling": "high", "deps": ["media_storage", "task_review_cut", "ai_selection", "persistence"], "loc": 3067, "score": 64, "grade": "C", "tags": ["fallback", "silent-except", "legacy", "duplication", "bloat", "god-component"], "findings": [{"sev": "MED", "loc": "app/services/subtitle_auto_workflow_service.py:42-50,51-108", "text": "prepare_task_subtitle_review 先执行 ensure_source_track/ensure_clip_track 并提交 revision/track 副作用，之后才检查活动 Job 与当前 lease；旧 Worker 失租或并发冲突时仍可能留下字幕数据库变更。"}, {"sev": "MED", "loc": "app/services/subtitle_data_service.py:1017-1074", "text": "_load_source_cues 对 checksum、JSON 或 segment 错误直接跳过；只要其他 chunk 仍有 cue 就生成部分字幕 revision，损坏转写会被静默降级为缺句结果。"}, {"sev": "MED", "loc": "app/services/subtitle_data_service.py:1222-1230,236-330", "text": "_sync_dependent_clip_tracks 逐条调用各自事务的 sync_clip_track；源轨已提交后任一切片同步失败，会留下部分 up_to_date、部分 pending_sync 状态。"}, {"sev": "MED", "loc": "app/services/subtitle_auto_workflow_service.py:513-569", "text": "checkpoint 与 DB 恢复证据只检查 completed/verified、路径 exists 和 is_file，不检查非空、size/fingerprint 或可被 FFprobe 验证；截断或零字节最终文件仍可能被恢复为成功。"}, {"sev": "LOW", "loc": "app/services/subtitle_workflow_service.py:240-257", "text": "遗留 _activate_subtitle_job 仍可无 lease、revision、status 或 task/output_clip 约束直接激活指定记录；当前主渲染路径未调用，但 task_service 仍导入并保留兼容入口。"}, {"sev": "MED", "loc": "app/services/subtitle_data_service.py:1222-1230", "text": "字幕数据层继续集中承担 revision/cue 持久化、导入导出、ASS、波形和 FFprobe，单文件约 1434 行，变更影响面和重复事务路径较大。"}]}, {"id": "pipeline_queue", "label": "Pipeline & Job Queue", "band": "workflow", "path": "pipeline and workflow job services", "desc": "用 SQLite Job、Lease、Heartbeat、Checkpoint 和子进程串联长任务与自动流水线。", "coupling": "core", "deps": ["transcription", "ai_selection", "task_review_cut", "subtitle", "publish_center", "persistence"], "loc": 4095, "score": 66, "grade": "C", "tags": ["fallback", "silent-except", "legacy", "stub", "bloat", "god-component", "glue"], "findings": [{"sev": "MED", "loc": "app/services/pipeline_engine.py:1600", "text": "_write_json_atomic 只在写临时文件前后调用 require_active_job_lease，最终 temporary_path.replace(path) 以及 _create_schedule 的直接 write_text（1614-1616）不带 owner/lease 条件；租约在最后检查后被接管时，旧 Worker 仍可能覆盖新 Worker 的 metadata/schedule 派生文件。数据库 Job 状态虽已 fencing，但文件产物仍存在跨进程陈旧写入窗口。"}, {"sev": "MED", "loc": "app/services/job_worker.py:234", "text": "WorkflowJobRunner.stop 只等待 worker 线程最多 25 秒；若 terminate_process_tree 持续失败，_run_job_subprocess 会保留 lease 并继续重试，但 stop 返回后应用生命周期仍会继续关闭，线程/子进程可能未结束、lease 也未立即释放，下一进程只能等待租约过期恢复。"}, {"sev": "MED", "loc": "app/services/job_worker.py:272", "text": "父 Worker 启动子进程时将 stdout/stderr 都重定向到 DEVNULL（272-276），job_worker_process 仅把异常文本打印到 stderr；子进程实际堆栈、Provider/FFmpeg 错误完全丢失，父进程最终只能记录退出码，重启恢复和人工诊断证据不足。"}, {"sev": "MED", "loc": "app/services/job_service.py:163", "text": "_row_to_dict 对 payload_json/result_json/checkpoint_json 的 JSONDecodeError 仅 pass，字段保留为原始字符串；job_worker 随后按 dict 调用 payload.get 等操作时会产生不清晰的 AttributeError/失败，损坏队列数据没有明确的不可恢复数据错误状态。"}, {"sev": "MED", "loc": "app/services/job_worker.py:70", "text": "JOB_TYPE_PUBLISH 仍在 job_service 中声明并可由 create_job 创建，但 execute_job 只有未支持分支（70-71）会失败；这是可入队、可查询却没有执行器的遗留/stub 入口，队列状态语义对调用方不完整。"}, {"sev": "MED", "loc": "app/services/pipeline_engine.py:88", "text": "PipelineEngine 文件约 1,926 行，仍集中承担步骤编排、租约/取消检查、AutoPipelineCheckpoint 恢复、文件证据、AI/切片/字幕、文案、排期和发布任务创建；与 job_service（约1,171行）共同形成核心 God Component，修改任一步骤的回归半径很大。"}, {"sev": "LOW", "loc": "app/services/pipeline_engine.py:1804", "text": "_read_json 在 OSError/JSONDecodeError 时静默返回 fallback；损坏的 metadata、schedule 或配置会被当作空结构继续处理，降低故障可见性和人工恢复依据。"}]}, {"id": "publish_center", "label": "Publish Center", "band": "workflow", "path": "publish content preparation services", "desc": "准备标题、简介、话题、封面、账号和发布草稿，并保留历史兼容执行入口。", "coupling": "core", "deps": ["task_review_cut", "subtitle", "publish_scheduler", "publisher_worker", "persistence"], "loc": 5654, "score": 65, "grade": "C", "tags": ["god-component", "bloat", "legacy", "dual-format", "fallback", "silent-except", "placeholder", "duplication"], "findings": [{"sev": "MED", "loc": "app/services/publish_service.py:1", "text": "publish_service.py 仍约4776行，集中承担配置、账号、OAuth、文案、封面、队列、历史、OpenCLI兼容和API发布职责，属于真实 God Component，修改影响面较大。"}, {"sev": "MED", "loc": "app/services/publish_service.py:2968", "text": "历史查询 SQL 仍先按大写 PUBLISH_HISTORY_STATUSES 过滤，再做 legacy 状态归一化；数据库中的 lowercase/旧状态记录会在归一化前被排除，历史页与统计可能漏数据。"}, {"sev": "MED", "loc": "app/services/publish_service.py:2173", "text": "sync_task_publish_jobs 中封面生成异常仅写入 cover_error 后继续创建 WAITING 发布任务，未计入 errors；同步接口可能返回 ok，但任务实际缺少封面，后续发送就绪检查才失败。"}, {"sev": "MED", "loc": "app/services/publish_service.py:2818", "text": "create_batch_publish_jobs 对不存在的 output_clip_id 直接 continue，最后无论缺失多少输入都返回 status=ok，调用方无法区分全部无效、部分成功和完整成功。"}, {"sev": "MED", "loc": "app/services/publish_readiness.py:167", "text": "PUBLISH_MODES 仍允许 api_publish，但 build_send_readiness 的 resolved_mode 只接受 local_browser/manual_export；API 模式可以创建，却在发送前统一判定 unsupported_publish_mode。"}, {"sev": "MED", "loc": "app/services/publish_providers.py:141", "text": "BilibiliPublishProvider 完成配置和 access_token 校验后固定抛出 bilibili_provider_pending，属于可创建、可排队但无法执行的真实发布入口，仍是 placeholder/stub。"}, {"sev": "MED", "loc": "app/services/publish_providers.py:81", "text": "DouyinPublishProvider 将上传和创建作品拆成两个非幂等 HTTP 调用；上传已被平台接受但客户端读取响应时超时或断网，重试可能产生重复作品，未转入人工复核或使用幂等键。"}, {"sev": "LOW", "loc": "app/services/publish_service.py:1610", "text": "批量查询每一行都调用 _normalize_job；该函数随后构建 readiness 并触发账号/运行态解析，批量页面可能产生逐行重复查询，数据量增长后会放大响应延迟。"}, {"sev": "LOW", "loc": "app/services/publish_providers.py:204", "text": "_post_multipart 使用 read_bytes 将整个视频读入内存，再与 multipart 头部 join；大文件发送峰值内存约为文件大小的两倍，存在资源受限环境下的稳定性风险。"}]}, {"id": "publish_scheduler", "label": "Publish Scheduler", "band": "execution", "path": "scheduler/repository/executor", "desc": "计算排期、原子领取发布任务、重试、恢复不确定执行并维护发布状态机。", "coupling": "core", "deps": ["publish_center", "publisher_worker", "persistence"], "loc": 2362, "score": 74, "grade": "C", "tags": ["god-component", "bloat", "legacy", "silent-except"], "findings": [{"sev": "MED", "loc": "app/services/publish_scheduler.py:756-785", "text": "recover_interrupted_jobs 每轮加载全部 PUBLISHING 任务，并逐个同步调用 Worker execution；没有批量上限、并发控制或退避，Worker 超时或不可用时恢复耗时随任务数线性增长并阻塞后续排期。"}, {"sev": "MED", "loc": "app/services/publish_scheduler.py:283-304", "text": "list_due_jobs 每轮 SELECT 全部 SCHEDULED 记录，再逐条在 Python 中解析并过滤时间，没有 SQL due 条件、分页或批量上限，排期规模增长会增加扫描内存和调度延迟。"}, {"sev": "MED", "loc": "app/services/publish_scheduler.py:133-1789", "text": "PublishScheduler 约 1,700 行并集中承担排期计算、任务领取、结果写回、Worker 恢复、重试修复、人工复核、批量排期及旧版兼容，状态路径修改的回归半径较大。"}, {"sev": "LOW", "loc": "app/services/publish_scheduler.py:276-281", "text": "shutdown 会等待后台 Task 完整结束，但没有超时或取消兜底；run_once 被 Worker 长超时、数据库锁或文件操作阻塞时，应用停机可能长时间挂起。"}, {"sev": "LOW", "loc": "app/services/publish_scheduler.py:1840-1845", "text": "queue_snapshot 对非法 scheduled_at 静默 pass，损坏排期会从今日任务视图消失，未产生告警或异常计数。"}]}, {"id": "publisher_worker", "label": "Publishers & Worker", "band": "execution", "path": "publisher registry and Windows worker", "desc": "通过 Publisher Registry 和 Windows Chrome Worker 执行抖音/B站投稿、导出与兼容模式。", "coupling": "high", "deps": ["media_storage", "persistence"], "loc": 2738, "score": 80, "grade": "B", "tags": ["legacy", "glue", "silent-except", "fallback"], "findings": [{"sev": "MED", "loc": "scripts/publish_host_worker.py:297", "text": "_prior_job_execution_requires_review 会跳过 corrupt 或缺失/无效 identity 的旧 journal；若旧执行已开始上传但身份未持久化，重试可能无法关联并再次提交。browser_opened 仍属于 safe_retry_phases，存在浏览器动作已发生而 journal 尚未推进的重复发布窗口。"}, {"sev": "LOW", "loc": "app/services/publishers/browser_runtime.py:315", "text": "screenshot 捕获 Exception 后直接返回空字符串，不记录错误或阶段；发布失败诊断可能静默丢失截图证据。"}, {"sev": "LOW", "loc": "app/services/publishers/page_scripts.py:14", "text": "通过延迟导入 app.services.publish_service 并调用其私有 DOM 脚本维持旧发布协议，形成 Worker/发布服务间的 legacy glue 耦合。"}]}, {"id": "persistence", "label": "SQLite Persistence", "band": "persistence", "path": "app/db + backup services", "desc": "创建 SQLite Schema、执行启动时兼容迁移和索引，并提供 WAL 安全备份恢复。", "coupling": "core", "deps": [], "loc": 3756, "score": 72, "grade": "C", "tags": ["legacy", "dual-format", "bloat", "god-component", "glue"], "findings": [{"sev": "MED", "loc": "app/db/database.py:614", "text": "init_db 仍先执行历史列探测迁移 helper，再执行账本迁移；helper 内部使用 executescript（如 :1074），会隐式提交此前 DML，后续 helper 失败时可能留下部分 Schema/数据变更而无对应 schema_migrations 记录。"}, {"sev": "MED", "loc": "scripts/backup_restore.py:362", "text": "备份验证仅执行 quick_check、必要表/行数和 manifest 文件哈希校验，未执行 PRAGMA foreign_key_check，也未核对 schema_migrations 版本/checksum；外键损坏或结构账本漂移可能被当作可恢复备份。"}, {"sev": "MED", "loc": "scripts/backup_restore.py:602", "text": "restore_backup_bundle 在替换数据库及删除 -wal/-shm 前没有活动应用/Worker 互斥或停止检查；运行中的 SQLite 连接可能继续写入旧 inode/WAL，造成恢复后丢写或双数据库视图。"}, {"sev": "LOW", "loc": "app/db/database.py:811", "text": "workflow_jobs claim 索引仅覆盖 status、next_attempt_at、created_at，未包含 lease_expires_at；租约过期接管/恢复扫描仍需过滤大量记录，规模增长后会退化。"}, {"sev": "LOW", "loc": "app/db/database.py:169", "text": "tasks.status 无 CHECK 约束且默认仍为 pending_video，历史迁移 :1091-1100 继续归一化 lowercase legacy 状态，而 app/models/task.py:38 同时接受新旧两套枚举，数据库层无法保证唯一状态协议。"}, {"sev": "LOW", "loc": "scripts/backup_restore_runtime.py:142", "text": "runtime 入口通过 monkeypatch 替换 backup_restore 的全局函数并重新导出 API；core 与 runtime 两套导入路径的行为可能随新增校验漂移，形成 legacy/dual-format glue。"}]}, {"id": "ops_delivery", "label": "Ops & Delivery", "band": "persistence", "path": "Docker/PowerShell/CI", "desc": "提供 Windows/Docker 启停、诊断、CI、发布门禁、Demo 与维护脚本。", "coupling": "med", "deps": ["api_runtime", "publisher_worker", "persistence"], "loc": 4348, "score": 68, "grade": "C", "tags": ["fallback", "legacy", "dual-format", "duplication", "bloat", "glue", "silent-except", "monkeypatch"], "findings": [{"sev": "MED", "loc": ".github/workflows/ci.yml:3", "text": "CI 仅监听 master push/PR；feature/docs 直接 push 不即时验证，问题延迟到开 PR。"}, {"sev": "MED", "loc": "scripts/start_docker_opencli.ps1:24", "text": "健康检查异常只警告不返回非零，服务失败也可能被调用方视为启动成功。"}, {"sev": "MED", "loc": "scripts/start.ps1:30", "text": "Demo 覆盖生效前先对正式 E 盘配置运行 doctor，新机/迁移机的隔离 Demo 可能被旧路径阻断。"}, {"sev": "MED", "loc": "scripts/start.ps1:71", "text": "Worker 启动异常被捕获后继续并报告工作台成功，发布能力不可用时易被误判完整健康。"}, {"sev": "HIGH", "loc": "scripts/migrate_task_dirs_to_project_names.py:211", "text": "任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。"}, {"sev": "MED", "loc": "scripts/restore.ps1:27", "text": "恢复只以健康响应判断 App 运行，StopServices 只停 Compose；native/异常健康进程可能仍持有 DB 时执行替换。"}, {"sev": "MED", "loc": "scripts/backup.ps1:33", "text": "备份默认包含 .env 且不加密，仅显式 ExcludeEnv 才排除，包被共享时泄漏本机秘密。"}, {"sev": "MED", "loc": "tests/test_native_scripts.py:11", "text": "启停测试主要是源码字符串断言，Windows smoke 不做实际 restore/冲突/清理失败与恢复后健康验证。"}, {"sev": "MED", "loc": "scripts/seed_demo_data.py:32", "text": "缺 FFmpeg 时仍插入无媒体路径 Demo 数据并成功退出，数量检查通过但媒体 smoke 不可信。"}, {"sev": "LOW", "loc": "scripts/acceptance.ps1:115", "text": "验收递归扫描正式任务目录，媒体量大/锁文件会显著拖慢或阻断 release gate。"}, {"sev": "LOW", "loc": "scripts/backup_restore_runtime.py:142", "text": "import 时 monkeypatch backup core，全局行为依赖导入顺序。"}, {"sev": "LOW", "loc": "docs/PORTABLE_SETUP.md:127", "text": "文档描述与当前 start.ps1 实现不符，旧 Next Steps 又保留兼容入口，启动排障认知漂移。"}]}]};
+const M = DATA.modules || [];
+const BANDS = DATA.bands || [];
+const SPINE = DATA.spine || [];
+const REPORT_THEMES = DATA.reportThemes || [];
+const META = DATA.meta || {};
+/* HTML-escape every string that comes from modules.json (labels, descriptions,
+   findings, tags, paths, meta, themes, standard) before it enters innerHTML. The only
+   trusted HTML is the template's own i18n strings (tl) and the structural markup. */
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>(
+  {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+let BAD_TAGS = new Set(["monkeypatch","fallback","legacy","dual-format","stub","fake-output","bloat","duplication","glue","silent-except","silent-catch","any-escape","over-fit","god-component","placeholder"]);
+
+/* ---------- i18n: display language via meta.lang (module names never translated) ---------- */
+const LANG = META.lang || "en";
+const I18N = {
+ en:{ mapSuffix:"· Functional Architecture Map", sub:"functional modules · call hierarchy · coupling · quality score · LoC",
+   report:"report", searchPh:"Find a module…", allGrades:"All grades", anyIssue:"Any issue", scrollNote:"click a module · scroll to pan",
+   about:"What it does", audit:"Quality audit", clean:"no material issues — clean / well-scoped",
+   dependsOn:"Depends on / calls →", usedBy:"← Used by (dependents)", none:"— none —", clearSel:"Clear selection",
+   couplingLbl:"coupling", deps:"dependencies", dependents:"dependents", locUnit:"LoC", coreModules:"Core modules (the spine)",
+   lgCoupling:"Coupling", lgCore:"core — system spine", lgHigh:"high — many connections", lgMed:"medium", lgLow:"low — leaf / self-contained",
+   lgEdges:"Edges", lgOut:"depends on / calls →", lgIn:"← used by (dependent)",
+   introHint:"<b>Click any module</b> to see what it does, its quality score &amp; findings, what it calls (solid amber, downstream) and what depends on it (dashed gray, upstream).<br><br>Each card shows a <b>health score</b> (0–100). Toggle the color mode, filter by grade/issue, or open the <b>Audit report</b>.",
+   criticalPath:"Critical path", spineTitle:"Data-flow spine", path:"Path", healthReport:"Health report", qa:"Quality audit",
+   worst:"Worst offenders — click to inspect", commonTags:"Most-common smell tags", themes:"Cross-cutting themes", backToMap:"← Back to map", avg:"avg",
+   filter:"Filter", modulesWord:"modules", allWord:"all", noMatches:"no matches", clearFilters:"Clear filters",
+   btnReport:"Audit report", btnSpine:"Data-flow spine", colorCoupling:"Color: coupling", colorHealth:"Color: health",
+   btnStd:"Standard", stdTitle:"Audit standard", stdIntro:"How modules are scored — the same rubric for every module, language, and run. Click Edit to add your own issue tags.",
+   stdRubric:"Score → grade", stdSeverity:"Finding severity", stdTags:"Issue tags", stdCoupling:"Coupling (structural, not quality)", close:"Close",
+   stdEditBtn:"Edit", stdDone:"Done", stdExport:"Export", stdReset:"Reset", stdAddTag:"+ Tag",
+   stdEditHint:"Editing — changes save in this browser. Export → save as <code>.codemap/standard.json</code> to make them permanent and used by audits.",
+   stdNewTagId:"New tag id (e.g. perf-risk, security):", stdExported:"Saved standard.json — put it in .codemap/",
+   copyFix:"Copy fix prompt", copied:"Copied — paste into Claude Code / Codex",
+   trackedLoc:(l,f)=>`${l} tracked LoC · ${f} files` },
+ zh:{ mapSuffix:"· 功能架构图", sub:"功能模块 · 调用层级 · 耦合 · 质量评分 · 代码行数",
+   report:"报告", searchPh:"查找模块…", allGrades:"全部等级", anyIssue:"全部问题", scrollNote:"点击模块 · 滚动平移",
+   about:"模块简介", audit:"质量审计", clean:"无实质问题 —— 干净、职责单一",
+   dependsOn:"依赖 / 调用 →", usedBy:"← 被谁依赖", none:"— 无 —", clearSel:"清除选择",
+   couplingLbl:"耦合", deps:"个依赖", dependents:"个被依赖", locUnit:"行", coreModules:"核心模块（主线）",
+   lgCoupling:"耦合", lgCore:"core — 系统主线枢纽", lgHigh:"high — 连接很多", lgMed:"medium — 中等", lgLow:"low — 叶子 / 自洽",
+   lgEdges:"连线", lgOut:"依赖 / 调用 →", lgIn:"← 被依赖",
+   introHint:"<b>点击任意模块</b>查看它在做什么、质量评分与问题、它调用了谁（实线琥珀＝下游）以及谁依赖它（虚线灰＝上游）。<br><br>每张卡片都有<b>健康分</b>（0–100）。可切换配色模式、按等级或问题筛选，或打开<b>审计报告</b>。",
+   criticalPath:"关键路径", spineTitle:"数据流主线", path:"路径", healthReport:"健康报告", qa:"质量审计",
+   worst:"最差模块 —— 点击查看", commonTags:"最常见问题标签", themes:"跨模块共性问题", backToMap:"← 返回地图", avg:"平均",
+   filter:"筛选", modulesWord:"个模块", allWord:"全部", noMatches:"无匹配", clearFilters:"清除筛选",
+   btnReport:"审计报告", btnSpine:"数据流主线", colorCoupling:"配色：耦合", colorHealth:"配色：健康度",
+   btnStd:"评判标准", stdTitle:"评判标准", stdIntro:"模块如何打分 —— 所有模块、所有语言、每一次运行都用同一套标准。点「编辑」可加入你自己的问题标签。",
+   stdRubric:"分数 → 等级", stdSeverity:"问题严重度", stdTags:"问题标签", stdCoupling:"耦合（结构维度，非质量）", close:"关闭",
+   stdEditBtn:"编辑", stdDone:"完成", stdExport:"导出", stdReset:"重置", stdAddTag:"+ 标签",
+   stdEditHint:"编辑中 —— 改动保存在本浏览器。导出 → 存为 <code>.codemap/standard.json</code> 即永久生效并被审计采用。",
+   stdNewTagId:"新标签 id（如 perf-risk、security）：", stdExported:"已生成 standard.json —— 放到 .codemap/ 下",
+   copyFix:"复制修复指令", copied:"已复制 —— 粘贴到 Claude Code / Codex",
+   trackedLoc:(l,f)=>`${l} 行（已跟踪）· ${f} 个文件` },
+};
+function tl(k){ const d=I18N[LANG]||I18N.en; return d[k]!=null?d[k]:(I18N.en[k]!=null?I18N.en[k]:k); }
+document.documentElement.lang = LANG;
+function stdText(o){ return o ? (LANG==="zh" ? (o.zh||o.en||"") : (o.en||o.zh||"")) : ""; }
+
+/* ---------- the audit standard — editable, configurable, its own page ----------
+   Effective standard = a saved browser draft (user edits), else the injected file
+   (DATA.standard, from .codemap/standard.json or the skill default), else
+   this built-in fallback. Edit it on the Standard page and Export to standard.json
+   to make it permanent and used by audits. Custom tags flow through the whole map. */
+const BUILTIN_STD = {
+  rubric:[
+    {grade:"A",score:95,range:"90–100",en:"clean, well-scoped, idiomatic",zh:"干净、职责单一、地道"},
+    {grade:"B",score:82,range:"75–89",en:"minor issues: a documented shim, mild bloat",zh:"小问题：有文档的兼容、轻微臃肿"},
+    {grade:"C",score:67,range:"60–74",en:"notable hacks / fallbacks / bloat / duplication",zh:"明显的 hack / 回退 / 臃肿 / 重复"},
+    {grade:"D",score:50,range:"40–59",en:"significant legacy / stubs / duplication, or a protocol violation",zh:"严重的遗留 / 占位 / 重复，或协议违规"},
+    {grade:"F",score:25,range:"0–39",en:"broken, fake output, or unfinished-but-wired",zh:"损坏、伪造输出，或未完成却已接线"},
+  ],
+  severities:[
+    {key:"HIGH",en:"wrong / dangerous / fake, a protocol or security issue, or a genuine maintenance hazard",zh:"错误 / 危险 / 伪造、协议或安全问题，或真正的维护地雷"},
+    {key:"MED",en:"a real smell a maintainer should fix",zh:"维护者该修的真坏味"},
+    {key:"LOW",en:"a documented shim, a cosmetic cast, benign bloat — worth noting, not urgent",zh:"有文档的兼容、装饰性 cast、良性臃肿 —— 值得记、不紧急"},
+  ],
+  coupling:[
+    {key:"core",en:"system spine — central to almost everything",zh:"系统主线 —— 几乎牵连一切"},
+    {key:"high",en:"many connections",zh:"连接很多"},
+    {key:"med",en:"moderate",zh:"中等"},
+    {key:"low",en:"leaf / self-contained",zh:"叶子 / 自洽"},
+  ],
+  tags:[
+    {id:"monkeypatch",label:"monkeypatch",labelZh:"猴补丁",bad:true,en:"runtime mutation of another module / stdlib / vendor; reflection or prototype patching",zh:"运行时改写别的模块/标准库/依赖；反射或原型补丁"},
+    {id:"fallback",label:"fallback",labelZh:"回退兜底",bad:true,en:"'try the real thing, then fake/degrade'; a||b||c chains that hide which value is real",zh:"“先试真的再退化/造假”；a||b||c 掩盖哪个是真值"},
+    {id:"silent-except",label:"silent-except",labelZh:"静默吞错",bad:true,en:"swallowed errors: empty catch / except:pass / ignored return codes",zh:"吞掉错误：空 catch / except:pass / 忽略返回码"},
+    {id:"legacy",label:"legacy",labelZh:"遗留",bad:true,en:"deprecated/back-compat shims, dead-but-shipped code, parallel old+new paths",zh:"遗留/兼容垫片、已发布的死代码、新旧并存"},
+    {id:"dual-format",label:"dual-format",labelZh:"双格式",bad:true,en:"accepting two shapes for one field (snake||camel), patched through the code",zh:"同一字段接受两种形态（snake||camel）并散落各处"},
+    {id:"stub",label:"stub",labelZh:"占位桩",bad:true,en:"NotImplemented / TODO / dead buttons / demo scripts presented as real",zh:"未实现/TODO/死按钮/演示脚本当成品"},
+    {id:"fake-output",label:"fake-output",labelZh:"伪造输出",bad:true,en:"returns random/canned/hardcoded results where real work is implied",zh:"本应真算的地方返回随机/写死结果"},
+    {id:"duplication",label:"duplication",labelZh:"重复",bad:true,en:"copy-pasted logic, or an existing shared abstraction not reused",zh:"复制粘贴，或已有共享抽象却不复用"},
+    {id:"bloat",label:"bloat",labelZh:"臃肿",bad:true,en:"oversized file / function; too many responsibilities in one unit",zh:"超大文件/函数；单元职责过多"},
+    {id:"glue",label:"glue",labelZh:"胶水",bad:true,en:"valueless pass-through: rows of thin forwarders / no-op adapters",zh:"无价值透传：成片薄包装 / 零转换适配器"},
+    {id:"any-escape",label:"any-escape",labelZh:"类型逃逸",bad:true,en:"bypassing the type system: as any / @ts-ignore / dynamic / void* / reinterpret_cast / unsafe",zh:"绕过类型系统：as any / @ts-ignore / dynamic / void* / reinterpret_cast / unsafe"},
+    {id:"over-fit",label:"over-fit",labelZh:"过度特化",bad:true,en:"hardcoded to one case where a small generalization was expected",zh:"硬编码单一情况，本应小幅泛化"},
+    {id:"god-component",label:"god-component",labelZh:"上帝组件",bad:true,en:"one component/class/file doing far too much",zh:"一个组件/类/文件做太多事"},
+    {id:"placeholder",label:"placeholder",labelZh:"占位",bad:true,en:"unfinished UI / data presented as if complete",zh:"未完成的 UI/数据当作已完成"},
+    {id:"clean",label:"clean",labelZh:"干净",bad:false,en:"no material issues — well-scoped",zh:"无实质问题 —— 职责单一"},
+  ],
+};
+const STD_KEY = "codemap.standard."+(META.project||"default");
+function loadStdDraft(){ try{ const s=localStorage.getItem(STD_KEY); return s?JSON.parse(s):null; }catch(e){ return null; } }
+let STDDATA = loadStdDraft() || JSON.parse(JSON.stringify(DATA.standard || BUILTIN_STD));
+const TAGMETA = {};
+function rebuildTagMeta(){
+  for(const k in TAGMETA) delete TAGMETA[k];
+  (STDDATA.tags||[]).forEach(t=>TAGMETA[t.id]=t);
+  BAD_TAGS = new Set((STDDATA.tags||[]).filter(t=>t.bad!==false).map(t=>t.id));
+}
+function tagMeta(id){ return TAGMETA[id] || {id,label:id,bad:true}; }
+function tagLabel(t){ const m=tagMeta(t); return LANG==="zh" ? (m.labelZh||m.label||t) : (m.label||t); }
+rebuildTagMeta();
+
+/* problems POP (saturated red→amber), good RECEDES (pale low-sat green).
+   The cue is saturation/lightness, not hue — colorblind-friendlier. */
+function healthColor(s){
+  if(s==null) return "#6b7280";
+  const stops=[[0,[224,78,74]],[42,[226,128,66]],[60,[222,172,52]],
+               [74,[214,180,72]],[82,[168,180,140]],[100,[150,178,150]]];
+  s=Math.max(0,Math.min(100,s));
+  let a=stops[0], b=stops[stops.length-1];
+  for(let i=0;i<stops.length-1;i++){ if(s>=stops[i][0] && s<=stops[i+1][0]){a=stops[i];b=stops[i+1];break;} }
+  const t=(s-a[0])/((b[0]-a[0])||1);
+  const c=a[1].map((v,k)=>Math.round(v+(b[1][k]-v)*t));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+const byId = Object.fromEntries(M.map(m=>[m.id,m]));
+const dependentsOf = id => M.filter(m=>(m.deps||[]).includes(id)).map(m=>m.id);
+
+const board=document.getElementById("board");
+const svg=document.getElementById("edges");
+const detail=document.getElementById("detail");
+const cardEl={};
+
+document.getElementById("projTitle").innerHTML = esc(META.project||"Project")+` <span>${tl('mapSuffix')}</span>`;
+document.getElementById("subLine").innerHTML = esc(META.subtitle||tl('sub'))+
+  (META.mdPath?`  ·  <a href="${esc(META.mdPath.split('/').pop())}" style="color:var(--accent);text-decoration:none">${tl('report')} ↗</a>`:"");
+/* localize static header chrome (module names/labels are never translated) */
+document.querySelector(".scrollnote").textContent = tl("scrollNote");
+document.getElementById("search").placeholder = tl("searchPh");
+document.getElementById("reportBtn").textContent = tl("btnReport");
+document.getElementById("spineBtn").textContent = tl("btnSpine");
+document.getElementById("stdBtn").textContent = tl("btnStd");
+document.getElementById("gradeFilter").options[0].textContent = tl("allGrades");
+document.getElementById("tagFilter").options[0].textContent = tl("anyIssue");
+
+BANDS.forEach(b=>{
+  if(b.wire){
+    const w=document.createElement("div"); w.className="wire";
+    w.innerHTML=`<div class="line"></div><div class="lbl">${esc(b.t||"boundary")}</div><div class="line"></div>`;
+    board.appendChild(w); return;
+  }
+  const band=document.createElement("div"); band.className=`band tier-${b.tier||""}`;
+  const items=M.filter(m=>m.band===b.id);
+  const gloc=items.reduce((a,m)=>a+(m.loc||0),0);
+  const head=document.createElement("div"); head.className="band-head";
+  head.innerHTML=`<span class="t">${esc(b.t||b.id)}</span><span class="d">${esc(b.d||"")}</span>`+
+    `<span class="num">${items.length}</span><span class="num gloc">${gloc.toLocaleString()} ${tl('locUnit')}</span>`;
+  band.appendChild(head);
+  const body=document.createElement("div"); body.className="band-body";
+  items.forEach(m=>{
+    const n=document.createElement("div");
+    n.className=`node c-${m.coupling||"low"}`; n.dataset.id=m.id;
+    if(m.score!=null) n.style.setProperty("--h",healthColor(m.score));
+    const chip=m.score!=null?`<span class="chip">${m.score}</span>`:"";
+    const locStr=m.loc!=null?` · ${Number(m.loc).toLocaleString()} ${tl('locUnit')}`:"";
+    n.innerHTML=`${chip}<div class="lab">${esc(m.label)}</div><div class="meta">${esc(m.grade||"–")} · ${(m.deps||[]).length}→ ${dependentsOf(m.id).length}←${locStr}</div>`;
+    n.addEventListener("click",e=>{e.stopPropagation();select(m.id)});
+    body.appendChild(n); cardEl[m.id]=n;
+  });
+  band.appendChild(body); board.appendChild(band);
+});
+
+function center(el){const r=el.getBoundingClientRect(), br=board.getBoundingClientRect();
+  return {x:r.left-br.left+r.width/2, y:r.top-br.top+r.height/2, w:r.width, h:r.height};}
+function clip(c,from){const dx=from.x-c.x, dy=from.y-c.y, hw=c.w/2+2, hh=c.h/2+2;
+  if(dx===0&&dy===0) return c;
+  const s=Math.min(hw/Math.abs(dx||1e-6), hh/Math.abs(dy||1e-6));
+  return {x:c.x+dx*s, y:c.y+dy*s};}
+function edge(aEl,bEl,kind){
+  const ca=center(aEl), cb=center(bEl), a=clip(ca,cb), b=clip(cb,ca);
+  const dy=b.y-a.y, k=Math.min(Math.abs(dy)*0.4+30,150);
+  const p=document.createElementNS("http://www.w3.org/2000/svg","path");
+  p.setAttribute("d",`M${a.x},${a.y} C${a.x},${a.y+(dy>=0?k:-k)} ${b.x},${b.y-(dy>=0?k:-k)} ${b.x},${b.y}`);
+  p.setAttribute("fill","none");
+  p.setAttribute("stroke",kind==="out"?"var(--out)":"var(--in)");
+  p.setAttribute("stroke-width",kind==="out"?"1.9":"1.5");
+  p.setAttribute("stroke-opacity",kind==="out"?"0.95":"0.6");
+  if(kind==="in")p.setAttribute("stroke-dasharray","4 3");
+  p.setAttribute("marker-end",kind==="out"?"url(#ah-out)":"url(#ah-in)");
+  svg.appendChild(p);
+}
+function clearEdges(){[...svg.querySelectorAll("path")].forEach(p=>p.remove());}
+
+let current=null, spineOn=false;
+function resetClasses(){board.classList.remove("has-sel");
+  Object.values(cardEl).forEach(n=>n.classList.remove("sel","dep","dependent","lit"));}
+function select(id){
+  if(current===id){clearSel();return;}
+  current=id; spineOn=false; document.getElementById("spineBtn").classList.remove("active");
+  clearEdges(); resetClasses();
+  const m=byId[id]; const outs=(m.deps||[]); const ins=dependentsOf(id);
+  board.classList.add("has-sel"); cardEl[id].classList.add("sel","lit");
+  outs.forEach(d=>{cardEl[d]&&(cardEl[d].classList.add("dep","lit"),edge(cardEl[id],cardEl[d],"out"));});
+  ins.forEach(d=>{cardEl[d]&&(cardEl[d].classList.add("dependent","lit"),edge(cardEl[d],cardEl[id],"in"));});
+  renderDetail(m,outs,ins);
+  cardEl[id].scrollIntoView({block:"nearest",inline:"nearest",behavior:"smooth"});
+}
+function clearSel(){current=null; clearEdges(); resetClasses(); renderIntro();}
+function showSpine(){
+  current=null; clearEdges(); resetClasses(); board.classList.add("has-sel");
+  spineOn=true; document.getElementById("spineBtn").classList.add("active");
+  SPINE.forEach(id=>cardEl[id]&&cardEl[id].classList.add("lit"));
+  for(let i=0;i<SPINE.length-1;i++){const a=cardEl[SPINE[i]],b=cardEl[SPINE[i+1]];
+    if(a&&b){a.classList.add("sel");b.classList.add("sel");edge(a,b,"out");}}
+  detail.innerHTML=`<div class="detail"><div class="kicker">${tl('criticalPath')}</div><h2>${tl('spineTitle')}</h2>
+    <p class="desc">${esc(META.spineDesc||"The system's critical request path, end to end.")}</p>
+    <div class="reltitle">${tl('path')}</div>
+    <div class="rel">${SPINE.map(id=>byId[id]?`<button data-go="${esc(id)}"><span>${esc(byId[id].label)}</span><span class="bnd">${esc(byId[id].coupling)}</span></button>`:"").join("")}</div>
+    ${legendHTML()}</div>`;
+  bindGo();
+}
+function auditHTML(m){
+  if(m.score==null) return "";
+  const col=healthColor(m.score);
+  const tags=(m.tags||[]).map(t=>`<span class="tg ${t==='clean'?'ok':(BAD_TAGS.has(t)?'bad':'')}">${esc(tagLabel(t))}</span>`).join("");
+  const sevCls=s=>({HIGH:"HIGH",MED:"MED",LOW:"LOW"}[s]||"LOW");
+  const fnd=(m.findings||[]).length
+    ? m.findings.map(f=>`<div class="finding sev-${sevCls(f.sev)}"><div class="top"><span class="sev sev-${sevCls(f.sev)}">${esc(f.sev)}</span><span class="loc">${esc(f.loc||"")}</span></div><div class="txt">${esc(f.text||"")}</div></div>`).join("")
+    : `<div class="none">${tl('clean')}</div>`;
+  return `<div class="reltitle" style="margin-top:6px">${tl('audit')}</div>`+`
+    <div class="scorebox"><span class="big" style="color:${col}">${m.score}</span>
+      <span class="gr grade-${esc(m.grade)}">${esc(m.grade)}</span>
+      <span class="bar"><i style="width:${m.score}%;background:${col}"></i></span></div>
+    <div class="tagchips">${tags}</div><div class="findings">${fnd}</div>`;
+}
+function renderDetail(m,outs,ins){
+  const li=arr=>arr.length?arr.map(id=>byId[id]?`<button data-go="${esc(id)}"><span>${esc(byId[id].label)}</span><span class="bnd">${esc(byId[id].band)}</span></button>`:"").join(""):`<div class="none">${tl('none')}</div>`;
+  detail.innerHTML=`<div class="detail"><div class="kicker">${esc(bandTitle(m.band))}</div>
+    <h2>${esc(m.label)}</h2><div class="path">${esc(m.path||"")}</div>
+    <div class="pill-row"><span class="pill cpl">${tl('couplingLbl')}: ${esc(m.coupling)}</span>
+      ${m.loc!=null?`<span class="pill">${Number(m.loc).toLocaleString()} ${tl('locUnit')}</span>`:""}
+      <span class="pill">${outs.length} ${tl('deps')}</span><span class="pill">${ins.length} ${tl('dependents')}</span></div>
+    ${m.desc?`<div class="reltitle">${tl('about')}</div><p class="desc">${esc(m.desc)}</p>`:""}
+    ${auditHTML(m)}
+    <div class="reltitle"><span class="dotc" style="background:var(--out)"></span>${tl('dependsOn')}</div>
+    <div class="rel">${li(outs)}</div>
+    <div class="reltitle"><span class="dotc" style="background:var(--in)"></span>${tl('usedBy')}</div>
+    <div class="rel">${li(ins)}</div>
+    ${m.score!=null?`<button class="btn clearbtn" id="copyFixBtn" style="margin-top:14px">${tl('copyFix')} ↗</button>`:""}
+    <button class="btn clearbtn" id="clearBtn" style="margin-top:8px">${tl('clearSel')}</button></div>`;
+  bindGo(); document.getElementById("clearBtn").addEventListener("click",clearSel);
+  const cf=document.getElementById("copyFixBtn");
+  if(cf) cf.onclick=()=>{ copyText("/codemap fix "+m.id); toast(tl('copied')); };
+}
+function bindGo(){detail.querySelectorAll("[data-go]").forEach(b=>b.addEventListener("click",()=>select(b.dataset.go)));}
+function bandTitle(b){return (BANDS.find(x=>x.id===b)||{}).t||b;}
+function legendHTML(){
+  return `<div class="legend"><h4>${tl('lgCoupling')}</h4>
+    <div class="row"><span class="swatch" style="background:var(--c-core)"></span>${tl('lgCore')}</div>
+    <div class="row"><span class="swatch" style="background:var(--c-high)"></span>${tl('lgHigh')}</div>
+    <div class="row"><span class="swatch" style="background:var(--c-med)"></span>${tl('lgMed')}</div>
+    <div class="row"><span class="swatch" style="background:var(--c-low)"></span>${tl('lgLow')}</div>
+    <h4 style="margin-top:18px">${tl('lgEdges')}</h4>
+    <div class="row"><span class="ln" style="border-color:var(--out)"></span>${tl('lgOut')}</div>
+    <div class="row"><span class="ln" style="border-color:var(--in);border-top-style:dashed"></span>${tl('lgIn')}</div></div>`;
+}
+function renderIntro(){
+  const cores=M.filter(m=>m.coupling==="core");
+  detail.innerHTML=`<div class="detail"><div class="empty-hint">${tl('introHint')}</div>
+    ${cores.length?`<div class="reltitle" style="margin-top:22px">${tl('coreModules')}</div>
+    <div class="rel">${cores.map(m=>`<button data-go="${esc(m.id)}"><span>${esc(m.label)}</span><span class="bnd">${esc(m.band)}</span></button>`).join("")}</div>`:""}
+    ${legendHTML()}</div>`;
+  bindGo();
+}
+function renderReport(){
+  current=null; spineOn=false; clearEdges(); resetClasses();
+  document.getElementById("spineBtn").classList.remove("active");
+  const scored=M.filter(m=>m.score!=null);
+  if(!scored.length){renderIntro();return;}
+  const avg=Math.round(scored.reduce((a,m)=>a+m.score,0)/scored.length);
+  const gc={A:0,B:0,C:0,D:0,F:0}; scored.forEach(m=>gc[m.grade]!=null&&gc[m.grade]++);
+  const worst=[...scored].sort((a,b)=>a.score-b.score).slice(0,10);
+  const tagCount={}; scored.forEach(m=>(m.tags||[]).forEach(t=>{if(BAD_TAGS.has(t))tagCount[t]=(tagCount[t]||0)+1;}));
+  const topTags=Object.entries(tagCount).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const locLine=META.locLine||(META.tracked_loc?tl('trackedLoc')(Number(META.tracked_loc).toLocaleString(),META.tracked_files||"?"):"");
+  detail.innerHTML=`<div class="report">
+    <div class="kicker" style="font-family:var(--mono);font-size:10px;color:var(--accent);letter-spacing:.5px">${tl('qa')} · ${scored.length} ${tl('modulesWord')}</div>
+    <h2 style="font-size:18px;margin:5px 0 2px;font-weight:650">${tl('healthReport')}</h2>
+    <div class="path" style="color:var(--faint);font-size:11px;margin-bottom:4px">${["monkeypatch","fallback","legacy","stub","bloat","duplication","dual-format"].map(tagLabel).join(" · ")}</div>
+    ${locLine?`<div class="path" style="color:var(--muted);font-size:11px;margin-bottom:2px">${esc(locLine)}</div>`:""}
+    <div class="stat-grid">
+      <div class="stat"><div class="n" style="color:${healthColor(avg)}">${avg}</div><div class="l">${tl('avg')}</div></div>
+      <div class="stat"><div class="n grade-A">${gc.A}</div><div class="l">A</div></div>
+      <div class="stat"><div class="n grade-B">${gc.B}</div><div class="l">B</div></div>
+      <div class="stat"><div class="n grade-C">${gc.C}</div><div class="l">C</div></div>
+      <div class="stat"><div class="n grade-D" style="color:#e0524b">${gc.D+gc.F}</div><div class="l">D/F</div></div>
+    </div>
+    <h3>${tl('worst')}</h3>
+    <div class="rel">${worst.map(m=>`<button data-go="${esc(m.id)}"><span>${esc(m.label)}</span><span class="bnd" style="color:${healthColor(m.score)}">${m.score} · ${esc(m.grade)}</span></button>`).join("")}</div>
+    ${topTags.length?`<h3>${tl('commonTags')}</h3><div class="tagchips">${topTags.map(([t,n])=>`<span class="tg bad">${esc(tagLabel(t))} ·${n}</span>`).join("")}</div>`:""}
+    ${REPORT_THEMES.length?`<h3>${tl('themes')}</h3>${REPORT_THEMES.map(([h,b])=>`<p class="theme"><b>${esc(h)}.</b> ${esc(b)}</p>`).join("")}`:""}
+    <button class="btn clearbtn" id="toMapBtn">${tl('backToMap')}</button></div>`;
+  bindGo(); document.getElementById("toMapBtn").addEventListener("click",clearSel);
+}
+function toast(msg){
+  let t=document.getElementById("toast");
+  if(!t){ t=document.createElement("div"); t.id="toast"; t.className="toast"; document.body.appendChild(t); }
+  t.textContent=msg; t.classList.add("show");
+  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),2400);
+}
+function copyText(s){
+  if(navigator.clipboard) { navigator.clipboard.writeText(s).catch(()=>{}); return; }
+  const ta=document.createElement("textarea"); ta.value=s; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand("copy"); }catch(e){} ta.remove();
+}
+let STD_EDIT=false;
+function openStandard(){ STD_EDIT=false; renderStd(); document.getElementById("stdModal").classList.add("open"); }
+function closeStandard(){ document.getElementById("stdModal").classList.remove("open"); }
+function saveStdDraft(){ try{ localStorage.setItem(STD_KEY, JSON.stringify(STDDATA)); }catch(e){} rebuildTagMeta(); }
+function langKey(){ return LANG==="zh" ? "zh" : "en"; }
+function renderStd(){
+  const ed=STD_EDIT, ce=ed?' contenteditable="true" spellcheck="false"':'';
+  const rubric=STDDATA.rubric.map((x,i)=>`<div class="std-row"><span class="std-badge" style="background:${healthColor(x.score)}">${esc(x.grade)}</span><span class="std-range">${esc(x.range)}</span><span class="std-desc"${ce} data-k="rubric" data-i="${i}">${esc(stdText(x))}</span></div>`).join("");
+  const sev=STDDATA.severities.map((x,i)=>`<div class="std-row"><span class="std-key"><span class="sev sev-${esc(x.key)}">${esc(x.key)}</span></span><span class="std-desc"${ce} data-k="sev" data-i="${i}">${esc(stdText(x))}</span></div>`).join("");
+  const tags=STDDATA.tags.map((x,i)=>`<div class="std-row"><span class="std-key"><span class="tg ${x.bad===false?'ok':'bad'}"${ce} data-k="taglabel" data-i="${i}">${esc(LANG==="zh"?(x.labelZh||x.label):x.label)}</span></span><span class="std-desc"${ce} data-k="tag" data-i="${i}">${esc(stdText(x))}</span>${ed?`<button class="xrm" data-rm="${i}" title="remove">✕</button>`:''}</div>`).join("");
+  const coup=STDDATA.coupling.map((x,i)=>`<div class="std-row"><span class="std-key" style="font-family:var(--mono);font-size:11.5px;color:var(--ink)">${esc(x.key)}</span><span class="std-desc"${ce} data-k="coup" data-i="${i}">${esc(stdText(x))}</span></div>`).join("");
+  document.getElementById("stdModal").innerHTML=`<div class="sheet">
+    <div class="xbtn" style="display:flex;gap:6px">
+      <button class="btn ${ed?'active':''}" id="stdEdit">${ed?tl('stdDone'):tl('stdEditBtn')}</button>
+      ${ed?`<button class="btn" id="stdExport">${tl('stdExport')}</button><button class="btn" id="stdReset">${tl('stdReset')}</button>`:''}
+      <button class="btn" id="stdClose">${tl('close')}</button>
+    </div>
+    <h2>${tl('stdTitle')}</h2><div class="intro">${ed?tl('stdEditHint'):tl('stdIntro')}</div>
+    <div class="std-h4">${tl('stdRubric')}</div>${rubric}
+    <div class="std-h4">${tl('stdSeverity')}</div>${sev}
+    <div class="std-h4">${tl('stdTags')}${ed?` <button class="btn" id="stdAddTag" style="margin-left:8px;padding:2px 8px">${tl('stdAddTag')}</button>`:''}</div>${tags}
+    <div class="std-h4">${tl('stdCoupling')}</div>${coup}</div>`;
+  document.getElementById("stdClose").onclick=closeStandard;
+  document.getElementById("stdEdit").onclick=()=>{STD_EDIT=!STD_EDIT; renderStd();};
+  if(ed){
+    document.getElementById("stdExport").onclick=()=>{
+      const blob=new Blob([JSON.stringify(STDDATA,null,1)],{type:"application/json"});
+      const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="standard.json"; a.click();
+      toast(tl('stdExported'));
+    };
+    document.getElementById("stdReset").onclick=()=>{
+      try{localStorage.removeItem(STD_KEY);}catch(e){}
+      STDDATA=JSON.parse(JSON.stringify(DATA.standard||BUILTIN_STD)); rebuildTagMeta(); renderStd();
+    };
+    document.getElementById("stdAddTag").onclick=()=>{
+      const id=(prompt(tl('stdNewTagId'))||"").trim().toLowerCase().replace(/\s+/g,"-");
+      if(!id || STDDATA.tags.some(t=>t.id===id)) return;
+      STDDATA.tags.push({id,label:id,labelZh:id,bad:true,en:"",zh:""}); saveStdDraft(); renderStd();
+    };
+    document.querySelectorAll("#stdModal [data-rm]").forEach(b=>b.onclick=()=>{STDDATA.tags.splice(+b.dataset.rm,1); saveStdDraft(); renderStd();});
+    document.querySelectorAll("#stdModal [data-k]").forEach(el=>el.addEventListener("input",()=>{
+      const i=+el.dataset.i, v=el.textContent, lk=langKey();
+      const k=el.dataset.k;
+      if(k==="rubric") STDDATA.rubric[i][lk]=v;
+      else if(k==="sev") STDDATA.severities[i][lk]=v;
+      else if(k==="coup") STDDATA.coupling[i][lk]=v;
+      else if(k==="tag") STDDATA.tags[i][lk]=v;
+      else if(k==="taglabel") STDDATA.tags[i][LANG==="zh"?"labelZh":"label"]=v;
+      saveStdDraft();
+    }));
+  }
+}
+function toggleHealth(){
+  const on=!board.classList.contains("show-health");
+  board.classList.toggle("show-health",on);
+  const b=document.getElementById("healthBtn");
+  b.classList.toggle("active",on); b.textContent=on?tl('colorHealth'):tl('colorCoupling');
+}
+/* ---------- filtering: search + grade threshold + issue tag (combined, AND) ---------- */
+let filterGrade=null, filterTag=null, searchQuery="";
+function filtersActive(){return filterGrade!=null||filterTag!=null||searchQuery!=="";}
+function matchesFilter(m){
+  if(filterGrade!=null && !(m.score!=null && m.score<filterGrade)) return false;
+  if(filterTag && !(m.tags||[]).includes(filterTag)) return false;
+  if(searchQuery){const q=searchQuery;
+    if(!(m.label.toLowerCase().includes(q)||m.id.toLowerCase().includes(q)||(m.desc||"").toLowerCase().includes(q))) return false;}
+  return true;
+}
+function runFilter(){
+  if(!filtersActive()){document.getElementById("fcount").textContent="";clearSel();return;}
+  current=null; spineOn=false; document.getElementById("spineBtn").classList.remove("active");
+  clearEdges(); resetClasses(); board.classList.add("has-sel");
+  document.getElementById("gradeFilter").classList.toggle("on",filterGrade!=null);
+  document.getElementById("tagFilter").classList.toggle("on",!!filterTag);
+  let n=0;
+  M.forEach(m=>{ if(matchesFilter(m)){cardEl[m.id].classList.add("lit");n++;} });
+  document.getElementById("fcount").textContent=n+" / "+M.length;
+  const matches=M.filter(matchesFilter).sort((a,b)=>(a.score??999)-(b.score??999));
+  const gl={90:"≤ B",75:"≤ C",60:"≤ D",40:"F"}[filterGrade];
+  const crit=[gl||"",filterTag?("#"+esc(tagLabel(filterTag))):"",searchQuery?('"'+esc(searchQuery)+'"'):""].filter(Boolean).join("  ·  ");
+  detail.innerHTML=`<div class="detail"><div class="kicker">${tl('filter')}</div>
+    <h2>${n} ${tl('modulesWord')}</h2><div class="path">${crit||tl('allWord')}</div>
+    <div class="rel">${matches.map(m=>`<button data-go="${esc(m.id)}"><span>${esc(m.label)}</span><span class="bnd" style="color:${healthColor(m.score)}">${m.score!=null?m.score+" · "+esc(m.grade):""}</span></button>`).join("")||`<div class="none">${tl('noMatches')}</div>`}</div>
+    <button class="btn clearbtn" id="clearFilterBtn">${tl('clearFilters')}</button></div>`;
+  bindGo(); document.getElementById("clearFilterBtn").addEventListener("click",resetFilters);
+}
+function resetFilters(){
+  filterGrade=null; filterTag=null; searchQuery="";
+  document.getElementById("gradeFilter").value=""; document.getElementById("gradeFilter").classList.remove("on");
+  document.getElementById("tagFilter").value=""; document.getElementById("tagFilter").classList.remove("on");
+  document.getElementById("search").value=""; document.getElementById("fcount").textContent="";
+  clearSel();
+}
+/* populate the issue-tag dropdown from the negative tags present, by frequency */
+(function(){
+  const cnt={}; M.forEach(m=>(m.tags||[]).forEach(t=>{if(BAD_TAGS.has(t))cnt[t]=(cnt[t]||0)+1;}));
+  const sel=document.getElementById("tagFilter");
+  Object.entries(cnt).sort((a,b)=>b[1]-a[1]).forEach(([t,c])=>{
+    const o=document.createElement("option"); o.value=t; o.textContent=`${tagLabel(t)} (${c})`; sel.appendChild(o);});
+})();
+document.getElementById("search").addEventListener("input",e=>{searchQuery=e.target.value.trim().toLowerCase();runFilter();});
+document.getElementById("search").addEventListener("keydown",e=>{
+  if(e.key==="Enter"){const lit=board.querySelector(".node.lit");if(lit)select(lit.dataset.id);}});
+document.getElementById("gradeFilter").addEventListener("change",e=>{filterGrade=e.target.value?Number(e.target.value):null;runFilter();});
+document.getElementById("tagFilter").addEventListener("change",e=>{filterTag=e.target.value||null;runFilter();});
+document.getElementById("healthBtn").addEventListener("click",toggleHealth);
+document.getElementById("reportBtn").addEventListener("click",renderReport);
+document.getElementById("spineBtn").addEventListener("click",()=>{spineOn?clearSel():showSpine();});
+document.getElementById("stdBtn").addEventListener("click",openStandard);
+document.getElementById("stdModal").addEventListener("click",e=>{ if(e.target.id==="stdModal") closeStandard(); });
+window.addEventListener("keydown",e=>{ if(e.key==="Escape") closeStandard(); });
+board.addEventListener("click",()=>{filtersActive()?runFilter():clearSel();});
+let rt; window.addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{const c=current;if(c){current=null;select(c);}else if(spineOn)showSpine();},120);});
+board.classList.add("show-health");
+document.getElementById("healthBtn").classList.add("active");
+document.getElementById("healthBtn").textContent=tl("colorHealth");
+renderIntro();
+</script>
+</body>
+</html>

@@ -86,6 +86,7 @@ class TestTaskLifecycle:
             task_name="测试任务-最小",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=5,
             candidate_clip_count=8,
             ai_preference="",
@@ -99,20 +100,11 @@ class TestTaskLifecycle:
         }
         assert "detail_url" in result
 
-    def test_create_task_record_with_nas_source(self):
-        """NAS 来源任务应有 pending_video 状态（因为没有文件校验）"""
-        payload = TaskCreate(
-            task_name="NAS 测试",
-            source_type="nas",
-            platform="bilibili",
-            nas_file_path="/not/exist/video.mp4",
-            max_clip_duration=3,
-            candidate_clip_count=5,
-            ai_preference="",
-        )
-        # NAS 路径不存在时会抛出 ValueError
-        with pytest.raises(ValueError, match="文件不存在|路径不存在"):
-            create_task_record(payload, task_id="test-nas-001")
+    def test_task_create_model_no_longer_exposes_nas_source(self):
+        """新建任务模型只接收上传后的原片路径，不再暴露 NAS 参数。"""
+        fields = getattr(TaskCreate, "model_fields", getattr(TaskCreate, "__fields__", {}))
+        assert "source_type" not in fields
+        assert "nas_file_path" not in fields
 
     def test_update_task_status_ok(self):
         """更新已存在任务的状态"""
@@ -121,6 +113,7 @@ class TestTaskLifecycle:
             task_name="状态更新测试",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
@@ -144,6 +137,7 @@ class TestTaskLifecycle:
             task_name="删除测试",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
@@ -163,6 +157,7 @@ class TestTaskLifecycle:
             task_name="数量测试",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
@@ -187,6 +182,9 @@ class TestAIAnalysisEntry:
 
         yield
         with get_connection() as connection:
+            connection.execute("DELETE FROM publish_jobs WHERE task_id LIKE 'test-ai-%'")
+            connection.execute("DELETE FROM workflow_jobs WHERE task_id LIKE 'test-ai-%'")
+            connection.execute("DELETE FROM output_clip WHERE task_id LIKE 'test-ai-%'")
             connection.execute("DELETE FROM clip_candidates WHERE task_id LIKE 'test-ai-%'")
             connection.execute("DELETE FROM ai_analysis_runs WHERE task_id LIKE 'test-ai-%'")
             connection.execute("DELETE FROM tasks WHERE id LIKE 'test-ai-%'")
@@ -194,7 +192,8 @@ class TestAIAnalysisEntry:
 
     def test_missing_transcript_triggers_error(self):
         """没有转写文件时 AI 分析应报错"""
-        from app.services.ai_analysis_workflow_service import process_task_ai_analysis
+        from app.services import job_service
+        from app.services.ai_analysis_workflow_service import process_task_ai_analysis, queue_task_ai_analysis
         from app.services.task_lifecycle_service import create_task_record
         from app.models.task import TaskCreate
 
@@ -202,14 +201,21 @@ class TestAIAnalysisEntry:
             task_name="AI 测试-无转写",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
         )
         create_task_record(payload, task_id="test-ai-001")
+        update_task_status("test-ai-001", TaskStatus.pending_ai)
 
-        with pytest.raises(ValueError, match="转写"):
-            process_task_ai_analysis("test-ai-001")
+        job, created = queue_task_ai_analysis("test-ai-001")
+        assert created is True
+        claimed = job_service.claim_job(job["id"], "test-ai-owner")
+        assert claimed
+        with job_service.job_lease_context(job["id"], "test-ai-owner", claimed["lease_token"]):
+            with pytest.raises(ValueError, match="转写"):
+                process_task_ai_analysis("test-ai-001")
 
     def test_analysis_status_idle(self):
         """刚创建的任务 AI 分析状态应为 idle"""
@@ -221,6 +227,7 @@ class TestAIAnalysisEntry:
             task_name="AI 状态测试",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
@@ -239,7 +246,7 @@ class TestAIAnalysisEntry:
 
         task_id = "test-ai-replace"
         create_task_record(
-            TaskCreate(task_name="候选替换测试", source_type="upload", platform="general"),
+            TaskCreate(task_name="候选替换测试", source_type="upload", platform="general", selection_profile="general"),
             task_id=task_id,
         )
         _replace_clip_candidates(
@@ -275,7 +282,7 @@ class TestAIAnalysisEntry:
 
         task_id = "test-ai-replace-rollback"
         create_task_record(
-            TaskCreate(task_name="候选回滚测试", source_type="upload", platform="general"),
+            TaskCreate(task_name="候选回滚测试", source_type="upload", platform="general", selection_profile="general"),
             task_id=task_id,
         )
         now = _now_iso()
@@ -328,6 +335,74 @@ class TestAIAnalysisEntry:
         assert len(clips) == 1
         assert clips[0]["title"] == "旧片段"
 
+    def test_replace_clip_candidates_rejects_existing_output_reference(self):
+        from app.db.database import get_connection
+        from app.services.ai_analysis_workflow_service import (
+            AIAnalysisConflictError,
+            _replace_clip_candidates,
+        )
+        from app.services.task_service import list_clip_candidates
+
+        task_id = "test-ai-output-reference"
+        create_task_record(TaskCreate(task_name="已有切片", selection_profile="general"), task_id=task_id)
+        with get_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO clip_candidates (
+                    id, task_id, clip_key, title, start_time, end_time, duration_seconds,
+                    selected_by_default, enabled, reviewed, created_at, updated_at
+                ) VALUES ('test-ai-output-reference_clip_001', ?, 'old', '旧候选',
+                          '00:00', '00:30', 30, 1, 1, 1, 'now', 'now')
+                """,
+                (task_id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO output_clip (
+                    id, task_id, clip_candidate_id, output_file_path, output_file_name,
+                    status, is_active, created_at, updated_at
+                ) VALUES ('test-ai-output-reference-out', ?, 'test-ai-output-reference_clip_001',
+                          'clip.mp4', 'clip.mp4', 'completed', 1, 'now', 'now')
+                """,
+                (task_id,),
+            )
+            connection.commit()
+
+        with pytest.raises(AIAnalysisConflictError, match="已有切片引用"):
+            _replace_clip_candidates(task_id, [])
+
+        assert [clip["title"] for clip in list_clip_candidates(task_id)] == ["旧候选"]
+        with get_connection() as connection:
+            assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    def test_manual_ai_reentry_is_blocked_before_status_change(self):
+        from app.db.database import get_connection
+        from app.services.ai_analysis_workflow_service import AIAnalysisConflictError, queue_task_ai_analysis
+        from app.services.task_service import get_task
+
+        task_id = "test-ai-manual-reentry"
+        create_task_record(TaskCreate(task_name="AI 重入保护", selection_profile="general"), task_id=task_id)
+        update_task_status(task_id, TaskStatus.completed)
+        with get_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO output_clip (
+                    id, task_id, output_file_path, output_file_name, status, is_active, created_at, updated_at
+                ) VALUES ('test-ai-manual-reentry-out', ?, 'clip.mp4', 'clip.mp4',
+                          'completed', 1, 'now', 'now')
+                """,
+                (task_id,),
+            )
+            connection.commit()
+        before = get_task(task_id, include_video_probe=False)
+
+        with pytest.raises(AIAnalysisConflictError, match="已经生成切片"):
+            queue_task_ai_analysis(task_id)
+
+        after = get_task(task_id, include_video_probe=False)
+        assert after["status"] == before["status"]
+        assert after["error_message"] == before["error_message"]
+
     def test_restore_ai_history_recreates_candidates(self):
         from app.services.ai_analysis_workflow_service import (
             _insert_ai_analysis_run,
@@ -338,7 +413,7 @@ class TestAIAnalysisEntry:
 
         task_id = "test-ai-restore-history"
         create_task_record(
-            TaskCreate(task_name="历史恢复测试", source_type="upload", platform="general"),
+            TaskCreate(task_name="历史恢复测试", source_type="upload", platform="general", selection_profile="general"),
             task_id=task_id,
         )
         payload = {
@@ -393,6 +468,7 @@ class TestVideoCutEntry:
             task_name="切片测试-无片段",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
@@ -429,6 +505,7 @@ class TestSubtitleEntry:
             task_name="字幕测试",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",
@@ -454,6 +531,7 @@ class TestTranscriptEntry:
             task_name="转写测试-无音频",
             source_type="upload",
             platform="general",
+            selection_profile="general",
             max_clip_duration=3,
             candidate_clip_count=5,
             ai_preference="",

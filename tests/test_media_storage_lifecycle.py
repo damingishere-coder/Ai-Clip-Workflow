@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 import tempfile
+from contextlib import contextmanager
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -16,7 +19,7 @@ from app.routers import tasks as tasks_router
 from app.services import job_service
 from app.services import task_lifecycle_service
 from app.services.storage_service import (
-    StorageSafetyError,
+    build_task_media_cleanup_plan,
     configure_runtime_media_storage,
     save_uploaded_video,
 )
@@ -30,7 +33,7 @@ from scripts.purge_deleted_task_media import apply_report, build_report
 
 
 @pytest.fixture
-def isolated_media_settings(tmp_path):
+def isolated_media_settings(tmp_path, monkeypatch):
     original_temp = tempfile.tempdir
     original_env = {name: os.environ.get(name) for name in ("TEMP", "TMP")}
 
@@ -45,6 +48,7 @@ def isolated_media_settings(tmp_path):
         "tasks_dir": storage_root,
         "upload_temp_dir": storage_root / "_临时上传",
         "publish_scheduler_export_dir": storage_root / "_发布包",
+        "max_upload_size_bytes": 4 * 1024 * 1024 * 1024,
     }
     settings_objects = []
     seen_settings = set()
@@ -68,6 +72,11 @@ def isolated_media_settings(tmp_path):
         for name, value in replacements.items():
             object.__setattr__(candidate, name, value)
     init_db()
+    monkeypatch.setattr(
+        task_lifecycle_service,
+        "preflight_media",
+        lambda *_args, **_kwargs: SimpleNamespace(to_dict=lambda: {"warnings": []}),
+    )
 
     try:
         yield replacements
@@ -91,6 +100,7 @@ def _create_managed_task(task_id: str, task_dir: Path, *, auto_mode: bool = Fals
         TaskCreate(
             task_name=task_id,
             source_type="upload",
+            selection_profile="general",
             original_video_path=str(source_path),
             auto_mode=auto_mode,
         ),
@@ -131,12 +141,12 @@ def test_large_multipart_upload_spools_in_e_drive(monkeypatch, isolated_media_se
     with TestClient(app) as client:
         response = client.post(
             "/api/tasks/upload",
-            data={"task_name": "large-upload-e-drive", "platform": "general"},
+            data={"task_name": "large-upload-e-drive", "platform": "general", "selection_profile": "general"},
             files={"video_file": ("source.mp4", b"V" * (2 * 1024 * 1024), "video/mp4")},
             headers=_headers(),
         )
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     assert captured["rolled"] is True
     assert captured["tempdir"] == str(settings.upload_temp_dir.resolve())
     assert tempfile.tempdir == previous_temp
@@ -150,8 +160,10 @@ def test_large_multipart_upload_spools_in_e_drive(monkeypatch, isolated_media_se
 
 
 def test_failed_upload_removes_partial_task_directory(monkeypatch, isolated_media_settings):
-    original_limit = settings.max_upload_size_bytes
-    object.__setattr__(settings, "max_upload_size_bytes", 1024)
+    from app.services import storage_service
+
+    original_limit = storage_service.settings.max_upload_size_bytes
+    object.__setattr__(storage_service.settings, "max_upload_size_bytes", 1024)
     monkeypatch.setattr(
         tasks_router,
         "allocate_task_dir_name",
@@ -160,12 +172,12 @@ def test_failed_upload_removes_partial_task_directory(monkeypatch, isolated_medi
     try:
         response = TestClient(app).post(
             "/api/tasks/upload",
-            data={"task_name": "failed-upload", "platform": "general"},
+            data={"task_name": "failed-upload", "platform": "general", "selection_profile": "general"},
             files={"video_file": ("source.mp4", b"V" * 2048, "video/mp4")},
             headers=_headers(),
         )
     finally:
-        object.__setattr__(settings, "max_upload_size_bytes", original_limit)
+        object.__setattr__(storage_service.settings, "max_upload_size_bytes", original_limit)
 
     assert response.status_code == 400
     assert not (settings.tasks_dir / "failed-upload-directory").exists()
@@ -211,8 +223,8 @@ def test_delete_preserves_external_source(isolated_media_settings):
     create_task_record(
         TaskCreate(
             task_name=task_id,
-            source_type="nas",
-            nas_file_path=str(external_source),
+            selection_profile="general",
+            original_video_path=str(external_source),
         ),
         task_id=task_id,
         task_dir_name=task_id,
@@ -261,7 +273,7 @@ def test_delete_failure_keeps_task_visible(monkeypatch, isolated_media_settings)
     def fail_cleanup(_plan):
         raise RuntimeError("模拟文件被占用")
 
-    monkeypatch.setattr(task_lifecycle_service, "apply_task_media_cleanup_plan", fail_cleanup)
+    monkeypatch.setattr(task_lifecycle_service, "stage_task_media_cleanup_plan", fail_cleanup)
     with pytest.raises(RuntimeError, match="文件被占用"):
         delete_task_permanently(task_id)
 
@@ -272,6 +284,8 @@ def test_delete_failure_keeps_task_visible(monkeypatch, isolated_media_settings)
 
 
 def test_delete_rejects_path_traversal(isolated_media_settings):
+    from app.services import storage_service
+
     now = "2026-08-02T00:00:00+00:00"
     with get_connection() as connection:
         connection.execute(
@@ -283,7 +297,7 @@ def test_delete_rejects_path_traversal(isolated_media_settings):
         )
         connection.commit()
 
-    with pytest.raises(StorageSafetyError, match="不安全路径"):
+    with pytest.raises(storage_service.StorageSafetyError, match="不安全路径"):
         delete_task_permanently("unsafe-task")
 
 
@@ -343,3 +357,138 @@ def test_cleanup_aborts_before_deleting_overlapping_active_directory(isolated_me
         apply_report(report)
 
     assert active_dir.exists()
+
+
+def _staged_cleanup_api():
+    """返回 P0.3 约定的暂存 API；生产实现尚未接入时给出明确测试失败。"""
+    from app.services import storage_service
+
+    names = (
+        "stage_task_media_cleanup_plan",
+        "rollback_staged_task_media_cleanup",
+        "finalize_staged_task_media_cleanup",
+    )
+    missing = [name for name in names if not hasattr(storage_service, name)]
+    if missing:
+        pytest.fail(
+            "P0.3 暂存删除 API 尚未实现：" + ", ".join(missing)
+        )
+    return tuple(getattr(storage_service, name) for name in names)
+
+
+def _task_cleanup_plan(task_id: str):
+    with get_connection() as connection:
+        task = connection.execute(
+            "SELECT * FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+    assert task is not None
+    return build_task_media_cleanup_plan(dict(task), include_legacy=False)
+
+
+def test_staged_cleanup_rolls_back_when_second_move_fails(monkeypatch, isolated_media_settings):
+    """第二个托管目录移动失败时，第一个目录必须恢复到原位置。"""
+    stage_cleanup, _rollback_cleanup, _finalize_cleanup = _staged_cleanup_api()
+    task_id = "staged-delete-second-move-failure"
+    task_dir = settings.tasks_dir / task_id
+    _create_managed_task(task_id, task_dir)
+    export_dir = settings.publish_scheduler_export_dir / task_id
+    export_dir.mkdir(parents=True)
+    (export_dir / "clip.mp4").write_bytes(b"export")
+    plan = _task_cleanup_plan(task_id)
+
+    from app.services import storage_service
+
+    original_move = storage_service.shutil.move
+    move_calls = 0
+
+    def fail_second_move(source, destination):
+        nonlocal move_calls
+        move_calls += 1
+        if move_calls == 2:
+            raise OSError("模拟第二个托管目录移动失败")
+        return original_move(source, destination)
+
+    monkeypatch.setattr(storage_service.shutil, "move", fail_second_move)
+    with pytest.raises((OSError, RuntimeError), match="移动失败"):
+        stage_cleanup(plan)
+
+    assert task_dir.exists()
+    assert export_dir.exists()
+    assert (task_dir / "source" / "source.mp4").read_bytes() == b"managed-video"
+    assert (export_dir / "clip.mp4").read_bytes() == b"export"
+
+
+def test_database_commit_failure_restores_staged_media(monkeypatch, isolated_media_settings):
+    """数据库提交失败时，删除流程不得留下文件已移走、任务仍可见的状态。"""
+    _staged_cleanup_api()
+    task_id = "staged-delete-db-commit-failure"
+    task_dir = settings.tasks_dir / task_id
+    _create_managed_task(task_id, task_dir)
+    export_dir = settings.publish_scheduler_export_dir / task_id
+    export_dir.mkdir(parents=True)
+    (export_dir / "clip.mp4").write_bytes(b"export")
+
+    original_get_connection = task_lifecycle_service.get_connection
+
+    class CommitFailingConnection:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+        def commit(self):
+            raise sqlite3.OperationalError("模拟数据库提交失败")
+
+    @contextmanager
+    def failing_connection():
+        with original_get_connection() as connection:
+            yield CommitFailingConnection(connection)
+
+    monkeypatch.setattr(task_lifecycle_service, "get_connection", failing_connection)
+    with pytest.raises(sqlite3.OperationalError, match="提交失败"):
+        delete_task_permanently(task_id)
+
+    assert task_dir.exists()
+    assert export_dir.exists()
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT is_deleted FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+    assert row["is_deleted"] == 0
+
+
+def test_final_cleanup_failure_returns_cleanup_pending_after_db_commit(
+    monkeypatch,
+    isolated_media_settings,
+):
+    """数据库已提交后隔离区清理失败，应保留已删除状态并返回待清理。"""
+    _staged_cleanup_api()
+    task_id = "staged-delete-final-cleanup-failure"
+    task_dir = settings.tasks_dir / task_id
+    _create_managed_task(task_id, task_dir)
+
+    from app.services import storage_service
+
+    original_rmtree = storage_service.shutil.rmtree
+    rmtree_calls = 0
+
+    def fail_final_cleanup(path, *args, **kwargs):
+        nonlocal rmtree_calls
+        rmtree_calls += 1
+        if rmtree_calls == 1:
+            raise OSError("模拟最终隔离区清理失败")
+        return original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(storage_service.shutil, "rmtree", fail_final_cleanup)
+    result = delete_task_permanently(task_id)
+
+    assert result["status"] == "cleanup_pending"
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT is_deleted FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+    assert row["is_deleted"] == 1

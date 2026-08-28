@@ -46,6 +46,16 @@ class BackupCleanupResult:
     released_bytes: int
 
 
+def _finalize_portable_backup(connection: sqlite3.Connection) -> None:
+    """把 Online Backup 结果固定为无需 WAL/SHM sidecar 的单文件快照。"""
+    connection.commit()
+    row = connection.execute("PRAGMA journal_mode = DELETE").fetchone()
+    journal_mode = str(row[0]).lower() if row else ""
+    if journal_mode != "delete":
+        raise BackupSafetyError(f"备份无法切换为单文件 journal_mode：{journal_mode or 'unknown'}")
+    connection.commit()
+
+
 def sqlite_quick_check(database_path: Path) -> str:
     path = database_path.resolve()
     if not path.is_file():
@@ -235,6 +245,7 @@ def create_publish_migration_backup(
         )
         backup_connection = sqlite3.connect(str(temporary_path), timeout=10)
         source_connection.backup(backup_connection)
+        _finalize_portable_backup(backup_connection)
         backup_connection.close()
         backup_connection = None
         source_connection.close()
@@ -258,6 +269,44 @@ def create_publish_migration_backup(
         if isinstance(exc, BackupSafetyError):
             raise
         raise BackupSafetyError(f"创建迁移前备份失败：{exc}") from exc
+    finally:
+        if backup_connection is not None:
+            backup_connection.close()
+        if source_connection is not None:
+            source_connection.close()
+
+
+def create_schema_migration_backup(database_path: Path, backup_dir: Path, label: str) -> Path:
+    """使用 SQLite Online Backup API 创建一次带完整性检查的结构迁移备份。"""
+    database_path = database_path.resolve()
+    backup_dir = backup_dir.resolve()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    safe_label = "".join(character for character in label.lower() if character.isalnum() or character == "-")
+    timestamp = datetime.now(BACKUP_TIMEZONE).strftime("%Y%m%d-%H%M%S-%f")
+    final_path = backup_dir / f"workflow-before-{safe_label}-{timestamp}-{uuid4().hex[:8]}.sqlite3"
+    temporary_path = final_path.with_suffix(final_path.suffix + ".tmp")
+    source_connection: sqlite3.Connection | None = None
+    backup_connection: sqlite3.Connection | None = None
+    try:
+        source_connection = sqlite3.connect(f"{database_path.as_uri()}?mode=ro", uri=True, timeout=10)
+        backup_connection = sqlite3.connect(str(temporary_path), timeout=10)
+        source_connection.backup(backup_connection)
+        _finalize_portable_backup(backup_connection)
+        backup_connection.close()
+        backup_connection = None
+        source_connection.close()
+        source_connection = None
+        integrity = sqlite_quick_check(temporary_path)
+        if integrity != "ok":
+            raise BackupSafetyError(f"新备份完整性检查失败：{integrity}")
+        os.replace(temporary_path, final_path)
+        return final_path
+    except Exception as exc:
+        if temporary_path.exists():
+            temporary_path.unlink()
+        if isinstance(exc, BackupSafetyError):
+            raise
+        raise BackupSafetyError(f"创建结构迁移前备份失败：{exc}") from exc
     finally:
         if backup_connection is not None:
             backup_connection.close()
@@ -292,6 +341,7 @@ def create_media_cleanup_backup(
         )
         backup_connection = sqlite3.connect(str(temporary_path), timeout=10)
         source_connection.backup(backup_connection)
+        _finalize_portable_backup(backup_connection)
         backup_connection.close()
         backup_connection = None
         source_connection.close()

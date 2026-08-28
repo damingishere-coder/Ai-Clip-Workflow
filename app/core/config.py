@@ -243,9 +243,6 @@ class Settings:
 
     # === P0 安全与稳定性配置 ===
 
-    # 本地 API 访问保护：对 /api 下写接口校验 token
-    local_admin_token: str = _env("LOCAL_ADMIN_TOKEN", "")
-
     # 允许浏览的媒体根目录（逗号分隔的绝对路径列表）
     allowed_media_roots: str = _env("ALLOWED_MEDIA_ROOTS", "")
 

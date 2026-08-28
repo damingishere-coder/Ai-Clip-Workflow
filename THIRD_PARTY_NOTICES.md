@@ -22,3 +22,30 @@
 - 许可证：Apache License 2.0（以 Playwright 官方仓库许可证为准）。
 
 第三方网站和平台名称、商标及页面属于各自权利人。使用本项目投稿时，用户仍需遵守抖音、哔哩哔哩及浏览器相关服务条款，不得使用本项目绕过验证或平台风控。
+
+## pysubs2 1.9.0
+
+- 项目：https://github.com/tkarabela/pysubs2
+- 用途：SRT、WebVTT、ASS 的解析、导入、导出与 ASS 样式序列化。
+- 许可证：MIT License。
+- 本项目锁定运行时版本 `pysubs2==1.9.0`；完整许可证保存在 `third_party_licenses/pysubs2-LICENSE.txt`。
+
+## wavesurfer.js 7.12.11
+
+- 项目：https://github.com/katspaugh/wavesurfer.js
+- 用途：字幕编辑器波形、Regions 区间拖动与 Timeline 时间刻度。
+- 许可证：BSD 3-Clause License。
+- 本项目固定并本地托管 `wavesurfer.min.js`、`regions.min.js` 与 `timeline.min.js`，避免运行时依赖 CDN；完整许可证保存在 `app/static/vendor/wavesurfer/LICENSE`。
+
+## Subtitle Edit（设计参考）
+
+- 项目：https://github.com/SubtitleEdit/subtitleedit
+- 参考范围：波形联动、字幕行编辑、拆分合并、撤销重做与质量检查交互。
+- 本项目没有复制 Subtitle Edit 源码，仅借鉴成熟交互设计。
+
+## VideoCaptioner（仅流程研究）
+
+- 项目：https://github.com/WEIFENG2333/VideoCaptioner
+- 许可证：GPL-3.0。
+- 参考范围：字幕识别、校对、导出和视频合成的产品流程。
+- GPL 源码没有复制、改写或打包进入本项目。

@@ -18,10 +18,12 @@
     {% if task.auto_mode %}
       <button class="primary-button js-process-action" type="button" data-live-primary-action="retry" data-endpoint="/api/tasks/{{ task.id }}/process/auto-retry" {% if not task.status.startswith("FAILED_") %}hidden{% endif %}>重试全自动流程</button>
       <button class="primary-button js-process-action" type="button" data-live-primary-action="resume" data-endpoint="/api/tasks/{{ task.id }}/process/auto-resume" {% if task.status not in ["pending_review", "completed_with_errors", "failed"] %}hidden{% endif %}>继续全自动流程</button>
+      <a class="primary-button" data-live-primary-action="subtitle_review" href="/subtitles/{{ task.id }}" {% if task.status != "PENDING_SUBTITLE_REVIEW" %}hidden{% endif %}>前往字幕审核</a>
+      <button class="secondary-button" type="button" data-live-subtitle-skip data-task-id="{{ task.id }}" {% if task.status != "PENDING_SUBTITLE_REVIEW" %}hidden{% endif %}>跳过字幕，进入片段审核</button>
       <a class="primary-button" data-live-primary-action="publish" href="/publish?task_id={{ task.id }}&tab=content" {% if task.status not in ["READY_TO_PUBLISH", "COMPLETED", "completed"] %}hidden{% endif %}>前往发送中心</a>
-      <button class="secondary-button" type="button" data-live-primary-action="processing" disabled {% if task.status.startswith("FAILED_") or task.status in ["pending_review", "completed", "completed_with_errors", "failed", "READY_TO_PUBLISH", "COMPLETED"] %}hidden{% endif %}>全自动处理中</button>
+      <button class="secondary-button" type="button" data-live-primary-action="processing" disabled {% if task.status.startswith("FAILED_") or task.status in ["pending_review", "PENDING_SUBTITLE_REVIEW", "completed", "completed_with_errors", "failed", "READY_TO_PUBLISH", "COMPLETED"] %}hidden{% endif %}>全自动处理中</button>
       <a class="secondary-button" data-live-review-action href="/tasks/{{ task.id }}/clips/review" {% if not task.analysis_exists %}hidden{% endif %}>检查候选片段</a>
-      <button class="secondary-button" type="button" data-live-sync-action data-sync-publish-task data-task-id="{{ task.id }}" {% if task.output_clip_count <= 0 %}hidden{% endif %}>同步发送中心</button>
+      <button class="secondary-button" type="button" data-live-sync-action data-sync-publish-task data-task-id="{{ task.id }}" {% if task.output_clip_count <= 0 or task.status == "PENDING_SUBTITLE_REVIEW" %}hidden{% endif %}>同步发送中心</button>
     {% elif task.transcript_exists %}
     <button class="secondary-button" id="start-workflow-button" type="button" disabled>转写已完成</button>
     <button class="secondary-button js-process-action" type="button" data-confirm="重新生成会覆盖当前转写文件，并且需要重新等待转写完成。确认重新生成吗？" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow?force=true">重新生成转写</button>
@@ -42,18 +44,17 @@
   </div>
 </section>
 
-{% if task.auto_mode %}
 <section
   class="inline-alert tone-blue"
   data-auto-pipeline-monitor
   data-task-id="{{ task.id }}"
   data-status="{{ task.status }}"
-  data-running="{{ 'true' if task.status in ['CREATED', 'PREPARING_SOURCE', 'TRANSCRIBING', 'AI_ANALYZING', 'CLIP_SELECTING', 'VIDEO_CUTTING', 'METADATA_GENERATING', 'SCHEDULE_CREATING', 'PUBLISH_JOB_CREATING'] else 'false' }}"
+  data-running="{{ 'true' if task.status in ['CREATED', 'PREPARING_SOURCE', 'TRANSCRIBING', 'AI_ANALYZING', 'CLIP_SELECTING', 'VIDEO_CUTTING', 'SUBTITLE_DRAFTING', 'METADATA_GENERATING', 'SCHEDULE_CREATING', 'PUBLISH_JOB_CREATING'] else 'false' }}"
+  {% if not task.auto_mode %}hidden{% endif %}
 >
   <strong>全自动模式已接管这个任务。</strong>
-  <p>系统会自动推进音频提取、转写、AI 选片和视频切割；状态概览与运行日志每 3 秒自动更新，不会刷新整张页面。只有失败或历史任务中断时才需要点击重试/继续。</p>
+  <p>系统会自动推进音频提取、转写、AI 选片和视频切割；切片后会生成字幕草稿并暂停。审核烧录可恢复后续流程；跳过字幕则先进入片段审核，保存确认后才同步发送中心。</p>
 </section>
-{% endif %}
 
 <section class="detail-grid">
   <article class="panel summary-card">
@@ -65,7 +66,6 @@
     </div>
     <dl class="meta-grid">
       <div><dt>平台</dt><dd>{{ task.platform_label }}</dd></div>
-      <div><dt>视频来源</dt><dd>{{ task.source_type_label }}</dd></div>
       <div><dt>视频时长</dt><dd>{{ task.duration }}</dd></div>
       <div><dt>视频大小</dt><dd>{{ task.video_size }}</dd></div>
       <div><dt>候选片段</dt><dd data-task-live-candidate-count>{{ task.candidate_count }} 条</dd></div>
@@ -84,12 +84,23 @@
         <p class="eyebrow">Status</p>
         <h2>状态概览</h2>
       </div>
-      <span class="status-pill" data-task-live-status-label>{{ task.status_label }}</span>
+      <span class="status-pill" data-task-live-status-label data-task-live-status-pill>{{ task.status_label }}</span>
     </div>
     <div class="large-progress">
       <span data-task-live-progress-bar style="width: {{ task.progress }}%"></span>
     </div>
-    <strong class="progress-number" data-task-live-progress-number>{{ task.progress }}%</strong>
+    <div class="live-progress-summary">
+      <strong class="progress-number" data-task-live-progress-number>{{ task.progress }}%</strong>
+      <span>总流程进度</span>
+    </div>
+    <div class="live-current-operation" data-task-live-operation>
+      <div>
+        <span>当前操作</span>
+        <strong data-task-live-operation-label>{{ task.status_label }}</strong>
+      </div>
+      <strong data-task-live-operation-progress>{{ task.progress }}%</strong>
+      <p data-task-live-operation-message>正在读取最新任务进度…</p>
+    </div>
     <ol class="metro-timeline" aria-label="处理进度时间线">
       {% for step in workflow_steps %}
       <li class="metro-step {{ step.state }}" data-task-live-step="{{ step.index }}">
@@ -103,7 +114,7 @@
       <span><i class="current"></i>当前阶段</span>
       <span><i class="warning"></i>异常 / 待处理</span>
     </div>
-    <p class="live-status-note" data-task-live-note data-state="ready">正在连接任务进度…</p>
+    <p class="live-status-note" data-task-live-note data-state="ready" data-task-live-snapshot>正在连接任务进度…</p>
   </article>
 
   <article class="panel transcript-panel ai-analysis-panel">
@@ -115,6 +126,10 @@
       <span class="status-pill" id="ai-candidate-count-pill">{{ task.candidate_count }} 条候选</span>
     </div>
     <form id="ai-analysis-form" class="settings-form ai-prompt-form" data-task-id="{{ task.id }}" data-selection-profile="{{ task.selection_profile }}">
+      {% if task.selection_profile == "long_live_talk" %}
+      <input id="ai-highlight-density" type="hidden" value="{{ task.highlight_density_per_hour or 4 }}">
+      <input id="ai-highlight-total-limit" type="hidden" value="{{ task.highlight_total_limit or 30 }}">
+      {% endif %}
       <div class="ai-analysis-controls">
         <label>
           <span>候选池上限</span>
@@ -127,8 +142,10 @@
           <span>选片模式</span>
           {% if task.selection_profile == "variety_comedy" %}
           <p class="form-hint"><strong>康熙笑点选片模式</strong>（固定）</p>
+          {% elif task.selection_profile == "long_live_talk" %}
+          <p class="form-hint"><strong>长直播高光（语言类）</strong>（每小时 {{ task.highlight_density_per_hour }} 条，总上限 {{ task.highlight_total_limit }} 条）</p>
           {% else %}
-          <p class="form-hint"><strong>通用模式</strong>（历史任务，保持原样）</p>
+          <p class="form-hint"><strong>通用内容价值</strong></p>
           {% endif %}
         </label>
         <label>
@@ -277,7 +294,7 @@
         <p class="eyebrow">Runtime</p>
         <h2>运行日志</h2>
       </div>
-      <span class="status-pill" id="runtime-log-state">待刷新</span>
+      <span class="status-pill" id="runtime-log-state">正在连接</span>
     </div>
     <pre id="runtime-log-lines">任务开始后，这里会自动显示最新运行日志。</pre>
     <p class="form-hint" id="process-result"></p>

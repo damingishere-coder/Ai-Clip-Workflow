@@ -1,5 +1,222 @@
 # Development Log
 
+## 2026-08-28 2.1 集成 PR 与 Docker 冒烟修复
+
+- 将当前线性领先 `master` 的 26 个提交完整保留到 `codex/integrate-v2.1-stable`，新增独立空白清理提交并创建顶层集成 PR #60；不 rebase、不 squash，也不自动合并。
+- 本地门禁通过：Python Compileall、Ruff、`801 passed`、4 个 JavaScript 文件、20 个 PowerShell 脚本和三套 Docker Compose 配置均正常。
+- 首轮 GitHub CI 的 Linux 全量测试和 Windows 主机冒烟通过；Docker 镜像构建、启动、健康检查与 Demo 数据写入通过，但主要页面因 CI 端口参数未满足 P1.5 本机访问门禁而返回 403。
+- Docker smoke 改为仅绑定 `127.0.0.1:8001:8001`，并显式设置 `NIUMA_TRUST_DOCKER_LOOPBACK_PROXY=true`；只修正 CI 宿主机到容器的回环识别，不放宽正式环境的远程访问保护。
+
+## 2026-08-26 工作台每日任务柱状图精简
+
+- 移除工作台“本周每日新增任务”柱状图，不用其他装饰模块填补空间；首页直接从四项核心指标进入最近任务列表。
+- 本周统计上下文由 `weekly_chart` 精简为 `weekly_summary`，只保留本周新增总数和日期范围；上海时区、周一边界和历史时间格式兼容逻辑保持不变。
+- 同步删除每日计数、柱高、当天高亮、柱状图响应式样式和专用动效；统计条补充底部留白，桌面与窄屏继续保持完整卡片间距。
+- 本轮不修改数据库、任务状态机、发布口径、AI Provider 或真实抖音/B站发送链路。
+- 定向 Dashboard / 性能 / 动效回归 `40 passed`，完整回归 `799 passed`；Python Compileall、JavaScript 语法、Ruff 和 `git diff --check` 均通过，10 条提示均为既有弃用警告。
+- 8001 Web/Scheduler 进程使用 `-SkipWorker` 安全重启，8765 Windows 发布 Worker 保持原 PID；`/health`、Scheduler 和首页均正常。浏览器桌面与 390px 窄屏验收通过，无横向溢出、无控制台 warning/error，未触发真实投稿。
+
+## 2026-08-26 全站克制动效与减少动态效果支持
+
+- 调研 Motion、AutoAnimate、Animate.css、AOS、GSAP 和 View Transitions 后，按当前原生 HTML/CSS/JavaScript + Jinja 架构实现本地轻量动效层；没有引入 npm、CDN、React/Vue 或第三方运行时依赖。
+- 工作台四项核心统计首次出现时播放一次短动效；新建任务只在长直播设置展开和文件选择确认时反馈；任务详情只在进度、阶段或数值真实变化时反馈；片段审核、字幕和发送中心复用进度、弹窗、抽屉、标签和主动新增内容动效。
+- 任务列表、完整转写、系统静态状态、运行日志、字幕虚拟行、波形、视频、42 格日历和 5 秒发布记录刷新不添加批量入场或循环动画，避免为凑数量造成闪烁、错位和阅读干扰。
+- `prefers-reduced-motion` 同时关闭非必要 CSS 动画/过渡和 JavaScript 平滑滚动；脚本失败或禁用时不隐藏任何业务内容，动画不改变按钮状态、请求或页面语义。
+- 实时文本观察器只在文本值确实变化时高亮，不会因 3/5 秒轮询重复闪烁，也不覆盖状态标签原有背景色。
+- 窄屏顺带补齐片段审核网格和卡片的 `min-width: 0` 约束，390px 验收横向溢出由 49px 收口为 0；其他检查页面也无整页横向溢出。
+- 本轮仅修改呈现与可访问性，不触发 AI、转写、切片、字幕烧录、封面生成、排期、数据库写入或真实平台发布。
+- 动效与关联前端定向回归 `62 passed`、完整回归 `799 passed`；Python Compileall、三份 JavaScript 语法检查、Ruff 和 `git diff --check` 均通过，10 条提示均为既有弃用告警。
+
+## 2026-08-26 发送中心 AI 文案操作分层
+
+- 明确区分“同步遗漏切片”和“AI 重写文案”：前者继续固定使用 `use_ai=false`，只为遗漏成片补建发布草稿与默认封面；后者只修改已存在草稿的标题、话题和简介。
+- 原页面顶栏“补充缺失任务”移入内容准备的维护区并改名为“同步遗漏切片”，维护区明确标注“不调用 AI、不修改已有文案”；账号管理继续留在页面顶栏。
+- 单条 AI 操作移动到发布文案字段上方并命名为“AI 重写本条文案”；勾选后的批量入口改为“AI 重写已选文案”，切换到排期计划或执行记录后隐藏。
+- 移除 `/publish` 页面加载时静默调用旧草稿全局 AI 升级的行为；后端兼容接口继续保留，但 AI 文案只在用户明确点击单条或已选批量入口后执行。
+- 发布任务、调度器、Publisher、账号、排期及执行记录状态机均未修改。
+- 定向发送中心回归 `52 passed`、完整回归 `794 passed`；Python Compileall、JavaScript 语法、Ruff 和 `git diff --check` 均通过，测试使用隔离数据与 Mock，未调用真实 AI、封面生成、排期或平台发送。
+
+## 2026-08-26 片段审核累计统计精简
+
+- `/clips` 顶部统计从“待 AI 分析、待检查、可生成切片、已完成、异常任务”五项过程指标，精简为“累计审核任务、已通过视频、已完成任务”三项累计结果。
+- “累计审核任务”按当前未删除任务中已有未删除候选片段的任务数计算，表示已经进入候选片段审核流程；不把自动流程写入的 `reviewed` 字段误称为纯人工审核。
+- “已通过视频”按当前未删除任务下启用且未删除的候选片段数计算，卡片说明明确为“当前启用的视频片段”。
+- “已完成任务”兼容 `completed`、`completed_with_errors` 和历史大写 `COMPLETED`，并排除已删除任务；审核队列的状态徽标使用同一套规范化口径，不再把历史大写完成状态误显示为“待检查”。
+- 三项统计使用独立三列布局，不改变字幕工作台继续复用的五列统计样式；窄屏仍按现有响应式规则切换为单列。
+- 当前活动库按新口径显示 `20 / 163 / 20`；定向统计与性能回归 `35 passed`、完整回归 `793 passed`，Python Compileall、Ruff 和 `git diff --check` 均通过，未触发真实 AI、切片或平台发布。
+
+## 2026-08-26 任务详情实时进度与日志统一
+
+- `/api/tasks/{task_id}/live-status` 扩展为任务详情唯一实时快照：同一次响应返回主任务状态、活动 Workflow Job、转写细分进度、最新运行日志、候选/输出数量和发布任务汇总。
+- 手动任务不再被 `auto_mode` 条件排除；手动转写、手动 AI、后台切片及全自动流程都能依据活动 Job 或运行状态持续每 3 秒局部刷新，切回页面时立即补取一次。
+- 状态卡把“总流程进度”和“当前操作进度”分开显示；转写的分段百分比、后台 Job 的真实进度和说明不再与固定任务阶段百分比混为一谈。
+- 补齐全自动流程内部小写 `transcribing / ai_analyzing / cutting` 的步骤映射，避免时间线短暂错误退回“任务创建”。
+- 已完成处理但仍有排期/发送任务时，状态概览继续读取每条有效切片的最新发布状态；当前任务 20 显示托管发布 `9/12`、当前发布进度 `75%` 和总流程 `97%`，而不是笼统的“已完成 100%”。失败或需复核会把最后一步显示为警告。
+- AI 专用轮询只更新 AI 区域自身进度，运行日志固定由统一快照刷新；新增请求去重，避免多个轮询响应互相覆盖。
+- 定向回归 `40 passed`、完整回归 `793 passed`；Ruff、Python Compileall、JavaScript 语法和 `git diff --check` 均通过。未调用真实 AI、火山转写、FFmpeg 或抖音/B站发布。
+- 8001 Web 进程已在保留 8765 Windows Worker 的情况下安全重启；`/health`、Scheduler 和 Worker 均健康，活动库 `quick_check=ok`、`foreign_key_check=0`。浏览器实测快照时间从 `14:58:11` 自动更新到 `14:58:14`，桌面与 390px 窄屏状态卡无横向溢出。
+
+## 2026-08-26 工作台周统计与发布口径修正
+
+- 工作台顶部改为单一“本周任务概览”面板，核心指标精简为本周新增、已切片、待推送和失败任务；原“待处理、待检查、待加字幕、工作流程、今日处理焦点”已移除。
+- “本周新增任务”的周边界显式按 `Asia/Shanghai` 计算，兼容 UTC ISO、`Z` 结尾和旧的无时区时间记录。
+- “已切片任务”改为按有效完成切片反推任务数，同时展示完成切片总数，不再漏算自动流程的 `COMPLETED` 任务。
+- “待推送任务”不再复用全部完成切片数；系统按每个有效切片的最新 `publish_jobs` 状态统计，`PUBLISHED / EXPORTED / CANCELLED` 排除，没有记录或仍处于等待、排期、发送中、失败、需复核的切片继续计入。
+- 当前活动页从错误的“待推送 163”修正为“待推送任务 4，涉及 11 条待发送或复核切片”；本周新增 1、已切片任务 20、有效切片 163、失败任务 0。
+- 8001 Web 进程已在保留 8765 Windows Worker 的情况下安全重启；重启前后 `/health=ok`、`worker_available=true`。浏览器桌面与 390px 窄屏验收通过，无整页横向溢出、无控制台 warning/error，未点击或触发真实发布操作。
+- 完整验收通过：`790 passed`；Ruff、Python Compileall、`node --check app/static/js/app.js` 与 `git diff --check` 均通过。现有 10 条第三方 / Pydantic 弃用警告不属于本次回归。
+
+## 2026-08-25 任务 20 状态恢复与新建流程精简
+
+- 已确认任务 `20 - E1829 110128 舒淇,安以轩P29-29` 的第 2 次切片批次、12 条 active 成片和发送中心 12/12 关联完整，原“失败”来自完成后重复触发 AI 分析并尝试删除仍被切片引用的候选记录。
+- 修复前 SQLite Online Backup 为 `backups/workflow-before-task20-repair-20260824-233721.sqlite3`；只把任务 `3210d91ee1fb` 恢复为 `completed / 100%` 并清空误报错误，候选、切片、Workflow Job、AI run 和发布任务 ID 前后完全一致，修复依据已写入任务日志。
+- 手动 AI 入口新增原子重入保护：活跃全自动 Job、已有 active 切片或已有发送中心记录时返回 HTTP 409；候选替换在同一事务内先检查 `output_clip` 引用，改为可理解的业务冲突，不再暴露 SQLite 外键错误，也不会把已完成任务降级为失败。
+- 新建任务只保留本机视频上传；任务名称历史候选最多显示最近 5 个未删除且去重后的名称，JSON 已有文件创建入口、目录浏览 API 和 NAS 页面能力已移除。
+- `source_type`、`nas_file_path` 物理列继续保留兼容；账本迁移 `20260824_02_task_upload_only` 在写入前创建 SQLite Online Backup，将旧来源归一到 `original_video_path + upload`，不删除外部视频。
+- “每小时高光密度”和候选总上限仅在长直播高光模式显示和提交；通用与康熙模式不读取页面参数，服务端固定使用兼容默认值。
+- 新增 `POST /api/subtitles/tasks/{task_id}/skip-to-review`；明确跳过字幕后进入片段审核，不再自动续跑文案和发送中心。审核保存并完整关联后才标记完成；关联不完整时保留审核状态与错误。
+- 本轮未修改 AI Provider、Prompt、模型、候选算法或真实发布逻辑，也没有重跑任务 20 的 AI、切片或发布任务。
+- 活动库迁移备份为 `data/backups/workflow-before-task-upload-only-20260825-000702-586803-d14c09b5.sqlite3`；迁移后旧来源记录为 0，`integrity_check=ok`、`foreign_key_check=0`。完整测试 `672 passed`，Ruff、Python Compileall、JavaScript 语法和浏览器烟测通过；8001、Scheduler 与 8765 Windows Worker 健康。
+
+## 2026-08-24 稳定 V1 P1.3c 数据库迁移账本与唯一索引 Fail-Closed
+
+- 新增 `schema_migrations` 账本；每条正式新迁移记录稳定 version、name、checksum 和完成时间，同版本定义漂移时拒绝启动。
+- 迁移执行使用 `BEGIN IMMEDIATE`，Schema 修改、不变量验证和账本写入同事务提交；失败会回滚且不会伪造成功记录，两个初始化进程共享一条迁移记录。
+- 发布活动任务唯一约束迁移到版本化 `uq_publish_jobs_active_clip_platform_mode_v2`；先检查 `DRAFT/WAITING/SCHEDULED/PUBLISHING/NEED_REVIEW` 重复组，再创建并验证新版索引，最后才删除旧索引。
+- 唯一索引缺失、定义漂移、旧索引残留、重复活动记录或 SQLite 索引错误均明确阻止启动；不再执行 `except sqlite3.Error: pass` 后继续无约束运行。
+- 历史库执行 P1.3c 写入前先使用 SQLite Online Backup 创建可移植快照；异常/缺列账本也先进入备份路径，再由账本结构验证拒绝迁移。
+- 新增 12 个隔离回归，覆盖重复初始化、并发迁移、checksum/Schema 漂移、异常账本、备份、失败历史兼容、活动重复数据、旧索引回滚保护和普通索引错误传播。
+- 正式 `workflow.sqlite3` 本轮只读预检：尚无 ledger、旧唯一索引仍存在、活动重复组为 0；未重启服务、未写入正式库，也未调用 AI、FFmpeg、Chrome、抖音或 B站。
+- 最终完整隔离测试 `663 passed`，Ruff、Python Compileall 与 `git diff --check` 全部通过。Codemap 独立复评将 `SQLite Persistence` 从 `64/C` 提升到 `73/C`，原 HIGH fail-open 与无账本 finding 已移除。
+- 诚实边界：启动期旧版列探测/`executescript` 仍是 pre-ledger compatibility，不能把全部历史迁移宣称为原子；备份恢复包的 FK/ledger/关键索引校验和运行中恢复闸门留待独立后续轮次。
+
+## 2026-08-24 稳定 V1 P1.3b 自动流水线断点恢复
+
+- 新增 `auto_pipeline_step_v1` 版本化 checkpoint；每一步记录 `running/succeeded/failed`、连续完成前缀、输入基线和紧凑产物证据，不保存 Secret、Prompt、完整 AI payload 或大对象。
+- checkpoint 写入继续使用 Workflow Job owner + lease token fencing；传入 `job_id` 却没有当前有效 lease 时，在状态更新、handler 和文件副作用之前直接拒绝执行。
+- Worker 重启/租约接管后会验证转写 Markdown、AI active run 与候选集合、选片 JSON、active cut run、字幕审核状态、文案/排期 JSON 和发布草稿，再从第一个未确认步骤继续。
+- AI、转写、切片、准备素材、字幕、文案和排期的 running 步骤支持产物 reconciliation；证据完整时补记成功，输入变化或证据不足时重做，不把旧产物当作新结果。
+- 切片恢复绑定 `cut_run_id`、启用候选、当前任务受控目录、非空文件、size 与首尾 fingerprint；空文件、错 run、路径越界或内容变化均 fail closed。
+- AI 恢复同时核对分析文件、数据库 `analysis_payload_json`、active run 和候选 `clip_key`；转写或候选输入变化时拒绝复用，避免恢复过期结果。
+- 发布草稿恢复绑定 schedule 的切片/平台、草稿字段、允许状态、视频路径/指纹和封面 hash；旧 Worker 取消本轮草稿时还必须满足当前 Job owner/token 的同事务 `EXISTS` 条件。
+- `/auto-retry` 现在在 `BEGIN IMMEDIATE` 中原位重排最新失败/取消 Job，保留其 checkpoint；不会另建空 Job 后重复调用 AI、FFmpeg 或发布草稿。直接 Job retry 仍保持同一语义。
+- 自动流水线 checkpoint 与字幕渲染 Job 的旧 `{completed: ...}` checkpoint 按 Job 类型隔离；没有修改数据库 Schema、活动库、AI/FFmpeg 参数或真实发布逻辑。
+- 定向回归覆盖崩溃后重领、失败 Job 原位重试、旧 token、无 lease、输入变化、损坏/未知 checkpoint、空切片/错 run、发布草稿篡改、取消竞态和测试清理隔离；最终完整测试 `651 passed`，Ruff 与 Python Compileall 全部通过。Codemap 独立复评将 `Pipeline & Job Queue` 从 `72/C` 提升到 `88/B`，剩余低风险项是发布创建步骤依赖幂等去重而非专用 reconcile，以及尚无真实进程重启级测试。
+- 诚实边界：Provider 返回前进程崩溃且没有落下可验证 run/文件时仍可能再次计费；SQLite 与外部 AI/FFmpeg 无法构成严格 exactly-once，后续 P1.4 继续处理超时与调用幂等。
+
+## 2026-08-24 稳定 V1 P1.3a 任务状态与切片原子性
+
+- `PATCH /api/tasks/{task_id}/status` 改为显式允许表 + `BEGIN IMMEDIATE` 条件更新；空任务不能直接标记完成，并发状态变化不会被旧请求覆盖。所有内部状态写入同时拒绝已永久删除任务。
+- 自动流水线在每个步骤开始前、处理完成后和最终 READY 写入前检查取消；取消后任务稳定进入 `CANCELLED`，Job 进入 `cancelled`，重试仍可从流水线起点恢复。
+- 自动流水线成功后稳定停在 `READY_TO_PUBLISH`，不再在同一次 run 内立刻覆盖为 `COMPLETED`；这表示内容已准备好，但仍等待用户在发送中心人工确认。
+- Task 步骤状态、切片批次和最终 READY 写回全部绑定当前 Workflow Job 的 owner、token、未过期 lease 与取消标记；旧 Worker 或锁等待期间过期的执行不能覆盖新状态。
+- 公开 Task 取消会在同一 SQLite 事务中请求活跃自动 Job 停止；READY 后取消只清理 `provider_response.workflow_job_id` 明确属于本轮且尚未发布的记录，不会误伤其他排期。
+- `running + cancel_requested` 在子进程退出或 lease 过期时会收敛为 `cancelled`，不再永久卡在运行态。
+- 任务汇总文件写入改为非遮蔽降级：磁盘或源文件异常只补充日志，不会覆盖原始业务失败或取消原因。
+- `cut_run` 编号分配放入 `BEGIN IMMEDIATE`；每个批次使用 `run_序号_id` 独立输出目录，避免并发/重试覆盖同名视频。
+- 一个批次的全部 `output_clip`、旧版本停用和新版本激活在同一个 SQLite 事务内提交；中途失败整批回滚并保留旧 active，较老批次即使最后完成也不能覆盖已完成的较新批次。
+- `cut_run` 创建与 Task=`cutting` 同事务，Task 终态只允许从当前 `cutting` CAS 写入；用户或其他流程刚更新的状态不会被晚到的切片结果覆盖。
+- Pytest 增加 session 级隔离数据库初始化，测试文件单独或换顺序执行时不再依赖其他文件先调用 `init_db()`。
+- 本轮不修改数据库 Schema、活动数据、AI Provider、FFmpeg 参数或真实发布流程；没有触发 AI、Chrome、抖音或 B站。
+- 最终隔离验收通过：完整测试 `637 passed`；Ruff 和 Python Compileall 全部通过，业务代码与文档的 whitespace 检查通过。Codemap 复评为 `Task Review & Cut 78/B`、`Pipeline & Job Queue 72/C`、`API & Runtime 48/D`、`SQLite Persistence 64/C`。
+- API/Persistence 分数下降不是本轮状态修复回归：独立复评删除了已修的状态跳跃/deleted 发现，同时把原始 Secret 读取、可选鉴权、同步重任务阻塞 async 路由、唯一索引重建失败静默吞掉和无版本迁移重新按 HIGH/MED 计分；这些保留到 P1.3b～P1.5。
+
+## 2026-08-24 稳定 V1 P1B.2 发布执行代际与 Worker 幂等
+
+- Scheduler 每次领取发布任务都会保留唯一 `execution_id`；平台结果、阶段、成功、导出、失败、人工复核和安全重排队全部要求命中当前 `PUBLISHING + execution_id`。旧执行写回会返回 `skipped`，同一事务中的结果和事件一并回滚。
+- `retry_failed` 与旧任务安全修复把源状态复核、活跃替代任务检查、克隆和事件写入放入同一个 `BEGIN IMMEDIATE`；并发点击只会产生一个替代任务。排期修改同时校验原状态和 `updated_at`，不能把已领取或被并发编辑的任务覆盖回 `SCHEDULED`。
+- 发送内容、平台目标和 AI 文案重新生成使用微秒级 `updated_at` 乐观并发版本；AI 慢调用返回时若任务已被人工修改或进入 `PUBLISHING`，旧结果会被拒绝，不覆盖真实投稿采用的文案。
+- Worker 查询失败不再根据数据库旧阶段自动重排队；HTTP 超时后若 Worker 仍持有 execution 锁，任务保持 `PUBLISHING` 等待明确终态。只有 Worker 可查询、锁已释放且确认仍停在上传前阶段时，才允许安全重试。
+- Windows Worker 对 job、execution 和账号同时使用进程内互斥与操作系统级跨进程文件锁；进程崩溃后锁由操作系统自动释放，不再依赖“读 PID 后删除锁文件”的竞态回收。同 execution 的终态直接重放既有结果，身份冲突、损坏/不一致 journal、上传后中断和并行 execution 全部 fail closed。
+- `job_id`、`execution_id`、`account_id`、浏览器 profile/artifact 路径和本地发布包目录增加 Windows/路径安全校验；手工发布 URL 改为解析 hostname，损坏风险 JSON 会进入人工复核而不是当作无风险。
+- Provider 结果、journal 和发布事件统一脱敏 `accessToken`、`refresh-token`、`session_token`、`csrfToken`、`clientSecret` 等常见变体；发布日志写入失败会留下受控错误日志，不再静默消失。
+- Scheduler 后台 Task 由应用保存引用；关闭时停止新扫描并等待当前轮结束，避免停机时丢弃进行中的恢复/发布状态处理。
+- 独立验收通过：发布定向 `144 passed`，完整测试 `610 passed`；Ruff、Python Compileall 和 `git diff --check` 全部通过。测试未修改工作区，未调用真实 AI、Chrome、远程 Worker、抖音或 B站。
+- Codemap 独立复评：`Publish Scheduler 62→71（C）`、`Publishers & Worker 62→76（B）`；`Publish Center` 的本轮并发旧写已修，但原始 Secret 响应、God Service 与旧 API Provider 风险未处理，仍为 `52（D）`。
+- 本轮没有修改数据库 Schema 或活动数据。P1B.1 的 `workflow_jobs.lease_token` 活动库迁移与正式服务重启仍需在单独的备份/无活动 Job 窗口执行。
+
+## 2026-08-24 稳定 V1 P1B.1 Workflow Job 执行代际隔离
+
+- `workflow_jobs` 新增可空 `lease_token`；每次领取任务都生成新的随机 token，并与 `lease_owner` 一起构成当前执行代际。旧数据库迁移前会先创建 SQLite Online Backup。
+- 进度、checkpoint、心跳、完成、失败、取消和释放租约全部增加 owner + token 条件；旧 Worker 在租约过期或任务被接管后写回会抛出 `JobLeaseLostError`，不能覆盖新执行。
+- 独立子进程启动前验证任务仍为 `running`、owner/token 一致且租约未过期；父 Worker 发现任务已换代时会终止旧子进程，旧子进程退出也不能把新执行标成失败。
+- `claim_next_job` 的选取和 claim 写入合并进同一个 `BEGIN IMMEDIATE` 事务；达到最大尝试次数但租约仍有效的任务不再被其他 Worker提前判为失败。
+- Pipeline、转写和字幕深层写回通过执行上下文继承领取时捕获的 token，不再重新从数据库读取“当前 owner”冒充旧执行身份。
+- 转写分块 checkpoint 的复用、成功、失败和完成写入，以及最终 `transcript.md` 原子替换，也会重新验证当前 Job token；远端请求返回时若任务已被接管，旧执行不能覆盖新 checkpoint 或 Markdown。
+- 字幕父进程清理临时文件时，在同一 `BEGIN IMMEDIATE` 内验证 owner/token、更新从属记录并删除精确 `.part` 文件；旧 token 不会改字幕记录或删除新执行文件。
+- 新增 `tests/test_job_fencing.py`，覆盖旧代 progress/checkpoint/heartbeat/终态/release 全部拒绝、过期子进程禁止启动、有效 max-attempt Worker 保持运行、过期上限失败和 retry token 失效。
+- 隔离验收通过：P1B.1 定向 `92 passed`，完整测试 `546 passed`；全项目 Ruff、Python Compileall 和差异检查通过。未迁移活动数据库、未调用真实 AI 或真实投稿；正式库应用迁移与真实重启烟测将在 P1B.2 完成后一并执行。
+
+## 2026-08-24 稳定 V1 P0 数据安全整改
+
+- Pytest 启动时改用每进程独立的系统临时 sandbox，并无条件隔离数据库、任务目录、上传临时目录和发布包目录；即使外部 `DATABASE_PATH` 指向活动库，测试也不会连接或清理真实数据。
+- `test_task_query_service` 的整表清理增加第二道 fail-closed 路径校验：数据库不在本次 pytest sandbox 或文件名不是 `test_workflow.sqlite3` 时立即中止。
+- 任务永久删除改为两阶段：托管媒体先原子移动到同卷隔离区并写 manifest，数据库提交失败时逆序恢复；数据库成功后才最终清除，清除失败返回 `cleanup_pending` 并保留恢复证据。外部唯一原片继续不移动、不删除。
+- 新增默认 dry-run 的 `scripts/repair_foreign_key_integrity.py`。活动库预演确认 17 条异常来自 8 个历史缺失的 `output_clip` 父记录；修复只新增 8 个 `is_active=0`、无媒体路径的 tombstone，保留 589 条发布任务、4 条字幕任务、28 条 `NEED_REVIEW` 及发布事件历史。
+- 修复前备份为 `data/backups/workflow-before-foreign-key-repair-20260824-130321-535723-35a0f972.sqlite3`；备份 `quick_check=ok` 并保留修复前 17 条外键异常，活动库修复后 `quick_check=ok`、`foreign_key_check=0`。
+- 三类 SQLite Online Backup 统一转换为 `journal_mode=DELETE` 的便携单文件快照，避免迁移、媒体清理和外键修复备份依赖 WAL/SHM sidecar。
+- 新增测试覆盖恶意活动库环境变量、清理 guard、第二个目录移动失败、数据库提交失败、最终清理失败、外键 dry-run/备份/tombstone/拒绝路径和单文件备份。
+- Windows Web 由 Alter 托管并会自动重启，未停止 Alter；数据库修复在 `BEGIN IMMEDIATE` 锁内完成备份和写入。修复后 `8001 /health=ok`，Scheduler `running=true`、`consecutive_failures=0`，Windows Worker `8765 /health=ok`；未触发真实投稿。
+- 最终验证通过：P0 定向测试 `42 passed`、完整测试 `512 passed`、Ruff、Python 编译与 Git 空白检查全部成功。全量测试故意继承活动库路径后仍使用临时 sandbox；正式 Scheduler 同期持续运行，因此活动库 mtime 会变化，但数据库大小稳定且 `foreign_key_check` 始终为 0。
+
+## 2026-08-24 全项目工程体检：Codemap + Code Overhaul + SonarQube
+
+- 按“只审计、不整改”边界完成 13 个功能模块的 Codemap 独立评分，并生成 `.codemap/modules.json`、`.codemap/codemap.html` 和 `.codemap/codemap.md`。
+- 完成架构、业务状态、数据库、并发恢复、AI/转写、发布安全、性能、测试和 Dead/Legacy 的 Code Overhaul 全量 Review。
+- 使用本机 SonarQube Community Build 26.8 和官方 Scanner 镜像实扫 `app/`、`scripts/`：38,963 ncloc，29 Bugs、2 Vulnerabilities、0 Hotspots、479 Code Smells、0.2% Duplication，维护性 A、可靠性 C、安全性 D，技术债估算约 58 小时。
+- Sonar Coverage 为 0% 是因为项目没有生成 `coverage.xml`；JUnit 已导入 500 项测试且成功率 100%，报告没有把“无覆盖率输入”误写成“代码没有测试”。
+- 隔离测试通过：`500 passed, 9 warnings`；Ruff、Python 编译、前端 JS 语法、PowerShell Parser、三组 Docker Compose 配置和 `pip check` 均通过。Ruff format check 显示 105 个文件会被重排，本轮没有格式化。
+- 只读核验当前原生服务与 Windows 发布 Worker 均在 `127.0.0.1` 健康；没有调用真实 AI、没有计费生成、没有真实投稿。
+- 发现并记录 P0：测试 fixture 在错误数据库环境下可整表删除、活动 SQLite 已有 17 条外键违规、永久删除的文件系统操作无法随数据库事务回滚。
+- 项目综合健康度定为 `59/100`，成熟度为“可用 V1”；完整证据、技术债 Top 10、删除候选、暂时不要动的区域和独立可回滚路线图见 `PROJECT_AUDIT.md`。
+- 本轮仅新增审计文档、Codemap 状态/可视化和 Sonar 本地扫描配置；没有修改生产业务代码、Schema、真实数据或发布流程。
+
+## 2026-08-24 字幕审核、异步渲染与自动流水线整合（PR 4）
+
+- 全自动流水线在切片后创建原片/切片字幕草稿，并停在 `pending_subtitle_review`；不会继续生成文案或发送任务。
+- 用户必须选择“审核并批量烧录”或“跳过字幕，使用原片继续”。决定写入任务配置，恢复流水线后不会静默切换视频来源。
+- 字幕批量烧录接入 `workflow_jobs` 持久化队列，固定引用已审核 revision，逐条保存 checkpoint；重启只复用文件存在且验证通过的结果。
+- FFmpeg 渲染支持真实进度、取消、无进展超时、临时文件和原子替换；优先尝试可用的 NVENC，失败回退 `libx264`，输出必须通过 H.264、`yuv420p`、音轨和时长校验。
+- 旧 active 字幕成片只在新结果验证成功后切换；失败、取消或进程异常不会覆盖旧文件，精确临时文件会被清理。
+- AI 纠错按所选 cue 分批创建 `ai_suggestion` revision，仅接受文字和断句建议；差异需人工选择，接受后再生成新的人工 revision，不自动覆盖 active 版本。
+- 发送中心新增字幕来源证据门禁：自动使用字幕时必须同时满足 revision 已审核、渲染已验证、文件存在；明确跳过时只使用原片。
+- 新增第四阶段专项测试，覆盖暂停/恢复、显式跳过、审核门禁、checkpoint、取消清理、NVENC 回退、验证失败、AI 建议与发布就绪证据。
+- 验证通过：Ruff、Python 编译、两个 JavaScript 语法检查、定向测试 `143 passed`、完整测试 `500 passed`；本机 9:16、16:9、1:1 三种画幅真实 FFmpeg 烧录与 FFprobe 校验通过。
+
+## 2026-08-23 字幕数据层与专业编辑器重构（PR 3）
+
+- 新增 `subtitle_tracks / subtitle_revisions / subtitle_cues`，以原片主时间轴为事实源；每次人工编辑、导入或同步都创建不可变 revision，渲染任务固定引用 revision。
+- 输出切片在切割提交时保存原片起止毫秒、时长和源指纹快照；切片字幕按快照截取并换算本地时间，人工编辑后只标记待同步，不自动覆盖。
+- 结构化转写 checkpoint 成为字幕首选数据源，保留置信度和毫秒时间；`transcript.md` 只作为旧任务兼容输入，不再限制 120 行。
+- 锁定 `pysubs2==1.9.0`，支持 SRT、VTT、ASS 导入导出和动态 ASS 序列化；ASS 受格式规范限制为 10ms 精度，内部 revision 与 SRT/VTT 继续保持 1ms。
+- 本地固定 `wavesurfer.js@7.12.11` 及 Regions/Timeline；原片波形由服务端 FFmpeg 以 100Hz 预计算 peaks 并缓存，浏览器不解码完整长视频音频。
+- 字幕工作台新增视频联动、当前行高亮、虚拟列表、搜索替换、毫秒编辑、区间拖动、拆分合并、增删、批量位移、撤销重做、说话人、自动保存、审核与导入导出。
+- 中文质量规则只提示不改字；ASS 样式按 9:16、16:9、1:1 实际分辨率计算，支持安全区、描边、阴影和说话人颜色。
+- GPL-3.0 的 VideoCaptioner 仅研究流程，没有复制源码；依赖版本及 MIT/BSD 许可证已记录在 `THIRD_PARTY_NOTICES.md`。
+- 新增 20 项字幕专项测试，覆盖幂等迁移、毫秒精度、150 行不截断、切片边界、人工版本保护、原片继承、多步编辑、三格式往返、三种画幅、说话人样式、固定渲染 revision、服务端 peaks 与 API 范围查询。
+
+## 2026-08-23 长直播分层高光选片（PR 2）
+
+- `long_live_talk` 不再进入通用选片，改用固定约 300 秒、重叠 60 秒的语言高光窗口。
+- 新增窗口级 SQLite checkpoint：状态、累计尝试次数、结果校验和、错误和下次重试时间均独立保存；同一转写指纹下成功窗口跨进程复用。
+- 远程窗口单轮最多尝试 3 次并指数退避；失败窗口不会抹掉其他窗口结果，再次分析只请求缺失窗口。
+- 高光按金句观点、故事经历、情绪峰值、冲突反转、实用知识、互动幽默六类召回，跨窗口按时间与文本语义合并。
+- 最终结果先执行每小时密度上限，再轮询各小时执行总量上限，避免前半场提前占满全部名额。
+- 时间轴覆盖不足 90% 时保存为“分析不完整”，自动流水线和手动切片均会在生成文件、同步发送中心之前停止。
+- 新增六小时结构化时间轴、跨窗口去重、三次重试、断点复用、覆盖率门禁和幂等数据库测试。
+
+## 2026-08-23 长直播基础设施（PR 1）
+
+- 新建任务移除综艺隐藏默认值，页面、multipart 上传与 JSON API 都要求显式选择三种模式；历史任务保留原模式。
+- 新建页接入受根目录保护的本地/NAS已有文件浏览，4 GB 以上素材引导使用引用模式，不复制外部唯一原片。
+- 增加媒体/磁盘预检、6 小时验收范围提示，以及长直播每小时密度和总量参数。
+- 工作流 Job 增加 lease、heartbeat、取消、重试和 checkpoint；应用启动单重型 worker，每个任务由独立 Python 子进程执行，全自动流水线和转写进入持久化队列。
+- 转写新增 run/chunk、源指纹、逐块原子提交和校验恢复；本地/火山结果统一支持置信度和词级毫秒时间戳。
+- 音频提取改为临时输出原子替换，并支持真实进度、无进展超时和终止进程树；显式 CPU 配置保持优先。
+- 本阶段不实现 `long_live_talk` 分层 AI 选片和新字幕编辑器；分别留给 PR 2 与 PR 3。
+- 验证通过：Ruff、Python 编译、`app.js` 语法、PR 1 定向测试 `85 passed`、完整测试 `455 passed`。
+- 六小时低码率实测通过：H.264/AAC 原片为 `21600s`，媒体/空间预检正常；实际提取 `16kHz` 单声道 PCM WAV 仍为 `21600s`（约 691 MB），验收临时媒体已清理。
+
 ## 2026-08-23 v2.1.0 主线整合与片段审核稳定性增强
 
 - 审计全部本地/远端分支、开放 PR 和 5 个 worktree：图片文档、续接排期、发送中心文案规则等近期分支已进入 `origin/master`；当前 PR #38 是唯一需要整体合入的有效新主线。存在冲突、失败 CI 或旧 opencli 架构的历史分支不做盲目整分支合并。
@@ -1064,3 +1281,90 @@
 - 系统状态页新增 Codex 路径、模型、超时和版本检查；分析与发布文案分别选择 Provider，默认均为 Codex，远程 DeepSeek 与本地 Ollama 继续作为人工回退。
 - 任务详情页把 Codex CLI 分析作为主按钮，发起前明确提示会消耗 Codex 套餐额度；转写 Provider 仍只允许火山/本地，不与文本 AI Provider 混用。
 - 本机 `.env` 仅把非敏感 Provider 配置切换到 Codex，未读取、输出或改动已有 API Key；未执行真实 AI、发布或投递。
+
+## 2026-08-24 稳定 V1 P1A 路径与进程边界
+
+- 任务目录解析统一限定在 `TASKS_DIR`：拒绝绝对路径、盘符、`..` 和符号链接逃逸，同时保留普通任务名中的 `~` 与受控旧目录兼容。
+- 新任务目录分配改为 `mkdir(exist_ok=False)` 原子预占；并发同名任务会得到不同目录，遗留回收站移动入口显式保持“目标尚不存在”语义。
+- 数据库读取任务目录失败不再静默回退为 task id 或空集合，避免数据库锁定/损坏被伪装成正常兼容路径。
+- 对外媒体响应增加任务级目录约束：切片只能来自当前任务的 `05_clips`/旧 `clips`，字幕成片只能来自 `06_subtitled`，异常数据库路径返回 404；白名单 NAS/本地原片继续可用。
+- Windows 子进程树终止现在校验 `taskkill` 退出码并等待进程退出；超时、启动失败、非零退出和无法确认退出都会显式报错，不再让上层误以为已经安全停止。
+- 移除路径测试中的全局模块 reload 泄漏，并让边界测试始终引用当前运行时 `storage_service`，消除全量测试顺序依赖。
+- 独立验收：边界专项 `52 passed`，全量 `533 passed`；Ruff、Python Compileall 和 `git diff --check` 全部通过。未访问真实 NAS 内容，未触发 AI 或真实投稿。
+
+## 2026-08-25 稳定 V1 P1.3d 字幕批次原子性与恢复
+
+- 字幕“审核并批量烧录”改为一个 `BEGIN IMMEDIATE` 事务：所有当前 active revision 在事务内重新校验，批准、创建/复用 Workflow Job 和 `subtitle_delivery_mode` 同时提交；任一 revision、配置或 Job 插入失败时整批回滚。
+- 单条批准也在写锁内重新核对 active revision，过期页面请求不能把字幕轨回退到旧版本；损坏的 `auto_config_json` 改为明确失败，不再静默覆盖为 `{}`。
+- 字幕成片的临时文件切换、completed/verified 写回和 active 版本切换合并为一次短事务，并绑定当前 Workflow Job 的 owner、lease token、未过期时间和取消状态；旧 Worker 或旧 revision 不能激活迟到结果。
+- 新 Worker 接管时会收口同一 Workflow Job 遗留的 processing 子任务，只清理本执行标记的 `.part.mp4` 和没有数据库引用的中断最终文件；其他 Job、已验证 active 文件、外部文件和历史 revision 均保留。
+- 若进程在“字幕 DB 已提交、checkpoint 尚未写入”的窄窗口退出，重启会从同一 Workflow Job 的 active + verified 结果恢复 checkpoint，不重复运行 FFmpeg。
+- 字幕完成与后续自动流水线 Job 改为同事务提交；取消、过期 lease 或不兼容的续跑 payload 会整笔回滚。发布草稿批次在提交前再次核验 lease，并可从同一 Workflow Job 的持久化草稿证据恢复 checkpoint。
+- 源轨生成、切片轨同步、手工保存和字幕导入均在写锁内重读 active revision 并使用条件更新；迟到的旧读取不能覆盖较新的人工版本。“跳过字幕”也会拒绝已经排队的后续自动流水线。
+- Worker 子进程启动失败会明确写入 failed 而不是让队列线程退出；重启接管同时收口 processing/queued 字幕子记录，按 revision 复用的 ASS 缓存不会被误删。
+- 最终独立验收 Ruff、Compileall 通过，字幕/Job fencing/队列/自动流水线/checkpoint/状态机/发布关联/版本回滚共 `167 passed`。Pytest 明确使用临时 `test_workflow.sqlite3`；活动库前后 size 与 SHA256 完全一致。未调用 AI、Chrome 或真实平台投稿。
+
+## 2026-08-25 稳定 V1 P1.4 AI、转写与媒体失败边界
+
+- AI Provider 新增统一错误分类和计费不确定标记；429/确认未连接只做最多 3 次有限重试，5xx、408、超时、空响应、坏 JSON、坏 Schema 和空模型结果都不自动重发。
+- 普通选片与综艺选片删除“解析失败后再次调用模型”的旧逻辑；Markdown/代码围栏 JSON 只在本地解析层兼容。Codex CLI 超时/坏输出按计费不确定收口，本地模型只在 404/405 时切换协议。
+- 长直播窗口 checkpoint 的 running/completed/failed 写回绑定当前 Workflow lease，只有安全错误才在本次执行内重试；成功窗口在恢复时继续复用。
+- 火山引擎远程转写在请求前保存稳定 request id 和 `requesting` 状态；超时、5xx、坏响应或成功响应字段异常进入 `uncertain`。普通 Job 重试不再创建新请求，只有用户明确“重新生成转写”才创建新 run。
+- 修复取消异常被 Provider 通用异常包装的问题；用户取消现在由转写工作流记录为 cancelled，不会误显示为 Provider failed。
+- 自动流水线文案按切片与平台逐项写入带 request fingerprint 的原子 checkpoint；恢复必须完整覆盖 output×platform。AI 失败规则文案带风险标记并进入 `NEED_REVIEW`，不会作为 AI 成功静默发布。
+- 任务详情和媒体预检的 FFprobe 增加超时/OSError 边界；视频切片、音频提取和字幕烧录增加超时/停滞终止与 `.part` 原子切换/失败清理。独立 ASS 导出在无媒体时使用 1080×1920 画布，有媒体但探测失败时明确报错。
+- 新增 Provider 错误矩阵、重复调用、远程转写 uncertain、取消传播、媒体超时、部分文件清理和文案 checkpoint 恢复测试；重点回归 `67 passed`。最终独立验收 Ruff、Compileall 通过；全量收集 714 项，排除 3 个真实 FFmpeg 参数实例后 `711 passed`、0 失败、10 个弃用告警。
+- 未读取或修改 `.env`，未访问真实 AI、火山引擎、FFmpeg、Chrome 或平台，也未写入活动 SQLite。下一轮 P1.5 处理密钥响应、输入校验、XSS 与本地管理员接口门禁。
+
+## 2026-08-25 稳定 V1 P1.5 本地安全边界
+
+- AI 配置读取 DTO 不再返回火山、远程分析、发布文案或本地 Provider 的原始 Key，也不再返回 `.env` 绝对路径；页面改为“已配置，留空保持”的密码框，空值保存继续保留已有密钥。
+- AI HTTP 错误与坏 JSON 不再把 Provider 原始正文写入任务日志；日志只保留 HTTP 状态、错误类别、重试和计费不确定语义，避免上游回显 Prompt、Token 或内部诊断。
+- 发布平台配置和账号读取 DTO 删除原始 `client_secret`、`access_token`、`refresh_token`，只保留脱敏摘要；Provider 内部调用通过私有读取路径取得凭据，避免把展示 DTO 误用于真实发布。
+- OAuth callback helper 保存 Token 后只返回脱敏账号 DTO，不再把平台原始授权响应重新挂回返回值。
+- 发布执行结果 DTO 会递归脱敏 Provider 响应中的 Token、Cookie、Authorization 和 Secret；数据库事件与立即执行响应共用同一脱敏边界。
+- 脱敏规则覆盖 `Set-Cookie`、`X-Auth-Token`、`provider_access_token` 等前后缀键，并清理 message/异常字符串中的 Bearer、Authorization、Cookie 与常见 Token 赋值，不只依赖精确字段名。
+- 发布任务列表、详情、历史与 Scheduler 快照不再返回旧库中的原始 `provider_response`/`publish_result` 字符串，只返回递归脱敏后的结构；这也覆盖新脱敏逻辑上线前的历史记录。
+- 损坏或非对象的历史 Provider JSON 只返回 `invalid_payload` 标志，不回显 `raw/data` 原文，避免半截 Token JSON 绕过按字段名脱敏。
+- 除健康检查、favicon 和静态资源外，页面、API 与媒体默认同时校验回环 Host 和客户端 IP；伪造 `Host: localhost` 不能绕过。非本机请求必须携带配置的 Bearer Token，写请求还会拒绝跨站 Origin。Token 不再注入 HTML 或前端 JavaScript。
+- Docker Web 端口改为只绑定 `127.0.0.1:8001`；容器内显式启用 loopback 代理兼容，必须与该 Host 绑定成对保留。保持当前个人本地使用方式，不引入多用户权限系统，也不改变 Windows Worker、平台验证码和人工复核边界。
+- 媒体 CORS 取消“任意 localhost 端口”通配，只允许明确列出的本地前端端口和抖音/B站创作者中心；未知本地网页不能读取源视频或产物。
+- 设置模型统一拒绝控制字符、异常长度、带凭据/查询/片段的服务地址、非 HTTPS 远程端点和越界响应路径；本地 AI URL 只允许明确的本机主机名。
+- 发布平台 OAuth/API 配置同步拒绝控制字符、危险 scheme、URL 内嵌凭据和非本机明文 HTTP，避免持久化后形成 OAuth 跳转或 Provider SSRF 入口。
+- 发布结果 URL 在最终落库和返回前按协议与真实 hostname 校验；伪造域名或危险 scheme 会进入 `NEED_REVIEW`，不会被记录为可信平台链接。
+- `risk_flags` JSON 损坏或结构不是数组时一律 fail closed 进入 `NEED_REVIEW`，不再把合法 JSON 的错误结构当作“无风险”。
+- 发送中心动态排期预览和任务发布链接改为 DOM `textContent` 构造，不再把标题、描述或 URL 拼进 `innerHTML`；Jinja 与字幕工作台既有转义保持不变。
+- 新增密钥不回显、空值保留、远程门禁、跨站写入、验证错误不回显原输入、发布 Token DTO、恶意 URL 和动态 XSS 回归。所有测试只使用临时 SQLite 与 mock，不读取 `.env`，不调用真实 Provider、Chrome 或平台。
+- 修复安全门禁误拒随机本机端口同源 POST 的回归：现在只有 Origin 与请求自身的 scheme/host/port 完全一致才按同源放行，不重新开放任意 localhost 跨域。
+- 最终隔离验收收集 751 项，排除 3 个真实 FFmpeg 参数实例后 `748 passed`、0 失败、10 个依赖告警；Ruff、Compileall、两个 JavaScript 语法检查、三套 Docker Compose 配置和 `git diff --check` 全部通过。活动库 `data/workflow.sqlite3` 前后大小均为 `7041024` bytes，SHA256 均为 `7AA6BE7955B46CA66A4A255A712E945832BA91E453BE73013699AEE1D4413E7F`。
+
+## 2026-08-25 稳定 V1 P1.4b AI 结果一致性与跨进程恢复
+
+- 人工 `/process/ai` 不再在 Web 请求线程直接调用 Provider，改为原子创建/复用持久化 `ai_analysis` Workflow Job；页面轮询 Job 状态，完成后重新读取分析摘要和历史。
+- AI Worker 复用现有子进程、heartbeat、owner/token 和过期 lease 接管；候选、active run 与任务 `pending_review` 在最终 SQLite 事务内重新验证 lease，旧 Worker 不能提交结果或覆盖新执行。
+- `clip_candidates` 替换、旧 run 取消激活、新 run 插入和任务终态改为一个 `BEGIN IMMEDIATE` 事务；任一步失败都会回滚到旧候选和旧 active run。
+- `candidate_clips.json` 改为由 `ai_analysis_runs.analysis_payload_json` 重建的派生缓存；同一 Workflow Job 在数据库已提交后中断，会复用已提交 run 并重建文件，不再次调用 Provider。
+- general 分段和 variety recall/expansion 新增结构化 `analysis_meta`：记录期望/完成/失败单元、无结果单元、无效条目、覆盖率、失败阶段和质量降级。
+- 合法空窗口继续视为成功；超时、HTTP/坏 JSON、坏结构或无效条目会标记分析不完整。全部单元失败继续 hard fail；部分成功保留候选供人工检查。
+- 自动流水线和手动“生成切片”都对三种 profile 统一检查 `analysis_incomplete`；长直播继续保留 90% 覆盖率门槛，普通/综艺局部失败也不能进入切片或发送中心。
+- Codemap 首轮复核新增的重复计费边界也已封口：普通分段、综艺召回/扩展/全局评审在调用前写入 Job 内单元 checkpoint，成功结果带 checksum；接管只复用已确认结果，发现上次请求已开始但未落账时进入 `uncertain`，不自动再次计费。自动流水线步骤 checkpoint 会保留这组恢复证据。
+- 长直播不再把 `clips/candidates` 当作 `moments`，显式空数组仍是合法空窗口；坏条目、缺字段或前次请求结果不确定都会标记失败/不完整。综艺全局评审必须覆盖全部候选，`quality_degraded` 与 `analysis_incomplete` 均锁定自动切片。
+- AI Job 取消会把仍在 AI 阶段的 Task 收口为可重试的 `pending_ai`；父 Worker 失败会写入明确失败态。停机 release 原子区分 queued/cancelled，不能再产生 `queued + cancel_requested=1`；进程树终止失败会保留 lease 并重试，不再杀死 Worker 线程。
+- 失败或取消后的人工重试会原位重新排队同一个 AI Job，保留已确认结果与 `billing_uncertain` 单元账本；切换按钮参数也不会绕过旧账本创建新 Job。Provider 的实际 model、endpoint、protocol 和实现类型进入输入指纹，避免配置变化后误把旧模型结果标成新模型。
+- active run JSON、`analysis_meta`、Schema、选片模式、布尔质量标记、有限覆盖率及 ratio/percent 对应关系统一 fail closed；缺失、NaN/Inf、bool 冒充数字或模式漂移都不能进入手动/自动切片。
+- 最终安全交叉复审把静态媒体 CORS 与管理 API 写入 Origin 拆开；抖音/B站创作者中心仍可按白名单读取受控媒体，但不能据此跨站写本地管理 API。
+- 新增人工 Job 去重、Worker 完成、事务回滚、旧 lease fencing、DB 已提交后接管、单元 checkpoint 复用/计费不确定、自动 checkpoint 共存、坏长直播结构、质量门禁和父进程收尾测试。最终独立全量验收 `785 passed, 3 deselected`；Ruff、Compileall、`app.js`/`publish-center.js` 语法、三套 Compose 合并配置和 `git diff --check` 全部通过。
+- Pytest 使用进程级 `niuma-pytest-*\data\test_workflow.sqlite3`，未触碰活动库。活动服务继续由 `127.0.0.1:8001` 的 Uvicorn PID `56576` 持有；只读数据库检查为 `integrity_check=ok`、`foreign_key_check=0`。活动库哈希随常驻服务 WAL 写入发生变化，未为取得静态哈希而停止正式服务。
+
+## 2026-08-26 修复中文路径视频预检误判
+
+- 修复 Windows 默认 GBK 解码 FFprobe/FFmpeg UTF-8 输出时，中文文件路径触发解码异常并被误报为“源文件没有视频轨”的问题。
+- 媒体创建预检与首尾解码抽样统一显式使用 UTF-8，并以替换非法字节的方式保留可诊断输出；真正缺少视频轨或音轨的素材仍继续拒绝创建。
+- 增加中文文件名编码回归和真正无视频轨回归测试；不修改上传目录、任务数据库、页面结构或原始视频文件。
+
+## 2026-08-27 抖音优先的康熙综艺选片 Prompt
+
+- 1 号默认 Prompt 收敛为抖音优先、连续原片可直接发布的康熙综艺选片标准，不再要求模型生成综艺 V2 不消费的 JSON 字段。
+- 强制用原始 `start_time` 后前 3 秒评价钩子，要求 15 秒内出现第一次有效刺激，并把评论动机、单一话题和完整反应闭环设为硬门槛。
+- 片段以 60–90 秒为主，普通可看内容不得虚高到 78 分；本次不修改三阶段分析代码、A/B/C 门槛、候选池或历史分析结果。
+- 相关选片与 Prompt 测试 `43 passed`，Ruff 和 `git diff --check` 通过；活动 SQLite 更新前已生成一致性备份，更新后 `integrity_check=ok`、外键异常为 0，其他 Prompt 与任务记录未变化。

@@ -1,5 +1,43 @@
 # 任务状态流转
 
+## 2026-08-24：自动字幕审核与恢复（PR 4）
+
+1. `video_cutting` 成功后进入 `subtitle_drafting`，为原片及成功切片准备字幕轨，然后写入 `pending_subtitle_review` 并结束当前流水线 Job。
+2. “审核并批量烧录”对 active revision 运行质量检查；字幕重叠属于阻断错误，其他中文质量项保持告警。审核后创建 `subtitle` 类型的持久化 Job。
+3. 字幕 Job 按固定 revision 串行处理切片，每条成功后写 checkpoint。失败或重启只重跑未验证条目；取消会终止 FFmpeg 进程树并保留旧 active 成片。
+4. 全部输出经 FFprobe 验证后创建从 `metadata_generating` 开始的恢复 Job；发送任务固定为 `subtitled` 来源。
+5. “跳过字幕”必须由用户在暂停状态明确操作；`POST /api/subtitles/tasks/{task_id}/skip-to-review` 写入 `original` 决定并进入 `pending_review`，不创建自动恢复 Job。旧 `skip-and-resume` 暂时保留为同语义兼容入口。
+6. 用户在片段审核页保存后才同步发送中心；完整关联时任务进入 `completed`，关联失败或缺失时保留 `pending_review` 并展示错误，不把整个任务误标为失败。
+7. 发送准备检查再次验证交付决定、revision 审核状态、渲染验证状态和文件存在性；任何证据缺失都不会进入实际发布。
+
+新增主任务状态：`subtitle_drafting`、`pending_subtitle_review`、`failed_subtitle_drafting`。暂停状态不是失败，也不会每 3 秒继续轮询；页面提供字幕审核和显式跳过操作。
+
+## 2026-08-23：字幕编辑数据流（PR 3）
+
+1. 完成转写后，从成功的结构化 checkpoint 创建原片主字幕 revision；旧任务没有 checkpoint 时兼容读取完整 `transcript.md`。
+2. 切片完成时固化原片起止毫秒快照；首次进入字幕工作台时按快照截取主字幕并换算为切片局部时间。
+3. 编辑、导入、拆分、合并、位移和替换均创建新 revision；自动保存使用当前 active revision 做乐观并发校验，冲突时返回 409，不覆盖他人或新版本。
+4. 未人工编辑的切片可跟随原片新 revision；人工切片只标记 `pending_sync`，用户明确强制同步前保留其 active revision。
+5. 审核将指定 revision 标记为 `approved`；单条和批量烧录都通过持久化 Job 异步执行，自动任务在审核点暂停并等待用户决定。
+
+## 2026-08-23：长直播高光流程
+
+1. 逐句时间戳转写按约 5 分钟、60 秒重叠生成窗口。
+2. 每个窗口分别召回金句观点、故事经历、情绪峰值、冲突反转、实用知识和互动幽默；远程失败单轮最多尝试 3 次。
+3. 成功窗口立即保存，重启或重试时直接复用；只重新请求未成功窗口。
+4. 跨窗口重复事件按时间重叠、关键时刻距离和文本语义合并。
+5. 每小时最多使用任务的 `highlight_density_per_hour`，再按跨小时轮询应用 `highlight_total_limit`。
+6. 成功窗口覆盖完整时间轴不足 90% 时，任务保留候选供查看但标记“分析不完整”；自动/手动切片和发送中心同步均被阻止。
+
+## 2026-08-23：长直播基础流程
+
+`明确选择模式 → 上传本机视频 → 媒体/磁盘预检 → SQLite Job 排队 → 音频提取 → 分块转写 checkpoint → transcript.md 兼容导出`。
+
+- 同一源指纹和转写配置下，重试只处理缺失或失败块；成功块通过 SHA-256 校验后复用。
+- 源内容或 Provider、模型、设备、分块参数改变时创建新的 run，旧 run 保留但不复用。
+- 默认只有一个本地重型 Job；Web 重启后 worker 接管 lease 已过期的任务。
+- `long_live_talk` 本阶段只完成创建与基础设施，分层高光选片由下一阶段实现。
+
 ## 1. 主任务状态列表（tasks.status）
 
 | 状态码 | 中文展示 | 说明 |
@@ -198,7 +236,7 @@ output_clip 生成成功
    └─ opencli_publish → 显式兼容开关 → PUBLISHED / FAILED / NEED_REVIEW
 ```
 
-`platform` 只能是 `douyin` / `bilibili`；`publish_mode` 只能表示执行方式，禁止互相混用。发送中心的“补充缺失任务”只补缺，不覆盖已有任务的执行方式。
+`platform` 只能是 `douyin` / `bilibili`；`publish_mode` 只能表示执行方式，禁止互相混用。发送中心内容准备区的“同步遗漏切片”固定使用 `use_ai=false`，只补建尚未进入发送中心的草稿与默认封面，不覆盖已有任务的执行方式或文案。AI 文案仅由内容卡“AI 重写本条文案”或明确勾选后的“AI 重写已选文案”触发；页面加载、排期计划和执行记录不会调用 AI 重写。
 
 ### 发送任务状态（publish_jobs.status）
 

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any
 
 from app.models.task import AIClipAnalysisResult
-from app.services.ai.base import AIProvider
+from app.services.ai.base import AIProvider, generate_json_with_safe_retry
 from app.services.ai.ai_clip_analyzer import (
     AIAnalysisError,
     TranscriptRow,
@@ -22,6 +24,11 @@ from app.services.ai.ai_clip_analyzer import (
 )
 from app.services.audio_reaction_service import analyze_audio_reaction
 from app.services.clip_feedback_service import list_recent_feedback_context
+from app.services.ai.unit_checkpoint import (
+    build_unit_fingerprint,
+    execute_checkpointed_ai_unit,
+    provider_fingerprint_fields,
+)
 
 
 REMOTE_WINDOW_SECONDS = 300
@@ -73,18 +80,38 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
     provider = build_provider(request.provider_name)
     windows = build_comedy_windows(rows, provider_name=request.provider_name)
     preference = _preference_summary(request.prompt_template or "", request.ai_preference)
-    moments, recall_failures = _recall_moments(provider, windows, preference)
+    unit_fingerprint = build_unit_fingerprint(
+        {
+            "profile": "variety_comedy",
+            "transcript_sha256": hashlib.sha256(transcript_text.encode("utf-8")).hexdigest(),
+            "provider": request.provider_name,
+            "provider_identity": provider_fingerprint_fields(provider),
+            "prompt_template": request.prompt_template or "",
+            "ai_preference": request.ai_preference,
+            "candidate_pool_limit": request.candidate_pool_limit,
+            "final_clip_target": request.final_clip_target,
+        }
+    )
+    moments, recall_failures, recall_stats = _recall_moments(
+        provider,
+        windows,
+        preference,
+        task_id=request.task_id,
+        input_fingerprint=unit_fingerprint,
+    )
     moments = dedupe_recall_moments(moments)[:MAX_PRELIMINARY_MOMENTS]
     if not moments:
         detail = "；".join(recall_failures[:3]) or "没有召回达到条件的笑点时刻"
         raise AIAnalysisError(f"综艺笑点分析没有召回可用内容：{detail}")
 
-    expanded, expansion_failures = _expand_moments(
+    expanded, expansion_failures, expansion_stats = _expand_moments(
         provider,
         rows,
         moments,
         preference,
         provider_name=request.provider_name,
+        task_id=request.task_id,
+        input_fingerprint=unit_fingerprint,
     )
     expanded = dedupe_expanded_candidates(expanded)[:MAX_PRELIMINARY_MOMENTS]
     if not expanded:
@@ -105,7 +132,14 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
         )
 
     feedback = list_recent_feedback_context("variety_comedy", limit=20)
-    judge_payload, judge_warning = _global_judge(provider, expanded, preference, feedback)
+    judge_payload, judge_warning = _global_judge(
+        provider,
+        expanded,
+        preference,
+        feedback,
+        task_id=request.task_id,
+        input_fingerprint=unit_fingerprint,
+    )
     scored = [
         score_comedy_candidate(candidate, judge_payload.get(candidate["source_id"]) or {})
         for candidate in expanded
@@ -139,7 +173,50 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
         warnings.append(judge_warning)
     if warnings:
         summary += f" 有 {len(warnings)} 个局部步骤已降级或跳过。"
-    return AIClipAnalysisResult(task_id=request.task_id, analysis_summary=summary, clips=clips)
+    expected_units = int(recall_stats["expected_units"]) + int(expansion_stats["expected_units"]) + 1
+    completed_units = (
+        int(recall_stats["completed_units"])
+        + int(expansion_stats["completed_units"])
+        + (0 if judge_warning else 1)
+    )
+    failed_units = (
+        int(recall_stats["failed_units"])
+        + int(expansion_stats["failed_units"])
+        + (1 if judge_warning else 0)
+    )
+    invalid_item_count = int(recall_stats["invalid_item_count"]) + int(
+        expansion_stats["invalid_item_count"]
+    )
+    coverage_ratio = completed_units / expected_units if expected_units else 0.0
+    failed_stages = [
+        {"stage": "recall", "message": " ".join(message.split())[:500]}
+        for message in recall_failures
+    ] + [
+        {"stage": "expansion", "message": " ".join(message.split())[:500]}
+        for message in expansion_failures
+    ]
+    if judge_warning:
+        failed_stages.append({"stage": "global_judge", "message": " ".join(judge_warning.split())[:500]})
+    return AIClipAnalysisResult(
+        task_id=request.task_id,
+        analysis_summary=summary,
+        clips=clips,
+        analysis_meta={
+            "schema_version": 2,
+            "coverage_basis": "recall_and_expansion_units",
+            "expected_units": expected_units,
+            "completed_units": completed_units,
+            "failed_units": failed_units,
+            "empty_unit_count": int(recall_stats["empty_unit_count"])
+            + int(expansion_stats["empty_unit_count"]),
+            "invalid_item_count": invalid_item_count,
+            "coverage_ratio": round(coverage_ratio, 6),
+            "coverage_percent": round(coverage_ratio * 100, 2),
+            "analysis_incomplete": bool(failed_units or invalid_item_count or judge_warning),
+            "quality_degraded": bool(judge_warning),
+            "failed_stages": failed_stages,
+        },
+    )
 
 
 def build_comedy_windows(
@@ -369,24 +446,54 @@ def _recall_moments(
     provider: AIProvider,
     windows: list[ComedyTranscriptWindow],
     preference: str,
-) -> tuple[list[dict], list[str]]:
+    *,
+    task_id: str,
+    input_fingerprint: str,
+) -> tuple[list[dict], list[str], dict[str, int]]:
     moments: list[dict] = []
     failures = []
+    completed_units = 0
+    failed_units = 0
+    empty_units = 0
+    invalid_item_count = 0
     for window in windows:
         prompt = _recall_prompt(window, preference)
+        execution = execute_checkpointed_ai_unit(
+            task_id=task_id,
+            namespace="variety_recall",
+            input_fingerprint=input_fingerprint,
+            unit_id=f"window_{window.index:03d}",
+            operation=lambda prompt=prompt: _generate_payload(provider, prompt, expected_key="moments"),
+        )
+        if execution.status != "completed" or not isinstance(execution.payload, dict):
+            failed_units += 1
+            failures.append(
+                f"召回窗口 {window.index}/{window.total} 跳过："
+                f"{execution.error or execution.status}"
+            )
+            continue
         try:
-            payload = _generate_payload(provider, prompt, expected_key="moments")
-            raw_moments = payload.get("moments") or []
+            payload = execution.payload
+            raw_moments = payload.get("moments")
             if not isinstance(raw_moments, list):
                 raise AIAnalysisError("moments 不是数组")
+            completed_units += 1
+            if not raw_moments:
+                empty_units += 1
             for index, item in enumerate(raw_moments[:RECALL_LIMIT_PER_WINDOW], start=1):
                 if not isinstance(item, dict):
+                    invalid_item_count += 1
+                    failures.append(f"召回窗口 {window.index}/{window.total} 第 {index} 条不是对象")
                     continue
                 key_text = _first_time(item, ("key_time", "key_moment_time", "moment_time", "start_time"))
                 if not key_text:
+                    invalid_item_count += 1
+                    failures.append(f"召回窗口 {window.index}/{window.total} 第 {index} 条缺少关键时间")
                     continue
                 key_seconds = _time_to_seconds(key_text)
                 if key_seconds < window.start_seconds or key_seconds > window.end_seconds:
+                    invalid_item_count += 1
+                    failures.append(f"召回窗口 {window.index}/{window.total} 第 {index} 条关键时间越界")
                     continue
                 moments.append(
                     {
@@ -400,8 +507,15 @@ def _recall_moments(
                     }
                 )
         except Exception as exc:
+            failed_units += 1
             failures.append(f"召回窗口 {window.index}/{window.total} 跳过：{exc}")
-    return moments, failures
+    return moments, failures, {
+        "expected_units": len(windows),
+        "completed_units": completed_units,
+        "failed_units": failed_units,
+        "empty_unit_count": empty_units,
+        "invalid_item_count": invalid_item_count,
+    }
 
 
 def _expand_moments(
@@ -411,10 +525,17 @@ def _expand_moments(
     preference: str,
     *,
     provider_name: str,
-) -> tuple[list[dict], list[str]]:
+    task_id: str,
+    input_fingerprint: str,
+) -> tuple[list[dict], list[str], dict[str, int]]:
     expanded = []
     failures = []
     batch_size = 1 if provider_name == "local" else EXPANSION_BATCH_SIZE_REMOTE
+    expected_units = math.ceil(len(moments) / batch_size) if moments else 0
+    completed_units = 0
+    failed_units = 0
+    empty_units = 0
+    invalid_item_count = 0
     for offset in range(0, len(moments), batch_size):
         batch = moments[offset : offset + batch_size]
         contexts = []
@@ -435,23 +556,47 @@ def _expand_moments(
                     "transcript": "\n".join(_format_row(row) for row in context_rows),
                 }
             )
+        prompt = _expansion_prompt(contexts, preference)
+        batch_number = offset // batch_size + 1
+        execution = execute_checkpointed_ai_unit(
+            task_id=task_id,
+            namespace="variety_expansion",
+            input_fingerprint=input_fingerprint,
+            unit_id=f"batch_{batch_number:03d}",
+            operation=lambda prompt=prompt: _generate_payload(provider, prompt, expected_key="clips"),
+        )
+        if execution.status != "completed" or not isinstance(execution.payload, dict):
+            failed_units += 1
+            failures.append(
+                f"上下文扩展批次 {batch_number} 跳过：{execution.error or execution.status}"
+            )
+            continue
         try:
-            payload = _generate_payload(provider, _expansion_prompt(contexts, preference), expected_key="clips")
-            raw_clips = payload.get("clips") or []
+            payload = execution.payload
+            raw_clips = payload.get("clips")
             if not isinstance(raw_clips, list):
                 raise AIAnalysisError("clips 不是数组")
-            for item in raw_clips:
+            completed_units += 1
+            if not raw_clips:
+                empty_units += 1
+            for item_index, item in enumerate(raw_clips, start=1):
                 if not isinstance(item, dict):
+                    invalid_item_count += 1
+                    failures.append(f"上下文扩展批次 {offset // batch_size + 1} 第 {item_index} 条不是对象")
                     continue
                 source_id = str(item.get("source_id") or "")
                 moment = next((value for value in batch if value["source_id"] == source_id), None)
                 context_rows = context_rows_by_id.get(source_id) or []
                 if not moment or not context_rows:
+                    invalid_item_count += 1
+                    failures.append(f"上下文扩展批次 {offset // batch_size + 1} 第 {item_index} 条 source_id 无效")
                     continue
                 start_text = _first_time(item, ("start_time",))
                 end_text = _first_time(item, ("end_time",))
                 key_text = _first_time(item, ("key_moment_time", "key_time")) or moment["key_time"]
                 if not start_text or not end_text:
+                    invalid_item_count += 1
+                    failures.append(f"上下文扩展批次 {offset // batch_size + 1} 第 {item_index} 条缺少起止时间")
                     continue
                 bounds = normalize_clip_bounds(
                     _time_to_seconds(start_text),
@@ -460,6 +605,8 @@ def _expand_moments(
                     context_rows,
                 )
                 if not bounds:
+                    invalid_item_count += 1
+                    failures.append(f"上下文扩展批次 {offset // batch_size + 1} 第 {item_index} 条时间范围无效")
                     continue
                 start_seconds, end_seconds = bounds
                 key_seconds = min(end_seconds - 1, max(start_seconds, _time_to_seconds(key_text)))
@@ -485,8 +632,15 @@ def _expand_moments(
                     }
                 )
         except Exception as exc:
+            failed_units += 1
             failures.append(f"上下文扩展批次 {offset // batch_size + 1} 跳过：{exc}")
-    return expanded, failures
+    return expanded, failures, {
+        "expected_units": expected_units,
+        "completed_units": completed_units,
+        "failed_units": failed_units,
+        "empty_unit_count": empty_units,
+        "invalid_item_count": invalid_item_count,
+    }
 
 
 def _global_judge(
@@ -494,6 +648,9 @@ def _global_judge(
     candidates: list[dict],
     preference: str,
     feedback: list[dict],
+    *,
+    task_id: str,
+    input_fingerprint: str,
 ) -> tuple[dict[str, dict], str]:
     prompt_candidates = []
     for item in candidates:
@@ -510,20 +667,42 @@ def _global_judge(
                 "audio_reaction": item.get("audio_evidence") or {},
             }
         )
+    prompt = _judge_prompt(prompt_candidates, preference, feedback)
+    execution = execute_checkpointed_ai_unit(
+        task_id=task_id,
+        namespace="variety_global_judge",
+        input_fingerprint=input_fingerprint,
+        unit_id="judge_001",
+        operation=lambda: _generate_payload(provider, prompt, expected_key="ranked_clips"),
+    )
+    if execution.status != "completed" or not isinstance(execution.payload, dict):
+        return {}, f"全局评审结果不确定，已锁定自动切片：{execution.error or execution.status}"
     try:
-        payload = _generate_payload(
-            provider,
-            _judge_prompt(prompt_candidates, preference, feedback),
-            expected_key="ranked_clips",
-        )
-        raw_items = payload.get("ranked_clips") or payload.get("clips") or []
+        payload = execution.payload
+        raw_items = payload.get("ranked_clips")
         if not isinstance(raw_items, list):
             raise AIAnalysisError("ranked_clips 不是数组")
-        return {
-            str(item.get("source_id")): item
+        known_ids = {str(item["source_id"]) for item in candidates}
+        valid_items = [
+            item
             for item in raw_items
-            if isinstance(item, dict) and item.get("source_id")
-        }, ""
+            if isinstance(item, dict) and str(item.get("source_id") or "") in known_ids
+        ]
+        judged = {str(item["source_id"]): item for item in valid_items}
+        invalid_count = len(raw_items) - len(valid_items)
+        duplicate_count = len(valid_items) - len(judged)
+        missing_ids = sorted(known_ids - set(judged))
+        if not judged:
+            raise AIAnalysisError("全局评审没有返回任何可对应的 source_id")
+        issues = []
+        if invalid_count:
+            issues.append(f"{invalid_count} 条无效条目")
+        if duplicate_count:
+            issues.append(f"{duplicate_count} 条重复 source_id")
+        if missing_ids:
+            issues.append(f"缺少 {len(missing_ids)} 个候选")
+        warning = f"全局评审{'、'.join(issues)}，已锁定自动切片" if issues else ""
+        return judged, warning
     except Exception as exc:
         return {}, f"全局评审调用失败，已使用扩展阶段评分降级：{exc}"
 
@@ -560,20 +739,12 @@ def _to_clip_payload(item: dict, index: int) -> dict:
 
 
 def _generate_payload(provider: AIProvider, prompt: str, *, expected_key: str) -> dict:
-    raw = provider.generate_json(prompt)
-    try:
-        payload = _loads_ai_json(raw)
-    except AIAnalysisError as first_error:
-        raw = provider.generate_json(
-            prompt,
-            retry_instruction=f"上一次输出无法解析。只返回严格 JSON，并确保包含 {expected_key} 数组。",
-        )
-        try:
-            payload = _loads_ai_json(raw)
-        except AIAnalysisError as second_error:
-            raise AIAnalysisError(str(second_error)) from first_error
+    raw = generate_json_with_safe_retry(provider, prompt)
+    payload = _loads_ai_json(raw)
     if not isinstance(payload, dict):
         raise AIAnalysisError("AI 输出必须是 JSON 对象")
+    if not isinstance(payload.get(expected_key), list):
+        raise AIAnalysisError(f"AI 输出缺少 {expected_key} 数组")
     return payload
 
 

@@ -17,6 +17,7 @@ from app.services.database_backup_service import (
     build_cleanup_plan,
     create_media_cleanup_backup,
     create_publish_migration_backup,
+    create_schema_migration_backup,
     sqlite_quick_check,
 )
 
@@ -30,6 +31,14 @@ def _create_database(path: Path, value: str = "ok") -> None:
     connection.execute("INSERT INTO sample(value) VALUES (?)", (value,))
     connection.commit()
     connection.close()
+
+
+def _assert_portable_backup(path: Path) -> None:
+    with sqlite3.connect(path) as connection:
+        journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+    assert str(journal_mode).lower() == "delete"
+    for suffix in ("-wal", "-shm", "-journal"):
+        assert not Path(f"{path}{suffix}").exists()
 
 
 def _set_local_time(path: Path, value: datetime) -> None:
@@ -106,6 +115,22 @@ def test_repeated_backup_within_24_hours_creates_only_one_file(tmp_path):
     assert second is None
     assert backups == [first]
     assert sqlite_quick_check(first) == "ok"
+    _assert_portable_backup(first)
+
+
+def test_schema_migration_backup_is_portable(tmp_path):
+    database_path = tmp_path / "workflow.sqlite3"
+    backup_dir = tmp_path / "backups"
+    _create_database(database_path)
+
+    backup = create_schema_migration_backup(
+        database_path,
+        backup_dir,
+        "schema-test",
+    )
+
+    assert sqlite_quick_check(backup) == "ok"
+    _assert_portable_backup(backup)
 
 
 def test_media_cleanup_backup_is_always_created_and_valid(tmp_path):
@@ -117,6 +142,7 @@ def test_media_cleanup_backup_is_always_created_and_valid(tmp_path):
 
     assert backup.name.startswith("workflow-before-media-cleanup-")
     assert sqlite_quick_check(backup) == "ok"
+    _assert_portable_backup(backup)
 
 
 def test_concurrent_publish_migration_creates_one_valid_backup(monkeypatch, tmp_path):

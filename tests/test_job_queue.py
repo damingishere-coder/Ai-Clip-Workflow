@@ -33,6 +33,13 @@ def _create_test_task(prefix: str = "task") -> str:
     return task_id
 
 
+def _lease_kwargs(job: dict) -> dict[str, str]:
+    return {
+        "lease_owner": str(job["lease_owner"]),
+        "lease_token": str(job["lease_token"]),
+    }
+
+
 class TestJobCreate:
     """创建 job 记录"""
 
@@ -143,8 +150,8 @@ class TestJobCreate:
 
         task_id = _create_test_task()
         first_job, _ = create_or_get_active_job(task_id, JOB_TYPE_VIDEO_CUT)
-        mark_job_running(first_job["id"])
-        mark_job_completed(first_job["id"])
+        running = mark_job_running(first_job["id"])
+        mark_job_completed(first_job["id"], **_lease_kwargs(running))
 
         second_job, second_created = create_or_get_active_job(task_id, JOB_TYPE_VIDEO_CUT)
 
@@ -222,7 +229,7 @@ class TestJobLifecycle:
 
         # 步骤 3：标记 completed
         result_data = {"output_count": 3, "output_dir": "/tmp/clips"}
-        job = mark_job_completed(job["id"], result_data)
+        job = mark_job_completed(job["id"], result_data, **_lease_kwargs(job))
         assert job["status"] == JOB_STATUS_COMPLETED
         assert job["progress"] == 100
         assert job["finished_at"] is not None
@@ -241,10 +248,10 @@ class TestJobLifecycle:
 
         task_id = _create_test_task()
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
-        mark_job_running(job["id"])
+        running = mark_job_running(job["id"])
 
         error_text = "视频文件已损坏，无法读取"
-        job = mark_job_failed(job["id"], error_text)
+        job = mark_job_failed(job["id"], error_text, **_lease_kwargs(running))
 
         assert job["status"] == JOB_STATUS_FAILED
         assert job["error_message"] == error_text
@@ -264,19 +271,19 @@ class TestJobLifecycle:
 
         task_id = _create_test_task()
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
-        mark_job_running(job["id"])
+        running = mark_job_running(job["id"])
 
         # 更新进度到 50
-        job = update_job_progress(job["id"], 50, "正在处理第 2/4 个片段")
+        job = update_job_progress(job["id"], 50, "正在处理第 2/4 个片段", **_lease_kwargs(running))
         assert job["progress"] == 50
         assert "第 2/4" in job["message"]
 
         # 进度不应超过 100
-        job = update_job_progress(job["id"], 150, "超出范围")
+        job = update_job_progress(job["id"], 150, "超出范围", **_lease_kwargs(running))
         assert job["progress"] == 100
 
         # 进度不应小于 0
-        job = update_job_progress(job["id"], -10, "负数")
+        job = update_job_progress(job["id"], -10, "负数", **_lease_kwargs(running))
         assert job["progress"] == 0
 
 
@@ -336,7 +343,7 @@ class TestJobSerialization:
 
         task_id = _create_test_task()
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
-        mark_job_running(job["id"])
+        running = mark_job_running(job["id"])
 
         result = {
             "status": "completed",
@@ -348,7 +355,7 @@ class TestJobSerialization:
             ],
             "errors": [],
         }
-        job = mark_job_completed(job["id"], result)
+        job = mark_job_completed(job["id"], result, **_lease_kwargs(running))
 
         assert job["result_json"] == result
         assert job["result_json"]["output_count"] == 3
@@ -377,8 +384,8 @@ class TestJobSerialization:
 
         task_id = _create_test_task()
         job = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
-        mark_job_running(job["id"])
-        job = mark_job_completed(job["id"])
+        running = mark_job_running(job["id"])
+        job = mark_job_completed(job["id"], **_lease_kwargs(running))
 
         assert job["result_json"] == {}
 
@@ -449,8 +456,8 @@ class TestJobQuery:
         j2 = create_job(task_id=task_id, job_type=JOB_TYPE_VIDEO_CUT)
 
         # 把 j2 完成
-        mark_job_running(j2["id"])
-        mark_job_completed(j2["id"])
+        running = mark_job_running(j2["id"])
+        mark_job_completed(j2["id"], **_lease_kwargs(running))
 
         queued_jobs = list_jobs(task_id=task_id, status=JOB_STATUS_QUEUED)
         assert len(queued_jobs) == 1

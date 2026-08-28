@@ -41,20 +41,31 @@ class TestTaskDirName:
         assert len(result) > 0
         assert result == "untitled"
 
-    def test_allocate_generates_unique_names(self, tmp_path, monkeypatch):
-        """重名时自动追加序号 — 需要模拟数据库已有第一条记录"""
-        monkeypatch.setenv("TASKS_DIR", str(tmp_path))
-        monkeypatch.setenv("STORAGE_ROOT", str(tmp_path))
-        # 第一次分配：创建目录并写入数据库
-        name1 = allocate_task_dir_name("测试唯一性")
-        # 模拟写入数据库 — 第二次调用应该能检测到重名
-        # 由于测试环境没有真实数据库，只验证两次调用格式正确
-        assert name1.endswith("测试唯一性") or "测试唯一性" in name1
-        # 验证函数不会崩溃
-        name2 = allocate_task_dir_name("另一个项目")
-        assert "另一个项目" in name2
-        assert isinstance(name1, str)
-        assert isinstance(name2, str)
+    def test_allocate_generates_unique_names(self, tmp_path):
+        """同名任务通过原子目录预占获得不同目录名。"""
+        from app.services import storage_service
+
+        runtime_settings = storage_service.settings
+
+        originals = {
+            "storage_root": runtime_settings.storage_root,
+            "tasks_dir": runtime_settings.tasks_dir,
+            "database_path": runtime_settings.database_path,
+        }
+        object.__setattr__(runtime_settings, "storage_root", tmp_path)
+        object.__setattr__(runtime_settings, "tasks_dir", tmp_path)
+        object.__setattr__(runtime_settings, "database_path", tmp_path / "missing.sqlite3")
+        try:
+            name1 = storage_service.allocate_task_dir_name("测试唯一性")
+            name2 = storage_service.allocate_task_dir_name("测试唯一性")
+        finally:
+            for name, value in originals.items():
+                object.__setattr__(runtime_settings, name, value)
+
+        assert name1 == "测试唯一性"
+        assert name2 == "测试唯一性 (2)"
+        assert (tmp_path / name1).is_dir()
+        assert (tmp_path / name2).is_dir()
 
     def test_storage_path_can_be_configured(self, tmp_path):
         """路径可以由环境变量配置，不是只写死 E 盘"""
@@ -139,41 +150,39 @@ class TestGetArtifactPaths:
 class TestCreateTaskDirectory:
     """创建任务目录时以 task_dir_name 为准"""
 
-    def test_directory_created_with_dir_name(self, tmp_path, monkeypatch):
+    def test_directory_created_with_dir_name(self, tmp_path):
         """create_task_directory 使用 task_dir_name 而非 task_id 作为文件夹名"""
-        # 先设置临时数据目录和数据库路径，避免污染真实数据
-        data_dir = tmp_path / "data"
-        data_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setenv("TASKS_DIR", str(tmp_path))
-        monkeypatch.setenv("STORAGE_ROOT", str(tmp_path))
-        monkeypatch.setenv("DATA_DIR", str(data_dir))
-        monkeypatch.setenv("DATABASE_PATH", str(data_dir / "test_db.sqlite3"))
+        from app.services import storage_service
 
-        # 强制重载 config 和 storage_service，让新环境变量生效
-        import importlib
-        import app.core.config
-        import app.services.storage_service
-        importlib.reload(app.core.config)
-        importlib.reload(app.services.storage_service)
-        from app.services.storage_service import get_artifact_paths
+        runtime_settings = storage_service.settings
 
-        task_dir = create_task_directory(task_id="abc123", task_dir_name="我的项目")
+        originals = {
+            "storage_root": runtime_settings.storage_root,
+            "tasks_dir": runtime_settings.tasks_dir,
+        }
+        object.__setattr__(runtime_settings, "storage_root", tmp_path)
+        object.__setattr__(runtime_settings, "tasks_dir", tmp_path)
+        try:
+            task_dir = storage_service.create_task_directory(task_id="abc123", task_dir_name="我的项目")
 
-        # 目录名以 task_dir_name 为准，不是 task_id
-        assert "我的项目" in str(task_dir), f"目录名应包含 task_dir_name，实际：{task_dir}"
-        assert "abc123" not in str(task_dir), "目录名不应包含 task_id"
+            # 目录名以 task_dir_name 为准，不是 task_id
+            assert "我的项目" in str(task_dir), f"目录名应包含 task_dir_name，实际：{task_dir}"
+            assert "abc123" not in str(task_dir), "目录名不应包含 task_id"
 
-        # 所有子目录都存在
-        expected_subdirs = [
-            "source", "audio", "transcripts", "analysis",
-            "05_clips", "06_subtitled", "07_covers", "logs",
-        ]
-        for sub in expected_subdirs:
-            sub_path = task_dir / sub
-            assert sub_path.exists(), f"缺少子目录：{sub}"
+            # 所有子目录都存在
+            expected_subdirs = [
+                "source", "audio", "transcripts", "analysis",
+                "05_clips", "06_subtitled", "07_covers", "logs",
+            ]
+            for sub in expected_subdirs:
+                sub_path = task_dir / sub
+                assert sub_path.exists(), f"缺少子目录：{sub}"
 
-        # clips_dir 指向 05_clips
-        paths = get_artifact_paths(task_id="abc123", task_dir_name="我的项目")
-        assert "05_clips" in str(paths["clips_dir"]), (
-            f"正式 clips_dir 应指向 05_clips，实际：{paths['clips_dir']}"
-        )
+            # clips_dir 指向 05_clips
+            paths = storage_service.get_artifact_paths(task_id="abc123", task_dir_name="我的项目")
+            assert "05_clips" in str(paths["clips_dir"]), (
+                f"正式 clips_dir 应指向 05_clips，实际：{paths['clips_dir']}"
+            )
+        finally:
+            for name, value in originals.items():
+                object.__setattr__(runtime_settings, name, value)

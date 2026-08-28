@@ -319,7 +319,7 @@ class TestListTasksOutputClipCount:
 class TestDashboardContext:
     """get_dashboard_context 统计正确"""
 
-    def test_ready_for_subtitle_count(self, tmp_path, monkeypatch):
+    def test_completed_clip_task_count(self, tmp_path, monkeypatch):
         _setup_db(tmp_path, monkeypatch)
         from app.db.database import get_connection
         from app.services.task_service import get_dashboard_context
@@ -333,11 +333,11 @@ class TestDashboardContext:
             conn.commit()
 
         ctx = get_dashboard_context()
-        # "待加字幕" = 已完成切片数 = 2
-        ready_stat = next(s for s in ctx["stats"] if s["label"] == "待加字幕")
-        assert ready_stat["value"] == 2
+        sliced_stat = next(s for s in ctx["stats"] if s["label"] == "已切片任务")
+        assert sliced_stat["value"] == 1
+        assert "2 条" in sliced_stat["note"]
 
-    def test_output_clip_count_in_focus_stats(self, tmp_path, monkeypatch):
+    def test_pending_publish_count_in_dashboard_stats(self, tmp_path, monkeypatch):
         _setup_db(tmp_path, monkeypatch)
         from app.db.database import get_connection
         from app.services.task_service import get_dashboard_context
@@ -349,8 +349,9 @@ class TestDashboardContext:
             conn.commit()
 
         ctx = get_dashboard_context()
-        focus_output = next(s for s in ctx["focus_stats"] if s["label"] == "输出切片")
-        assert focus_output["value"] == 1
+        pending_stat = next(s for s in ctx["stats"] if s["label"] == "待推送任务")
+        assert pending_stat["value"] == 1
+        assert "1 条" in pending_stat["note"]
 
 
 class TestClipsOverviewContext:

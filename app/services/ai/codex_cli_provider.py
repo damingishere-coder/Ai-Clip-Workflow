@@ -75,24 +75,52 @@ class CodexCliProvider:
                         check=False,
                     )
                 if completed.returncode != 0:
-                    raise AIProviderError(f"Codex CLI 执行失败（退出码 {completed.returncode}）")
+                    raise AIProviderError(
+                        f"Codex CLI 执行失败（退出码 {completed.returncode}）",
+                        category="cli_exit_error",
+                        billing_uncertain=True,
+                    )
                 if not output_path.is_file():
-                    raise AIProviderError("Codex CLI 未生成最终结果文件")
+                    raise AIProviderError(
+                        "Codex CLI 未生成最终结果文件",
+                        category="empty_model_output",
+                        billing_uncertain=True,
+                    )
 
                 result = _strip_json_fence(output_path.read_text(encoding="utf-8").strip())
                 if not result:
-                    raise AIProviderError("Codex CLI 返回空结果")
+                    raise AIProviderError(
+                        "Codex CLI 返回空结果",
+                        category="empty_model_output",
+                        billing_uncertain=True,
+                    )
                 try:
                     parsed = json.loads(result)
                 except json.JSONDecodeError as exc:
-                    raise AIProviderError("Codex CLI 返回内容不是合法 JSON") from exc
+                    raise AIProviderError(
+                        "Codex CLI 返回内容不是合法 JSON",
+                        category="invalid_response_json",
+                        billing_uncertain=True,
+                    ) from exc
                 if not isinstance(parsed, (dict, list)):
-                    raise AIProviderError("Codex CLI JSON 顶层必须是对象或数组")
+                    raise AIProviderError(
+                        "Codex CLI JSON 顶层必须是对象或数组",
+                        category="invalid_response_schema",
+                        billing_uncertain=True,
+                    )
                 return result
         except subprocess.TimeoutExpired as exc:
-            raise AIProviderError(f"Codex CLI 执行超时（>{self.config.timeout_seconds} 秒）") from exc
+            raise AIProviderError(
+                f"Codex CLI 执行超时（>{self.config.timeout_seconds} 秒）",
+                category="timeout",
+                billing_uncertain=True,
+            ) from exc
         except OSError as exc:
-            raise AIProviderError("Codex CLI 无法启动，请检查可执行文件路径") from exc
+            raise AIProviderError(
+                "Codex CLI 无法启动，请检查可执行文件路径",
+                category="cli_start_error",
+                safe_to_retry=False,
+            ) from exc
 
     def version_status(self) -> dict[str, str | bool]:
         executable = self._resolve_executable()

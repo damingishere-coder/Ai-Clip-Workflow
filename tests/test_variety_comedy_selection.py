@@ -388,7 +388,7 @@ def test_three_stage_flow_allows_weak_episode_to_select_less_than_target(monkeyp
     assert 60 <= result.clips[0].duration_seconds <= 150
 
 
-def test_auto_pipeline_only_enables_selected_a_grade_clips():
+def test_auto_pipeline_only_enables_selected_a_grade_clips(monkeypatch):
     task_id = f"{PREFIX}auto"
     _insert_task(task_id, final_target=5)
     get_artifact_paths(task_id)["analysis_path"].parent.mkdir(parents=True, exist_ok=True)
@@ -398,6 +398,22 @@ def test_auto_pipeline_only_enables_selected_a_grade_clips():
     }
     _insert_candidate(task_id, 5, tier="A", quality=99, selected_by_default=False)
     _insert_candidate(task_id, 6, tier="B", quality=76, selected_by_default=True)
+    monkeypatch.setattr(
+        "app.services.pipeline_engine.task_service.get_task_ai_analysis_meta",
+        lambda _task_id: {
+            "schema_version": 2,
+            "selection_profile": "variety_comedy",
+            "analysis_incomplete": False,
+            "quality_degraded": False,
+            "coverage_ratio": 1.0,
+            "coverage_percent": 100.0,
+            "expected_units": 1,
+            "completed_units": 1,
+            "failed_units": 0,
+            "failed_stages": [],
+            "invalid_item_count": 0,
+        },
+    )
 
     result = PipelineEngine()._select_clips(task_id, {"config": {}})
 

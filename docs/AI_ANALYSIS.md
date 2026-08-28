@@ -1,5 +1,16 @@
 # AI 片段分析说明
 
+## 2026-08-23：长直播语言高光模式
+
+- 模式键：`long_live_talk`。
+- 窗口：300 秒，重叠 60 秒；单窗口最多召回 5 个高光，允许返回空数组，不强制凑数。
+- 类别：`quote_opinion`、`story_experience`、`emotional_peak`、`conflict_reversal`、`practical_knowledge`、`interactive_humor`。
+- 恢复：checkpoint 绑定转写 SHA-256、Provider、模型和窗口边界；任一键变化都会创建新的窗口集合。
+- 完整性：以成功窗口区间并集计算 `coverage_ratio`，小于 `0.90` 写入 `analysis_incomplete=true`。
+- 排序：先跨窗口去重，再按小时最多 N 条，最后跨小时轮询到总量上限；默认 4 条/小时、总计 30 条。
+
+`general` 和 `variety_comedy` 继续使用原算法；本次没有迁移或重算既有分析历史。
+
 ## 2026-05-23：AI Prompt 方案
 
 任务详情页现在使用“AI Prompt 方案”管理 AI 分析 Prompt：

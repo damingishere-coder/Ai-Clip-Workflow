@@ -27,7 +27,6 @@ from app.services.storage_service import (
 )
 from app.services.task_lifecycle_service import TaskDeletionConflictError
 from app.services import job_service
-from app.services import job_worker
 
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -38,17 +37,6 @@ async def list_tasks() -> list[dict]:
     return task_service.list_tasks()
 
 
-@router.post("")
-async def create_task(payload: TaskCreate, background_tasks: BackgroundTasks) -> dict:
-    try:
-        result = task_service.create_task_record(payload)
-        if payload.auto_mode:
-            result["auto_pipeline"] = start_auto_pipeline(result["id"], background_tasks=background_tasks)
-        return result
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
 @router.post("/upload")
 async def create_upload_task(
     background_tasks: BackgroundTasks,
@@ -56,8 +44,10 @@ async def create_upload_task(
     platform: str = Form("general"),
     max_clip_duration: int = Form(10),
     candidate_clip_count: int = Form(12),
-    selection_profile: str = Form("variety_comedy"),
+    selection_profile: str | None = Form(None),
     final_clip_target: int = Form(5),
+    highlight_density_per_hour: int = Form(4),
+    highlight_total_limit: int = Form(30),
     ai_preference: str | None = Form(None),
     auto_mode: bool = Form(False),
     auto_clip_count: str = Form("auto"),
@@ -71,6 +61,8 @@ async def create_upload_task(
     auto_metadata_use_ai: bool = Form(False),
     video_file: UploadFile = File(...),
 ) -> dict:
+    if not selection_profile:
+        raise HTTPException(status_code=422, detail="请选择选片模式")
     task_id = uuid4().hex[:12]
     task_dir_name = allocate_task_dir_name(task_name, exclude_task_id=task_id)
     task_record_created = False
@@ -84,13 +76,14 @@ async def create_upload_task(
         )
         payload = TaskCreate(
             task_name=task_name,
-            source_type="upload",
             platform=platform,
             original_video_path=str(saved_path),
             max_clip_duration=max_clip_duration,
             candidate_clip_count=candidate_clip_count,
             selection_profile=selection_profile,
             final_clip_target=final_clip_target,
+            highlight_density_per_hour=(highlight_density_per_hour if selection_profile == "long_live_talk" else 4),
+            highlight_total_limit=(highlight_total_limit if selection_profile == "long_live_talk" else 30),
             ai_preference=ai_preference,
             auto_mode=auto_mode,
             auto_clip_count=auto_clip_count,
@@ -168,7 +161,10 @@ async def delete_task(task_id: str) -> dict:
 
 @router.patch("/{task_id}/status")
 async def patch_task_status(task_id: str, payload: TaskStatusUpdate) -> dict:
-    task = task_service.update_task_status(task_id, payload.status, payload.error_message)
+    try:
+        task = task_service.transition_task_status(task_id, payload.status, payload.error_message)
+    except task_service.TaskStatusConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
     return task
@@ -205,6 +201,8 @@ async def patch_task_selection_settings(task_id: str, payload: TaskSelectionSett
             task_id,
             payload.selection_profile,
             payload.final_clip_target,
+            payload.highlight_density_per_hour,
+            payload.highlight_total_limit,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -242,12 +240,23 @@ async def process_transcript_workflow(
     provider: str | None = Query(default=None, pattern="^(remote|local)$"),
 ) -> dict:
     try:
-        return task_service.process_task_transcript_workflow(
-            task_id,
-            background_tasks=background_tasks,
-            force=force,
-            provider=provider,
+        task = task_service.get_task(task_id, include_video_probe=False)
+        if not task:
+            raise ValueError("任务不存在")
+        if task.get("transcript_exists") and not force:
+            return {"status": "completed", "message": "转写已经生成，无需重复处理。", "task": task}
+        job, created = job_service.create_or_get_active_job(
+            task_id=task_id,
+            job_type=job_service.JOB_TYPE_TRANSCRIPT,
+            payload={"force": force, "provider": provider},
         )
+        return {
+            "status": job["status"],
+            "message": "转写任务已加入持久化队列" if created else "已有转写任务正在排队或运行",
+            "job_id": job["id"],
+            "job": job,
+            "task": task,
+        }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -257,6 +266,13 @@ async def process_transcript_workflow(
 @router.post("/{task_id}/process/transcript-cancel")
 async def cancel_transcript(task_id: str) -> dict:
     try:
+        active_jobs = [
+            job for job in job_service.list_jobs(task_id=task_id)
+            if job.get("job_type") == job_service.JOB_TYPE_TRANSCRIPT
+            and job.get("status") in {job_service.JOB_STATUS_QUEUED, job_service.JOB_STATUS_RUNNING}
+        ]
+        if active_jobs:
+            job_service.request_job_cancel(active_jobs[0]["id"])
         return task_service.cancel_task_transcript(task_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -268,7 +284,15 @@ async def process_ai_analysis(
     provider: str | None = Query(default=None, pattern="^(codex|remote|local)$"),
 ) -> dict:
     try:
-        return await run_in_threadpool(task_service.process_task_ai_analysis, task_id, provider=provider)
+        job, created = task_service.queue_task_ai_analysis(task_id, provider=provider)
+        return {
+            "status": job["status"],
+            "message": "AI 分析任务已加入持久化队列" if created else "已有 AI 分析任务正在排队或运行",
+            "job_id": job["id"],
+            "job": job,
+        }
+    except task_service.AIAnalysisConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -289,6 +313,8 @@ async def get_ai_analysis_runs(task_id: str) -> dict:
 async def restore_ai_analysis_run(task_id: str, run_id: str) -> dict:
     try:
         return task_service.restore_ai_analysis_run(task_id, run_id)
+    except task_service.AIAnalysisConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -416,7 +442,14 @@ async def resume_auto_pipeline(task_id: str, background_tasks: BackgroundTasks) 
 @router.post("/{task_id}/output-clips/{output_clip_id}/subtitles")
 async def render_output_clip_subtitles(task_id: str, output_clip_id: str) -> dict:
     try:
-        return task_service.render_subtitles_for_output_clip(task_id, output_clip_id)
+        from app.services.subtitle_auto_workflow_service import enqueue_task_subtitle_render
+
+        return enqueue_task_subtitle_render(
+            task_id,
+            output_clip_ids=[output_clip_id],
+            approve_active_revisions=False,
+            continue_pipeline=False,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -436,7 +469,6 @@ async def save_subtitle_style(payload: SubtitleStyleUpdate) -> dict:
 @router.post("/{task_id}/process/cuts-async")
 async def process_video_cuts_async(
     task_id: str,
-    background_tasks: BackgroundTasks,
 ) -> dict:
     """自动切片异步版：创建 job 后立即返回，后台执行切割"""
     # 先验证任务存在
@@ -452,9 +484,6 @@ async def process_video_cuts_async(
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"创建切片任务失败：{exc}") from exc
-
-    if created:
-        background_tasks.add_task(_run_job_in_background, job["id"])
 
     return {
         "status": job["status"],
@@ -478,6 +507,22 @@ async def get_job_status(job_id: str) -> dict:
     return job
 
 
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str) -> dict:
+    job = job_service.request_job_cancel(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job 不存在")
+    return {"status": job["status"], "message": job.get("message"), "job": job}
+
+
+@router.post("/jobs/{job_id}/retry")
+async def retry_job(job_id: str) -> dict:
+    job = job_service.retry_job(job_id)
+    if not job:
+        raise HTTPException(status_code=409, detail="只有失败或已取消的 job 可以重试")
+    return {"status": job["status"], "message": job.get("message"), "job": job}
+
+
 @router.get("/{task_id}/jobs")
 async def list_task_jobs(task_id: str, status: str | None = Query(default=None)) -> dict:
     """查看某个任务下的所有 job 记录"""
@@ -490,12 +535,3 @@ async def list_task_jobs(task_id: str, status: str | None = Query(default=None))
         "jobs": jobs,
         "count": len(jobs),
     }
-
-
-def _run_job_in_background(job_id: str) -> None:
-    """后台线程执行 job"""
-    try:
-        job_worker.execute_job(job_id)
-    except Exception:
-        # 错误已由 worker 记录到 job 的 error_message 字段
-        pass

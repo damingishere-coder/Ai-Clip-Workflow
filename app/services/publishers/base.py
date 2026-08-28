@@ -78,7 +78,7 @@ class PublishResult:
         return self.provider_response
 
     def as_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
+        payload = sanitize_provider_response(asdict(self))
         payload["outcome"] = self.outcome.value
         return payload
 
@@ -99,22 +99,51 @@ class PublishResult:
         )
 
 
-_SENSITIVE_KEYS = {
-    "access_token", "authorization", "cookie", "cookies", "password", "refresh_token",
-    "secret", "storage_state", "token", "client_secret",
+_SENSITIVE_KEY_PARTS = {
+    "accesskey", "accesstoken", "apikey", "apisecret", "authorization", "authtoken",
+    "bearer", "clientsecret",
+    "cookie", "cookies", "credential", "credentials", "csrftoken", "password", "privatekey",
+    "idtoken", "jwt", "refreshtoken", "secret", "secretkey", "sessiontoken", "storagestate",
+    "token", "tokenvalue",
 }
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+    return normalized in _SENSITIVE_KEY_PARTS or any(
+        normalized.endswith(part) for part in _SENSITIVE_KEY_PARTS
+    )
+
+
+def _sanitize_sensitive_text(value: str) -> str:
+    cleaned = re.sub(
+        r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}",
+        "Bearer [REDACTED]",
+        value,
+    )
+    return re.sub(
+        r"(?i)\b(authorization|access[_-]?token|refresh[_-]?token|api[_-]?key|client[_-]?secret|cookie)"
+        r"\s*[:=]\s*['\"]?[^'\"\s,;}]+'?",
+        r"\1=[REDACTED]",
+        cleaned,
+    )
 
 
 def sanitize_provider_response(value: Any) -> Any:
     if isinstance(value, dict):
         return {
-            str(key): "[REDACTED]" if str(key).lower() in _SENSITIVE_KEYS else sanitize_provider_response(item)
+            str(key): "[REDACTED]"
+            if _is_sensitive_key(key)
+            else sanitize_provider_response(item)
             for key, item in value.items()
         }
     if isinstance(value, list):
         return [sanitize_provider_response(item) for item in value]
-    if isinstance(value, str) and len(value) > 20000:
-        return value[:20000] + "…"
+    if isinstance(value, str):
+        cleaned = _sanitize_sensitive_text(value)
+        if len(cleaned) > 20000:
+            return cleaned[:20000] + "…"
+        return cleaned
     return value
 
 
@@ -128,6 +157,21 @@ def parse_json_dict(value: Any) -> dict[str, Any]:
     except (json.JSONDecodeError, TypeError):
         return {"raw": str(value)}
     return parsed if isinstance(parsed, dict) else {"data": parsed}
+
+
+def parse_public_json_dict(value: Any) -> dict[str, Any]:
+    """解析供 API/UI 返回的 Provider JSON；损坏正文不回显。"""
+    if isinstance(value, dict):
+        return sanitize_provider_response(value)
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except (json.JSONDecodeError, TypeError):
+        return {"invalid_payload": True}
+    if not isinstance(parsed, dict):
+        return {"invalid_payload": True}
+    return sanitize_provider_response(parsed)
 
 
 def job_video_path(job: dict[str, Any]) -> Path:

@@ -13,3 +13,4 @@ tzdata==2026.3
 playwright==1.62.0
 aiofiles==25.1.0
 faster-whisper==1.2.1
+pysubs2==1.9.0

@@ -21,16 +21,17 @@ class PublishRepository:
         job_id: str,
         result: PublishResult,
         *,
+        expected_execution_id: str | None = None,
         connection=None,
         updated_at: str | None = None,
-    ) -> None:
-        """保存脱敏平台结果；复用连接时由调用方统一提交事务。"""
+    ) -> bool:
+        """保存脱敏平台结果；可用 execution_id 拒绝旧执行写回。"""
 
         now = updated_at or utc_now_iso()
         provider_json = json.dumps(
             sanitize_provider_response(result.provider_response), ensure_ascii=False
         )
-        result_json = json.dumps(result.as_dict(), ensure_ascii=False)
+        result_json = json.dumps(sanitize_provider_response(result.as_dict()), ensure_ascii=False)
         values = (
             result.remote_video_id,
             result.remote_video_id,
@@ -44,46 +45,89 @@ class PublishRepository:
             int(result.needs_manual_review),
             now,
             job_id,
+            *((expected_execution_id,) if expected_execution_id else ()),
         )
-        sql = """
+        execution_condition = (
+            " AND status = 'PUBLISHING' AND execution_id = ?"
+            if expected_execution_id
+            else ""
+        )
+        sql = f"""
             UPDATE publish_jobs
             SET remote_video_id = ?, platform_item_id = ?, platform_url = ?,
                 provider_response = ?, publish_result = ?, published_at = ?,
                 error_code = ?, last_error = ?, error_message = ?,
                 needs_manual_review = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ?{execution_condition}
         """
         if connection is not None:
-            connection.execute(sql, values)
-            return
+            cursor = connection.execute(sql, values)
+            return int(cursor.rowcount or 0) == 1
         with get_connection() as owned:
-            owned.execute(sql, values)
+            cursor = owned.execute(sql, values)
             owned.commit()
+        return int(cursor.rowcount or 0) == 1
 
     def update_execution_phase(
         self,
         job_id: str,
         phase: str,
         details: dict[str, Any] | None = None,
-    ) -> None:
-        """同步 Worker 的实时阶段；不会在这里改变任务最终状态。"""
+        *,
+        expected_execution_id: str | None = None,
+    ) -> bool:
+        """同步 Worker 实时阶段；提供 execution 时拒绝旧执行写回。"""
 
         values = sanitize_provider_response(details or {})
         message = str(values.get("message") or "") if isinstance(values, dict) else ""
         now = utc_now_iso()
+        execution_condition = " AND execution_id = ?" if expected_execution_id else ""
+        params = (
+            phase,
+            message,
+            message,
+            message,
+            message,
+            now,
+            job_id,
+            *((expected_execution_id,) if expected_execution_id else ()),
+        )
         with get_connection() as connection:
-            connection.execute(
-                """
+            cursor = connection.execute(
+                f"""
                 UPDATE publish_jobs
                 SET execution_phase = ?,
                     last_error = CASE WHEN ? <> '' THEN ? ELSE last_error END,
                     error_message = CASE WHEN ? <> '' THEN ? ELSE error_message END,
                     updated_at = ?
-                WHERE id = ? AND status = 'PUBLISHING'
+                WHERE id = ? AND status = 'PUBLISHING'{execution_condition}
                 """,
-                (phase, message, message, message, message, now, job_id),
+                params,
             )
             connection.commit()
+        return int(cursor.rowcount or 0) == 1
+
+    def begin_execution_dispatch(
+        self,
+        job_id: str,
+        expected_execution_id: str,
+        expected_updated_at: str,
+    ) -> bool:
+        """在外部投稿前原子保留 dispatch 权；与恢复扫描的快照写回互斥。"""
+
+        now = utc_now_iso()
+        with get_connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE publish_jobs
+                SET execution_phase = 'dispatching', updated_at = ?
+                WHERE id = ? AND status = 'PUBLISHING' AND execution_id = ?
+                    AND updated_at = ?
+                """,
+                (now, job_id, expected_execution_id, expected_updated_at),
+            )
+            connection.commit()
+        return int(cursor.rowcount or 0) == 1
 
     def add_event(
         self,

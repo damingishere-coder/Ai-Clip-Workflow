@@ -1,5 +1,66 @@
 # 系统架构
 
+## 2026-08-24：字幕审核与交付证据链
+
+```text
+切片完成
+→ source/clip 字幕草稿
+→ pending_subtitle_review（自动流水线暂停）
+   ├─ 明确跳过 → delivery_mode=original → 恢复元数据/发送任务
+   └─ 审核 revision → workflow_jobs:subtitle → 临时渲染
+      → FFprobe 验证 → 原子激活 → delivery_mode=subtitled
+      → 恢复元数据/发送任务
+```
+
+- `subtitle_auto_workflow_service.py` 负责暂停点、交付决定、批量 checkpoint、恢复流水线及父进程异常清理。
+- `job_worker.py` 仍采用单重型 Job 子进程；字幕 Job 与转写/切片共享 lease、heartbeat、取消和人工重试接口。
+- 渲染尝试顺序为可用 `h264_nvenc`、`libx264`，音频可安全复制时优先复制，否则转 AAC；最终统一验证 H.264、`yuv420p`、音轨、时长和文件大小。
+- 发布任务保存 `subtitle_delivery_mode` 及 revision/验证证据。自动字幕来源只有在审核、验证和文件三项同时成立时可进入发送中心。
+- AI 纠错独立于自动流水线：Provider 返回的内容只能映射既有 cue 的文本，不允许改变时间、说话人或未知 cue；建议 revision 必须人工接受。
+
+## 2026-08-23：统一字幕架构
+
+```text
+转写 checkpoint / 旧 transcript.md
+            ↓
+source subtitle_track → immutable subtitle_revision → subtitle_cues(ms)
+            ↓ 按 output_clip 原片边界快照截取
+clip subtitle_track   → immutable subtitle_revision → SRT/VTT/ASS/编辑器
+```
+
+- `subtitle_data_service.py` 是字幕数据事实入口，负责轨、版本、cue、同步、导入导出、质量检查和服务端波形 peaks。
+- 原片轨只保存一条 active track；内容变化产生新 revision。切片轨记录来源 track/revision，未人工编辑时可同步，人工编辑后只进入 `pending_sync`。
+- revision 内容不可原地更新；审核只改变 revision 状态，渲染必须固定引用 revision id，避免编辑过程中改变已排队输出。
+- `pysubs2` 负责字幕格式与 ASS，不再手写固定分辨率 ASS。`wavesurfer.js` 仅消费服务端 peaks 与媒体流，不读取六小时完整音频到浏览器内存。
+- 单条兼容入口和批量入口都只负责创建持久化字幕 Job；HTTP 请求不再同步等待 FFmpeg。批量入口额外负责全自动流水线恢复。
+
+## 2026-08-23：长直播选片层
+
+`long_live_talk` 使用独立的 `long_live_talk_analyzer`：
+
+```text
+结构化转写
+→ 300 秒窗口（60 秒重叠）
+→ 每窗口独立 AI 召回与 SQLite checkpoint
+→ 成功窗口时间轴并集 / 完整转写时间轴 = coverage_ratio
+→ 时间重叠 + 语义相似去重
+→ 每小时密度筛选
+→ 跨小时轮询合并
+→ 总量上限
+→ analysis.json + ai_analysis_runs + clip_candidates
+```
+
+自动流水线在 `CLIP_SELECTING` 入口读取当前 `analysis_meta`。`analysis_incomplete=true` 或 `coverage_ratio < 0.90` 会直接中断，所以后续 `VIDEO_CUTTING`、内容准备和发送任务创建均不会执行。手动切片入口使用相同门禁。
+
+## 2026-08-23：长直播基础层
+
+- 新建任务必须显式选择 `general`、`variety_comedy` 或 `long_live_talk`；数据库的 `general` 默认值只用于旧数据兼容。
+- 数小时重型流程由 SQLite `workflow_jobs` 单 worker 串行领取，并为每个 Job 启动独立 Python 子进程。Job 使用 lease、heartbeat、尝试次数、取消标志和 checkpoint；Web 重启后可接管过期 lease，取消时终止子进程树。
+- 创建任务前检查视频轨、音轨、时长、编码、分辨率、帧率、首尾抽样解码与 E 盘剩余空间；超过 6 小时只提示。
+- 转写事实来源改为 `transcription_runs + transcription_chunks`。每块独立提交带校验和的结构化结果；`transcript.md` 是兼容导出。
+- 本地 faster-whisper 保存词级毫秒时间戳与置信度。仅 `TRANSCRIPTION_DEVICE=auto` 自动探测 CUDA，显式 `cpu` 不覆盖。
+- FFmpeg 音频提取写临时文件后原子替换，支持无进展超时、Job 取消和 Windows 进程树终止。
+
 ## 1. 当前架构概览
 
 ### 1.1 架构形态
@@ -55,8 +116,8 @@ v2.1 的架构目标不是云端多租户，而是把一台 Windows 电脑上的
 
 - **单体业务应用**：页面、路由、视频、AI、SQLite 和 Scheduler 保持同一 FastAPI 应用；Windows Worker 只隔离宿主 Chrome 操作。
 - **SQLite 单写入者**：只有 Docker 内的 FastAPI 可以读写 `workflow.sqlite3`；Windows Worker 不导入数据库仓储、不打开 SQLite，只通过 HTTP 返回账号检查/发布结果并写独立执行日志。
-- **同步 FFmpeg**：视频处理通过 `subprocess` 同步调用，阻塞当前请求直到完成。
-- **无外部消息队列**：发布队列直接使用 SQLite 原子状态更新，无 Redis / Celery。
+- **受管 FFmpeg**：长流程由持久化 Job worker 调用；已接入的音频提取支持进度、无进展超时、取消和进程树终止。
+- **无外部消息队列**：工作流与发布队列均使用 SQLite 原子领取，无 Redis / Celery。
 - **无用户体系**：单用户本地使用，通过 `LOCAL_ADMIN_TOKEN` 做简易鉴权。
 - **统一定时调度**：立即发送与未来排期都先写 `SCHEDULED`，再由 `PublishScheduler` 原子领取。
 - **终态原子提交**：平台结果、任务终态和事件由 FastAPI 在同一 SQLite 事务写入；任一步失败都会回滚，避免出现“平台结果已记但任务仍在发送中”。

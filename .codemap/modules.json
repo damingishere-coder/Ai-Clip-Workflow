@@ -1,0 +1,1086 @@
+{
+ "meta": {
+  "project": "NiuMa Studio",
+  "lang": "zh",
+  "subtitle": "牛马片场 · 本地 AI 高光生产后台工程体检",
+  "generatedAt": "2026-08-24",
+  "htmlPath": ".codemap/codemap.html",
+  "mdPath": ".codemap/codemap.md",
+  "spineDesc": "用户通过页面/API 创建素材任务，SQLite Job 驱动转写、AI 选片、审核切片和字幕，再由发送中心排期并交给 Windows Chrome Worker，所有状态与审计证据回写 SQLite。",
+  "tracked_loc": 55768,
+  "tracked_files": 132,
+  "rev": "56f4d501087860145412fa6ecc411252ae8e877e"
+ },
+ "excludes": [
+  ".venv/",
+  "__pycache__/",
+  ".pytest_cache/",
+  ".ruff_cache/",
+  ".scannerwork/",
+  "app/static/vendor/",
+  "app/static/img/",
+  "data/",
+  "tasks/",
+  "workspace/",
+  "outputs/",
+  "backups/",
+  "acceptance-results/"
+ ],
+ "bands": [
+  {
+   "id": "presentation",
+   "tier": "fe",
+   "t": "界面 · API",
+   "d": "浏览器页面、前端交互、FastAPI 路由与运行配置"
+  },
+  {
+   "id": "wire1",
+   "wire": true,
+   "t": "HTTP / JSON / 文件上传"
+  },
+  {
+   "id": "workflow",
+   "tier": "be",
+   "t": "业务编排",
+   "d": "任务、流水线、发送中心和状态机"
+  },
+  {
+   "id": "processing",
+   "tier": "be",
+   "t": "媒体与 AI 处理",
+   "d": "转写、AI 选片、切片和字幕"
+  },
+  {
+   "id": "execution",
+   "tier": "be",
+   "t": "外部执行边界",
+   "d": "调度、Publisher 与 Windows Chrome Worker"
+  },
+  {
+   "id": "persistence",
+   "tier": "be",
+   "t": "持久化与运维",
+   "d": "SQLite Schema/迁移/备份与本地交付脚本"
+  }
+ ],
+ "spine": [
+  "frontend_ui",
+  "api_runtime",
+  "pipeline_queue",
+  "transcription",
+  "ai_selection",
+  "task_review_cut",
+  "subtitle",
+  "publish_center",
+  "publish_scheduler",
+  "publisher_worker",
+  "persistence"
+ ],
+ "reportThemes": [
+  [
+   "本地单体架构是当前可运行的主要原因",
+   "FastAPI + SQLite WAL + 文件产物 + 持久化 Job + Windows Worker 与个人本机规模匹配；不需要微服务化，现有恢复骨架应保留。"
+  ],
+  [
+   "P0 数据一致性与迁移入口已经 fail closed",
+   "测试误删、活动库外键、媒体删除回滚、切片/字幕批次和迁移账本已处理；仍需在受控停机窗口首次正式迁移，并逐步把旧 helper 收编到账本。"
+  ],
+  [
+   "Job、发布执行和字幕恢复代际已封口",
+   "Workflow lease token、Publish execution fencing、任务状态转换、取消恢复、切片与字幕原子提交已经完成；旧 Worker/旧 execution 不能覆盖新结果。"
+  ],
+  [
+   "P0/P1 运行时稳定线已经完成",
+   "AI 候选/run/任务终态、持久 Job、单元计费账本、不完整结果门禁与本地安全边界已收口；当前可按本机单用户、人工复核范围判定为稳定 V1。"
+  ],
+  [
+   "本地安全边界已从隐式信任变为显式 fail closed",
+   "AI/Publish Secret DTO、旧 Provider 结果脱敏、loopback client 校验、Docker 回环绑定、Origin 白名单、作品 URL 和动态 DOM XSS 已收紧；不扩大为多用户权限系统。"
+  ],
+  [
+   "复杂度集中而非全项目平均恶化",
+   "publish_service.py、publish-center.js、app.js、publish_scheduler.py、subtitle_data_service.py 和 transcript_service.py 是主要 God Component；应按业务边界渐进拆分。"
+  ],
+  [
+   "测试已与活动数据隔离，但 Coverage 与真实故障闭环仍不足",
+   "Pytest 已强制使用进程级 sandbox，P0/P1 失败矩阵持续扩充；Coverage 尚未采集，Playwright 可选跳过和真实平台/进程故障闭环仍需在 P2 补齐。"
+  ],
+  [
+   "遗留目录迁移脚本不得用于活动库",
+   "scripts/migrate_task_dirs_to_project_names.py 仍是唯一 Codemap HIGH：它不属于当前运行链路，但缺少 WAL-aware 备份与文件补偿；在 P2 专项替换前必须保持停用。"
+  ]
+ ],
+ "modules": [
+  {
+   "id": "frontend_ui",
+   "label": "Frontend UI",
+   "band": "presentation",
+   "path": "app/templates + app/static",
+   "paths": [
+    "app/templates/**/*.html",
+    "app/static/css/styles.css",
+    "app/static/js/*.js"
+   ],
+   "coupling": "high",
+   "deps": [
+    "api_runtime"
+   ],
+   "desc": "用 Jinja2、原生 JavaScript 和 CSS 提供任务、审核、字幕与发送中心界面。",
+   "tests": [
+    "tests/test_*browser.py",
+    "tests/test_group_select_all.py",
+    "tests/test_subtitle_editor.py"
+   ],
+   "loc": 13764,
+   "contentHash": "2d2166297bd28a802517fdea820e36153f83cdf9799a3e3593a86d7d3b649519",
+   "score": 62,
+   "grade": "C",
+   "tags": [
+    "bloat",
+    "glue",
+    "fallback",
+    "silent-except",
+    "legacy",
+    "over-fit"
+   ],
+   "findings": [
+    {
+     "sev": "MED",
+     "loc": "app/templates/clip_review.html:154; app/static/js/app.js:103-132",
+     "text": "片段审核空状态的“运行 Codex CLI 分析”仍绑定通用 handleProcessAction；/process/ai 现在返回持久化 job_id 后，该处理器没有等待或轮询 Job，而是在收到排队响应后直接 window.location.reload()。用户会看到仍无候选片段的旧页面，并可能在后台任务未完成时再次点击，造成重复请求或重复计费边界。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/static/js/app.js:437-490; app/templates/clip_review.html:194-198",
+     "text": "AI 结果卡片始终按“AI 分析完成”渲染并显示“去检查并生成切片”，片段审核页只按是否存在 clips 启用生成切片和同步发送中心按钮；前端没有读取或展示 analysis_incomplete、quality_degraded、partial 等结果标记。后端虽可拒绝不合格切片，但页面会把降级/不完整结果呈现为正常结果，用户仍会尝试后续操作。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/static/js/app.js:1927-1945",
+     "text": "AI 状态轮询只在成功读取后安排下一次定时器；fetch、JSON 解析或临时网络异常会被调用方 catch(() => {}) 静默吞掉，且不会重新调度，导致页面永久停止刷新而无提示。轮询恢复没有退避、重试上限或明确的读取失败状态。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/static/js/app.js:1805-1822",
+     "text": "waitForAiAnalysisJob 是无限 while 循环，每秒直接 fetch，没有 AbortController、总超时或网络错误重试；一次临时读取异常就会跳到外层“AI 分析失败”，但服务端 Job 仍可能继续执行，前端重新启用按钮，用户可能再次发起请求并误判任务已失败。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/static/js/app.js:711-718; app/static/js/app.js:1927-1946",
+     "text": "页面重新打开时只轮询 AI 状态和运行日志；当后台 Job 在该页面生命周期内完成后，轮询停止，但不会自动重新读取 ai-analysis-runs 或渲染最新结果。跨页面/跨进程恢复场景可能显示 100%/已完成，却仍保留旧候选片段和旧历史，必须人工刷新历史或整页刷新。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/static/js/app.js:374-386; app/static/js/app.js:721-776",
+     "text": "AI 分析期间禁用的控件集合不包含动态生成的历史结果恢复按钮，也不包含显示/刷新历史按钮；用户仍可在新分析运行时恢复旧结果或刷新历史，与后台新 Job 的最终写回形成前端竞态。后端若拒绝该操作，页面仍会额外发出冲突请求。"
+    }
+   ],
+   "auditedHash": "2d2166297bd28a802517fdea820e36153f83cdf9799a3e3593a86d7d3b649519",
+   "auditedAt": "2026-08-25",
+   "auditedRev": "56f4d501087860145412fa6ecc411252ae8e877e"
+  },
+  {
+   "id": "api_runtime",
+   "label": "API & Runtime",
+   "band": "presentation",
+   "path": "app/main.py + core/models/routers",
+   "paths": [
+    "app/main.py",
+    "app/core/**/*.py",
+    "app/models/**/*.py",
+    "app/routers/**/*.py"
+   ],
+   "coupling": "core",
+   "deps": [
+    "media_storage",
+    "transcription",
+    "ai_selection",
+    "task_review_cut",
+    "subtitle",
+    "pipeline_queue",
+    "publish_center",
+    "publish_scheduler",
+    "persistence"
+   ],
+   "desc": "加载配置、初始化应用与安全中间件，并把页面/API 请求路由到业务服务。",
+   "tests": [
+    "tests/test_p0_security.py",
+    "tests/test_publish_api_flow.py",
+    "tests/test_task_defaults.py"
+   ],
+   "loc": 2948,
+   "contentHash": "be58ee5d147bab5fd5da3046e53a33a2f05b899fbad204785a71e9b12114c622",
+   "score": 63,
+   "grade": "C",
+   "tags": [
+    "fallback",
+    "legacy",
+    "dual-format",
+    "bloat",
+    "glue"
+   ],
+   "findings": [
+    {
+     "sev": "MED",
+     "loc": "app/routers/publish.py:59",
+     "text": "OAuth URL 与 callback 仍捕获 broad Exception，并把 str(exc) 直接放入 HTTP detail 或重定向查询参数；tasks.py、subtitles.py 也存在同类映射。异常文本可能包含本地路径、数据库、FFmpeg 或第三方接口诊断，形成浏览器可见的信息泄漏。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/routers/tasks.py:212",
+     "text": "async process_audio 直接调用同步的 process_task_audio，服务层会执行 FFmpeg/文件与数据库操作；process_video_cuts:392-400 同样直接调用同步切片流程。长请求会阻塞 FastAPI event loop，使轮询、健康检查和其他 API 排队，并增加超时后的重复请求风险。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/models/task.py:38",
+     "text": "TaskStatus 同时保留 uppercase 自动流程状态与 lowercase legacy 状态（pending_processing、ai_analyzing、completed 等），同一业务状态存在双协议；API、数据库查询和状态转换需要维护两套值，容易出现状态筛选和迁移口径不一致。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/models/task.py:243",
+     "text": "批量输入列表缺少统一上限：PublishBatchScheduleUpdate.job_ids/confirmed_schedule、PublishBatchJobCreate.output_clip_ids:287、ClipCandidateBatchUpdate.clips:406 与 PublishBatchTargetUpdate.job_ids 均可任意增长。对应路由会逐项执行数据库、文件或发布操作，缺少请求级资源上限，异常大请求可造成内存和处理时间消耗。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/core/config.py:93",
+     "text": "新分域 AI_ANALYSIS_REMOTE_* / AI_PUBLISH_REMOTE_* 配置仍通过 _env_first 回退到 AI_REMOTE_*，同时 Settings 继续保留完整旧字段组；兼容来源有文档说明但长期存在来源漂移和配置行为不一致风险。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/routers/tasks.py:1",
+     "text": "tasks.py 约 537 行、publish.py 约 514 行，包含大量重复的 try/except 与一行式 service 转发；路由、错误映射、同步/异步边界和兼容规则集中在大型 glue 文件中，修改入口时 blast radius 较大。"
+    }
+   ],
+   "auditedHash": "be58ee5d147bab5fd5da3046e53a33a2f05b899fbad204785a71e9b12114c622",
+   "auditedAt": "2026-08-25",
+   "auditedRev": "56f4d501087860145412fa6ecc411252ae8e877e"
+  },
+  {
+   "id": "media_storage",
+   "label": "Media & Storage",
+   "band": "processing",
+   "path": "storage/media/FFmpeg services",
+   "paths": [
+    "app/services/storage_service.py",
+    "app/services/media_preflight_service.py",
+    "app/services/managed_process_service.py",
+    "app/services/video_cut_service.py",
+    "app/services/audio_reaction_service.py"
+   ],
+   "coupling": "high",
+   "deps": [
+    "persistence"
+   ],
+   "desc": "管理 E 盘任务目录、路径安全、素材预检、FFmpeg/FFprobe 与受控子进程。",
+   "tests": [
+    "tests/test_media_storage_lifecycle.py",
+    "tests/test_path_resolution.py",
+    "tests/test_long_live_foundation.py"
+   ],
+   "loc": 1635,
+   "contentHash": "ec7d7c1c77275b12ac6cad06027256c44aa6a9e9a75e21c277cb6734001772e0",
+   "score": 78,
+   "grade": "B",
+   "tags": [
+    "fallback",
+    "legacy",
+    "dual-format",
+    "silent-except"
+   ],
+   "findings": [
+    {
+     "sev": "MED",
+     "loc": "app/services/storage_service.py:693",
+     "text": "任务媒体删除已写入 manifest 并分阶段移动，但没有跨进程扫描、加载或恢复入口。进程在暂存完成、数据库提交前崩溃会使数据库仍可见任务的原目录已被移走；数据库提交后、finalize 前崩溃则 cleanup_pending 只存在于本次响应，重启后不会自动清理或恢复。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/storage_service.py:362",
+     "text": "resolve_video_file_path 对已存在路径直接返回，不验证路径是否位于允许根目录；get_source_video_path 及多个非 HTTP 调用方复用该入口，数据库中的异常视频/产物路径仍可能被发布、字幕或任务查询流程读取为本地任意文件。HTTP 媒体路由已有更严格的任务目录校验，但共享原语本身仍不安全。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/storage_service.py:256",
+     "text": "allocate_task_dir_name(reserve=True) 先独占创建目录，再由调用方写入 tasks 记录；进程在两步之间退出会留下没有数据库记录的孤儿任务目录，当前没有启动扫描或清理机制。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/storage_service.py:503",
+     "text": "上传直接写入最终 source 文件；上传或后续建档失败时的 unlink 异常被静默忽略，进程在上传中途退出也没有跨进程清理清单，可能留下未被任务引用的半成品媒体。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/storage_service.py:842",
+     "text": "遗留 move_task_directory_to_trash 使用 reserve=False 的存在性检查后分配回收站目录，没有独占预占；并发删除同名任务可能选择相同目标目录并发生移动冲突。当前未发现运行时调用，但兼容入口仍可被恢复使用。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/video_cut_service.py:185",
+     "text": "cut_single_clip 在 FFmpeg 成功前先删除 plan.output_path；若重复执行同一 CutPlan 后发生超时、启动失败或输出切换失败，之前已经有效的成片会先被删除，临时文件原子替换无法保护旧结果。"
+    }
+   ],
+   "auditedHash": "ec7d7c1c77275b12ac6cad06027256c44aa6a9e9a75e21c277cb6734001772e0",
+   "auditedAt": "2026-08-25",
+   "auditedRev": "56f4d501087860145412fa6ecc411252ae8e877e"
+  },
+  {
+   "id": "transcription",
+   "label": "Transcription",
+   "band": "processing",
+   "path": "transcript services",
+   "paths": [
+    "app/services/transcript_service.py",
+    "app/services/transcript_workflow_service.py",
+    "app/services/transcription_checkpoint_service.py"
+   ],
+   "coupling": "high",
+   "deps": [
+    "media_storage",
+    "persistence"
+   ],
+   "desc": "提取音频，调用火山引擎或 faster-whisper，并以分块 checkpoint 生成时间戳转写。",
+   "tests": [
+    "tests/test_job_queue.py",
+    "tests/test_auto_pipeline.py",
+    "tests/test_long_live_foundation.py"
+   ],
+   "loc": 2276,
+   "contentHash": "0e7b974a289de7b62a22333d90b6ac8e9db2a8118cac505279546d75ea2fe74a",
+   "score": 64,
+   "grade": "C",
+   "tags": [
+    "fallback",
+    "silent-except",
+    "duplication",
+    "god-component"
+   ],
+   "findings": [
+    {
+     "sev": "MED",
+     "loc": "app/services/transcript_service.py:1099-1129,1159-1196",
+     "text": "faster-whisper 的 model.transcribe 与模型加载没有单次调用或绝对时限；模型/解码器卡住时只能依赖外层 Worker，直接转写路径可能长期占用。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/transcript_service.py:164-191",
+     "text": "FFmpeg 音频提取只有无进展 watchdog，没有绝对 wall-clock deadline；进程持续输出进度但实际不结束时仍可能无限运行。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/transcript_service.py:981-989",
+     "text": "进度文件损坏、读取失败或顶层非 dict 时统一返回空字典，静默丢失故障证据，恢复逻辑无法区分初始状态与持久化损坏。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/transcript_service.py:67-77,1259-1270",
+     "text": "活动 provider/model/device/compute_type 仍使用模块级可变全局；同一进程并发转写会互相覆盖运行元数据和进度展示。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/transcript_service.py:347-549",
+     "text": "本地与火山远程分片分别复制 chunk、checkpoint、进度和异常收口逻辑，两个实现继续存在维护分叉。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/transcript_service.py:83-1395",
+     "text": "单文件仍混合 FFmpeg、faster-whisper、远程 HTTP、幂等 checkpoint、进度文件和 Markdown 生成，约 1400 行，职责边界和回归影响面偏大。"
+    }
+   ],
+   "auditedHash": "0e7b974a289de7b62a22333d90b6ac8e9db2a8118cac505279546d75ea2fe74a",
+   "auditedAt": "2026-08-25",
+   "auditedRev": "56f4d501087860145412fa6ecc411252ae8e877e"
+  },
+  {
+   "id": "ai_selection",
+   "label": "AI Selection",
+   "band": "processing",
+   "path": "AI providers and analyzers",
+   "paths": [
+    "app/services/ai/**/*.py",
+    "app/services/ai_analysis_workflow_service.py",
+    "app/services/ai_config_service.py",
+    "app/services/ai_prompt_preset_service.py",
+    "app/services/ai_clip_service.py",
+    "app/services/clip_feedback_service.py"
+   ],
+   "coupling": "core",
+   "deps": [
+    "transcription",
+    "persistence"
+   ],
+   "desc": "选择 Codex/远程/本地 Provider，解析不稳定 AI 输出并生成通用、综艺或长直播候选片段。",
+   "tests": [
+    "tests/test_ai_json_parsing.py",
+    "tests/test_codex_cli_provider.py",
+    "tests/test_long_live_selection.py",
+    "tests/test_variety_comedy_selection.py"
+   ],
+   "loc": 6031,
+   "contentHash": "60f1d8ab002c31dbec0d955d62707d06502b95f72ee9d12776155772fc01735f",
+   "score": 70,
+   "grade": "C",
+   "tags": [
+    "fallback",
+    "legacy",
+    "dual-format",
+    "placeholder",
+    "fake-output",
+    "bloat",
+    "god-component"
+   ],
+   "findings": [
+    {
+     "sev": "MED",
+     "loc": "app/services/ai_analysis_workflow_service.py:1273-1320,1322-1360",
+     "text": "active run 的 payload clips、clip_candidates 和 analysis.json 分开读取；恢复/返回路径未校验三者的数量、ID、内容及代际一致性，候选账本漂移时仍可能把 active run 当作可信结果继续展示或恢复。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/ai_analysis_workflow_service.py:878-925",
+     "text": "数据库没有历史 run 时会从 analysis.json 兼容合成 active run，当前只检查 JSON 对象和基础 meta 类型，不验证 checksum、完整 schema、selection_profile、候选字段或文件与数据库代际一致性。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/ai/ai_clip_analyzer.py:414-490,597-615",
+     "text": "AI JSON 解析通过别名映射、literal_eval 和默认值补齐缺失标题、摘要、理由、置信度等字段；模型 schema 退化时仍可能被合成为看似完整的候选结果。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/ai_analysis_workflow_service.py:1-1470",
+     "text": "单文件约 1400 行，同时承担 Provider 编排、任务状态、租约、候选替换、文件落盘、历史 run、恢复和 API 返回；职责与测试边界过宽，修改 blast radius 较大。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/ai/ai_clip_service.py:4-39",
+     "text": "generate_candidate_clips_placeholder 仍返回固定 fake output；当前未发现主流程调用，但误调用会产生伪造候选，属于 legacy/placeholder dead code。"
+    }
+   ],
+   "auditedHash": "60f1d8ab002c31dbec0d955d62707d06502b95f72ee9d12776155772fc01735f",
+   "auditedAt": "2026-08-25",
+   "auditedRev": "56f4d501087860145412fa6ecc411252ae8e877e"
+  },
+  {
+   "id": "task_review_cut",
+   "label": "Task Review & Cut",
+   "band": "workflow",
+   "path": "task and cut workflow services",
+   "paths": [
+    "app/services/task_lifecycle_service.py",
+    "app/services/task_service.py",
+    "app/services/task_query_service.py",
+    "app/services/task_log_service.py",
+    "app/services/video_cut_workflow_service.py"
+   ],
+   "coupling": "core",
+   "deps": [
+    "media_storage",
+    "ai_selection",
+    "publish_center",
+    "persistence"
+   ],
+   "desc": "维护任务状态与视图，保存候选审核选择，生成切片版本并同步发送中心。",
+   "tests": [
+    "tests/test_split_services.py",
+    "tests/test_task_query_service.py",
+    "tests/test_clip_review_publish_sync.py",
+    "tests/test_versioning_rollback.py"
+   ],
+   "loc": 3094,
+   "contentHash": "b61dc1321ba5e1e1b14052163be7ca8bf64850b6f493dc996594dbe89977b657",
+   "score": 68,
+   "grade": "C",
+   "tags": [
+    "god-component",
+    "glue",
+    "duplication",
+    "fallback",
+    "dual-format",
+    "legacy"
+   ],
+   "findings": [
+    {
+     "sev": "MED",
+     "loc": "app/services/video_cut_workflow_service.py:516-582; app/services/video_cut_workflow_service.py:87-105",
+     "text": "process_task_video_cuts 创建切片批次前仍未校验任务必须处于允许切片的状态，也未检查同一任务是否已有其他 queued/running workflow job；_create_cut_run 只排除 CANCELLED，能够把任意非取消任务写成 cutting。同步切片、AI 候选替换和异步切片并发时仍存在过期候选和状态互相覆盖风险。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/task_lifecycle_service.py:373-406",
+     "text": "公共状态转换的完成前置条件仍只查询 output_clip 数据库记录，不验证 output_file_path 对应文件真实存在，也不核对当前 active cut_run。残留或损坏的 output_clip 索引可以让任务被标记为 completed，主状态与实际产物不一致。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/task_query_service.py:234-272",
+     "text": "片段总览的 can_cut 仍只依据 enabled_count 和 source_exists，不读取已统一校验的 analysis_incomplete/quality_degraded，也不排除 AI_ANALYZING 等运行状态。后端已阻止质量降级或不完整分析切片时，页面仍会显示可生成切片。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/task_query_service.py:204-208; app/services/task_query_service.py:245-304; app/services/task_query_service.py:417-428",
+     "text": "Dashboard、片段总览和系统状态统计只识别 lowercase completed/completed_with_errors，而全自动流水线使用 uppercase COMPLETED 状态，自动完成任务可能漏计或显示为待前置/待检查，继续保留两套状态格式的展示不一致。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/task_service.py:687-744",
+     "text": "list_clip_candidates 对每条历史候选直接解析 start_time/end_time 及多个评分字段，单条坏时间或坏数值格式会让整个审核列表抛 ValueError，阻断人工检查和后续修复。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/task_service.py:926-960",
+     "text": "_active_outputs_match_enabled_candidates 只比较启用候选 ID、数量和 output_file_path 是否存在，不验证文件内容、大小、可播放性或 source_fingerprint。路径存在但文件损坏或被外部替换时，审核同步可能错误跳过重新切片。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/task_service.py:1-101; app/services/task_service.py:1246-1299; app/services/task_query_service.py:89-172",
+     "text": "TaskService 仍约 1,300 行，同时承担任务状态、AI、字幕、转写、切片、数据库写入和页面查询；底部保留多组只转发到 task_query_service 的包装函数，而 task_query_service 又复制 list_output_clips 的路径解析、字幕状态和发布就绪逻辑，核心修改的 blast radius 仍较大。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/task_lifecycle_service.py:159-164; app/services/task_lifecycle_service.py:182-229",
+     "text": "create_task_record 在数据库 INSERT 前预创建任务目录；若随后数据库写入失败，服务层本身没有补偿删除空目录的路径，直接调用服务函数时仍可能留下孤儿目录。"
+    }
+   ],
+   "auditedHash": "b61dc1321ba5e1e1b14052163be7ca8bf64850b6f493dc996594dbe89977b657",
+   "auditedAt": "2026-08-25",
+   "auditedRev": "56f4d501087860145412fa6ecc411252ae8e877e"
+  },
+  {
+   "id": "subtitle",
+   "label": "Subtitle",
+   "band": "processing",
+   "path": "subtitle services",
+   "paths": [
+    "app/services/subtitle_*.py"
+   ],
+   "coupling": "high",
+   "deps": [
+    "media_storage",
+    "task_review_cut",
+    "ai_selection",
+    "persistence"
+   ],
+   "desc": "维护字幕轨、不可变 revision、cue、AI 建议、渲染验证与自动流水线交付决定。",
+   "tests": [
+    "tests/test_subtitle_editor.py",
+    "tests/test_subtitle_auto_workflow.py"
+   ],
+   "loc": 3067,
+   "contentHash": "bdbb1edf69efb3c42f96fd9cff31dfa9e173ba56a2345d191b73531c5ad8f37f",
+   "score": 64,
+   "grade": "C",
+   "tags": [
+    "fallback",
+    "silent-except",
+    "legacy",
+    "duplication",
+    "bloat",
+    "god-component"
+   ],
+   "findings": [
+    {
+     "sev": "MED",
+     "loc": "app/services/subtitle_auto_workflow_service.py:42-50,51-108",
+     "text": "prepare_task_subtitle_review 先执行 ensure_source_track/ensure_clip_track 并提交 revision/track 副作用，之后才检查活动 Job 与当前 lease；旧 Worker 失租或并发冲突时仍可能留下字幕数据库变更。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/subtitle_data_service.py:1017-1074",
+     "text": "_load_source_cues 对 checksum、JSON 或 segment 错误直接跳过；只要其他 chunk 仍有 cue 就生成部分字幕 revision，损坏转写会被静默降级为缺句结果。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/subtitle_data_service.py:1222-1230,236-330",
+     "text": "_sync_dependent_clip_tracks 逐条调用各自事务的 sync_clip_track；源轨已提交后任一切片同步失败，会留下部分 up_to_date、部分 pending_sync 状态。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/subtitle_auto_workflow_service.py:513-569",
+     "text": "checkpoint 与 DB 恢复证据只检查 completed/verified、路径 exists 和 is_file，不检查非空、size/fingerprint 或可被 FFprobe 验证；截断或零字节最终文件仍可能被恢复为成功。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/subtitle_workflow_service.py:240-257",
+     "text": "遗留 _activate_subtitle_job 仍可无 lease、revision、status 或 task/output_clip 约束直接激活指定记录；当前主渲染路径未调用，但 task_service 仍导入并保留兼容入口。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/subtitle_data_service.py:1222-1230",
+     "text": "字幕数据层继续集中承担 revision/cue 持久化、导入导出、ASS、波形和 FFprobe，单文件约 1434 行，变更影响面和重复事务路径较大。"
+    }
+   ],
+   "auditedHash": "bdbb1edf69efb3c42f96fd9cff31dfa9e173ba56a2345d191b73531c5ad8f37f",
+   "auditedAt": "2026-08-25",
+   "auditedRev": "56f4d501087860145412fa6ecc411252ae8e877e"
+  },
+  {
+   "id": "pipeline_queue",
+   "label": "Pipeline & Job Queue",
+   "band": "workflow",
+   "path": "pipeline and workflow job services",
+   "paths": [
+    "app/services/pipeline_engine.py",
+    "app/services/job_service.py",
+    "app/services/job_worker.py",
+    "app/services/job_worker_process.py",
+    "app/services/auto_publish_service.py",
+    "app/services/metadata_generator.py"
+   ],
+   "coupling": "core",
+   "deps": [
+    "transcription",
+    "ai_selection",
+    "task_review_cut",
+    "subtitle",
+    "publish_center",
+    "persistence"
+   ],
+   "desc": "用 SQLite Job、Lease、Heartbeat、Checkpoint 和子进程串联长任务与自动流水线。",
+   "tests": [
+    "tests/test_auto_pipeline.py",
+    "tests/test_job_queue.py",
+    "tests/test_subtitle_auto_workflow.py"
+   ],
+   "loc": 4095,
+   "contentHash": "bd2e33520b473b9dff951c8facb733411fa879987643082a891b8bf2d5694a2e",
+   "score": 66,
+   "grade": "C",
+   "tags": [
+    "fallback",
+    "silent-except",
+    "legacy",
+    "stub",
+    "bloat",
+    "god-component",
+    "glue"
+   ],
+   "findings": [
+    {
+     "sev": "MED",
+     "loc": "app/services/pipeline_engine.py:1600",
+     "text": "_write_json_atomic 只在写临时文件前后调用 require_active_job_lease，最终 temporary_path.replace(path) 以及 _create_schedule 的直接 write_text（1614-1616）不带 owner/lease 条件；租约在最后检查后被接管时，旧 Worker 仍可能覆盖新 Worker 的 metadata/schedule 派生文件。数据库 Job 状态虽已 fencing，但文件产物仍存在跨进程陈旧写入窗口。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/job_worker.py:234",
+     "text": "WorkflowJobRunner.stop 只等待 worker 线程最多 25 秒；若 terminate_process_tree 持续失败，_run_job_subprocess 会保留 lease 并继续重试，但 stop 返回后应用生命周期仍会继续关闭，线程/子进程可能未结束、lease 也未立即释放，下一进程只能等待租约过期恢复。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/job_worker.py:272",
+     "text": "父 Worker 启动子进程时将 stdout/stderr 都重定向到 DEVNULL（272-276），job_worker_process 仅把异常文本打印到 stderr；子进程实际堆栈、Provider/FFmpeg 错误完全丢失，父进程最终只能记录退出码，重启恢复和人工诊断证据不足。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/job_service.py:163",
+     "text": "_row_to_dict 对 payload_json/result_json/checkpoint_json 的 JSONDecodeError 仅 pass，字段保留为原始字符串；job_worker 随后按 dict 调用 payload.get 等操作时会产生不清晰的 AttributeError/失败，损坏队列数据没有明确的不可恢复数据错误状态。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/job_worker.py:70",
+     "text": "JOB_TYPE_PUBLISH 仍在 job_service 中声明并可由 create_job 创建，但 execute_job 只有未支持分支（70-71）会失败；这是可入队、可查询却没有执行器的遗留/stub 入口，队列状态语义对调用方不完整。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/pipeline_engine.py:88",
+     "text": "PipelineEngine 文件约 1,926 行，仍集中承担步骤编排、租约/取消检查、AutoPipelineCheckpoint 恢复、文件证据、AI/切片/字幕、文案、排期和发布任务创建；与 job_service（约1,171行）共同形成核心 God Component，修改任一步骤的回归半径很大。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/pipeline_engine.py:1804",
+     "text": "_read_json 在 OSError/JSONDecodeError 时静默返回 fallback；损坏的 metadata、schedule 或配置会被当作空结构继续处理，降低故障可见性和人工恢复依据。"
+    }
+   ],
+   "auditedHash": "bd2e33520b473b9dff951c8facb733411fa879987643082a891b8bf2d5694a2e",
+   "auditedAt": "2026-08-25",
+   "auditedRev": "56f4d501087860145412fa6ecc411252ae8e877e"
+  },
+  {
+   "id": "publish_center",
+   "label": "Publish Center",
+   "band": "workflow",
+   "path": "publish content preparation services",
+   "paths": [
+    "app/services/publish_service.py",
+    "app/services/publish_copy_rules.py",
+    "app/services/publish_domain.py",
+    "app/services/publish_adapters.py",
+    "app/services/publish_readiness.py",
+    "app/services/publish_providers.py"
+   ],
+   "coupling": "core",
+   "deps": [
+    "task_review_cut",
+    "subtitle",
+    "publish_scheduler",
+    "publisher_worker",
+    "persistence"
+   ],
+   "desc": "准备标题、简介、话题、封面、账号和发布草稿，并保留历史兼容执行入口。",
+   "tests": [
+    "tests/test_publish_copy_rules.py",
+    "tests/test_publish_readiness.py",
+    "tests/test_publish_task_linkage.py",
+    "tests/test_publish_history.py"
+   ],
+   "loc": 5654,
+   "contentHash": "7a13cff1d83735a2396e98709b58d9a9ec55b3aef5c32b91373a3a5de4cac13f",
+   "score": 65,
+   "grade": "C",
+   "tags": [
+    "god-component",
+    "bloat",
+    "legacy",
+    "dual-format",
+    "fallback",
+    "silent-except",
+    "placeholder",
+    "duplication"
+   ],
+   "findings": [
+    {
+     "sev": "MED",
+     "loc": "app/services/publish_service.py:1",
+     "text": "publish_service.py 仍约4776行，集中承担配置、账号、OAuth、文案、封面、队列、历史、OpenCLI兼容和API发布职责，属于真实 God Component，修改影响面较大。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/publish_service.py:2968",
+     "text": "历史查询 SQL 仍先按大写 PUBLISH_HISTORY_STATUSES 过滤，再做 legacy 状态归一化；数据库中的 lowercase/旧状态记录会在归一化前被排除，历史页与统计可能漏数据。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/publish_service.py:2173",
+     "text": "sync_task_publish_jobs 中封面生成异常仅写入 cover_error 后继续创建 WAITING 发布任务，未计入 errors；同步接口可能返回 ok，但任务实际缺少封面，后续发送就绪检查才失败。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/publish_service.py:2818",
+     "text": "create_batch_publish_jobs 对不存在的 output_clip_id 直接 continue，最后无论缺失多少输入都返回 status=ok，调用方无法区分全部无效、部分成功和完整成功。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/publish_readiness.py:167",
+     "text": "PUBLISH_MODES 仍允许 api_publish，但 build_send_readiness 的 resolved_mode 只接受 local_browser/manual_export；API 模式可以创建，却在发送前统一判定 unsupported_publish_mode。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/publish_providers.py:141",
+     "text": "BilibiliPublishProvider 完成配置和 access_token 校验后固定抛出 bilibili_provider_pending，属于可创建、可排队但无法执行的真实发布入口，仍是 placeholder/stub。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/publish_providers.py:81",
+     "text": "DouyinPublishProvider 将上传和创建作品拆成两个非幂等 HTTP 调用；上传已被平台接受但客户端读取响应时超时或断网，重试可能产生重复作品，未转入人工复核或使用幂等键。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/publish_service.py:1610",
+     "text": "批量查询每一行都调用 _normalize_job；该函数随后构建 readiness 并触发账号/运行态解析，批量页面可能产生逐行重复查询，数据量增长后会放大响应延迟。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/publish_providers.py:204",
+     "text": "_post_multipart 使用 read_bytes 将整个视频读入内存，再与 multipart 头部 join；大文件发送峰值内存约为文件大小的两倍，存在资源受限环境下的稳定性风险。"
+    }
+   ],
+   "auditedHash": "7a13cff1d83735a2396e98709b58d9a9ec55b3aef5c32b91373a3a5de4cac13f",
+   "auditedAt": "2026-08-25",
+   "auditedRev": "56f4d501087860145412fa6ecc411252ae8e877e"
+  },
+  {
+   "id": "publish_scheduler",
+   "label": "Publish Scheduler",
+   "band": "execution",
+   "path": "scheduler/repository/executor",
+   "paths": [
+    "app/publish_scheduler.py",
+    "app/services/publish_scheduler.py",
+    "app/services/publish_repository.py",
+    "app/services/publish_executor.py",
+    "app/services/publish_time.py"
+   ],
+   "coupling": "core",
+   "deps": [
+    "publish_center",
+    "publisher_worker",
+    "persistence"
+   ],
+   "desc": "计算排期、原子领取发布任务、重试、恢复不确定执行并维护发布状态机。",
+   "tests": [
+    "tests/test_publish_scheduler.py",
+    "tests/test_publish_scheduler_state_machine.py",
+    "tests/test_publish_fencing.py",
+    "tests/test_publish_timezones.py"
+   ],
+   "loc": 2362,
+   "contentHash": "7e0f1ec4494c65899b8f29f572c60be557c92140e767f74419bf81b361f10d05",
+   "score": 74,
+   "grade": "C",
+   "tags": [
+    "god-component",
+    "bloat",
+    "legacy",
+    "silent-except"
+   ],
+   "findings": [
+    {
+     "sev": "MED",
+     "loc": "app/services/publish_scheduler.py:756-785",
+     "text": "recover_interrupted_jobs 每轮加载全部 PUBLISHING 任务，并逐个同步调用 Worker execution；没有批量上限、并发控制或退避，Worker 超时或不可用时恢复耗时随任务数线性增长并阻塞后续排期。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/publish_scheduler.py:283-304",
+     "text": "list_due_jobs 每轮 SELECT 全部 SCHEDULED 记录，再逐条在 Python 中解析并过滤时间，没有 SQL due 条件、分页或批量上限，排期规模增长会增加扫描内存和调度延迟。"
+    },
+    {
+     "sev": "MED",
+     "loc": "app/services/publish_scheduler.py:133-1789",
+     "text": "PublishScheduler 约 1,700 行并集中承担排期计算、任务领取、结果写回、Worker 恢复、重试修复、人工复核、批量排期及旧版兼容，状态路径修改的回归半径较大。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/publish_scheduler.py:276-281",
+     "text": "shutdown 会等待后台 Task 完整结束，但没有超时或取消兜底；run_once 被 Worker 长超时、数据库锁或文件操作阻塞时，应用停机可能长时间挂起。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/publish_scheduler.py:1840-1845",
+     "text": "queue_snapshot 对非法 scheduled_at 静默 pass，损坏排期会从今日任务视图消失，未产生告警或异常计数。"
+    }
+   ],
+   "auditedHash": "7e0f1ec4494c65899b8f29f572c60be557c92140e767f74419bf81b361f10d05",
+   "auditedAt": "2026-08-25",
+   "auditedRev": "56f4d501087860145412fa6ecc411252ae8e877e"
+  },
+  {
+   "id": "publisher_worker",
+   "label": "Publishers & Worker",
+   "band": "execution",
+   "path": "publisher registry and Windows worker",
+   "paths": [
+    "app/services/publishers/**/*.py",
+    "scripts/publish_host_worker.py",
+    "scripts/opencli_host_bridge.py"
+   ],
+   "coupling": "high",
+   "deps": [
+    "media_storage",
+    "persistence"
+   ],
+   "desc": "通过 Publisher Registry 和 Windows Chrome Worker 执行抖音/B站投稿、导出与兼容模式。",
+   "tests": [
+    "tests/test_publisher_registry.py",
+    "tests/test_local_browser_publishers.py",
+    "tests/test_page_script_publishers.py",
+    "tests/test_publish_worker_client.py",
+    "tests/test_publish_fencing.py"
+   ],
+   "loc": 2738,
+   "contentHash": "13f332520f2fc5d872bd52b2dc645804524e005dbedd0990f787c72ee8fbafb4",
+   "score": 80,
+   "grade": "B",
+   "tags": [
+    "legacy",
+    "glue",
+    "silent-except",
+    "fallback"
+   ],
+   "findings": [
+    {
+     "sev": "MED",
+     "loc": "scripts/publish_host_worker.py:297",
+     "text": "_prior_job_execution_requires_review 会跳过 corrupt 或缺失/无效 identity 的旧 journal；若旧执行已开始上传但身份未持久化，重试可能无法关联并再次提交。browser_opened 仍属于 safe_retry_phases，存在浏览器动作已发生而 journal 尚未推进的重复发布窗口。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/publishers/browser_runtime.py:315",
+     "text": "screenshot 捕获 Exception 后直接返回空字符串，不记录错误或阶段；发布失败诊断可能静默丢失截图证据。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/services/publishers/page_scripts.py:14",
+     "text": "通过延迟导入 app.services.publish_service 并调用其私有 DOM 脚本维持旧发布协议，形成 Worker/发布服务间的 legacy glue 耦合。"
+    }
+   ],
+   "auditedHash": "13f332520f2fc5d872bd52b2dc645804524e005dbedd0990f787c72ee8fbafb4",
+   "auditedAt": "2026-08-25",
+   "auditedRev": "56f4d501087860145412fa6ecc411252ae8e877e"
+  },
+  {
+   "id": "persistence",
+   "label": "SQLite Persistence",
+   "band": "persistence",
+   "path": "app/db + backup services",
+   "paths": [
+    "app/db/**/*.py",
+    "app/services/database_backup_service.py",
+    "scripts/backup_restore.py",
+    "scripts/backup_restore_runtime.py",
+    "scripts/cleanup_database_backups.py",
+    "scripts/repair_foreign_key_integrity.py"
+   ],
+   "coupling": "core",
+   "deps": [],
+   "desc": "创建 SQLite Schema、执行启动时兼容迁移和索引，并提供 WAL 安全备份恢复。",
+   "tests": [
+    "tests/test_backup_restore.py",
+    "tests/test_backup_restore_wal.py",
+    "tests/test_database_backup_service.py",
+    "tests/test_p1_1_db_performance.py"
+   ],
+   "loc": 3756,
+   "contentHash": "9ad2d3c8874bf07b1938c8f9784fcce5b45e686ccddf0a4e056b2744299e213c",
+   "score": 72,
+   "grade": "C",
+   "tags": [
+    "legacy",
+    "dual-format",
+    "bloat",
+    "god-component",
+    "glue"
+   ],
+   "findings": [
+    {
+     "sev": "MED",
+     "loc": "app/db/database.py:614",
+     "text": "init_db 仍先执行历史列探测迁移 helper，再执行账本迁移；helper 内部使用 executescript（如 :1074），会隐式提交此前 DML，后续 helper 失败时可能留下部分 Schema/数据变更而无对应 schema_migrations 记录。"
+    },
+    {
+     "sev": "MED",
+     "loc": "scripts/backup_restore.py:362",
+     "text": "备份验证仅执行 quick_check、必要表/行数和 manifest 文件哈希校验，未执行 PRAGMA foreign_key_check，也未核对 schema_migrations 版本/checksum；外键损坏或结构账本漂移可能被当作可恢复备份。"
+    },
+    {
+     "sev": "MED",
+     "loc": "scripts/backup_restore.py:602",
+     "text": "restore_backup_bundle 在替换数据库及删除 -wal/-shm 前没有活动应用/Worker 互斥或停止检查；运行中的 SQLite 连接可能继续写入旧 inode/WAL，造成恢复后丢写或双数据库视图。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/db/database.py:811",
+     "text": "workflow_jobs claim 索引仅覆盖 status、next_attempt_at、created_at，未包含 lease_expires_at；租约过期接管/恢复扫描仍需过滤大量记录，规模增长后会退化。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "app/db/database.py:169",
+     "text": "tasks.status 无 CHECK 约束且默认仍为 pending_video，历史迁移 :1091-1100 继续归一化 lowercase legacy 状态，而 app/models/task.py:38 同时接受新旧两套枚举，数据库层无法保证唯一状态协议。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "scripts/backup_restore_runtime.py:142",
+     "text": "runtime 入口通过 monkeypatch 替换 backup_restore 的全局函数并重新导出 API；core 与 runtime 两套导入路径的行为可能随新增校验漂移，形成 legacy/dual-format glue。"
+    }
+   ],
+   "auditedHash": "9ad2d3c8874bf07b1938c8f9784fcce5b45e686ccddf0a4e056b2744299e213c",
+   "auditedAt": "2026-08-25",
+   "auditedRev": "4d30e346b2f75ca8c55a3fdb2fb836eaa0328e78"
+  },
+  {
+   "id": "ops_delivery",
+   "label": "Ops & Delivery",
+   "band": "persistence",
+   "path": "Docker/PowerShell/CI",
+   "paths": [
+    "Dockerfile",
+    "docker-compose*.yml",
+    ".github/**/*.yml",
+    "scripts/**/*.ps1",
+    "scripts/doctor.ps1",
+    "scripts/seed_demo_data.py",
+    "scripts/purge_deleted_task_media.py",
+    "scripts/migrate_task_dirs_to_project_names.py"
+   ],
+   "coupling": "med",
+   "deps": [
+    "api_runtime",
+    "publisher_worker",
+    "persistence"
+   ],
+   "desc": "提供 Windows/Docker 启停、诊断、CI、发布门禁、Demo 与维护脚本。",
+   "tests": [
+    "tests/test_native_scripts.py",
+    "tests/test_release_version.py",
+    "tests/test_publish_worker_autostart.py"
+   ],
+   "loc": 4348,
+   "contentHash": "cedfdb41e1d9fb89d361d1f4071b696bc0d1584e9e35db556c5a9f51c513ab2a",
+   "score": 68,
+   "grade": "C",
+   "tags": [
+    "fallback",
+    "legacy",
+    "dual-format",
+    "duplication",
+    "bloat",
+    "glue",
+    "silent-except",
+    "monkeypatch"
+   ],
+   "findings": [
+    {
+     "sev": "MED",
+     "loc": ".github/workflows/ci.yml:3",
+     "text": "CI 仅监听 master push/PR；feature/docs 直接 push 不即时验证，问题延迟到开 PR。"
+    },
+    {
+     "sev": "MED",
+     "loc": "scripts/start_docker_opencli.ps1:24",
+     "text": "健康检查异常只警告不返回非零，服务失败也可能被调用方视为启动成功。"
+    },
+    {
+     "sev": "MED",
+     "loc": "scripts/start.ps1:30",
+     "text": "Demo 覆盖生效前先对正式 E 盘配置运行 doctor，新机/迁移机的隔离 Demo 可能被旧路径阻断。"
+    },
+    {
+     "sev": "MED",
+     "loc": "scripts/start.ps1:71",
+     "text": "Worker 启动异常被捕获后继续并报告工作台成功，发布能力不可用时易被误判完整健康。"
+    },
+    {
+     "sev": "HIGH",
+     "loc": "scripts/migrate_task_dirs_to_project_names.py:211",
+     "text": "任务目录迁移用非 WAL-aware 主库 copy，先移动目录再统一更新提交，无文件补偿，异常会让路径/DB 不一致。"
+    },
+    {
+     "sev": "MED",
+     "loc": "scripts/restore.ps1:27",
+     "text": "恢复只以健康响应判断 App 运行，StopServices 只停 Compose；native/异常健康进程可能仍持有 DB 时执行替换。"
+    },
+    {
+     "sev": "MED",
+     "loc": "scripts/backup.ps1:33",
+     "text": "备份默认包含 .env 且不加密，仅显式 ExcludeEnv 才排除，包被共享时泄漏本机秘密。"
+    },
+    {
+     "sev": "MED",
+     "loc": "tests/test_native_scripts.py:11",
+     "text": "启停测试主要是源码字符串断言，Windows smoke 不做实际 restore/冲突/清理失败与恢复后健康验证。"
+    },
+    {
+     "sev": "MED",
+     "loc": "scripts/seed_demo_data.py:32",
+     "text": "缺 FFmpeg 时仍插入无媒体路径 Demo 数据并成功退出，数量检查通过但媒体 smoke 不可信。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "scripts/acceptance.ps1:115",
+     "text": "验收递归扫描正式任务目录，媒体量大/锁文件会显著拖慢或阻断 release gate。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "scripts/backup_restore_runtime.py:142",
+     "text": "import 时 monkeypatch backup core，全局行为依赖导入顺序。"
+    },
+    {
+     "sev": "LOW",
+     "loc": "docs/PORTABLE_SETUP.md:127",
+     "text": "文档描述与当前 start.ps1 实现不符，旧 Next Steps 又保留兼容入口，启动排障认知漂移。"
+    }
+   ],
+   "auditedHash": "cedfdb41e1d9fb89d361d1f4071b696bc0d1584e9e35db556c5a9f51c513ab2a",
+   "auditedAt": "2026-08-25",
+   "auditedRev": "56f4d501087860145412fa6ecc411252ae8e877e"
+  }
+ ]
+}

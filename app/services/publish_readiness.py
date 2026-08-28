@@ -94,6 +94,54 @@ def _content_issues(job: dict[str, Any], platform: str, publish_mode: str) -> li
     return issues
 
 
+def _subtitle_delivery_issues(job: dict[str, Any]) -> list[dict[str, Any]]:
+    provider_payload = job.get("provider_payload") if isinstance(job.get("provider_payload"), dict) else {}
+    delivery_mode = str(
+        job.get("subtitle_delivery_mode")
+        or provider_payload.get("subtitle_delivery_mode")
+        or ""
+    )
+    video_source = str(job.get("video_source") or "original")
+    if delivery_mode == "original" and video_source != "original":
+        return [
+            _issue(
+                "subtitle_delivery_mismatch",
+                "该任务已明确选择原片继续，当前视频源不一致",
+                "complete_content",
+            )
+        ]
+    if delivery_mode == "subtitled" and video_source != "subtitled":
+        return [
+            _issue(
+                "subtitle_review_required",
+                "该任务要求使用审核后的字幕成片，当前仍是原片",
+                "complete_content",
+            )
+        ]
+    if video_source != "subtitled":
+        return []
+    revision_id = str(job.get("subtitle_revision_id") or provider_payload.get("subtitle_revision_id") or "")
+    revision_status = str(
+        job.get("subtitle_revision_status")
+        or provider_payload.get("subtitle_revision_status")
+        or ""
+    )
+    validation_status = str(
+        job.get("subtitle_validation_status")
+        or provider_payload.get("subtitle_validation_status")
+        or ""
+    )
+    if not revision_id or revision_status != "approved" or validation_status != "verified":
+        return [
+            _issue(
+                "subtitle_not_verified",
+                "带字幕成片缺少已审核 revision 或 FFprobe 验证证据",
+                "complete_content",
+            )
+        ]
+    return []
+
+
 def build_send_readiness(
     job: dict[str, Any],
     *,
@@ -175,6 +223,7 @@ def build_send_readiness(
                     )
                 )
 
+    issues.extend(_subtitle_delivery_issues(job))
     issues.extend(_content_issues(job, platform, resolved_mode))
 
     if resolved_mode == "local_browser" and worker_available is False:

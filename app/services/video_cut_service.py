@@ -182,25 +182,86 @@ def cut_single_clip(
     strategy: str = "accurate",
 ) -> CutResult:
     plan.output_path.parent.mkdir(parents=True, exist_ok=True)
-    command = build_ffmpeg_cut_command(ffmpeg_path, source_video, plan, strategy=strategy)
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                            timeout=settings.ffmpeg_cut_timeout)
-    if result.returncode != 0:
+    plan.output_path.unlink(missing_ok=True)
+    temporary_path = plan.output_path.with_name(f"{plan.output_path.stem}.part{plan.output_path.suffix}")
+    temporary_path.unlink(missing_ok=True)
+    temporary_plan = CutPlan(
+        clip_candidate_id=plan.clip_candidate_id,
+        title=plan.title,
+        start_time=plan.start_time,
+        end_time=plan.end_time,
+        output_path=temporary_path,
+        duration_seconds=plan.duration_seconds,
+    )
+    command = build_ffmpeg_cut_command(ffmpeg_path, source_video, temporary_plan, strategy=strategy)
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=settings.ffmpeg_cut_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        temporary_path.unlink(missing_ok=True)
         return CutResult(
             clip_candidate_id=plan.clip_candidate_id,
-            output_file_path=str(plan.output_path),
-            output_file_name=plan.output_path.name,
+            output_file_path="",
+            output_file_name="",
+            status="failed",
+            error_message=f"FFmpeg 切片超过 {settings.ffmpeg_cut_timeout} 秒，已清理未完成文件",
+        )
+    except OSError as exc:
+        temporary_path.unlink(missing_ok=True)
+        return CutResult(
+            clip_candidate_id=plan.clip_candidate_id,
+            output_file_path="",
+            output_file_name="",
+            status="failed",
+            error_message=f"FFmpeg 无法启动：{exc}",
+        )
+    if result.returncode != 0:
+        temporary_path.unlink(missing_ok=True)
+        return CutResult(
+            clip_candidate_id=plan.clip_candidate_id,
+            output_file_path="",
+            output_file_name="",
             status="failed",
             error_message=summarize_stderr(result.stderr),
         )
 
-    if not plan.output_path.exists() or plan.output_path.stat().st_size == 0:
+    try:
+        valid_output = temporary_path.exists() and temporary_path.stat().st_size > 0
+    except OSError as exc:
+        temporary_path.unlink(missing_ok=True)
         return CutResult(
             clip_candidate_id=plan.clip_candidate_id,
-            output_file_path=str(plan.output_path),
-            output_file_name=plan.output_path.name,
+            output_file_path="",
+            output_file_name="",
+            status="failed",
+            error_message=f"FFmpeg 输出文件无法校验：{exc}",
+        )
+    if not valid_output:
+        temporary_path.unlink(missing_ok=True)
+        return CutResult(
+            clip_candidate_id=plan.clip_candidate_id,
+            output_file_path="",
+            output_file_name="",
             status="failed",
             error_message="FFmpeg 已结束，但没有生成有效的视频文件",
+        )
+    try:
+        temporary_path.replace(plan.output_path)
+    except OSError as exc:
+        temporary_path.unlink(missing_ok=True)
+        return CutResult(
+            clip_candidate_id=plan.clip_candidate_id,
+            output_file_path="",
+            output_file_name="",
+            status="failed",
+            error_message=f"FFmpeg 输出文件切换失败，已清理未完成文件：{exc}",
         )
 
     return CutResult(

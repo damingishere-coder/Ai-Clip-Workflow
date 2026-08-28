@@ -100,7 +100,7 @@ if (publishCenterRoot) {
     backfillCoversButton.disabled = loading || count === 0;
     backfillCoversButton.textContent = loading
       ? `正在补充${platformLabel()} ${count} 条封面…`
-      : `一键补充${platformLabel()}缺失封面${count ? `（${count}）` : ""}`;
+      : `补齐${platformLabel()}缺失封面${count ? `（${count}）` : ""}`;
   }
 
   function beijingDatetimeValue(timestamp) {
@@ -270,7 +270,7 @@ if (publishCenterRoot) {
       `[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(jobId || "")}"]`,
     );
     if (!row || row.hidden) return;
-    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
     row.classList.add("is-calendar-focus");
     window.setTimeout(() => row.classList.remove("is-calendar-focus"), 1600);
   }
@@ -1128,6 +1128,8 @@ if (publishCenterRoot) {
       panel.hidden = !active;
       panel.classList.toggle("active", active);
     });
+    const batchAiButton = document.querySelector("[data-batch-ai]");
+    if (batchAiButton) batchAiButton.hidden = tab !== "content";
     if (tab === "history") void refreshHistory({ calendar: true, records: true });
   }
 
@@ -1337,7 +1339,7 @@ if (publishCenterRoot) {
     const readiness = effectiveReadiness(row);
     if (readiness.action === "start_worker") {
       document.querySelector("[data-worker-help]")?.removeAttribute("hidden");
-      document.querySelector("[data-scheduler-health]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      document.querySelector("[data-scheduler-health]")?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
       await refreshSchedulerHealth(true);
       return;
     }
@@ -1375,7 +1377,7 @@ if (publishCenterRoot) {
       }
       switchTab("content");
       const editorRow = document.querySelector(`[data-publish-row][data-section="content"][data-job-id="${CSS.escape(row.dataset.jobId)}"]`);
-      editorRow?.scrollIntoView({ behavior: "smooth", block: "center" });
+      editorRow?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
       editorRow?.querySelector("[data-account-select]")?.focus();
       showMessage("请在内容准备中选择本次使用的同平台账号并保存。", "error");
       return;
@@ -1384,7 +1386,7 @@ if (publishCenterRoot) {
       switchTab("content");
       const editorRow = document.querySelector(`[data-publish-row][data-section="content"][data-job-id="${CSS.escape(row.dataset.jobId)}"]`);
       if (editorRow && !editorRow.hidden) {
-        editorRow.scrollIntoView({ behavior: "smooth", block: "center" });
+        editorRow.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
         editorRow.querySelector("input, textarea, select")?.focus();
       }
       showMessage(readiness.message || "请先补齐发布内容并保存。", "error");
@@ -1397,24 +1399,6 @@ if (publishCenterRoot) {
       (data.jobs || []).forEach(updateRowFromJob);
     } catch (_error) {
       // 后台轮询失败不遮挡用户正在编辑的内容。
-    }
-  }
-
-  async function upgradePendingDouyinMetadata() {
-    try {
-      const data = await window.apiFetch("/api/publish/jobs/metadata/upgrade-pending-douyin", { method: "POST" });
-      (data.jobs || []).forEach((job) => {
-        const row = document.querySelector(
-          `[data-publish-row][data-section="content"][data-job-id="${CSS.escape(job.id || "")}"]`,
-        );
-        applyGeneratedMetadataToForm(row, job);
-        updateRowFromJob(job);
-      });
-      if (Number(data.upgraded_count || 0) > 0 || Number(data.failed_count || 0) > 0) {
-        showMessage(data.message || "抖音旧草稿文案升级完成。", data.failed_count ? "error" : "success");
-      }
-    } catch (error) {
-      showMessage(`旧草稿文案升级已中止：${error.message}`, "error");
     }
   }
 
@@ -1496,7 +1480,7 @@ if (publishCenterRoot) {
     if (!cell) return;
     selectedCalendarDate = cell.dataset.calendarDate || "";
     renderCalendar();
-    calendarDayDetail?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    calendarDayDetail?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "nearest" });
   });
   calendarNode?.addEventListener("keydown", (event) => {
     const cell = event.target.closest("[data-calendar-date]");
@@ -1830,7 +1814,7 @@ if (publishCenterRoot) {
         );
         setTaskGroupExpanded(contentRow?.closest("[data-publish-task-group]"), true);
         switchTab("content");
-        contentRow?.scrollIntoView({ behavior: "smooth", block: "center" });
+        contentRow?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
         showMessage(data.message || "已取消发送并返回内容准备。", "success");
       } catch (error) {
         showMessage(`取消发送失败：${error.message}`, "error");
@@ -1866,8 +1850,8 @@ if (publishCenterRoot) {
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/metadata?use_ai=true`, { method: "POST" });
         applyGeneratedMetadataToForm(row, data.job);
         updateRowFromJob(data.job);
-        showMessage("AI 文案已重写并同步到最终发送字段。", "success");
-      } catch (error) { showMessage(`AI 重写失败：${error.message}`, "error"); }
+        showMessage("本条 AI 文案已重写并保存到最终发送字段。", "success");
+      } catch (error) { showMessage(`本条 AI 重写失败：${error.message}`, "error"); }
       finally { metadataButton.disabled = false; }
       return;
     }
@@ -2052,7 +2036,7 @@ if (publishCenterRoot) {
       }
     }
     showMessage(
-      `批量 AI 重写完成：成功 ${succeeded} 条，失败 ${failed} 条；失败项已保留原文。`,
+      `已选文案 AI 重写完成：成功 ${succeeded} 条，失败 ${failed} 条；失败项已保留原文。`,
       failed ? "error" : "success",
     );
   });
@@ -2149,7 +2133,11 @@ if (publishCenterRoot) {
       latestPreviewItems.forEach((item, index) => {
         const row = document.querySelector(`[data-publish-row][data-job-id="${CSS.escape(item.job_id)}"]`);
         const line = document.createElement("div");
-        line.innerHTML = `<strong>第 ${index + 1} 条：${row?.querySelector("[data-row-title]")?.textContent || item.job_id}</strong><time>${item.scheduled_at_local_display}</time>`;
+        const title = document.createElement("strong");
+        const scheduledAt = document.createElement("time");
+        title.textContent = `第 ${index + 1} 条：${row?.querySelector("[data-row-title]")?.textContent || item.job_id}`;
+        scheduledAt.textContent = item.scheduled_at_local_display || "";
+        line.append(title, scheduledAt);
         previewList.appendChild(line);
       });
       latestPreviewSignature = previewSignature(payload);
@@ -2196,8 +2184,8 @@ if (publishCenterRoot) {
     const button = event.currentTarget; button.disabled = true;
     try {
       const data = await window.apiFetch(`/api/publish/queue/refresh?use_ai=false&platform=${encodeURIComponent(activePlatform)}`, { method: "POST" });
-      showMessage(data.message || "缺失任务已补充，请稍后查看内容准备区。", "success");
-    } catch (error) { showMessage(`补充任务失败：${error.message}`, "error"); }
+      showMessage(data.message || "遗漏切片已同步，请在内容准备区核对。", "success");
+    } catch (error) { showMessage(`同步遗漏切片失败：${error.message}`, "error"); }
     finally { button.disabled = false; }
   });
 
@@ -2212,14 +2200,13 @@ if (publishCenterRoot) {
   if (scheduleForm?.elements.start_at_local) scheduleForm.elements.start_at_local.value = beijingDatetimeValue(Date.now() + 10 * 60 * 1000);
   document.querySelectorAll('[data-publish-row][data-section="schedule"], [data-publish-row][data-section="history"]').forEach((row) => applyRowReadiness(row));
   updateSelectionUi(); applyHistoryFilter(); refreshScheduleViews(); updateBackfillCoversButton();
-  void upgradePendingDouyinMetadata();
   if (focus?.dataset.taskId) {
     const group = document.querySelector(
       `[data-publish-task-group][data-task-id="${CSS.escape(focus.dataset.taskId)}"]`,
     );
     if (group && !group.hidden) {
       setTaskGroupExpanded(group, true);
-      group.scrollIntoView({ behavior: "smooth", block: "start" });
+      group.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "start" });
     } else {
       showMessage("已定位到该处理任务，但当前没有可准备的抖音新版本内容。可返回任务页重新同步。");
     }

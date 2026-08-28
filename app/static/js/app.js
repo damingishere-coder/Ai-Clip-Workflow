@@ -1,12 +1,8 @@
 async function apiFetch(url, options = {}) {
   const requestOptions = { ...options };
   const headers = new Headers(options.headers || {});
-  const token = document.querySelector('meta[name="local-admin-token"]')?.content || "";
   if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
-  }
-  if (token && !headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${token}`);
   }
   requestOptions.headers = headers;
   const response = await fetch(url, requestOptions);
@@ -31,9 +27,17 @@ async function apiFetch(url, options = {}) {
 
 window.apiFetch = apiFetch;
 
+function preferredScrollBehavior() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+}
+
+window.preferredScrollBehavior = preferredScrollBehavior;
+
 const newTaskForm = document.querySelector("#new-task-form");
 const newTaskAutoMode = newTaskForm?.querySelector("input[name='auto_mode']");
 const newTaskSubmitButton = document.querySelector("#new-task-submit-button");
+const selectionProfileInput = document.querySelector("#selection-profile");
+const longLiveSettings = document.querySelector("#long-live-settings");
 
 function updateNewTaskSubmitLabel() {
   if (!newTaskSubmitButton) return;
@@ -43,6 +47,14 @@ function updateNewTaskSubmitLabel() {
 if (newTaskAutoMode) {
   newTaskAutoMode.addEventListener("change", updateNewTaskSubmitLabel);
   updateNewTaskSubmitLabel();
+}
+
+if (selectionProfileInput && longLiveSettings) {
+  const updateLongLiveSettings = () => {
+    longLiveSettings.hidden = selectionProfileInput.value !== "long_live_talk";
+  };
+  selectionProfileInput.addEventListener("change", updateLongLiveSettings);
+  updateLongLiveSettings();
 }
 
 if (newTaskForm) {
@@ -58,29 +70,22 @@ if (newTaskForm) {
     result.textContent = "正在创建任务...";
 
     try {
-      if (!videoFileInput.files.length) {
-        throw new Error("请选择要上传的视频文件");
-      }
+      if (!payload.selection_profile) throw new Error("请选择选片模式");
+      if (!videoFileInput.files.length) throw new Error("请选择要上传的视频文件");
       const uploadData = new FormData();
-      uploadData.append("task_name", payload.task_name || "");
-      uploadData.append("platform", payload.platform || "general");
-      uploadData.append("max_clip_duration", payload.max_clip_duration || "10");
-      uploadData.append("candidate_clip_count", payload.candidate_clip_count || "12");
-      uploadData.append("selection_profile", payload.selection_profile || "variety_comedy");
-      uploadData.append("final_clip_target", payload.final_clip_target || "5");
+      for (const key of [
+        "task_name", "platform", "max_clip_duration", "candidate_clip_count",
+        "selection_profile", "final_clip_target",
+      ]) uploadData.append(key, payload[key] || "");
+      if (payload.selection_profile === "long_live_talk") {
+        uploadData.append("highlight_density_per_hour", payload.highlight_density_per_hour || "4");
+        uploadData.append("highlight_total_limit", payload.highlight_total_limit || "30");
+      }
       uploadData.append("ai_preference", "");
       uploadData.append("auto_mode", payload.auto_mode === "true" ? "true" : "false");
       uploadData.append("auto_metadata_use_ai", "false");
       uploadData.append("video_file", videoFileInput.files[0]);
-      const response = await fetch("/api/tasks/upload", {
-        method: "POST",
-        body: uploadData,
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "任务创建失败");
-      }
+      const data = await apiFetch("/api/tasks/upload", { method: "POST", body: uploadData });
       result.textContent = `${data.message}${payload.auto_mode === "true" ? " 全自动流水线已启动。" : ""} 正在进入详情页...`;
       window.location.href = data.detail_url;
     } catch (error) {
@@ -120,6 +125,7 @@ async function handleProcessAction(button) {
       if (result) result.textContent = data.message || "处理完成，正在刷新页面...";
       if (button.dataset.endpoint.includes("/process/transcript")) {
         startTranscriptPolling(true);
+        startTaskLiveStatusPolling(true);
         if (data.status === "completed") {
           window.setTimeout(() => window.location.reload(), 600);
         }
@@ -333,9 +339,11 @@ const aiAnalysisSummary = document.querySelector("#ai-analysis-summary");
 const aiCandidateCountPill = document.querySelector("#ai-candidate-count-pill");
 const aiCandidateCountInput = document.querySelector("#ai-candidate-count-input");
 const aiSelectionProfile = aiAnalysisForm
-  ? aiAnalysisForm.dataset.selectionProfile || "variety_comedy"
-  : "variety_comedy";
+  ? aiAnalysisForm.dataset.selectionProfile || "general"
+  : "general";
 const aiFinalClipTarget = document.querySelector("#ai-final-clip-target");
+const aiHighlightDensity = document.querySelector("#ai-highlight-density");
+const aiHighlightTotalLimit = document.querySelector("#ai-highlight-total-limit");
 const showAiHistoryButton = document.querySelector("#show-ai-history-button");
 const refreshAiHistoryButton = document.querySelector("#refresh-ai-history-button");
 const aiAnalysisHistory = document.querySelector("#ai-analysis-history");
@@ -363,11 +371,16 @@ const taskLiveUpdatedAt = document.querySelector("[data-task-live-updated-at]");
 const taskLiveCandidateCount = document.querySelector("[data-task-live-candidate-count]");
 const taskLiveOutputCount = document.querySelector("[data-task-live-output-count]");
 const taskLiveActions = document.querySelector("[data-live-task-actions]");
+const taskLiveOperation = document.querySelector("[data-task-live-operation]");
+const taskLiveOperationLabel = document.querySelector("[data-task-live-operation-label]");
+const taskLiveOperationProgress = document.querySelector("[data-task-live-operation-progress]");
+const taskLiveOperationMessage = document.querySelector("[data-task-live-operation-message]");
 let aiStatusPollingTimer = null;
 let isAiAnalysisBusy = false;
 let aiAnalysisControlStates = new Map();
 let taskLiveStatusTimer = null;
 let taskLiveForcedPollingUntil = 0;
+let taskLiveStatusRequestInFlight = false;
 const TASK_LIVE_STATUS_INTERVAL_MS = 3000;
 
 function setAiAnalysisControlsDisabled(disabled) {
@@ -664,10 +677,7 @@ aiProcessButtons.forEach((button) => {
       percent: 18,
       message: "正在保存 Prompt 方案并启动 AI 分析...",
     });
-    renderRuntimeLog({
-      status: "running",
-      log_lines: ["正在启动 AI 分析，请稍等..."],
-    });
+    startTaskLiveStatusPolling(true);
 
     try {
       await saveTaskAiPromptSettings();
@@ -681,13 +691,20 @@ aiProcessButtons.forEach((button) => {
       if (!response.ok) {
         throw new Error(data.detail || "AI 分析失败");
       }
-      if (aiProcessResult) aiProcessResult.textContent = data.message || "AI 分析完成。";
+      if (!data.job_id) throw new Error("AI 分析队列没有返回 job_id");
+      if (aiProcessResult) aiProcessResult.textContent = data.message || "AI 分析已加入队列。";
+      const completedJob = await waitForAiAnalysisJob(data.job_id);
+      const result = completedJob.result_json || {};
+      if (aiProcessResult) aiProcessResult.textContent = result.message || completedJob.message || "AI 分析完成。";
       await pollAiAnalysisStatus(false).catch(() => {});
-      if (aiCandidateCountPill && Array.isArray(data.clips)) {
-        aiCandidateCountPill.textContent = `${data.clips.length} 条候选`;
+      if (aiCandidateCountPill && Number.isFinite(Number(result.clip_count))) {
+        aiCandidateCountPill.textContent = `${Number(result.clip_count)} 条候选`;
       }
-      renderAiAnalysisSummary(data.analysis_run || data);
-      renderAiAnalysisHistory(data.runs || aiAnalysisRuns);
+      const historyResponse = await fetch(`/api/tasks/${taskId}/ai-analysis-runs`);
+      const historyData = await historyResponse.json();
+      if (!historyResponse.ok) throw new Error(historyData.detail || "读取 AI 分析历史失败");
+      renderAiAnalysisSummary(historyData.latest || result);
+      renderAiAnalysisHistory(historyData.runs || aiAnalysisRuns);
     } catch (error) {
       if (aiProcessResult) aiProcessResult.textContent = `AI 分析失败：${summarizeErrorMessage(error.message)}`;
       await pollAiAnalysisStatus(false).catch(() => {});
@@ -1344,7 +1361,7 @@ function ensureClipPreviewVisible() {
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
   const isVisible = rect.top >= 0 && rect.top < viewportHeight * 0.72 && rect.bottom > Math.min(120, viewportHeight);
   if (isVisible) return;
-  previewTarget.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
+  previewTarget.scrollIntoView({ behavior: preferredScrollBehavior(), block: "start", inline: "nearest" });
 }
 
 function closeTranscriptDrawer() {
@@ -1579,13 +1596,18 @@ async function saveTaskSelectionSettings() {
   if (!Number.isInteger(finalTarget) || finalTarget < 1 || finalTarget > 12) {
     throw new Error("最终启用目标必须是 1 到 12 之间的整数。");
   }
+  const settingsPayload = {
+    selection_profile: aiSelectionProfile,
+    final_clip_target: finalTarget,
+  };
+  if (aiSelectionProfile === "long_live_talk") {
+    settingsPayload.highlight_density_per_hour = Number(aiHighlightDensity?.value || 4);
+    settingsPayload.highlight_total_limit = Number(aiHighlightTotalLimit?.value || 30);
+  }
   const response = await fetch(`/api/tasks/${aiAnalysisForm.dataset.taskId}/selection-settings`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      selection_profile: aiSelectionProfile || "variety_comedy",
-      final_clip_target: finalTarget,
-    }),
+    body: JSON.stringify(settingsPayload),
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.detail || "选片设置保存失败");
@@ -1626,7 +1648,11 @@ document.querySelectorAll("[data-sync-publish-task]").forEach((button) => {
       }
       const summary = document.querySelector("[data-publish-link-summary]");
       if (summary) {
-        summary.innerHTML = `<strong>发送中心关联：${data.link_state?.label || "同步完成"}</strong><span>${data.message || ""}</span>`;
+        const heading = document.createElement("strong");
+        const detail = document.createElement("span");
+        heading.textContent = `发送中心关联：${data.link_state?.label || "同步完成"}`;
+        detail.textContent = data.message || "";
+        summary.replaceChildren(heading, detail);
       }
       showClipReviewMessage(data.message || "发送中心同步完成。", data.status === "partial" ? "error" : "success");
       if (!document.querySelector("#process-result")) {
@@ -1654,7 +1680,7 @@ document.querySelectorAll("[data-sync-publish-task]").forEach((button) => {
 document.querySelectorAll(".js-hide-task").forEach((button) => {
   button.addEventListener("click", async () => {
     const taskTitle = button.dataset.taskTitle || "这条任务";
-    const confirmed = window.confirm(`确认永久删除“${taskTitle}”吗？\n\n系统会永久删除 E 盘任务目录内的原片副本、音频、转写、切片、字幕、封面和发布包，删除后无法恢复。\n\nNAS 或任务目录外的原始视频不会被删除。`);
+    const confirmed = window.confirm(`确认永久删除“${taskTitle}”吗？\n\n系统会永久删除 E 盘任务目录内的原片副本、音频、转写、切片、字幕、封面和发布包，删除后无法恢复。\n\n任务目录外的原始视频不会被删除。`);
     if (!confirmed) return;
 
     const originalText = button.textContent;
@@ -1689,6 +1715,15 @@ if (subtitleStyleForm) {
     const formData = new FormData(subtitleStyleForm);
     const payload = Object.fromEntries(formData.entries());
     payload.font_size = Number(payload.font_size || 42);
+    payload.outline_width = Number(payload.outline_width || 3);
+    payload.shadow_depth = Number(payload.shadow_depth || 1);
+    payload.safe_area_percent = Number(payload.safe_area_percent || 5);
+    payload.speaker_styles = {
+      主播: { font_color: payload.speaker_host_color || "#ffffff" },
+      嘉宾: { font_color: payload.speaker_guest_color || "#ffd60a" },
+    };
+    delete payload.speaker_host_color;
+    delete payload.speaker_guest_color;
     payload.shadow_enabled = Boolean(subtitleStyleForm.elements.shadow_enabled?.checked);
     if (submitButton) submitButton.disabled = true;
     if (subtitleStyleResult) subtitleStyleResult.textContent = "正在保存字幕样式...";
@@ -1736,8 +1771,13 @@ function renderRuntimeLog(status) {
       completed: "已完成",
       failed: "失败",
     };
-    runtimeLogState.textContent = status.status_label || labelMap[status.status] || status.task_status_label || "已刷新";
-    runtimeLogState.dataset.status = status.status || "idle";
+    const runtimeStatus = status.runtime_status || status.status || "idle";
+    runtimeLogState.textContent = status.runtime_status_label
+      || labelMap[runtimeStatus]
+      || status.status_label
+      || status.task_status_label
+      || "已刷新";
+    runtimeLogState.dataset.status = runtimeStatus;
   }
   if (!runtimeLogLines) return;
   const lines = Array.isArray(status.log_lines) ? status.log_lines : [];
@@ -1769,13 +1809,38 @@ function renderTaskLiveActions(data) {
   const reviewAction = taskLiveActions.querySelector("[data-live-review-action]");
   if (reviewAction) reviewAction.hidden = !actions.review;
   const syncAction = taskLiveActions.querySelector("[data-live-sync-action]");
-  if (syncAction) syncAction.hidden = Number(data.counts?.outputs || 0) <= 0;
+  if (syncAction) {
+    syncAction.hidden = primaryAction === "subtitle_review" || Number(data.counts?.outputs || 0) <= 0;
+  }
+  const subtitleSkip = taskLiveActions.querySelector("[data-live-subtitle-skip]");
+  if (subtitleSkip) subtitleSkip.hidden = primaryAction !== "subtitle_review";
+}
+
+async function waitForAiAnalysisJob(jobId) {
+  while (true) {
+    const response = await fetch(`/api/tasks/jobs/${jobId}`);
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.detail || "查询 AI 分析任务进度失败");
+    renderAiAnalysisProgress({
+      status: job.status,
+      percent: Number(job.progress || 0),
+      message: job.status === "failed"
+        ? (job.error_message || job.message || "AI 分析失败")
+        : (job.message || "AI 分析正在排队..."),
+    });
+    if (job.status === "completed") return job;
+    if (job.status === "failed" || job.status === "cancelled") {
+      throw new Error(job.error_message || job.message || "AI 分析任务未完成");
+    }
+    await wait(1000);
+  }
 }
 
 function renderTaskLiveStatus(data) {
   const progress = Math.max(0, Math.min(100, Number(data.progress || 0)));
   document.querySelectorAll("[data-task-live-status-label]").forEach((node) => {
     node.textContent = data.status_label || data.status || "状态未知";
+    node.dataset.status = data.runtime_status || (data.should_poll ? "running" : "completed");
   });
   const headerStatus = document.querySelector("[data-task-live-header-status]");
   if (headerStatus) headerStatus.textContent = data.status_label || data.status || "状态未知";
@@ -1788,6 +1853,18 @@ function renderTaskLiveStatus(data) {
   if (taskLiveCandidateCount) taskLiveCandidateCount.textContent = `${candidateCount} 条`;
   if (taskLiveOutputCount) taskLiveOutputCount.textContent = `${outputCount} 条`;
   if (aiCandidateCountPill) aiCandidateCountPill.textContent = `${candidateCount} 条候选`;
+
+  const operation = data.active_operation || {};
+  const operationProgress = Math.max(0, Math.min(100, Number(operation.progress || 0)));
+  if (taskLiveOperation) taskLiveOperation.dataset.status = operation.status || "idle";
+  if (taskLiveOperationLabel) {
+    taskLiveOperationLabel.textContent = operation.label || data.task_status_label || "当前任务";
+  }
+  if (taskLiveOperationProgress) taskLiveOperationProgress.textContent = `${operationProgress}%`;
+  if (taskLiveOperationMessage) {
+    taskLiveOperationMessage.textContent = operation.message
+      || `当前阶段：${data.task_status_label || data.status_label || "状态未知"}`;
+  }
 
   const allowedStepStates = new Set(["done", "current", "pending", "warning"]);
   (Array.isArray(data.workflow_steps) ? data.workflow_steps : []).forEach((step) => {
@@ -1808,6 +1885,7 @@ function renderTaskLiveStatus(data) {
     autoPipelineMonitor.dataset.running = data.should_poll ? "true" : "false";
   }
   if (taskLiveNote) {
+    taskLiveNote.dataset.snapshotAt = data.snapshot_at || "";
     if (data.error_message) {
       taskLiveNote.dataset.state = "error";
       taskLiveNote.textContent = `流程已暂停：${summarizeErrorMessage(data.error_message)}`;
@@ -1831,6 +1909,7 @@ function scheduleTaskLiveStatusPolling() {
 
 async function pollTaskLiveStatus() {
   if (!autoPipelineMonitor) return null;
+  if (taskLiveStatusRequestInFlight) return null;
   const taskId = autoPipelineMonitor.dataset.taskId;
   if (!taskId) return null;
   if (taskLiveStatusTimer) {
@@ -1838,6 +1917,7 @@ async function pollTaskLiveStatus() {
     taskLiveStatusTimer = null;
   }
 
+  taskLiveStatusRequestInFlight = true;
   try {
     const data = await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/live-status`);
     renderTaskLiveStatus(data);
@@ -1853,6 +1933,8 @@ async function pollTaskLiveStatus() {
     }
     scheduleTaskLiveStatusPolling();
     return null;
+  } finally {
+    taskLiveStatusRequestInFlight = false;
   }
 }
 
@@ -1883,7 +1965,6 @@ async function pollAiAnalysisStatus(keepPolling = false) {
     throw new Error(data.detail || "读取 AI 分析状态失败");
   }
   renderAiAnalysisProgress(data);
-  renderRuntimeLog(data);
   if (aiStatusPollingTimer) {
     window.clearTimeout(aiStatusPollingTimer);
     aiStatusPollingTimer = null;
@@ -1912,8 +1993,8 @@ document.querySelectorAll("[data-render-subtitle]").forEach((button) => {
     const errorNode = card.querySelector("[data-subtitle-error]");
     const originalText = button.textContent;
     button.disabled = true;
-    button.textContent = "加字幕中...";
-    if (statusNode) statusNode.textContent = "字幕生成中";
+    button.textContent = "正在入队...";
+    if (statusNode) statusNode.textContent = "字幕排队中";
     if (errorNode) errorNode.textContent = "";
 
     try {
@@ -1922,13 +2003,51 @@ document.querySelectorAll("[data-render-subtitle]").forEach((button) => {
       if (!response.ok) {
         throw new Error(data.detail || "自动加字幕失败");
       }
-      if (statusNode) statusNode.textContent = data.output_clip?.subtitle_status_label || "已加字幕";
-      if (errorNode) errorNode.textContent = data.message || "自动加字幕完成。";
-      window.setTimeout(() => window.location.reload(), 700);
+      if (errorNode) errorNode.textContent = data.message || "字幕任务已加入队列。";
+      button.textContent = "后台烧录中";
+      await pollSubtitleWorkflowJob(data.job_id, statusNode, errorNode);
+      window.location.reload();
     } catch (error) {
       if (statusNode) statusNode.textContent = "字幕失败";
       if (errorNode) errorNode.textContent = `自动加字幕失败：${error.message}`;
     } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
+});
+
+async function pollSubtitleWorkflowJob(jobId, statusNode, messageNode) {
+  if (!jobId) throw new Error("后台没有返回字幕 job id");
+  while (true) {
+    const response = await fetch(`/api/tasks/jobs/${encodeURIComponent(jobId)}`);
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.detail || "读取字幕任务状态失败");
+    if (statusNode) statusNode.textContent = `${job.status_label || job.status} · ${Number(job.progress || 0)}%`;
+    if (messageNode) messageNode.textContent = job.message || "字幕任务处理中";
+    if (job.status === "completed") return job;
+    if (job.status === "failed" || job.status === "cancelled") {
+      throw new Error(job.error_message || job.message || "字幕任务未完成");
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 1500));
+  }
+}
+
+document.querySelectorAll("[data-live-subtitle-skip]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    if (!window.confirm("确认跳过字幕并进入片段审核吗？审核保存后才会同步发送中心。")) return;
+    const taskId = button.dataset.taskId;
+    button.disabled = true;
+    const originalText = button.textContent;
+    button.textContent = "正在进入审核...";
+    try {
+      const data = await apiFetch(`/api/subtitles/tasks/${encodeURIComponent(taskId)}/skip-to-review`, {
+        method: "POST",
+      });
+      if (taskLiveNote) taskLiveNote.textContent = data.message || "已跳过字幕，正在进入片段审核";
+      window.location.href = data.review_url || `/tasks/${encodeURIComponent(taskId)}/clips/review`;
+    } catch (error) {
+      window.alert(`跳过字幕失败：${summarizeErrorMessage(error.message)}`);
       button.disabled = false;
       button.textContent = originalText;
     }
@@ -2329,15 +2448,11 @@ if (aiConfigForm) {
     if (aiConfigResult) aiConfigResult.textContent = "正在保存三类 AI 接口配置...";
 
     try {
-      const response = await fetch("/api/settings/ai", {
+      const data = await window.apiFetch("/api/settings/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "保存失败");
-      }
       if (aiConfigResult) aiConfigResult.textContent = data.message || "保存成功。";
       window.setTimeout(() => {
         toggleAiConfigModal(false);

@@ -218,6 +218,8 @@ def test_dismiss_keeps_files_and_other_platform_and_blocks_recreation(tmp_path: 
     assert refreshed["skipped_removed"] >= 1
     assert not any(job.get("output_clip_id") == clip_id for job in refreshed["created"])
 
+    cover_path = tmp_path / f"{clip_id}-cover.jpg"
+    cover_path.write_bytes(b"cover")
     auto_result = create_auto_publish_jobs(
         {"id": task_id, "platform": "douyin"},
         [
@@ -230,9 +232,11 @@ def test_dismiss_keeps_files_and_other_platform_and_blocks_recreation(tmp_path: 
                     "hashtags": ["测试"],
                     "risk_flags": [],
                 },
+                "cover": {"cover_file_path": str(cover_path), "cover_time_seconds": 1},
                 "scheduled_at": "",
             }
         ],
+        subtitle_delivery_mode="original",
     )
     assert auto_result["created_count"] == 0
     assert auto_result["skipped_count"] == 1

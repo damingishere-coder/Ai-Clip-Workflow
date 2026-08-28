@@ -5,7 +5,11 @@ import json
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
+import queue
+import threading
+import time
 from tempfile import TemporaryDirectory
 from typing import Callable
 from urllib.error import HTTPError, URLError
@@ -13,6 +17,12 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from app.core.config import settings
+from app.services import job_service
+from app.services.managed_process_service import popen_process_group, terminate_process_tree
+from app.services.transcription_checkpoint_service import (
+    RemoteTranscriptionResultUncertainError,
+    TranscriptionCheckpoint,
+)
 
 
 TIME_TABLE_PATTERN = re.compile(
@@ -27,10 +37,20 @@ PLACEHOLDER_TEXT_MARKERS = ("这里会保存", "后续可接入", "占位转写�
 
 
 @dataclass(frozen=True)
+class TranscriptWord:
+    start_ms: int
+    end_ms: int
+    text: str
+    confidence: float | None = None
+
+
+@dataclass(frozen=True)
 class TranscriptSegment:
     start_seconds: float
     end_seconds: float
     text: str
+    confidence: float | None = None
+    words: tuple[TranscriptWord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,13 +83,49 @@ _CUDA_ERROR_MARKERS = (
     "nvidia",
 )
 _RESERVED_REMOTE_PROVIDERS = ("aliyun", "tencent", "xunfei")
+_REMOTE_SAFE_RETRY_ATTEMPTS = 3
 
 
-def run_ffmpeg_audio_extract(video_path: Path, output_path: Path) -> dict[str, str]:
+class RemoteTranscriptionError(RuntimeError):
+    """远程转写失败，并明确是否允许在本进程内安全重试。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str,
+        safe_to_retry: bool = False,
+        billing_uncertain: bool = False,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        suffix = "；本次是否计费不确定，未自动重试" if billing_uncertain else ""
+        super().__init__(f"[{category}] {message}{suffix}")
+        self.category = category
+        self.safe_to_retry = safe_to_retry
+        self.billing_uncertain = billing_uncertain
+        self.retry_after_seconds = retry_after_seconds
+
+
+class TranscriptCancelledError(RuntimeError):
+    """用户取消转写；必须穿透 Provider 包装并由工作流记为 cancelled。"""
+
+
+def run_ffmpeg_audio_extract(
+    video_path: Path,
+    output_path: Path,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+    progress_callback: Callable[[int], None] | None = None,
+) -> dict[str, str]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_name(f"{output_path.stem}.part{output_path.suffix}")
+    temporary_path.unlink(missing_ok=True)
     command = [
         "ffmpeg",
         "-y",
+        "-nostats",
+        "-loglevel",
+        "error",
         "-i",
         str(video_path),
         "-vn",
@@ -79,12 +135,67 @@ def run_ffmpeg_audio_extract(video_path: Path, output_path: Path) -> dict[str, s
         "16000",
         "-ac",
         "1",
-        str(output_path),
+        "-progress",
+        "pipe:1",
+        str(temporary_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                            timeout=settings.ffmpeg_audio_extract_timeout)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "FFmpeg 音频提取失败")
+    duration = get_audio_duration_seconds(video_path)
+    process = popen_process_group(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    output_lines: queue.Queue[str] = queue.Queue()
+    stderr_lines: list[str] = []
+
+    def read_stream(stream, target) -> None:
+        if not stream:
+            return
+        for line in iter(stream.readline, ""):
+            target(line.rstrip())
+
+    stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, output_lines.put), daemon=True)
+    stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, stderr_lines.append), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    last_progress_at = time.monotonic()
+    try:
+        while process.poll() is None:
+            if cancel_check and cancel_check():
+                terminate_process_tree(process)
+                raise RuntimeError("用户已取消音频提取")
+            try:
+                line = output_lines.get(timeout=0.5)
+            except queue.Empty:
+                line = ""
+            if line:
+                last_progress_at = time.monotonic()
+                if line.startswith(("out_time_ms=", "out_time_us=")):
+                    try:
+                        microseconds = int(line.split("=", 1)[1])
+                        percent = round((microseconds / 1_000_000) / max(duration, 0.001) * 100)
+                        if progress_callback:
+                            progress_callback(max(0, min(99, percent)))
+                    except ValueError:
+                        pass
+            if time.monotonic() - last_progress_at > settings.ffmpeg_audio_extract_timeout:
+                terminate_process_tree(process)
+                raise RuntimeError(f"FFmpeg 连续 {settings.ffmpeg_audio_extract_timeout} 秒没有进展，已终止进程树")
+        stdout_thread.join(timeout=2)
+        stderr_thread.join(timeout=2)
+        if process.returncode != 0:
+            raise RuntimeError("\n".join(stderr_lines[-20:]).strip() or "FFmpeg 音频提取失败")
+        temporary_path.replace(output_path)
+        if progress_callback:
+            progress_callback(100)
+    except Exception:
+        if process.poll() is None:
+            terminate_process_tree(process)
+        temporary_path.unlink(missing_ok=True)
+        raise
     return {
         "status": "ok",
         "message": "音频提取完成",
@@ -99,6 +210,7 @@ def write_transcript_markdown(
     transcript_path: Path,
     progress_callback: Callable[[dict], None] | None = None,
     provider: str | None = None,
+    allow_uncertain_retry: bool = False,
 ) -> dict[str, str]:
     if not audio_path.exists():
         raise RuntimeError("未找到音频文件，请先提取音频")
@@ -106,6 +218,20 @@ def write_transcript_markdown(
     transcript_path.parent.mkdir(parents=True, exist_ok=True)
     progress_path = get_transcript_progress_path(transcript_path)
     _set_configured_transcription_runtime(provider)
+    checkpoint = None
+    task_id = str(task.get("id") or "").strip()
+    if task_id:
+        checkpoint = TranscriptionCheckpoint(
+            task_id=task_id,
+            source_path=audio_path,
+            provider=_ACTIVE_TRANSCRIPTION_PROVIDER,
+            model=_ACTIVE_TRANSCRIPTION_MODEL,
+            device=_ACTIVE_TRANSCRIPTION_DEVICE,
+            compute_type=_ACTIVE_TRANSCRIPTION_COMPUTE_TYPE,
+            chunk_seconds=settings.transcription_chunk_seconds,
+            overlap_seconds=settings.transcription_chunk_overlap_seconds,
+            allow_uncertain_retry=allow_uncertain_retry,
+        )
     _emit_transcript_progress(
         progress_path,
         progress_callback,
@@ -121,10 +247,13 @@ def write_transcript_markdown(
         progress_path,
         progress_callback,
         provider=provider,
+        checkpoint=checkpoint,
     )
+    job_service.require_active_job_lease()
     content = build_transcript_markdown(task, audio_path, segments)
     temp_path = transcript_path.with_name(f"{transcript_path.name}.tmp")
     temp_path.write_text(content, encoding="utf-8")
+    job_service.require_active_job_lease()
     temp_path.replace(transcript_path)
     final_progress = read_transcript_progress(transcript_path)
     total_chunks = int(final_progress.get("total_chunks") or 0)
@@ -153,11 +282,18 @@ def transcribe_audio_with_configured_provider(
     progress_callback: Callable[[dict], None] | None = None,
     provider: str | None = None,
     allow_fallback: bool = False,
+    checkpoint: TranscriptionCheckpoint | None = None,
 ) -> list[TranscriptSegment]:
     provider = _normalize_provider_name(provider or settings.transcription_provider)
     fallback_provider = _normalize_provider_name(settings.transcription_fallback_provider)
     try:
-        return transcribe_audio_with_provider(audio_path, working_dir, progress_path, provider, progress_callback)
+        return transcribe_audio_with_provider(
+            audio_path, working_dir, progress_path, provider, progress_callback, checkpoint=checkpoint
+        )
+    except job_service.JobLeaseLostError:
+        raise
+    except TranscriptCancelledError:
+        raise
     except Exception as exc:
         if allow_fallback and fallback_provider and fallback_provider != provider:
             _emit_transcript_progress(
@@ -177,6 +313,10 @@ def transcribe_audio_with_configured_provider(
                     fallback_provider,
                     progress_callback,
                 )
+            except job_service.JobLeaseLostError:
+                raise
+            except TranscriptCancelledError:
+                raise
             except Exception as fallback_exc:
                 raise RuntimeError(
                     f"{_provider_label(provider)} 转写失败：{exc}；"
@@ -191,6 +331,7 @@ def transcribe_audio_with_provider(
     progress_path: Path,
     provider: str,
     progress_callback: Callable[[dict], None] | None = None,
+    checkpoint: TranscriptionCheckpoint | None = None,
 ) -> list[TranscriptSegment]:
     provider = _normalize_provider_name(provider)
     if provider == "local":
@@ -201,9 +342,13 @@ def transcribe_audio_with_provider(
             device=(_WHISPER_MODEL_KEY or _primary_model_key())[1],
             compute_type=(_WHISPER_MODEL_KEY or _primary_model_key())[2],
         )
-        return transcribe_audio_in_chunks(audio_path, working_dir, progress_path, progress_callback)
+        return transcribe_audio_in_chunks(
+            audio_path, working_dir, progress_path, progress_callback, checkpoint=checkpoint
+        )
     if provider == "volcengine":
-        return transcribe_audio_with_volcengine(audio_path, working_dir, progress_path, progress_callback)
+        return transcribe_audio_with_volcengine(
+            audio_path, working_dir, progress_path, progress_callback, checkpoint=checkpoint
+        )
     if provider in _RESERVED_REMOTE_PROVIDERS:
         raise RuntimeError(f"{_provider_label(provider)} 转写接口已预留，但当前版本还没有完整接入")
     raise RuntimeError(f"未知转写服务商：{provider or '空'}")
@@ -214,6 +359,7 @@ def transcribe_audio_in_chunks(
     working_dir: Path,
     progress_path: Path,
     progress_callback: Callable[[dict], None] | None = None,
+    checkpoint: TranscriptionCheckpoint | None = None,
 ) -> list[TranscriptSegment]:
     duration_seconds = get_audio_duration_seconds(audio_path)
     chunks = build_transcript_chunks(
@@ -223,6 +369,8 @@ def transcribe_audio_in_chunks(
     )
     if not chunks:
         raise RuntimeError("本地语音转写失败：音频时长无效，无法分段")
+    if checkpoint:
+        checkpoint.ensure_run(chunks)
     _emit_transcript_progress(
         progress_path,
         progress_callback,
@@ -237,6 +385,17 @@ def transcribe_audio_in_chunks(
     with TemporaryDirectory(prefix=_TRANSCRIPT_CHUNK_DIR_PREFIX, dir=working_dir) as temp_dir:
         temp_dir_path = Path(temp_dir)
         for chunk in chunks:
+            completed_segments = checkpoint.load_completed(chunk.index, _segment_from_checkpoint) if checkpoint else None
+            if completed_segments is not None:
+                all_segments.extend(
+                    _offset_chunk_segments(completed_segments, chunk, settings.transcription_chunk_overlap_seconds)
+                )
+                _emit_transcript_progress(
+                    progress_path, progress_callback, status="running", current_chunk=chunk.index,
+                    total_chunks=len(chunks), percent=_chunk_percent(chunk.index, len(chunks)),
+                    message=f"已复用第 {chunk.index}/{len(chunks)} 段 checkpoint",
+                )
+                continue
             _emit_transcript_progress(
                 progress_path,
                 progress_callback,
@@ -257,7 +416,14 @@ def transcribe_audio_in_chunks(
                 percent=_chunk_start_percent(chunk.index, len(chunks)),
                 message=f"正在加载模型并转写第 {chunk.index}/{len(chunks)} 段",
             )
-            chunk_segments = transcribe_audio(chunk_path, allow_empty=True)
+            try:
+                chunk_segments = transcribe_audio(chunk_path, allow_empty=True)
+                if checkpoint:
+                    checkpoint.save_completed(chunk.index, chunk_segments)
+            except Exception as exc:
+                if checkpoint:
+                    checkpoint.save_failed(chunk.index, str(exc))
+                raise
             all_segments.extend(_offset_chunk_segments(chunk_segments, chunk, settings.transcription_chunk_overlap_seconds))
             _emit_transcript_progress(
                 progress_path,
@@ -271,6 +437,8 @@ def transcribe_audio_in_chunks(
 
     if not all_segments:
         raise RuntimeError("本地语音转写完成，但没有识别到可用语音内容")
+    if checkpoint:
+        checkpoint.complete()
     return sorted(all_segments, key=lambda segment: (segment.start_seconds, segment.end_seconds))
 
 
@@ -279,6 +447,7 @@ def transcribe_audio_with_volcengine(
     working_dir: Path,
     progress_path: Path,
     progress_callback: Callable[[dict], None] | None = None,
+    checkpoint: TranscriptionCheckpoint | None = None,
 ) -> list[TranscriptSegment]:
     _ensure_volcengine_configured()
     _set_active_transcription_runtime(
@@ -297,6 +466,8 @@ def transcribe_audio_with_volcengine(
     )
     if not chunks:
         raise RuntimeError("火山引擎远程转写失败：音频时长无效，无法分段")
+    if checkpoint:
+        checkpoint.ensure_run(chunks)
     _emit_transcript_progress(
         progress_path,
         progress_callback,
@@ -311,6 +482,17 @@ def transcribe_audio_with_volcengine(
     with TemporaryDirectory(prefix=_TRANSCRIPT_CHUNK_DIR_PREFIX, dir=working_dir) as temp_dir:
         temp_dir_path = Path(temp_dir)
         for chunk in chunks:
+            completed_segments = checkpoint.load_completed(chunk.index, _segment_from_checkpoint) if checkpoint else None
+            if completed_segments is not None:
+                all_segments.extend(
+                    _offset_chunk_segments(completed_segments, chunk, settings.transcription_chunk_overlap_seconds)
+                )
+                _emit_transcript_progress(
+                    progress_path, progress_callback, status="running", current_chunk=chunk.index,
+                    total_chunks=len(chunks), percent=_chunk_percent(chunk.index, len(chunks)),
+                    message=f"已复用第 {chunk.index}/{len(chunks)} 段 checkpoint",
+                )
+                continue
             _emit_transcript_progress(
                 progress_path,
                 progress_callback,
@@ -331,7 +513,24 @@ def transcribe_audio_with_volcengine(
                 percent=_chunk_start_percent(chunk.index, len(chunks)),
                 message=f"正在请求火山引擎转写第 {chunk.index}/{len(chunks)} 段",
             )
-            chunk_segments = transcribe_audio_with_volcengine_flash(chunk_path, allow_empty=True)
+            request_id = checkpoint.prepare_remote_request(chunk.index) if checkpoint else None
+            try:
+                chunk_segments = transcribe_audio_with_volcengine_flash(
+                    chunk_path,
+                    allow_empty=True,
+                    request_id=request_id,
+                )
+            except Exception as exc:
+                if checkpoint:
+                    if isinstance(exc, RemoteTranscriptionResultUncertainError) or (
+                        isinstance(exc, RemoteTranscriptionError) and exc.billing_uncertain
+                    ):
+                        checkpoint.save_uncertain(chunk.index, str(exc))
+                    else:
+                        checkpoint.save_failed(chunk.index, str(exc), attempt_already_counted=True)
+                raise
+            if checkpoint:
+                _save_remote_checkpoint_completed(checkpoint, chunk.index, chunk_segments)
             all_segments.extend(_offset_chunk_segments(chunk_segments, chunk, settings.transcription_chunk_overlap_seconds))
             _emit_transcript_progress(
                 progress_path,
@@ -345,13 +544,64 @@ def transcribe_audio_with_volcengine(
 
     if not all_segments:
         raise RuntimeError("火山引擎远程转写完成，但没有识别到可用语音内容")
+    if checkpoint:
+        checkpoint.complete()
     return sorted(all_segments, key=lambda segment: (segment.start_seconds, segment.end_seconds))
 
 
-def transcribe_audio_with_volcengine_flash(audio_path: Path, allow_empty: bool = False) -> list[TranscriptSegment]:
+def _save_remote_checkpoint_completed(
+    checkpoint: TranscriptionCheckpoint,
+    chunk_index: int,
+    segments: list[TranscriptSegment],
+) -> None:
+    """Provider 已返回后若落账失败，保留 requesting/uncertain，绝不降为可自动重试。"""
+    try:
+        checkpoint.save_completed(chunk_index, segments, attempt_already_counted=True)
+    except job_service.JobLeaseLostError:
+        # 旧 worker 不得写回；requesting 会让新 owner 停止自动重发。
+        raise
+    except Exception as exc:
+        uncertain = RemoteTranscriptionResultUncertainError(
+            f"第 {chunk_index} 段远程转写已返回，但 checkpoint 保存失败；"
+            "结果与计费状态不确定，普通重试不会再次请求。"
+        )
+        try:
+            checkpoint.save_uncertain(chunk_index, str(uncertain))
+        except job_service.JobLeaseLostError:
+            raise
+        except Exception:
+            # 数据库仍不可写时保留请求前的 requesting，恢复端同样会 fail closed。
+            pass
+        raise uncertain from exc
+
+
+def transcribe_audio_with_volcengine_flash(
+    audio_path: Path,
+    allow_empty: bool = False,
+    *,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    request_id: str | None = None,
+) -> list[TranscriptSegment]:
     _ensure_volcengine_configured()
-    headers = _volcengine_headers()
+    headers = _volcengine_headers(request_id=request_id)
     payload = _build_volcengine_flash_payload(audio_path)
+    for attempt in range(1, _REMOTE_SAFE_RETRY_ATTEMPTS + 1):
+        try:
+            return _request_volcengine_transcript(payload, headers, allow_empty=allow_empty)
+        except RemoteTranscriptionError as exc:
+            if not exc.safe_to_retry or attempt >= _REMOTE_SAFE_RETRY_ATTEMPTS:
+                raise
+            delay = exc.retry_after_seconds if exc.retry_after_seconds is not None else 2 ** (attempt - 1)
+            sleep_fn(max(0.0, min(delay, 60.0)))
+    raise AssertionError("远程转写安全重试循环异常结束")
+
+
+def _request_volcengine_transcript(
+    payload: dict,
+    headers: dict[str, str],
+    *,
+    allow_empty: bool,
+) -> list[TranscriptSegment]:
     request = Request(
         settings.volcengine_asr_api_url,
         data=json.dumps(payload).encode("utf-8"),
@@ -366,27 +616,88 @@ def transcribe_audio_with_volcengine_flash(audio_path: Path, allow_empty: bool =
             log_id = response.headers.get("X-Tt-Logid", "")
     except HTTPError as exc:
         error_text = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"火山引擎接口返回 HTTP {exc.code}：{error_text[:500]}") from exc
+        retry_after = (
+            _parse_retry_after_seconds((exc.headers or {}).get("Retry-After"))
+            if exc.code == 429
+            else None
+        )
+        raise RemoteTranscriptionError(
+            f"火山引擎接口返回 HTTP {exc.code}：{error_text[:500]}",
+            category="rate_limited" if exc.code == 429 else "http_error",
+            safe_to_retry=exc.code == 429,
+            billing_uncertain=exc.code >= 500 or exc.code == 408,
+            retry_after_seconds=retry_after,
+        ) from exc
     except URLError as exc:
-        raise RuntimeError(f"无法连接火山引擎转写接口：{exc}") from exc
+        reason = exc.reason
+        is_timeout = isinstance(reason, TimeoutError)
+        is_preconnect_failure = isinstance(reason, (ConnectionRefusedError, socket.gaierror))
+        raise RemoteTranscriptionError(
+            "火山引擎转写接口连接超时" if is_timeout else f"无法连接火山引擎转写接口：{reason}",
+            category="timeout" if is_timeout else "network_error",
+            safe_to_retry=is_preconnect_failure,
+            billing_uncertain=not is_preconnect_failure,
+        ) from exc
+    except TimeoutError as exc:
+        raise RemoteTranscriptionError(
+            "火山引擎转写接口连接或读取超时",
+            category="timeout",
+            billing_uncertain=True,
+        ) from exc
+    except OSError as exc:
+        raise RemoteTranscriptionError(
+            f"火山引擎转写响应读取失败：{exc}",
+            category="network_error",
+            billing_uncertain=True,
+        ) from exc
 
     if status_code and status_code != "20000000":
         if allow_empty and status_code == "20000003":
             return []
-        raise RuntimeError(
+        raise RemoteTranscriptionError(
             "火山引擎接口返回业务错误："
-            f"code={status_code}, message={status_message or 'unknown'}, logid={log_id or 'unknown'}"
+            f"code={status_code}, message={status_message or 'unknown'}, logid={log_id or 'unknown'}",
+            category="business_error",
+            billing_uncertain=True,
         )
 
     try:
         payload = json.loads(response_text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"火山引擎接口返回的不是 JSON：{response_text[:500]}") from exc
+        raise RemoteTranscriptionError(
+            f"火山引擎接口返回的不是 JSON：{response_text[:500]}",
+            category="invalid_response_json",
+            billing_uncertain=True,
+        ) from exc
 
-    segments = parse_volcengine_transcript_segments(payload)
+    if not isinstance(payload, dict) or not isinstance(payload.get("result"), dict):
+        raise RemoteTranscriptionError(
+            "火山引擎成功响应缺少 result 对象",
+            category="invalid_response_schema",
+            billing_uncertain=True,
+        )
+    try:
+        segments = parse_volcengine_transcript_segments(payload)
+    except (TypeError, ValueError, KeyError, OverflowError) as exc:
+        raise RemoteTranscriptionError(
+            f"火山引擎成功响应的转写字段无效：{exc}",
+            category="invalid_response_schema",
+            billing_uncertain=True,
+        ) from exc
     if not segments and not allow_empty:
-        raise RuntimeError(f"火山引擎远程转写没有返回可用文本：{json.dumps(payload, ensure_ascii=False)[:500]}")
+        raise RemoteTranscriptionError(
+            f"火山引擎远程转写没有返回可用文本：{json.dumps(payload, ensure_ascii=False)[:500]}",
+            category="empty_model_output",
+            billing_uncertain=True,
+        )
     return segments
+
+
+def _parse_retry_after_seconds(value: str | None) -> float | None:
+    try:
+        return max(0.0, min(float(str(value or "").strip()), 60.0))
+    except ValueError:
+        return None
 
 
 def parse_volcengine_transcript_segments(payload: dict) -> list[TranscriptSegment]:
@@ -399,7 +710,7 @@ def parse_volcengine_transcript_segments(payload: dict) -> list[TranscriptSegmen
         segments = [_segment_from_volcengine_utterance(item) for item in utterances if isinstance(item, dict)]
         return [segment for segment in segments if segment and segment.text]
 
-    text = normalize_transcript_text(str(result.get("text") or result.get("message") or "")) if isinstance(result, dict) else ""
+    text = normalize_transcript_text(str(result.get("text") or "")) if isinstance(result, dict) else ""
     if text:
         return [TranscriptSegment(start_seconds=0, end_seconds=1, text=text)]
     return []
@@ -416,8 +727,20 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
         "default=noprint_wrappers=1:nokey=1",
         str(audio_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                            timeout=settings.ffprobe_timeout)
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=settings.ffprobe_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"FFprobe 读取音频时长超过 {settings.ffprobe_timeout} 秒") from exc
+    except OSError as exc:
+        raise RuntimeError(f"FFprobe 无法读取音频时长：{exc}") from exc
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "FFprobe 无法读取音频时长")
     try:
@@ -475,9 +798,25 @@ def _extract_audio_chunk(audio_path: Path, chunk_path: Path, chunk: TranscriptCh
         "1",
         str(chunk_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                            timeout=settings.ffmpeg_chunk_timeout)
+    chunk_path.unlink(missing_ok=True)
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=settings.ffmpeg_chunk_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        chunk_path.unlink(missing_ok=True)
+        raise RuntimeError(f"FFmpeg 音频分段超过 {settings.ffmpeg_chunk_timeout} 秒：第 {chunk.index} 段") from exc
+    except OSError as exc:
+        chunk_path.unlink(missing_ok=True)
+        raise RuntimeError(f"FFmpeg 无法执行音频分段：第 {chunk.index} 段：{exc}") from exc
     if result.returncode != 0:
+        chunk_path.unlink(missing_ok=True)
         raise RuntimeError(result.stderr.strip() or f"FFmpeg 音频分段失败：第 {chunk.index} 段")
 
 
@@ -504,9 +843,27 @@ def _extract_remote_audio_chunk(audio_path: Path, chunk_path: Path, chunk: Trans
         *codec_args,
         str(chunk_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                            timeout=settings.ffmpeg_chunk_timeout)
+    chunk_path.unlink(missing_ok=True)
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=settings.ffmpeg_chunk_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        chunk_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"FFmpeg 远程转写音频压缩超过 {settings.ffmpeg_chunk_timeout} 秒：第 {chunk.index} 段"
+        ) from exc
+    except OSError as exc:
+        chunk_path.unlink(missing_ok=True)
+        raise RuntimeError(f"FFmpeg 无法执行远程转写音频压缩：第 {chunk.index} 段：{exc}") from exc
     if result.returncode != 0:
+        chunk_path.unlink(missing_ok=True)
         raise RuntimeError(result.stderr.strip() or f"FFmpeg 远程转写音频压缩失败：第 {chunk.index} 段")
 
 
@@ -537,11 +894,11 @@ def _ensure_volcengine_configured() -> None:
         raise RuntimeError("缺少火山引擎资源 ID，请在系统状态页的“1. 音频转写”填写资源 ID")
 
 
-def _volcengine_headers() -> dict[str, str]:
+def _volcengine_headers(*, request_id: str | None = None) -> dict[str, str]:
     headers = {
         "Content-Type": "application/json",
         "X-Api-Resource-Id": settings.volcengine_asr_resource_id,
-        "X-Api-Request-Id": uuid4().hex,
+        "X-Api-Request-Id": request_id or uuid4().hex,
         "X-Api-Sequence": "-1",
     }
     if settings.volcengine_asr_api_key:
@@ -561,7 +918,34 @@ def _segment_from_volcengine_utterance(item: dict) -> TranscriptSegment | None:
     end_seconds = _volcengine_utterance_time_to_seconds(item, "end_time", "end")
     if end_seconds <= start_seconds:
         end_seconds = start_seconds + 1
-    return TranscriptSegment(start_seconds=start_seconds, end_seconds=end_seconds, text=text)
+    raw_words = item.get("words") or item.get("word_info") or []
+    words: list[TranscriptWord] = []
+    if isinstance(raw_words, list):
+        for word in raw_words:
+            if not isinstance(word, dict):
+                continue
+            word_text = normalize_transcript_text(str(word.get("text") or word.get("word") or ""))
+            if not word_text:
+                continue
+            word_start = _volcengine_utterance_time_to_seconds(word, "start_time", "start")
+            word_end = _volcengine_utterance_time_to_seconds(word, "end_time", "end")
+            confidence = word.get("confidence") or word.get("probability")
+            words.append(
+                TranscriptWord(
+                    start_ms=round(word_start * 1000),
+                    end_ms=round(max(word_start, word_end) * 1000),
+                    text=word_text,
+                    confidence=float(confidence) if confidence is not None else None,
+                )
+            )
+    segment_confidence = item.get("confidence")
+    return TranscriptSegment(
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        text=text,
+        confidence=float(segment_confidence) if segment_confidence is not None else None,
+        words=tuple(words),
+    )
 
 
 def _volcengine_utterance_time_to_seconds(item: dict, millisecond_key: str, fallback_key: str) -> float:
@@ -608,9 +992,39 @@ def _offset_chunk_segments(
                 start_seconds=adjusted_start,
                 end_seconds=adjusted_end,
                 text=segment.text,
+                confidence=segment.confidence,
+                words=tuple(
+                    TranscriptWord(
+                        start_ms=word.start_ms + round(chunk.start_seconds * 1000),
+                        end_ms=word.end_ms + round(chunk.start_seconds * 1000),
+                        text=word.text,
+                        confidence=word.confidence,
+                    )
+                    for word in segment.words
+                ),
             )
         )
     return adjusted_segments
+
+
+def _segment_from_checkpoint(item: dict) -> TranscriptSegment:
+    words = tuple(
+        TranscriptWord(
+            start_ms=int(word.get("start_ms") or 0),
+            end_ms=int(word.get("end_ms") or 0),
+            text=str(word.get("text") or ""),
+            confidence=float(word["confidence"]) if word.get("confidence") is not None else None,
+        )
+        for word in (item.get("words") or [])
+        if isinstance(word, dict)
+    )
+    return TranscriptSegment(
+        start_seconds=float(item.get("start_seconds") or 0),
+        end_seconds=float(item.get("end_seconds") or 0),
+        text=str(item.get("text") or ""),
+        confidence=float(item["confidence"]) if item.get("confidence") is not None else None,
+        words=words,
+    )
 
 
 def get_transcript_progress_path(transcript_path: Path) -> Path:
@@ -743,16 +1157,35 @@ def _transcribe_audio_with_model(model, audio_path: Path) -> list[TranscriptSegm
         language=settings.transcription_language or None,
         vad_filter=True,
         beam_size=5,
+        word_timestamps=True,
     )
-    return [
-        TranscriptSegment(
-            start_seconds=float(segment.start),
-            end_seconds=float(segment.end),
-            text=normalize_transcript_text(segment.text),
+    results: list[TranscriptSegment] = []
+    for segment in raw_segments:
+        text = normalize_transcript_text(segment.text)
+        if not text:
+            continue
+        words = tuple(
+            TranscriptWord(
+                start_ms=round(float(word.start) * 1000),
+                end_ms=round(float(word.end) * 1000),
+                text=normalize_transcript_text(word.word),
+                confidence=float(word.probability) if getattr(word, "probability", None) is not None else None,
+            )
+            for word in (getattr(segment, "words", None) or [])
+            if normalize_transcript_text(getattr(word, "word", ""))
         )
-        for segment in raw_segments
-        if normalize_transcript_text(segment.text)
-    ]
+        avg_logprob = getattr(segment, "avg_logprob", None)
+        confidence = max(0.0, min(1.0, 2.718281828 ** float(avg_logprob))) if avg_logprob is not None else None
+        results.append(
+            TranscriptSegment(
+                start_seconds=float(segment.start),
+                end_seconds=float(segment.end),
+                text=text,
+                confidence=confidence,
+                words=words,
+            )
+        )
+    return results
 
 
 def _get_whisper_model(model_key: tuple[str, str, str] | None = None):
@@ -796,11 +1229,33 @@ def _get_whisper_model(model_key: tuple[str, str, str] | None = None):
 
 
 def _primary_model_key() -> tuple[str, str, str]:
+    configured_device = settings.transcription_device.strip().lower()
+    device = _detect_transcription_device() if configured_device == "auto" else configured_device
+    configured_compute = settings.transcription_compute_type.strip().lower()
+    compute_type = ("float16" if device == "cuda" else "int8") if configured_compute == "auto" else configured_compute
     return (
         settings.transcription_model,
-        settings.transcription_device,
-        settings.transcription_compute_type,
+        device,
+        compute_type,
     )
+
+
+def _detect_transcription_device() -> str:
+    """仅在显式配置 TRANSCRIPTION_DEVICE=auto 时检测 CUDA；cpu 配置永不覆盖。"""
+    executable = shutil.which("nvidia-smi")
+    if not executable:
+        return "cpu"
+    try:
+        result = subprocess.run(
+            [executable, "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "cpu"
+    return "cuda" if result.returncode == 0 and result.stdout.strip() else "cpu"
 
 
 def _cpu_fallback_model_key() -> tuple[str, str, str]:

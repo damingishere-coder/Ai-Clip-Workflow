@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 import pytest
@@ -14,6 +15,7 @@ from app.db.database import get_connection, init_db
 from app.main import app
 from app.models.task import TaskCreate, TaskStatus
 from app.services.auto_publish_service import create_auto_publish_jobs
+from app.services import job_service
 from app.services.pipeline_engine import PipelineEngine, build_schedule_times
 from app.services.storage_service import get_artifact_paths
 from app.services.task_lifecycle_service import create_task_record, update_task_status
@@ -22,11 +24,24 @@ from app.services.task_service import get_task
 
 
 @pytest.fixture(autouse=True)
-def auto_pipeline_db_cleanup():
+def auto_pipeline_db_cleanup(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.task_lifecycle_service.preflight_media",
+        lambda *_args, **_kwargs: SimpleNamespace(to_dict=lambda: {"warnings": []}),
+    )
     init_db()
     with get_connection() as connection:
+        connection.execute("DELETE FROM ai_analysis_windows WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM publish_jobs WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM subtitle_jobs WHERE task_id LIKE 'test-auto-%'")
+        connection.execute("DELETE FROM workflow_jobs WHERE task_id LIKE 'test-auto-%'")
+        connection.execute(
+            "DELETE FROM subtitle_cues WHERE revision_id IN (SELECT id FROM subtitle_revisions WHERE track_id IN (SELECT id FROM subtitle_tracks WHERE task_id LIKE 'test-auto-%'))"
+        )
+        connection.execute(
+            "DELETE FROM subtitle_revisions WHERE track_id IN (SELECT id FROM subtitle_tracks WHERE task_id LIKE 'test-auto-%')"
+        )
+        connection.execute("DELETE FROM subtitle_tracks WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM output_clip WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM cut_runs WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM clip_candidates WHERE task_id LIKE 'test-auto-%'")
@@ -35,8 +50,17 @@ def auto_pipeline_db_cleanup():
         connection.commit()
     yield
     with get_connection() as connection:
+        connection.execute("DELETE FROM ai_analysis_windows WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM publish_jobs WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM subtitle_jobs WHERE task_id LIKE 'test-auto-%'")
+        connection.execute("DELETE FROM workflow_jobs WHERE task_id LIKE 'test-auto-%'")
+        connection.execute(
+            "DELETE FROM subtitle_cues WHERE revision_id IN (SELECT id FROM subtitle_revisions WHERE track_id IN (SELECT id FROM subtitle_tracks WHERE task_id LIKE 'test-auto-%'))"
+        )
+        connection.execute(
+            "DELETE FROM subtitle_revisions WHERE track_id IN (SELECT id FROM subtitle_tracks WHERE task_id LIKE 'test-auto-%')"
+        )
+        connection.execute("DELETE FROM subtitle_tracks WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM output_clip WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM cut_runs WHERE task_id LIKE 'test-auto-%'")
         connection.execute("DELETE FROM clip_candidates WHERE task_id LIKE 'test-auto-%'")
@@ -49,6 +73,60 @@ def _headers() -> dict[str, str]:
     if settings.local_admin_token:
         return {"Authorization": f"Bearer {settings.local_admin_token}"}
     return {}
+
+
+def test_manual_ai_endpoint_returns_409_while_auto_pipeline_is_active(monkeypatch):
+    task_id = "test-auto-ai-job-guard"
+    create_task_record(
+        TaskCreate(task_name="自动流水线 AI 重入保护", selection_profile="general", auto_mode=True),
+        task_id=task_id,
+    )
+    update_task_status(task_id, TaskStatus.pending_ai)
+    job_service.create_job(task_id, job_service.JOB_TYPE_AUTO_PIPELINE)
+    monkeypatch.setattr(
+        "app.services.ai_analysis_workflow_service._analyze_with_provider",
+        lambda *_args, **_kwargs: pytest.fail("冲突请求不应调用 AI Provider"),
+    )
+
+    response = TestClient(app).post(f"/api/tasks/{task_id}/process/ai", headers=_headers())
+
+    assert response.status_code == 409
+    assert "全自动流水线正在处理" in response.json()["detail"]
+    assert get_task(task_id, include_video_probe=False)["status"] == TaskStatus.pending_ai.value
+    assert not [
+        job
+        for job in job_service.list_jobs(task_id=task_id)
+        if job.get("job_type") == job_service.JOB_TYPE_AI_ANALYSIS
+    ]
+
+
+def test_manual_ai_endpoint_returns_409_after_clips_are_materialized(monkeypatch):
+    task_id = "test-auto-ai-output-guard"
+    create_task_record(TaskCreate(task_name="切片后 AI 重入保护", selection_profile="general"), task_id=task_id)
+    update_task_status(task_id, TaskStatus.completed)
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO output_clip (
+                id, task_id, output_file_path, output_file_name,
+                status, is_active, created_at, updated_at
+            ) VALUES (?, ?, 'clip.mp4', 'clip.mp4', 'completed', 1, 'now', 'now')
+            """,
+            (f"{task_id}-output", task_id),
+        )
+        connection.commit()
+    monkeypatch.setattr(
+        "app.services.ai_analysis_workflow_service._analyze_with_provider",
+        lambda *_args, **_kwargs: pytest.fail("冲突请求不应调用 AI Provider"),
+    )
+
+    response = TestClient(app).post(f"/api/tasks/{task_id}/process/ai", headers=_headers())
+
+    assert response.status_code == 409
+    assert "已经生成切片" in response.json()["detail"]
+    task = get_task(task_id, include_video_probe=False)
+    assert task["status"] == TaskStatus.completed.value
+    assert not task["error_message"]
 
 
 def _fake_video(name: str = "source.mp4") -> Path:
@@ -71,12 +149,13 @@ def _create_auto_task(task_id: str = "test-auto-task") -> dict:
         task_name=task_id,
         source_type="upload",
         platform="general",
+        selection_profile="general",
         original_video_path=str(video),
         max_clip_duration=5,
         candidate_clip_count=5,
         auto_mode=True,
     )
-    create_task_record(payload, task_id=task_id)
+    create_task_record(payload, task_id=task_id, task_dir_name=task_id)
     return get_task(task_id, include_video_probe=False)
 
 
@@ -93,16 +172,20 @@ def test_clip_candidates_schema_has_nullable_cover_time():
 def test_auto_mode_false_does_not_start_pipeline(monkeypatch):
     starter = Mock(return_value={"status": "started"})
     monkeypatch.setattr("app.routers.tasks.start_auto_pipeline", starter)
-    video = _fake_video("manual.mp4")
+    monkeypatch.setattr("app.routers.tasks.uuid4", lambda: SimpleNamespace(hex="test-auto-m1-upload"))
     payload = {
         "task_name": "test-auto-manual",
-        "source_type": "upload",
         "platform": "general",
-        "original_video_path": str(video),
-        "auto_mode": False,
+        "selection_profile": "general",
+        "auto_mode": "false",
     }
     with TestClient(app) as client:
-        response = client.post("/api/tasks", json=payload, headers=_headers())
+        response = client.post(
+            "/api/tasks/upload",
+            data=payload,
+            files={"video_file": ("manual.mp4", b"fake mp4", "video/mp4")},
+            headers=_headers(),
+        )
     assert response.status_code == 200
     starter.assert_not_called()
 
@@ -110,18 +193,35 @@ def test_auto_mode_false_does_not_start_pipeline(monkeypatch):
 def test_auto_mode_true_starts_pipeline(monkeypatch):
     starter = Mock(return_value={"status": "started"})
     monkeypatch.setattr("app.routers.tasks.start_auto_pipeline", starter)
-    video = _fake_video("auto.mp4")
+    monkeypatch.setattr("app.routers.tasks.uuid4", lambda: SimpleNamespace(hex="test-auto-a1-upload"))
     payload = {
         "task_name": "test-auto-start",
-        "source_type": "upload",
         "platform": "general",
-        "original_video_path": str(video),
-        "auto_mode": True,
+        "selection_profile": "general",
+        "auto_mode": "true",
     }
     with TestClient(app) as client:
-        response = client.post("/api/tasks", json=payload, headers=_headers())
+        response = client.post(
+            "/api/tasks/upload",
+            data=payload,
+            files={"video_file": ("auto.mp4", b"fake mp4", "video/mp4")},
+            headers=_headers(),
+        )
     assert response.status_code == 200
     starter.assert_called_once()
+
+
+def test_json_task_creation_route_is_removed():
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/tasks",
+            json={"task_name": "不允许的已有文件任务", "source_type": "nas"},
+            headers=_headers(),
+        )
+        browse = client.get("/api/files/browse", headers=_headers())
+    assert response.status_code == 405
+    assert browse.status_code == 404
+    assert "/api/files/browse" not in app.openapi()["paths"]
 
 
 def test_existing_transcript_skips_transcription(monkeypatch):
@@ -245,7 +345,13 @@ def test_daily_window_schedule_supports_seven_to_midnight_without_looping():
 
 def test_create_auto_publish_job_records_scheduled_at():
     task = _create_auto_task("test-auto-publish-job")
-    clip_path = _fake_video("publish_clip.mp4")
+    paths = get_artifact_paths(task["id"])
+    paths["clips_dir"].mkdir(parents=True, exist_ok=True)
+    paths["covers_dir"].mkdir(parents=True, exist_ok=True)
+    clip_path = paths["clips_dir"] / "publish_clip.mp4"
+    cover_path = paths["covers_dir"] / "publish_clip_cover.jpg"
+    clip_path.write_bytes(b"fake mp4")
+    cover_path.write_bytes(b"fake jpg")
     with get_connection() as connection:
         now = "2026-06-23T08:00:00+00:00"
         connection.execute(
@@ -263,7 +369,7 @@ def test_create_auto_publish_job_records_scheduled_at():
         {
             "output_clip": {"id": "out-1", "output_file_path": str(clip_path)},
             "cover": {
-                "cover_file_path": str(_fake_cover("publish_clip_cover.jpg")),
+                "cover_file_path": str(cover_path),
                 "cover_time_seconds": 12.5,
                 "cover_source": "ai_frame",
             },
@@ -279,8 +385,45 @@ def test_create_auto_publish_job_records_scheduled_at():
             "scheduled_at": "2026-06-23T08:10:00+00:00",
         }
     ]
-    result = create_auto_publish_jobs(task, scheduled_items)
+    workflow_job = job_service.create_job(task["id"], job_service.JOB_TYPE_AUTO_PIPELINE)
+    claimed = job_service.claim_job(workflow_job["id"], "auto-publish-test-worker")
+    with job_service.job_lease_context(
+        workflow_job["id"],
+        "auto-publish-test-worker",
+        claimed["lease_token"],
+    ):
+        result = create_auto_publish_jobs(
+            task,
+            scheduled_items,
+            subtitle_delivery_mode="original",
+            workflow_job_id=workflow_job["id"],
+        )
+        cover_path.write_bytes(b"changed cover")
+        with pytest.raises(ValueError, match="证据已失效"):
+            create_auto_publish_jobs(
+                task,
+                scheduled_items,
+                subtitle_delivery_mode="original",
+                workflow_job_id=workflow_job["id"],
+            )
+        cover_path.write_bytes(b"fake jpg")
+        changed_copy = [
+            {
+                **scheduled_items[0],
+                "metadata": {**scheduled_items[0]["metadata"], "title": "新的排期标题"},
+            }
+        ]
+        with pytest.raises(ValueError, match="文案证据已失效"):
+            create_auto_publish_jobs(
+                task,
+                changed_copy,
+                subtitle_delivery_mode="original",
+                workflow_job_id=workflow_job["id"],
+            )
     assert result["created_count"] == 1
+    assert result["created"][0]["provider_payload"]["workflow_job_id"] == workflow_job["id"]
+    assert result["created"][0]["provider_payload"]["video_file_fingerprint"]
+    assert result["created"][0]["provider_payload"]["cover_file_fingerprint"]
     with get_connection() as connection:
         row = connection.execute(
             "SELECT scheduled_at, status, video_source, cover_mode, cover_time_seconds, cover_file_path FROM publish_jobs WHERE task_id = ?",
@@ -293,6 +436,47 @@ def test_create_auto_publish_job_records_scheduled_at():
     assert row["cover_mode"] == "time"
     assert row["cover_time_seconds"] == 12.5
     assert row["cover_file_path"].endswith("publish_clip_cover.jpg")
+
+
+def test_workflow_publish_rejects_artifacts_outside_task_directory():
+    task = _create_auto_task("test-auto-publish-unmanaged")
+    clip_path = _fake_video("unmanaged_publish_clip.mp4")
+    cover_path = _fake_cover("unmanaged_publish_cover.jpg")
+    workflow_job = job_service.create_job(task["id"], job_service.JOB_TYPE_AUTO_PIPELINE)
+    claimed = job_service.claim_job(workflow_job["id"], "unmanaged-publish-worker")
+
+    with job_service.job_lease_context(
+        workflow_job["id"],
+        "unmanaged-publish-worker",
+        claimed["lease_token"],
+    ):
+        with pytest.raises(ValueError, match="原片切片文件不存在"):
+            create_auto_publish_jobs(
+                task,
+                [
+                    {
+                        "output_clip": {"id": "unmanaged-out", "output_file_path": str(clip_path)},
+                        "cover": {"cover_file_path": str(cover_path), "cover_time_seconds": 1},
+                        "metadata": {
+                            "platform": "douyin",
+                            "title": "越界测试",
+                            "caption": "越界测试",
+                            "hashtags": ["测试"],
+                            "risk_flags": [],
+                        },
+                        "scheduled_at": "",
+                    }
+                ],
+                subtitle_delivery_mode="original",
+                workflow_job_id=workflow_job["id"],
+            )
+
+    with get_connection() as connection:
+        count = connection.execute(
+            "SELECT COUNT(*) FROM publish_jobs WHERE task_id = ?",
+            (task["id"],),
+        ).fetchone()[0]
+    assert count == 0
 
 
 def test_create_auto_publish_job_without_schedule_waits_for_send_center():
@@ -333,6 +517,7 @@ def test_create_auto_publish_job_without_schedule_waits_for_send_center():
                 "scheduled_at": "",
             }
         ],
+        subtitle_delivery_mode="original",
     )
     assert result["created_count"] == 1
     with get_connection() as connection:
@@ -400,7 +585,7 @@ def test_prepare_source_uses_pathlib_and_writes_reference():
     assert reference_path.exists()
 
 
-def test_auto_selection_uses_candidate_count_and_task_max_duration():
+def test_auto_selection_uses_candidate_count_and_task_max_duration(monkeypatch):
     task_id = "test-auto-selection-rules"
     video = _fake_video(f"{task_id}.mp4")
     payload = TaskCreate(
@@ -415,7 +600,7 @@ def test_auto_selection_uses_candidate_count_and_task_max_duration():
         auto_min_clip_seconds=120,
         auto_max_clip_seconds=7200,
     )
-    create_task_record(payload, task_id=task_id)
+    create_task_record(payload, task_id=task_id, task_dir_name=task_id)
     now = datetime.now(timezone.utc).isoformat()
     with get_connection() as connection:
         for clip_id, start_time, end_time, confidence in [
@@ -435,6 +620,23 @@ def test_auto_selection_uses_candidate_count_and_task_max_duration():
                 (f"{task_id}_{clip_id}", task_id, clip_id, clip_id, start_time, end_time, confidence, now, now),
             )
         connection.commit()
+
+    monkeypatch.setattr(
+        "app.services.pipeline_engine.task_service.get_task_ai_analysis_meta",
+        lambda _task_id: {
+            "schema_version": 2,
+            "selection_profile": "general",
+            "analysis_incomplete": False,
+            "quality_degraded": False,
+            "coverage_ratio": 1.0,
+            "coverage_percent": 100.0,
+            "expected_units": 1,
+            "completed_units": 1,
+            "failed_units": 0,
+            "failed_stages": [],
+            "invalid_item_count": 0,
+        },
+    )
 
     result = PipelineEngine()._select_clips(task_id, {"config": {}})
 
@@ -480,7 +682,7 @@ def test_live_status_endpoint_tracks_running_auto_pipeline():
     assert payload["is_running"] is True
     assert payload["should_poll"] is True
     assert payload["actions"]["primary"] == "processing"
-    assert len(payload["workflow_steps"]) == 10
+    assert len(payload["workflow_steps"]) == 11
     assert payload["workflow_steps"][3]["state"] == "current"
     assert any("实时状态测试日志" in line for line in payload["log_lines"])
 
@@ -518,6 +720,100 @@ def test_live_status_endpoint_returns_completed_actions(monkeypatch):
     assert all(step["state"] == "done" for step in payload["workflow_steps"])
 
 
+def test_live_status_endpoint_tracks_manual_workflow_job():
+    task_id = "test-auto-manual-live-job"
+    create_task_record(
+        TaskCreate(task_name="手动任务实时进度", selection_profile="general"),
+        task_id=task_id,
+    )
+    update_task_status(task_id, TaskStatus.ai_analyzing)
+    job = job_service.create_job(task_id, job_service.JOB_TYPE_AI_ANALYSIS)
+    claimed = job_service.claim_job(job["id"], "live-status-test-worker")
+    job_service.update_job_progress(
+        job["id"],
+        61,
+        "正在分析第 14/23 段",
+        lease_owner="live-status-test-worker",
+        lease_token=claimed["lease_token"],
+    )
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/tasks/{task_id}/live-status", headers=_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["should_poll"] is True
+    assert payload["active_operation"]["kind"] == job_service.JOB_TYPE_AI_ANALYSIS
+    assert payload["active_operation"]["progress"] == 61
+    assert payload["active_operation"]["message"] == "正在分析第 14/23 段"
+    assert payload["workflow_steps"][3]["state"] == "current"
+
+
+def test_live_status_endpoint_maps_lowercase_status_inside_auto_pipeline():
+    task = _create_auto_task("test-auto-live-lowercase")
+    update_task_status(task["id"], TaskStatus.transcribing)
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/tasks/{task['id']}/live-status", headers=_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["should_poll"] is True
+    assert payload["workflow_steps"][2]["state"] == "current"
+    assert payload["workflow_steps"][0]["state"] == "done"
+
+
+def test_live_status_endpoint_combines_publish_progress_with_task_timeline():
+    task = _create_auto_task("test-auto-live-publish")
+    update_task_status(task["id"], TaskStatus.COMPLETED)
+    now = datetime.now(timezone.utc).isoformat()
+    statuses = ("PUBLISHED", "SCHEDULED", "NEED_REVIEW")
+    with get_connection() as connection:
+        for index, status in enumerate(statuses, start=1):
+            output_id = f"{task['id']}-output-{index}"
+            connection.execute(
+                """
+                INSERT INTO output_clip (
+                    id, task_id, output_file_path, output_file_name,
+                    status, is_active, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'completed', 1, ?, ?)
+                """,
+                (output_id, task["id"], f"clip-{index}.mp4", f"clip-{index}.mp4", now, now),
+            )
+            connection.execute(
+                """
+                INSERT INTO publish_jobs (
+                    id, task_id, output_clip_id, platform, publish_mode,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, 'douyin', 'local_browser', ?, ?, ?)
+                """,
+                (f"{task['id']}-publish-{index}", task["id"], output_id, status, now, now),
+            )
+        connection.commit()
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/tasks/{task['id']}/live-status", headers=_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == TaskStatus.COMPLETED.value
+    assert payload["task_progress"] == 100
+    assert payload["progress"] == 93
+    assert payload["status_label"] == "发布需处理 · 1 条"
+    assert payload["publish"]["total"] == 3
+    assert payload["publish"]["success"] == 1
+    assert payload["publish"]["pending"] == 1
+    assert payload["publish"]["need_review"] == 1
+    assert payload["active_operation"]["kind"] == "publish"
+    assert payload["active_operation"]["progress"] == 33
+    assert payload["workflow_steps"][-1] == {
+        "name": "平台发布",
+        "index": "11",
+        "state": "warning",
+    }
+    assert payload["should_poll"] is True
+
+
 def test_live_status_endpoint_returns_404_for_missing_task():
     with TestClient(app) as client:
         response = client.get("/api/tasks/test-auto-missing/live-status", headers=_headers())
@@ -535,8 +831,17 @@ def test_task_detail_live_status_frontend_uses_partial_refresh():
     ]
 
     assert "data-task-live-overview" in template
+    assert "data-task-live-operation" in template
     assert "data-live-task-actions" in template
     assert "/live-status" in live_script
     assert "TASK_LIVE_STATUS_INTERVAL_MS = 3000" in script
     assert 'document.addEventListener("visibilitychange"' in live_script
+    assert "taskLiveStatusRequestInFlight" in live_script
+    assert "renderRuntimeLog(data);" in live_script
     assert "window.location.reload" not in live_script
+
+    ai_poll_script = script[
+        script.index("async function pollAiAnalysisStatus"):
+        script.index("function stopAiAnalysisStatusPolling")
+    ]
+    assert "renderRuntimeLog" not in ai_poll_script

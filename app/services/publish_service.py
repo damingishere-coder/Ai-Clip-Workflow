@@ -28,9 +28,11 @@ from app.models.task import (
     PublishJobTargetUpdate,
     PublishPlatformConfigUpdate,
     PublishSendJobUpdate,
+    TaskStatus,
 )
-from app.services.ai.ai_clip_analyzer import build_provider
-from app.services.ai.base import AIProviderError
+from app.services.ai.ai_clip_analyzer import build_provider, loads_ai_json
+from app.services.ai.base import AIProviderError, generate_json_with_safe_retry
+from app.services.publishers.base import parse_public_json_dict
 from app.services.database_backup_service import create_publish_migration_backup
 from app.services.publish_copy_rules import (
     BILIBILI_TITLE_MAX,
@@ -48,9 +50,14 @@ from app.services.publish_providers import (
     DouyinPublishProvider,
     PublishProviderError,
 )
-from app.services.publish_domain import AUTO_PUBLISH_PLATFORMS, PUBLISH_MODES, TARGET_PLATFORMS
+from app.services.publish_domain import (
+    AUTO_PUBLISH_PLATFORMS,
+    PUBLISH_MODES,
+    TARGET_PLATFORMS,
+    safe_platform_url,
+)
 from app.services.publish_readiness import PublishPlatformIsolationBlocked
-from app.services.publish_time import app_zone, local_display, parse_datetime
+from app.services.publish_time import app_zone, local_display, parse_datetime, utc_now_iso
 from app.services.storage_service import get_artifact_paths, resolve_video_file_path
 from app.services.video_cut_service import ensure_ffmpeg_available, sanitize_filename_part, summarize_stderr
 
@@ -264,6 +271,12 @@ CommandRunner = Callable[[list[str]], subprocess.CompletedProcess]
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _version_iso() -> str:
+    """publish_jobs.updated_at 的乐观并发版本；创建时间继续保持旧显示顺序。"""
+
+    return utc_now_iso()
 
 
 def _unique_paths(paths: list[Path]) -> list[Path]:
@@ -564,6 +577,7 @@ def _normalize_config(row) -> dict:
     config = dict(row)
     client_key = config.get("client_key") or ""
     client_secret = config.get("client_secret") or ""
+    config.pop("client_secret", None)
     config.update(
         {
             "platform_label": PLATFORM_LABELS.get(config.get("platform"), config.get("platform")),
@@ -578,11 +592,15 @@ def _normalize_config(row) -> dict:
 def _normalize_account(row) -> dict:
     account = dict(row)
     login_status = account.get("login_status") or "login_required"
+    access_token = account.get("access_token")
+    refresh_token = account.get("refresh_token")
+    account.pop("access_token", None)
+    account.pop("refresh_token", None)
     account.update(
         {
             "platform_label": PLATFORM_LABELS.get(account.get("platform"), account.get("platform")),
-            "access_token_masked": _mask_secret(account.get("access_token")),
-            "refresh_token_masked": _mask_secret(account.get("refresh_token")),
+            "access_token_masked": _mask_secret(access_token),
+            "refresh_token_masked": _mask_secret(refresh_token),
             "is_authorized": account.get("authorization_status") == "authorized",
             "auth_type": account.get("auth_type") or "browser_profile",
             "login_status": login_status,
@@ -638,11 +656,7 @@ def _format_task_created_at(value: str | None) -> str:
 
 
 def _task_source_file_name(job: dict) -> str:
-    source_path = (
-        job.get("task_nas_file_path")
-        if job.get("task_source_type") == "nas"
-        else job.get("task_original_video_path")
-    )
+    source_path = job.get("task_original_video_path")
     source_text = str(source_path or "").strip()
     if not source_text:
         return "未记录原视频文件名"
@@ -657,8 +671,11 @@ def _normalize_job(
 ) -> dict:
     job = dict(row)
     status = _normalize_publish_status(job.get("status"))
-    provider_payload = _parse_json_text(job.get("provider_response"))
-    publish_result_payload = _parse_json_text(job.get("publish_result")) if "publish_result" in job else {}
+    provider_payload = parse_public_json_dict(job.get("provider_response"))
+    publish_result_payload = parse_public_json_dict(job.get("publish_result")) if "publish_result" in job else {}
+    # 旧记录和兼容写入可能包含未脱敏 JSON；公共 DTO 只返回清洗后的结构。
+    job.pop("provider_response", None)
+    job.pop("publish_result", None)
     caption = job.get("caption") or job.get("description") or ""
     hashtags = job.get("hashtags") or job.get("tags") or ""
     clip_id = job.get("clip_id") or job.get("output_clip_id") or ""
@@ -728,7 +745,10 @@ def _normalize_job(
             ),
             "provider_payload": provider_payload,
             "publish_result_payload": publish_result_payload,
-            "platform_url": job.get("platform_url") or provider_payload.get("url") or provider_payload.get("platform_url") or "",
+            "platform_url": safe_platform_url(
+                str(job.get("platform") or ""),
+                job.get("platform_url") or provider_payload.get("url") or provider_payload.get("platform_url") or "",
+            ),
             "trace_path": provider_payload.get("trace_path") or "",
             "content_complete": not missing_fields,
             "missing_fields": missing_fields,
@@ -850,17 +870,22 @@ def list_platform_configs() -> list[dict]:
     return [_normalize_config(row) for row in rows]
 
 
-def get_platform_config(platform: str) -> dict | None:
+def _get_platform_config_record(platform: str) -> dict | None:
     with get_connection() as connection:
         row = connection.execute(
             "SELECT * FROM publish_platform_configs WHERE platform = ?",
             (platform,),
         ).fetchone()
+    return dict(row) if row else None
+
+
+def get_platform_config(platform: str) -> dict | None:
+    row = _get_platform_config_record(platform)
     return _normalize_config(row) if row else None
 
 
 def update_platform_config(platform: str, payload: PublishPlatformConfigUpdate) -> dict:
-    existing = get_platform_config(platform)
+    existing = _get_platform_config_record(platform)
     if not existing:
         raise ValueError("发布平台不存在。")
 
@@ -900,7 +925,7 @@ def update_platform_config(platform: str, payload: PublishPlatformConfigUpdate) 
 
 
 def test_platform_config(platform: str) -> dict:
-    config = get_platform_config(platform)
+    config = _get_platform_config_record(platform)
     if not config:
         raise ValueError("发布平台不存在。")
     provider = _get_provider(platform, config)
@@ -947,11 +972,16 @@ def _unique_normal_account_id(connection, platform: str) -> str:
     return str(rows[0]["id"] or "")
 
 
-def get_account(account_id: str) -> dict | None:
+def _get_account_record(account_id: str) -> dict | None:
     if not account_id:
         return None
     with get_connection() as connection:
         row = connection.execute("SELECT * FROM publish_accounts WHERE id = ?", (account_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_account(account_id: str) -> dict | None:
+    row = _get_account_record(account_id)
     return _normalize_account(row) if row else None
 
 
@@ -1043,7 +1073,7 @@ def open_browser_creator_center(account_id: str) -> dict:
 
 
 def build_douyin_oauth_url() -> dict:
-    config = get_platform_config("douyin")
+    config = _get_platform_config_record("douyin")
     if not config:
         raise ValueError("抖音配置不存在。")
     state = uuid4().hex
@@ -1088,7 +1118,7 @@ def save_douyin_oauth_account(code: str, state: str = "") -> dict:
     if not _validate_and_consume_oauth_state(state, "douyin"):
         raise ValueError("OAuth state 无效或已过期，请重新发起授权")
 
-    config = get_platform_config("douyin")
+    config = _get_platform_config_record("douyin")
     if not config:
         raise ValueError("抖音配置不存在。")
     response = DouyinPublishProvider(config).exchange_code(code)
@@ -1110,9 +1140,7 @@ def save_douyin_oauth_account(code: str, state: str = "") -> dict:
         scopes=data.get("scope") or config.get("scope") or "",
         remark="OAuth 授权创建",
     )
-    result = create_account(payload)
-    result["provider_response"] = response
-    return result
+    return create_account(payload)
 
 
 def _get_output_clip_for_publish(task_id: str, output_clip_id: str) -> dict | None:
@@ -1129,11 +1157,16 @@ def _get_output_clip_for_publish(task_id: str, output_clip_id: str) -> dict | No
                 clip_candidates.title AS clip_title,
                 clip_candidates.cover_time_seconds AS ai_cover_time_seconds,
                 subtitle_jobs.status AS subtitle_status,
-                subtitle_jobs.output_file_path AS subtitled_output_file_path
+                subtitle_jobs.output_file_path AS subtitled_output_file_path,
+                subtitle_jobs.revision_id AS subtitle_revision_id,
+                subtitle_jobs.validation_status AS subtitle_validation_status,
+                subtitle_jobs.verified_at AS subtitle_verified_at,
+                subtitle_revisions.status AS subtitle_revision_status
             FROM output_clip
             JOIN tasks ON tasks.id = output_clip.task_id
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
             LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
+            LEFT JOIN subtitle_revisions ON subtitle_revisions.id = subtitle_jobs.revision_id
             WHERE output_clip.task_id = ? AND output_clip.id = ? AND output_clip.is_active = 1
             """,
             (task_id, output_clip_id),
@@ -1155,11 +1188,16 @@ def _get_output_clip_by_id(output_clip_id: str) -> dict | None:
                 clip_candidates.title AS clip_title,
                 clip_candidates.cover_time_seconds AS ai_cover_time_seconds,
                 subtitle_jobs.status AS subtitle_status,
-                subtitle_jobs.output_file_path AS subtitled_output_file_path
+                subtitle_jobs.output_file_path AS subtitled_output_file_path,
+                subtitle_jobs.revision_id AS subtitle_revision_id,
+                subtitle_jobs.validation_status AS subtitle_validation_status,
+                subtitle_jobs.verified_at AS subtitle_verified_at,
+                subtitle_revisions.status AS subtitle_revision_status
             FROM output_clip
             JOIN tasks ON tasks.id = output_clip.task_id
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
             LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
+            LEFT JOIN subtitle_revisions ON subtitle_revisions.id = subtitle_jobs.revision_id
             WHERE output_clip.id = ? AND output_clip.is_active = 1
             """,
             (output_clip_id,),
@@ -1193,11 +1231,16 @@ def _list_completed_publish_clips(task_id: str | None = None) -> list[dict]:
                 clip_candidates.duration_seconds,
                 clip_candidates.cover_time_seconds AS ai_cover_time_seconds,
                 subtitle_jobs.status AS subtitle_status,
-                subtitle_jobs.output_file_path AS subtitled_output_file_path
+                subtitle_jobs.output_file_path AS subtitled_output_file_path,
+                subtitle_jobs.revision_id AS subtitle_revision_id,
+                subtitle_jobs.validation_status AS subtitle_validation_status,
+                subtitle_jobs.verified_at AS subtitle_verified_at,
+                subtitle_revisions.status AS subtitle_revision_status
             FROM output_clip
             JOIN tasks ON tasks.id = output_clip.task_id
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
             LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
+            LEFT JOIN subtitle_revisions ON subtitle_revisions.id = subtitle_jobs.revision_id
             WHERE tasks.is_deleted = 0 AND output_clip.status = 'completed' AND output_clip.is_active = 1
               {where_task}
             ORDER BY output_clip.created_at DESC
@@ -1217,8 +1260,8 @@ def _get_completed_publish_clip_by_output(output_clip_id: str) -> dict | None:
 def _resolve_publish_video_path(output_clip: dict, video_source: str) -> tuple[str, Path]:
     if video_source == "subtitled":
         raw_path = (output_clip.get("subtitled_output_file_path") or "").strip()
-        if output_clip.get("subtitle_status") != "completed" or not raw_path:
-            raise ValueError("这条切片还没有生成带字幕成片，不能选择“带字幕成片”。")
+        if not _subtitle_publish_ready(output_clip) or not raw_path:
+            raise ValueError("带字幕成片尚未同时通过 revision 审核和 FFprobe 验证，不能选择。")
     else:
         raw_path = (output_clip.get("output_file_path") or "").strip()
         if output_clip.get("output_status") != "completed" or not raw_path:
@@ -1369,7 +1412,9 @@ def generate_publish_metadata(item: dict, use_ai: bool = False, *, platform: str
 
     try:
         provider = build_provider(settings.ai_publish_provider, purpose="publish")
-        parsed = json.loads(provider.generate_json(_metadata_prompt(item, platform)))
+        parsed = loads_ai_json(generate_json_with_safe_retry(provider, _metadata_prompt(item, platform)))
+        if not isinstance(parsed, dict):
+            raise ValueError("AI 文案响应必须是 JSON 对象")
         provider_name = getattr(provider, "name", settings.ai_publish_provider)
         publish_model = (
             settings.ai_codex_model
@@ -1397,7 +1442,7 @@ def generate_publish_metadata(item: dict, use_ai: bool = False, *, platform: str
             "policy_version": PUBLISH_COPY_RULE_VERSION if platform == "douyin" else 0,
         }
     except (AIProviderError, json.JSONDecodeError, TypeError, ValueError) as exc:
-        metadata["error"] = str(exc)
+        metadata["error"] = exc.checkpoint_message() if isinstance(exc, AIProviderError) else str(exc)
         return metadata
 
 
@@ -1611,6 +1656,10 @@ def _insert_opencli_job(
             "output_status": item.get("output_status") or "completed",
             "subtitle_status": item.get("subtitle_status"),
             "subtitled_output_file_path": item.get("subtitled_output_file_path"),
+            "subtitle_revision_id": item.get("subtitle_revision_id"),
+            "subtitle_revision_status": item.get("subtitle_revision_status"),
+            "subtitle_validation_status": item.get("subtitle_validation_status"),
+            "subtitle_verified_at": item.get("subtitle_verified_at"),
         },
         video_source,
     )
@@ -1684,7 +1733,11 @@ def _insert_opencli_job(
                 cover_file_path,
                 settings.app_timezone,
                 settings.app_timezone,
-                _publish_provider_payload(metadata, cover),
+                _publish_provider_payload(
+                    metadata,
+                    cover,
+                    existing=_subtitle_publish_evidence(item, video_source),
+                ),
                 settings.publish_scheduler_max_retry_count,
                 now,
                 now,
@@ -1901,9 +1954,32 @@ def _find_inheritable_publish_job(item: dict, platform: str) -> dict:
 def _preferred_video_source(item: dict, prefer_subtitled: bool) -> str:
     raw_path = str(item.get("subtitled_output_file_path") or "").strip()
     path = resolve_video_file_path(raw_path) if raw_path else None
-    if prefer_subtitled and item.get("subtitle_status") == "completed" and path and path.exists():
+    if prefer_subtitled and _subtitle_publish_ready(item) and path and path.exists():
         return "subtitled"
     return "original"
+
+
+def _subtitle_publish_ready(item: dict) -> bool:
+    return bool(
+        item.get("subtitle_status") == "completed"
+        and item.get("subtitle_validation_status") == "verified"
+        and item.get("subtitle_revision_status") == "approved"
+        and item.get("subtitle_revision_id")
+    )
+
+
+def _subtitle_publish_evidence(item: dict, video_source: str) -> dict:
+    if video_source != "subtitled":
+        return {}
+    if not _subtitle_publish_ready(item):
+        raise ValueError("字幕成片缺少审核或验证证据")
+    return {
+        "subtitle_delivery_mode": "subtitled",
+        "subtitle_revision_id": item.get("subtitle_revision_id") or "",
+        "subtitle_revision_status": item.get("subtitle_revision_status") or "",
+        "subtitle_validation_status": item.get("subtitle_validation_status") or "",
+        "subtitle_verified_at": item.get("subtitle_verified_at") or "",
+    }
 
 
 def _update_preparation_video_source(job: dict, item: dict, video_source: str) -> dict:
@@ -1938,7 +2014,14 @@ def _update_preparation_video_source(job: dict, item: dict, video_source: str) -
                 cover_mode,
                 cover_time_seconds,
                 cover_file_path,
-                _publish_provider_payload({}, cover, existing=job.get("provider_payload") or {}),
+                _publish_provider_payload(
+                    {},
+                    cover,
+                    existing={
+                        **(job.get("provider_payload") or {}),
+                        **_subtitle_publish_evidence(item, video_source),
+                    },
+                ),
                 now,
                 job["id"],
             ),
@@ -2018,11 +2101,13 @@ def sync_task_publish_jobs(
 ) -> dict:
     with get_connection() as connection:
         task = connection.execute(
-            "SELECT id, platform FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            "SELECT id, platform, auto_mode, status FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
             (task_id,),
         ).fetchone()
     if not task:
         raise ValueError("任务不存在")
+    if bool(task["auto_mode"]) and task["status"] == TaskStatus.PENDING_SUBTITLE_REVIEW.value:
+        raise ValueError("自动流水线正在等待字幕审核，请先批量烧录，或明确跳过字幕并完成片段审核")
     items = _list_completed_publish_clips(task_id)
     if not items:
         raise ValueError("当前任务还没有可同步的激活切片")
@@ -2370,7 +2455,11 @@ def _list_missing_publish_cover_jobs(platform: str | None = None) -> list[dict]:
                 output_clip.status AS output_status,
                 clip_candidates.cover_time_seconds AS ai_cover_time_seconds,
                 subtitle_jobs.status AS subtitle_status,
-                subtitle_jobs.output_file_path AS subtitled_output_file_path
+                subtitle_jobs.output_file_path AS subtitled_output_file_path,
+                subtitle_jobs.revision_id AS subtitle_revision_id,
+                subtitle_jobs.validation_status AS subtitle_validation_status,
+                subtitle_jobs.verified_at AS subtitle_verified_at,
+                subtitle_revisions.status AS subtitle_revision_status
             FROM publish_jobs
             JOIN output_clip ON output_clip.id = publish_jobs.output_clip_id
             JOIN tasks ON tasks.id = publish_jobs.task_id
@@ -2378,6 +2467,7 @@ def _list_missing_publish_cover_jobs(platform: str | None = None) -> list[dict]:
             LEFT JOIN subtitle_jobs
               ON subtitle_jobs.output_clip_id = output_clip.id
              AND subtitle_jobs.is_active = 1
+            LEFT JOIN subtitle_revisions ON subtitle_revisions.id = subtitle_jobs.revision_id
             WHERE publish_jobs.status IN ('DRAFT', 'WAITING', 'SCHEDULED')
               AND TRIM(COALESCE(publish_jobs.cover_file_path, '')) = ''
               AND output_clip.is_active = 1
@@ -2589,12 +2679,12 @@ def generate_publish_job_cover(job_id: str, payload: PublishCoverCreate) -> dict
 
 
 def _validate_api_publish_ready(payload: PublishJobCreate) -> tuple[dict, dict]:
-    account = get_account(payload.account_id or "")
+    account = _get_account_record(payload.account_id or "")
     if not account:
         raise ValueError("真实发布必须先选择一个已配置的发布账号。")
     if account.get("platform") != payload.platform:
         raise ValueError("账号平台和发布平台不一致。")
-    config = get_platform_config(payload.platform)
+    config = _get_platform_config_record(payload.platform)
     if not config:
         raise ValueError("发布平台配置不存在。")
     _get_provider(payload.platform, config).validate_config()
@@ -3217,14 +3307,14 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
             existing=job.get("provider_payload") or {},
             upgrade_status="manual_saved",
         )
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE publish_jobs
             SET title = ?, description = ?, caption = ?, tags = ?, hashtags = ?, visibility = ?,
                 cover_file_path = ?, cover_time_seconds = ?, allow_download = ?,
                 bilibili_tid = ?, bilibili_copyright = ?, bilibili_source = ?,
                 account_id = ?, provider_response = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = ? AND updated_at = ?
             """,
             (
                 safe_content["title"],
@@ -3241,10 +3331,15 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
                 (payload.bilibili_source or "").strip(),
                 account_id or None,
                 provider_response,
-                _now_iso(),
+                _version_iso(),
                 job_id,
+                job.get("status"),
+                job.get("updated_at"),
             ),
         )
+        if not cursor.rowcount:
+            connection.rollback()
+            raise ValueError("发送任务内容或状态已经变化，请刷新后重试。")
         connection.commit()
     return {"status": "ok", "message": "发送内容已保存。", "job": get_publish_job(job_id)}
 
@@ -3274,13 +3369,24 @@ def update_publish_job_target(job_id: str, payload: PublishJobTargetUpdate) -> d
             raise ValueError("账号与目标平台不一致")
     try:
         with get_connection() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE publish_jobs SET platform = ?, account_id = ?, publish_mode = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status = ? AND updated_at = ?
                 """,
-                (payload.platform, account_id or None, payload.publish_mode, _now_iso(), job_id),
+                (
+                    payload.platform,
+                    account_id or None,
+                    payload.publish_mode,
+                    _version_iso(),
+                    job_id,
+                    job.get("status"),
+                    job.get("updated_at"),
+                ),
             )
+            if not cursor.rowcount:
+                connection.rollback()
+                raise ValueError("发布任务内容或状态已经变化，请刷新后重试")
             connection.commit()
     except Exception as exc:
         if "UNIQUE constraint" in str(exc):
@@ -3330,7 +3436,7 @@ def update_publish_job_content(job_id: str, payload: PublishJobContentUpdate) ->
         ensure_future(payload.scheduled_at, settings.app_timezone)
         scheduled_at = to_utc_iso(payload.scheduled_at, settings.app_timezone)
     status = PUBLISH_STATUS_SCHEDULED if scheduled_at else PUBLISH_STATUS_WAITING
-    now = _now_iso()
+    now = _version_iso()
     with get_connection() as connection:
         account_id = str(job.get("account_id") or "")
         if not account_id and str(job.get("publish_mode") or "") == "local_browser":
@@ -3340,14 +3446,14 @@ def update_publish_job_content(job_id: str, payload: PublishJobContentUpdate) ->
             existing=job.get("provider_payload") or {},
             upgrade_status="manual_saved",
         )
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE publish_jobs
             SET title = ?, description = ?, caption = ?, tags = ?, hashtags = ?,
                 cover_text = ?, scheduled_at = ?, status = ?, risk_flags = '',
                 account_id = ?, provider_response = ?,
                 error_code = '', error_message = '', last_error = '', updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = ? AND updated_at = ?
             """,
             (
                 safe_content["title"],
@@ -3362,8 +3468,13 @@ def update_publish_job_content(job_id: str, payload: PublishJobContentUpdate) ->
                 provider_response,
                 now,
                 job_id,
+                job.get("status"),
+                job.get("updated_at"),
             ),
         )
+        if not cursor.rowcount:
+            connection.rollback()
+            raise ValueError("发布任务内容或状态已经变化，请刷新后重试")
         connection.commit()
     return {"status": "ok", "message": "publish content saved", "job": get_publish_job(job_id)}
 
@@ -3386,12 +3497,12 @@ def regenerate_send_job_metadata(job_id: str, use_ai: bool = True) -> dict:
         account_id = str(job.get("account_id") or "")
         if not account_id and str(job.get("publish_mode") or "") == "local_browser":
             account_id = _unique_normal_account_id(connection, str(job.get("platform") or ""))
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE publish_jobs
             SET title = ?, description = ?, caption = ?, tags = ?, hashtags = ?,
                 account_id = ?, provider_response = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = ? AND updated_at = ?
             """,
             (
                 metadata["title"],
@@ -3409,10 +3520,15 @@ def regenerate_send_job_metadata(job_id: str, use_ai: bool = True) -> dict:
                     existing=job.get("provider_payload") or {},
                     upgrade_status="manual_retry" if use_ai else "rule_regenerated",
                 ),
-                _now_iso(),
+                _version_iso(),
                 job_id,
+                job.get("status"),
+                job.get("updated_at"),
             ),
         )
+        if not cursor.rowcount:
+            connection.rollback()
+            raise ValueError("发送任务内容或状态已经变化，请刷新后重新生成文案。")
         connection.commit()
     return {
         "status": "ok",
@@ -4455,8 +4571,8 @@ def execute_api_publish_job(job_id: str) -> dict:
     if not output_clip:
         raise ValueError("切片记录不存在。")
     _, video_path = _resolve_publish_video_path(output_clip, job["video_source"])
-    config = get_platform_config(job["platform"])
-    account = get_account(job.get("account_id") or "")
+    config = _get_platform_config_record(job["platform"])
+    account = _get_account_record(job.get("account_id") or "")
     if not config or not account:
         raise ValueError("平台配置或账号不存在。")
     return _execute_publish_job(job_id, config=config, account=account, video_path=video_path)
@@ -4513,14 +4629,19 @@ def get_publish_center_context(*, focus_task_id: str = "") -> dict:
             generated=True,
         )
         original_available = bool(original_path and original_path.exists() and original_path.is_file())
-        subtitled_available = bool(subtitled_path and subtitled_path.exists() and subtitled_path.is_file())
+        subtitled_available = bool(
+            _subtitle_publish_ready(item)
+            and subtitled_path
+            and subtitled_path.exists()
+            and subtitled_path.is_file()
+        )
         normalized_item = {
             **item,
             "default_title": default_title,
             "default_tags": format_douyin_tags(_fallback_tags(item), generated=True),
             "original_available": original_available,
             "subtitled_available": subtitled_available,
-            "subtitle_status_label": "已加字幕" if item.get("subtitle_status") == "completed" else "未加字幕",
+            "subtitle_status_label": "已审核并验证" if subtitled_available else "字幕未就绪",
             "video_media_url": _video_media_url(item["task_id"], item["output_clip_id"], "original"),
         }
         publish_items.append(normalized_item)

@@ -71,7 +71,9 @@ def test_worker_client_sends_bearer_token_and_converts_result(monkeypatch):
         })
 
     monkeypatch.setattr("app.services.publishers.worker_client.urlopen", fake_urlopen)
-    result = PublishWorkerClient("http://127.0.0.1:8765", "secret-token", 7).publish({"job_id": "job-1"})
+    result = PublishWorkerClient("http://127.0.0.1:8765", "secret-token", 7).publish(
+        {"job_id": "job-1", "execution_id": "execution-1", "account_id": "account-1"}
+    )
     assert result.outcome == PublishOutcome.PUBLISHED
     assert result.remote_video_id == "BV123"
     assert captured == {"authorization": "Bearer secret-token", "timeout": 7}
@@ -83,7 +85,22 @@ def test_worker_timeout_is_marked_as_possibly_received(monkeypatch):
 
     monkeypatch.setattr("app.services.publishers.worker_client.urlopen", timeout)
     with pytest.raises(PublishWorkerUnavailable) as caught:
-        PublishWorkerClient("http://127.0.0.1:8765", "token", 2).publish({"job_id": "job-1"})
+        PublishWorkerClient("http://127.0.0.1:8765", "token", 2).publish(
+            {"job_id": "job-1", "execution_id": "execution-1", "account_id": "account-1"}
+        )
+    assert caught.value.request_may_have_been_received is True
+
+
+def test_worker_connection_reset_after_publish_is_marked_as_possibly_received(monkeypatch):
+    def reset(*_, **__):
+        raise ConnectionResetError("connection reset after response")
+
+    monkeypatch.setattr("app.services.publishers.worker_client.urlopen", reset)
+    with pytest.raises(PublishWorkerUnavailable) as caught:
+        PublishWorkerClient("http://127.0.0.1:8765", "token", 2).publish(
+            {"job_id": "job-1", "execution_id": "execution-1", "account_id": "account-1"}
+        )
+
     assert caught.value.request_may_have_been_received is True
 
 

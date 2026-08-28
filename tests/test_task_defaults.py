@@ -22,7 +22,7 @@ def _headers() -> dict[str, str]:
 
 
 def test_task_create_and_upload_api_use_ten_minutes_and_twelve_candidates(monkeypatch, tmp_path):
-    payload = TaskCreate(task_name="默认值模型测试")
+    payload = TaskCreate(task_name="默认值模型测试", selection_profile="general")
     assert payload.max_clip_duration == 10
     assert payload.candidate_clip_count == 12
 
@@ -58,7 +58,7 @@ def test_task_create_and_upload_api_use_ten_minutes_and_twelve_candidates(monkey
 
     response = TestClient(app).post(
         "/api/tasks/upload",
-        data={"task_name": "上传默认值测试", "platform": "general"},
+        data={"task_name": "上传默认值测试", "platform": "general", "selection_profile": "general"},
         files={"video_file": ("source.mp4", b"fake-video", "video/mp4")},
         headers=_headers(),
     )
@@ -87,13 +87,14 @@ def test_new_defaults_persist_without_rewriting_explicit_historical_values(monke
 
     try:
         create_task_record(
-            TaskCreate(task_name="新默认值"),
+            TaskCreate(task_name="新默认值", selection_profile="general"),
             task_id=default_task_id,
             task_dir_name=default_task_id,
         )
         create_task_record(
             TaskCreate(
                 task_name="历史显式值",
+                selection_profile="general",
                 max_clip_duration=5,
                 candidate_clip_count=5,
             ),

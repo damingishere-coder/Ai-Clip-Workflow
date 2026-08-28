@@ -1,7 +1,38 @@
 from enum import Enum
 from typing import Any, Literal, Optional
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, validator
+
+
+_PUBLISH_CONFIG_URL_FIELDS = (
+    "redirect_uri",
+    "api_base_url",
+    "auth_url",
+    "token_url",
+    "refresh_url",
+    "upload_url",
+    "create_url",
+)
+
+
+def _validate_publish_config_url(value: str) -> str:
+    text = value.strip()
+    if not text:
+        return text
+    parsed = urlsplit(text)
+    hostname = str(parsed.hostname or "").lower().rstrip(".")
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("发布接口 URL 端口无效") from exc
+    if parsed.scheme not in {"http", "https"} or not hostname:
+        raise ValueError("发布接口必须是完整的 http:// 或 https:// URL")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("发布接口 URL 不能包含账号、密码、查询参数或片段")
+    if parsed.scheme != "https" and hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("非本机发布接口必须使用 https://")
+    return text
 
 
 class TaskStatus(str, Enum):
@@ -11,16 +42,20 @@ class TaskStatus(str, Enum):
     AI_ANALYZING = "AI_ANALYZING"
     CLIP_SELECTING = "CLIP_SELECTING"
     VIDEO_CUTTING = "VIDEO_CUTTING"
+    SUBTITLE_DRAFTING = "SUBTITLE_DRAFTING"
+    PENDING_SUBTITLE_REVIEW = "PENDING_SUBTITLE_REVIEW"
     METADATA_GENERATING = "METADATA_GENERATING"
     SCHEDULE_CREATING = "SCHEDULE_CREATING"
     PUBLISH_JOB_CREATING = "PUBLISH_JOB_CREATING"
     READY_TO_PUBLISH = "READY_TO_PUBLISH"
     COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
     FAILED_PREPARING_SOURCE = "FAILED_PREPARING_SOURCE"
     FAILED_TRANSCRIBING = "FAILED_TRANSCRIBING"
     FAILED_AI_ANALYZING = "FAILED_AI_ANALYZING"
     FAILED_CLIP_SELECTING = "FAILED_CLIP_SELECTING"
     FAILED_VIDEO_CUTTING = "FAILED_VIDEO_CUTTING"
+    FAILED_SUBTITLE_DRAFTING = "FAILED_SUBTITLE_DRAFTING"
     FAILED_METADATA_GENERATING = "FAILED_METADATA_GENERATING"
     FAILED_SCHEDULE_CREATING = "FAILED_SCHEDULE_CREATING"
     FAILED_PUBLISH_JOB_CREATING = "FAILED_PUBLISH_JOB_CREATING"
@@ -39,14 +74,14 @@ class TaskStatus(str, Enum):
 
 class TaskCreate(BaseModel):
     task_name: str = Field(..., min_length=1, max_length=120)
-    source_type: Literal["upload", "nas"] = "upload"
     platform: Literal["douyin", "bilibili", "general"] = "general"
     original_video_path: Optional[str] = None
-    nas_file_path: Optional[str] = None
     max_clip_duration: int = Field(default=10, ge=1, le=60)
     candidate_clip_count: int = Field(default=12, ge=1, le=50)
-    selection_profile: Literal["general", "variety_comedy"] = "variety_comedy"
+    selection_profile: Literal["general", "variety_comedy", "long_live_talk"]
     final_clip_target: int = Field(default=5, ge=1, le=12)
+    highlight_density_per_hour: int = Field(default=4, ge=1, le=10)
+    highlight_total_limit: int = Field(default=30, ge=1, le=50)
     ai_preference: Optional[str] = None
     auto_mode: bool = False
     auto_clip_count: str = Field(default="auto", max_length=10)
@@ -86,7 +121,7 @@ class TaskSummary(BaseModel):
 
 class TaskStatusUpdate(BaseModel):
     status: TaskStatus
-    error_message: Optional[str] = None
+    error_message: Optional[str] = Field(default=None, max_length=2000)
 
 
 class TaskAIPreferenceUpdate(BaseModel):
@@ -107,8 +142,10 @@ class TaskCandidateClipCountUpdate(BaseModel):
 
 
 class TaskSelectionSettingsUpdate(BaseModel):
-    selection_profile: Literal["general", "variety_comedy"] = "variety_comedy"
+    selection_profile: Literal["general", "variety_comedy", "long_live_talk"]
     final_clip_target: int = Field(default=5, ge=1, le=12)
+    highlight_density_per_hour: int = Field(default=4, ge=1, le=10)
+    highlight_total_limit: int = Field(default=30, ge=1, le=50)
 
 
 class ClipFeedbackCreate(BaseModel):
@@ -132,6 +169,10 @@ class SubtitleStyleUpdate(BaseModel):
     font_color: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
     stroke_color: str = Field(default="#111827", pattern=r"^#[0-9a-fA-F]{6}$")
     shadow_enabled: bool = True
+    outline_width: float = Field(default=3, ge=0, le=20)
+    shadow_depth: float = Field(default=1, ge=0, le=20)
+    safe_area_percent: float = Field(default=5, ge=0, le=25)
+    speaker_styles: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class PublishPlatformConfigUpdate(BaseModel):
@@ -147,6 +188,18 @@ class PublishPlatformConfigUpdate(BaseModel):
     upload_url: str = Field(default="", max_length=1000)
     create_url: str = Field(default="", max_length=1000)
     extra_config: Optional[str] = Field(default="", max_length=4000)
+
+    @field_validator("app_name", "client_key", "client_secret", "scope", mode="before")
+    @classmethod
+    def reject_config_control_characters(cls, value):
+        if isinstance(value, str) and any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("发布配置不能包含换行或控制字符")
+        return value
+
+    @field_validator(*_PUBLISH_CONFIG_URL_FIELDS)
+    @classmethod
+    def validate_config_urls(cls, value: str) -> str:
+        return _validate_publish_config_url(value)
 
 
 class PublishAccountCreate(BaseModel):
@@ -391,3 +444,4 @@ class AIClipAnalysisResult(BaseModel):
     task_id: str | int = ""
     analysis_summary: str = ""
     clips: list[AIClipItem] = Field(default_factory=list)
+    analysis_meta: dict[str, Any] = Field(default_factory=dict)

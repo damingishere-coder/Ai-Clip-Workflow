@@ -9,9 +9,11 @@ from typing import Any
 
 from app.core.config import settings
 from app.models.task import TaskStatus
+from app.services import job_service
 from app.services.storage_service import get_artifact_paths, get_source_video_path, validate_source_video_path
 from app.services.task_log_service import append_task_log
 from app.services.transcript_service import (
+    TranscriptCancelledError,
     cleanup_transcript_chunk_dirs,
     read_transcript_preview,
     read_transcript_progress,
@@ -24,10 +26,6 @@ from app.services.transcript_service import (
 
 _RUNNING_TRANSCRIPT_TASKS: set[str] = set()
 _CANCEL_TRANSCRIPT_TASKS: set[str] = set()
-
-
-class TranscriptCancelledError(RuntimeError):
-    pass
 
 
 _TRANSCRIPT_STALE_AFTER = timedelta(minutes=10)
@@ -152,7 +150,7 @@ def get_task_transcript_status(task_id: str) -> dict:
 
 # ---------- 音频提取 ----------
 
-def process_task_audio(task_id: str) -> dict:
+def process_task_audio(task_id: str, job_id: str | None = None) -> dict:
     from app.services.task_service import get_task, update_task_status  # noqa: F811
 
     task = get_task(task_id)
@@ -169,7 +167,25 @@ def process_task_audio(task_id: str) -> dict:
     update_task_status(task_id, TaskStatus.audio_extracting)
     append_task_log(task_id, "开始使用 FFmpeg 提取音频")
     try:
-        result = run_ffmpeg_audio_extract(source_path, paths["audio_path"])
+        cancel_check = None
+        audio_progress_callback = None
+        if job_id:
+            def cancel_check() -> bool:
+                return job_service.is_cancel_requested(job_id)
+
+            def audio_progress_callback(percent: int) -> None:
+                job_service.update_job_progress(
+                    job_id, max(1, min(20, round(percent * 0.2))), f"正在提取音频：{percent}%"
+                )
+                job_service.heartbeat_job(job_id)
+        result = run_ffmpeg_audio_extract(
+            source_path,
+            paths["audio_path"],
+            cancel_check=cancel_check,
+            progress_callback=audio_progress_callback,
+        )
+    except job_service.JobLeaseLostError:
+        raise
     except Exception as exc:
         error = str(exc)
         update_task_status(task_id, TaskStatus.failed, error)
@@ -187,6 +203,8 @@ def process_task_transcript(
     task_id: str,
     background_tasks: Any | None = None,
     provider: str | None = None,
+    job_id: str | None = None,
+    allow_uncertain_retry: bool = False,
 ) -> dict:
     from app.services.task_service import get_task, update_task_status  # noqa: F811
 
@@ -229,9 +247,15 @@ def process_task_transcript(
     _CANCEL_TRANSCRIPT_TASKS.discard(task_id)
     _RUNNING_TRANSCRIPT_TASKS.add(task_id)
     if background_tasks is not None:
-        background_tasks.add_task(_run_task_transcript_background, task_id, provider_name)
+        background_tasks.add_task(
+            _run_task_transcript_background,
+            task_id,
+            provider_name,
+            job_id,
+            allow_uncertain_retry,
+        )
     else:
-        _run_task_transcript_background(task_id, provider_name)
+        _run_task_transcript_background(task_id, provider_name, job_id, allow_uncertain_retry)
     return {
         "status": "started",
         "message": f"已开始{provider_label}分段转写，请稍后刷新查看进度。",
@@ -285,6 +309,7 @@ def process_task_transcript_workflow(
     background_tasks: Any | None = None,
     force: bool = False,
     provider: str | None = None,
+    job_id: str | None = None,
 ) -> dict:
     from app.services.task_service import get_task  # noqa: F811
 
@@ -294,23 +319,36 @@ def process_task_transcript_workflow(
     paths = get_artifact_paths(task_id)
 
     if paths["transcript_path"].exists() and not force:
-        return {
-            "status": "completed",
-            "message": "转写 Markdown 已经生成，无需重复处理。如需重做，请点击\"重新生成转写\"。",
-            "task": get_task(task_id),
-        }
+        if read_transcript_preview(paths["transcript_path"], max_lines=1):
+            return {
+                "status": "completed",
+                "message": "转写 Markdown 已经生成，无需重复处理。如需重做，请点击\"重新生成转写\"。",
+                "task": get_task(task_id),
+            }
+        append_task_log(task_id, "检测到空白、截断或不可解析的转写 Markdown，本次不会误判为已完成")
 
     if not paths["audio_path"].exists():
         append_task_log(task_id, "一键处理：未发现音频文件，先自动提取音频")
-        process_task_audio(task_id)
+        process_task_audio(task_id, job_id=job_id)
 
     if force:
         append_task_log(task_id, "用户明确要求重新生成转写 Markdown")
 
-    return process_task_transcript(task_id, background_tasks=background_tasks, provider=provider)
+    return process_task_transcript(
+        task_id,
+        background_tasks=background_tasks,
+        provider=provider,
+        job_id=job_id,
+        allow_uncertain_retry=force,
+    )
 
 
-def _run_task_transcript_background(task_id: str, provider: str | None = None) -> None:
+def _run_task_transcript_background(
+    task_id: str,
+    provider: str | None = None,
+    job_id: str | None = None,
+    allow_uncertain_retry: bool = False,
+) -> None:
     from app.services.task_service import get_task, update_task_status  # noqa: F811
 
     task = get_task(task_id)
@@ -322,6 +360,13 @@ def _run_task_transcript_background(task_id: str, provider: str | None = None) -
     provider_label = _transcription_choice_label(provider_name)
 
     def progress_callback(progress: dict) -> None:
+        if job_id:
+            if job_service.is_cancel_requested(job_id):
+                raise TranscriptCancelledError("用户已停止当前转写任务")
+            percent = int(progress.get("percent") or 0)
+            job_percent = 20 + round(max(0, min(100, percent)) * 0.79)
+            job_service.update_job_progress(job_id, job_percent, str(progress.get("message") or "转写中"))
+            job_service.heartbeat_job(job_id)
         if task_id in _CANCEL_TRANSCRIPT_TASKS:
             raise TranscriptCancelledError("用户已停止当前转写任务")
         message = progress.get("message") or "转写进度已更新"
@@ -342,7 +387,10 @@ def _run_task_transcript_background(task_id: str, provider: str | None = None) -
             paths["transcript_path"],
             progress_callback=progress_callback,
             provider=provider_name,
+            allow_uncertain_retry=allow_uncertain_retry,
         )
+    except job_service.JobLeaseLostError:
+        raise
     except TranscriptCancelledError as exc:
         last_progress = read_transcript_progress(paths["transcript_path"])
         write_transcript_progress(

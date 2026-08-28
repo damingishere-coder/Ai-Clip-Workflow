@@ -10,11 +10,15 @@
 """
 
 from datetime import datetime, timezone
+import os
+from pathlib import Path
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.db.database import get_connection, init_db
+from app.core.config import settings
 from app.services.task_query_service import (
     get_clips_overview_context,
     get_dashboard_context,
@@ -152,6 +156,27 @@ def _insert_test_output_clip(
         connection.commit()
 
 
+def _insert_test_publish_job(
+    job_id: str,
+    task_id: str,
+    output_clip_id: str,
+    status: str,
+    *,
+    created_at: str,
+) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO publish_jobs (
+                id, task_id, output_clip_id, platform, publish_mode,
+                status, created_at, updated_at
+            ) VALUES (?, ?, ?, 'douyin', 'local_browser', ?, ?, ?)
+            """,
+            (job_id, task_id, output_clip_id, status, created_at, created_at),
+        )
+        connection.commit()
+
+
 def _insert_test_subtitle_job(
     job_id: str,
     task_id: str,
@@ -173,6 +198,21 @@ def _insert_test_subtitle_job(
 
 
 def _clean_test_data() -> None:
+    sandbox_value = os.environ.get("NIUMA_PYTEST_SANDBOX_ROOT", "").strip()
+    if not sandbox_value:
+        raise RuntimeError("拒绝清理测试数据：缺少 NIUMA_PYTEST_SANDBOX_ROOT")
+    sandbox_root = Path(sandbox_value).resolve()
+    database_path = Path(settings.database_path).resolve()
+    try:
+        is_in_sandbox = database_path.is_relative_to(sandbox_root)
+    except AttributeError:  # pragma: no cover - Python 3.8 兼容
+        is_in_sandbox = str(database_path).lower().startswith(str(sandbox_root).lower() + os.sep)
+    if not is_in_sandbox or database_path.name != "test_workflow.sqlite3":
+        raise RuntimeError(
+            "拒绝清理测试数据：数据库不在 pytest sandbox 内或文件名异常；"
+            f"database={database_path}, sandbox={sandbox_root}"
+        )
+
     with get_connection() as connection:
         connection.execute("DELETE FROM publish_jobs")
         connection.execute("DELETE FROM subtitle_jobs")
@@ -183,6 +223,21 @@ def _clean_test_data() -> None:
         connection.execute("DELETE FROM clip_candidates")
         connection.execute("DELETE FROM tasks")
         connection.commit()
+
+
+def test_clean_test_data_refuses_database_outside_pytest_sandbox():
+    """危险整表清理在路径异常时必须先中止，不能连接活动库。"""
+    original_database_path = settings.database_path
+    try:
+        object.__setattr__(
+            settings,
+            "database_path",
+            Path(__file__).resolve().parents[1] / "data" / "workflow.sqlite3",
+        )
+        with pytest.raises(RuntimeError, match="拒绝清理测试数据"):
+            _clean_test_data()
+    finally:
+        object.__setattr__(settings, "database_path", original_database_path)
 
 
 @pytest.fixture(autouse=True)
@@ -206,15 +261,13 @@ class TestDashboardContext:
 
         # 顶层字段
         assert "stats" in context
-        assert "focus_stats" in context
-        assert "workflow_steps" in context
+        assert "weekly_summary" in context
         assert "recent_tasks" in context
 
         # stats 列表结构
         stat_labels = {s["label"] for s in context["stats"]}
         expected_labels = {
-            "今日新增任务", "待处理", "待检查", "已切片任务",
-            "待加字幕", "待推送", "失败任务",
+            "本周新增任务", "已切片任务", "待推送任务", "失败任务",
         }
         assert stat_labels == expected_labels
 
@@ -223,20 +276,11 @@ class TestDashboardContext:
             assert "value" in stat
             assert "tone" in stat
 
-        # focus_stats 列表结构
-        focus_labels = {s["label"] for s in context["focus_stats"]}
-        assert focus_labels == {"输出切片", "待加字幕", "待推送"}
-
-        for stat in context["focus_stats"]:
-            assert "label" in stat
-            assert "value" in stat
-            assert "description" in stat
+        assert context["weekly_summary"]["total"] == 0
+        assert "days" not in context["weekly_summary"]
 
         # recent_tasks 为空列表
         assert context["recent_tasks"] == []
-
-        # workflow_steps 不为空
-        assert len(context["workflow_steps"]) > 0
 
     def test_dashboard_counts_with_tasks(self):
         """有任务时统计数值正确"""
@@ -248,14 +292,15 @@ class TestDashboardContext:
         _insert_test_task(task_id_1, "任务1", status="pending_video", created_at=today)
         _insert_test_task(task_id_2, "任务2", status="pending_review", created_at=today)
         _insert_test_task(task_id_3, "任务3", status="completed", created_at="2020-01-01T00:00:00")
+        _insert_test_clip_candidate("clip-dashboard-completed", task_id_3)
+        _insert_test_output_clip("output-dashboard-completed", task_id_3, "clip-dashboard-completed")
 
         context = get_dashboard_context()
 
         stat_map = {s["label"]: s["value"] for s in context["stats"]}
-        assert stat_map["今日新增任务"] == 2  # task_1 + task_2 (today)
-        assert stat_map["待处理"] == 1  # task_1
-        assert stat_map["待检查"] == 1  # task_2
+        assert stat_map["本周新增任务"] == 2
         assert stat_map["已切片任务"] == 1  # task_3
+        assert stat_map["待推送任务"] == 1  # 已切片但还没有发布记录
         assert stat_map["失败任务"] == 0
 
         # recent_tasks 最多 5 条
@@ -275,6 +320,68 @@ class TestDashboardContext:
         stat_map = {s["label"]: s["value"] for s in context["stats"]}
         assert stat_map["失败任务"] == 2
 
+    def test_dashboard_week_uses_shanghai_monday_boundary(self):
+        now = datetime(2026, 8, 26, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        _insert_test_task(
+            "week-before", "上周日任务", created_at="2026-08-23T15:59:59+00:00"
+        )
+        _insert_test_task(
+            "week-monday", "本周一任务", created_at="2026-08-23T16:00:00+00:00"
+        )
+        _insert_test_task(
+            "week-after", "下周一任务", created_at="2026-08-30T16:00:00+00:00"
+        )
+
+        context = get_dashboard_context(now=now)
+
+        assert context["weekly_summary"]["range_label"] == "08.24 - 08.30"
+        assert context["weekly_summary"]["total"] == 1
+        assert "days" not in context["weekly_summary"]
+
+    def test_dashboard_pending_publish_uses_latest_job_state(self):
+        task_id = "dashboard-publish-state"
+        _insert_test_task(task_id, "发布状态任务", status="completed")
+        for index in range(1, 4):
+            candidate_id = f"dashboard-publish-candidate-{index}"
+            output_id = f"dashboard-publish-output-{index}"
+            _insert_test_clip_candidate(candidate_id, task_id)
+            _insert_test_output_clip(output_id, task_id, candidate_id)
+
+        _insert_test_publish_job(
+            "dashboard-job-waiting-old",
+            task_id,
+            "dashboard-publish-output-1",
+            "WAITING",
+            created_at="2026-08-26T01:00:00+00:00",
+        )
+        _insert_test_publish_job(
+            "dashboard-job-published-new",
+            task_id,
+            "dashboard-publish-output-1",
+            "PUBLISHED",
+            created_at="2026-08-26T02:00:00+00:00",
+        )
+        _insert_test_publish_job(
+            "dashboard-job-published-old",
+            task_id,
+            "dashboard-publish-output-2",
+            "PUBLISHED",
+            created_at="2026-08-26T01:00:00+00:00",
+        )
+        _insert_test_publish_job(
+            "dashboard-job-scheduled-new",
+            task_id,
+            "dashboard-publish-output-2",
+            "SCHEDULED",
+            created_at="2026-08-26T02:00:00+00:00",
+        )
+
+        context = get_dashboard_context()
+        stat_map = {s["label"]: s for s in context["stats"]}
+
+        assert stat_map["待推送任务"]["value"] == 1
+        assert "2 条" in stat_map["待推送任务"]["note"]
+
 
 # ── Clips Overview Context ─────────────────────────────────────────
 
@@ -291,8 +398,9 @@ class TestClipsOverviewContext:
         assert context["tasks"] == []
 
         stat_labels = {s["label"] for s in context["stats"]}
-        expected_labels = {"待 AI 分析", "待检查", "可生成切片", "已完成", "异常任务"}
+        expected_labels = {"累计审核任务", "已通过视频", "已完成任务"}
         assert stat_labels == expected_labels
+        assert all(stat["value"] == 0 for stat in context["stats"])
 
     def test_clips_overview_with_tasks_and_clips(self):
         """有任务和候选片段时统计字段正确"""
@@ -325,6 +433,12 @@ class TestClipsOverviewContext:
         assert task["review_ready"] is True
         assert task["can_cut"] is False  # source_exists 为 False
 
+        stat_map = {stat["label"]: stat for stat in context["stats"]}
+        assert stat_map["累计审核任务"]["value"] == 1
+        assert stat_map["已通过视频"]["value"] == 2
+        assert stat_map["已通过视频"]["note"] == "当前启用的视频片段"
+        assert stat_map["已完成任务"]["value"] == 0
+
     def test_clips_overview_with_deleted_clips(self):
         """已删除的候选片段不计入统计"""
         task_id = uuid4().hex[:12]
@@ -341,20 +455,50 @@ class TestClipsOverviewContext:
         assert task["enabled_clip_count"] == 1
 
     def test_clips_overview_stats_correct(self):
-        """统计卡片数值正确"""
+        """累计审核、启用片段和完成任务统计正确，且排除已删除数据"""
         task_id_1 = uuid4().hex[:12]
         task_id_2 = uuid4().hex[:12]
+        task_id_3 = uuid4().hex[:12]
+        task_id_4 = uuid4().hex[:12]
         today = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-        _insert_test_task(task_id_1, "待AI", status="pending_ai", created_at=today)
-        _insert_test_task(task_id_2, "失败", status="failed", created_at=today)
+        _insert_test_task(task_id_1, "待检查", status="pending_review", created_at=today)
+        _insert_test_task(task_id_2, "大写完成", status="COMPLETED", created_at=today)
+        _insert_test_task(
+            task_id_3,
+            "部分完成",
+            status="completed_with_errors",
+            created_at=today,
+        )
+        _insert_test_task(
+            task_id_4,
+            "已删除任务",
+            status="completed",
+            is_deleted=1,
+            created_at=today,
+        )
+        _insert_test_clip_candidate("clip_stats_1", task_id_1, "启用片段", enabled=1)
+        _insert_test_clip_candidate("clip_stats_2", task_id_1, "未启用片段", enabled=0)
+        _insert_test_clip_candidate("clip_stats_3", task_id_2, "完成片段", enabled=1)
+        _insert_test_clip_candidate("clip_stats_4", task_id_4, "已删除任务片段", enabled=1)
+        _insert_test_clip_candidate(
+            "clip_stats_5",
+            task_id_1,
+            "已删除片段",
+            enabled=1,
+            is_deleted=1,
+        )
 
         context = get_clips_overview_context()
         stat_map = {s["label"]: s["value"] for s in context["stats"]}
+        task_map = {task["id"]: task for task in context["tasks"]}
 
-        assert stat_map["待 AI 分析"] == 1
-        assert stat_map["待检查"] == 0
-        assert stat_map["异常任务"] == 1
+        assert stat_map == {
+            "累计审核任务": 2,
+            "已通过视频": 2,
+            "已完成任务": 2,
+        }
+        assert task_map[task_id_2]["review_stage"] == "已完成"
 
 
 # ── Subtitle Workflow Context ──────────────────────────────────────
