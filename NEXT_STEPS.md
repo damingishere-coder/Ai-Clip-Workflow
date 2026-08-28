@@ -1,5 +1,14 @@
 # Next Steps
 
+## 2026-08-28 本地目录迁移后的使用说明
+
+1. 今后只从 `C:\Users\10578\Documents\Ai-Clip-Workflow` 打开项目；旧目录 `C:\Users\10578\Documents\New project 2` 已不存在，GitHub 远程地址没有变化。
+2. Alter 中 `Niuma-Studio` 和 `Niuma-Publish-Worker` 已保留原 ID 并使用新路径；用户主动关闭的其他 Alter 项仍保持停止，需要使用时再由用户逐项启动。
+3. 抖音排期 `494518fc1100` 已按用户确认调整到 2026-08-28 17:00；保持电脑、网络和已登录 Chrome 可用，若出现验证码、登录失效或平台风控，进入人工复核，不要重复投稿。
+4. `.venv.before-path-rename-20260828-1520` 和 `backups/path-rename-20260828-1520` 暂时保留用于回滚；确认新目录持续稳定后再另行决定是否清理，不要手动删除活动数据库或 E 盘素材。
+5. 本次文档提交位于 `docs/rename-project-root` 分支；由于当前功能分支已有待合并改动，PR 采用堆叠基线，只包含目录迁移文档，不自动合并。
+6. Docker Desktop 当前不可连接，`doctor.ps1` 的 Docker Engine 项因此失败；日常 Windows 原生运行不受影响。以后需要切回 Docker 时，先启动 Docker Desktop，再重新运行 `scripts\doctor.ps1`。
+
 ## 2026-08-28 v2.2 内容复盘验收与后续使用
 
 1. 合并 2.2 PR 前确认 Linux、Windows host smoke 与 Docker image smoke 全绿；使用普通 merge commit，由用户手动合并，不自动删除功能分支。
