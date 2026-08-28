@@ -1394,3 +1394,11 @@
 - `NiuMa Studio Docker Watcher` 的脚本路径和工作目录已更新为新目录，并继续保持禁用。Worker、Web 与 Scheduler 健康检查通过，迁移验证未手工触发真实投稿。
 - Documents 下的 `启动牛马片场.bat` 与 `停止牛马片场.bat` 已同步改为新根目录，避免后续双击启动或停止时仍进入不存在的旧目录。
 - 路径相关回归 `28 passed`，Ruff 与 `git diff --check` 通过；`doctor.ps1` 仅因 Docker Desktop 当前不可连接返回失败，当前正式 Windows 原生 Web/Worker 与 Scheduler 健康，不影响本次迁移，Docker Watcher 继续禁用。
+
+## 2026-08-29 AI 分析长任务误杀修复
+
+- 现场核对任务 `d7fdc8d5cdb0`：全自动 Job `2ef20a9b6e57` 已完成 10 个综艺召回窗口和 4 个上下文扩展批次，另有 1 个召回窗口发生 300 秒 Codex 超时；第 5 个扩展批次开始后，父 Worker 因 Job 百分比和文案连续 900 秒未变化而终止子进程树。
+- 普通 Workflow Job 的默认无进展保护由 900 秒延长为 1800 秒，并新增 `WORKFLOW_JOB_NO_PROGRESS_TIMEOUT_SECONDS` 非敏感配置；字幕任务继续使用独立字幕超时。
+- Worker 现在把 `checkpoint_updated_at` 与百分比、文案共同视为业务进展；自己每 20 秒写入的 heartbeat 不算进展，避免真正卡死的进程永久占用。
+- 自动流水线父进程失败收口兼容小写 `ai_analyzing`，与大写 `AI_ANALYZING` 一样写为 `FAILED_AI_ANALYZING / 45%`，不再出现 Job 已失败但页面仍显示 65% 运行中的状态分裂。
+- 定向回归 `52 passed`；Ruff、Compileall 和 `git diff --check` 通过。未重跑当前 AI 单元，未调用真实 AI、ASR、FFmpeg 或发布平台，也未修改活动 SQLite；正式 8001 服务尚未重启加载新代码。

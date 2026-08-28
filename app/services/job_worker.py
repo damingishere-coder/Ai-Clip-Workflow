@@ -216,6 +216,27 @@ def _execute_subtitle(job_id: str, task_id: str, payload: dict) -> None:
     job_service.mark_job_completed(job_id, result)
 
 
+def _job_no_progress_timeout(job: dict) -> int:
+    if job.get("job_type") == job_service.JOB_TYPE_SUBTITLE:
+        return max(30, int(settings.ffmpeg_subtitle_timeout))
+    return max(
+        30,
+        int(settings.workflow_job_no_progress_timeout_seconds),
+        int(settings.ffmpeg_audio_extract_timeout),
+        int(settings.ffmpeg_cut_timeout),
+        int(settings.volcengine_asr_timeout_seconds),
+    )
+
+
+def _job_progress_state(job: dict) -> tuple[int, str, str]:
+    """返回真正代表业务进展的标记；Worker 自己的 heartbeat 不计入进展。"""
+    return (
+        int(job.get("progress") or 0),
+        str(job.get("message") or ""),
+        str(job.get("checkpoint_updated_at") or ""),
+    )
+
+
 class WorkflowJobRunner:
     """应用生命周期内的单 worker 线程。"""
 
@@ -288,17 +309,8 @@ class WorkflowJobRunner:
             return
         last_heartbeat = 0.0
         last_progress_at = time.monotonic()
-        previous_progress: tuple[int, str] | None = None
-        no_progress_timeout = (
-            settings.ffmpeg_subtitle_timeout
-            if job_before_start.get("job_type") == job_service.JOB_TYPE_SUBTITLE
-            else max(
-                900,
-                settings.ffmpeg_audio_extract_timeout,
-                settings.ffmpeg_cut_timeout,
-                settings.volcengine_asr_timeout_seconds,
-            )
-        )
+        previous_progress: tuple[int, str, str] | None = None
+        no_progress_timeout = _job_no_progress_timeout(job_before_start)
         while process.poll() is None:
             if self._stop_event.wait(1):
                 if not self._terminate_process(process, job_id, lease_token, "应用停止"):
@@ -362,7 +374,7 @@ class WorkflowJobRunner:
                     lease_token=lease_token,
                 )
                 return
-            progress_state = (int(job.get("progress") or 0), str(job.get("message") or ""))
+            progress_state = _job_progress_state(job)
             if previous_progress != progress_state:
                 previous_progress = progress_state
                 last_progress_at = time.monotonic()
