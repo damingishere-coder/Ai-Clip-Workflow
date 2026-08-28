@@ -1381,3 +1381,16 @@
 - 强制用原始 `start_time` 后前 3 秒评价钩子，要求 15 秒内出现第一次有效刺激，并把评论动机、单一话题和完整反应闭环设为硬门槛。
 - 片段以 60–90 秒为主，普通可看内容不得虚高到 78 分；本次不修改三阶段分析代码、A/B/C 门槛、候选池或历史分析结果。
 - 相关选片与 Prompt 测试 `43 passed`，Ruff 和 `git diff --check` 通过；活动 SQLite 更新前已生成一致性备份，更新后 `integrity_check=ok`、外键异常为 0，其他 Prompt 与任务记录未变化。
+
+## 2026-08-28 本地项目根目录迁移
+
+- 正式项目根目录从 `C:\Users\10578\Documents\New project 2` 迁移为 `C:\Users\10578\Documents\Ai-Clip-Workflow`；GitHub 远程仓库继续使用 `https://github.com/damingishere-coder/Ai-Clip-Workflow.git`，仓库名称和公开 API 均未修改。
+- 停机前备份活动 SQLite、Alter `state.json`、Git worktree 元数据和禁用的 Docker Watcher 配置；因用户主动关闭全部 Alter，迁移期间其他托管项目保持停止。原定 16:00 且尚未执行的抖音排期 `494518fc1100` 经用户确认调整到 17:00，修改前另做数据库备份。
+- 使用独立的一次性 Windows 计划任务完成同盘目录重命名，成功后立即删除该临时任务与助手脚本；旧目录已不存在，新目录存在。
+- 执行 `git worktree repair` 修复主仓库、随目录移动的嵌套 worktree 和三个外部 linked worktree；`New project 2-task-automation` 原有 15 个未提交文件保持不变，没有 reset、stash 或覆盖。
+- 旧 `.venv` 保留为 `.venv.before-path-rename-20260828-1520` 回滚副本；使用 `C:\Python312\python.exe` 在新目录重建 `.venv` 并从备份 wheelhouse 离线安装 `requirements-dev.txt`。
+- SQLite 事务仅替换 `tasks.source_path`、`tasks.original_video_path` 和 `output_clip.output_file_path` 中实际命中的 4 条旧根路径；两个发布结果 JSON 字段无命中。迁移后 `quick_check=ok`、外键异常为 0，E 盘路径计数未变化。
+- Alter 固定 ID `fe184e2b-9e04-4b21-a86b-12c59f98d71e` 与 `6f5fc7c4-9e42-4966-a8ef-f382b0c3e451` 保持不变，`enabled=true`、`autorestart=true`，`cwd/script/args` 已更新为新路径；其他托管项未启动。
+- `NiuMa Studio Docker Watcher` 的脚本路径和工作目录已更新为新目录，并继续保持禁用。Worker、Web 与 Scheduler 健康检查通过，迁移验证未手工触发真实投稿。
+- Documents 下的 `启动牛马片场.bat` 与 `停止牛马片场.bat` 已同步改为新根目录，避免后续双击启动或停止时仍进入不存在的旧目录。
+- 路径相关回归 `28 passed`，Ruff 与 `git diff --check` 通过；`doctor.ps1` 仅因 Docker Desktop 当前不可连接返回失败，当前正式 Windows 原生 Web/Worker 与 Scheduler 健康，不影响本次迁移，Docker Watcher 继续禁用。

@@ -52,8 +52,8 @@
 在隔离 worktree 中使用主项目虚拟环境：
 
 ```powershell
-& 'C:\Users\10578\Documents\New project 2\.venv\Scripts\python.exe' -m pytest tests/test_publish_copy_rules.py tests/test_publish_readiness.py tests/test_publish_job_lifecycle.py tests/test_local_browser_publishers.py tests/test_publish_task_grouping.py tests/test_publish_task_linkage.py tests/test_auto_pipeline.py tests/test_publish_center_browser.py -q
-& 'C:\Users\10578\Documents\New project 2\.venv\Scripts\python.exe' -m pytest -q
+& 'C:\Users\10578\Documents\Ai-Clip-Workflow\.venv\Scripts\python.exe' -m pytest tests/test_publish_copy_rules.py tests/test_publish_readiness.py tests/test_publish_job_lifecycle.py tests/test_local_browser_publishers.py tests/test_publish_task_grouping.py tests/test_publish_task_linkage.py tests/test_auto_pipeline.py tests/test_publish_center_browser.py -q
+& 'C:\Users\10578\Documents\Ai-Clip-Workflow\.venv\Scripts\python.exe' -m pytest -q
 ```
 
 ## 返回格式

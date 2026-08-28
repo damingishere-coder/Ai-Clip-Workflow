@@ -48,8 +48,8 @@ v2.2.0 支持两种运行方式。日常使用推荐 Docker Desktop；真实抖�
 打开 PowerShell，进入你想放项目的目录：
 
 ```powershell
-git clone <仓库地址> "New project 2"
-cd "New project 2"
+git clone <仓库地址> "Ai-Clip-Workflow"
+cd "Ai-Clip-Workflow"
 ```
 
 ### 2.3 创建虚拟环境并安装依赖
