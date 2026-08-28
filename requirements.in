@@ -2,7 +2,7 @@
 # requirements.txt contains the direct versions verified by CI.
 
 fastapi>=0.136,<0.142
-uvicorn[standard]>=0.47,<0.53
+uvicorn[standard]>=0.52.4,<0.53
 jinja2>=3.1,<4
 python-multipart>=0.0.28,<0.1
 pydantic>=2.13,<3
