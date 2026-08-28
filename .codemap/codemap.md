@@ -180,4 +180,3 @@ _LoC is the representative file/folder per module; folder-level modules overlap 
 - **复杂度集中而非全项目平均恶化.** publish_service.py、publish-center.js、app.js、publish_scheduler.py、subtitle_data_service.py 和 transcript_service.py 是主要 God Component；应按业务边界渐进拆分。
 - **测试已与活动数据隔离，但 Coverage 与真实故障闭环仍不足.** Pytest 已强制使用进程级 sandbox，P0/P1 失败矩阵持续扩充；Coverage 尚未采集，Playwright 可选跳过和真实平台/进程故障闭环仍需在 P2 补齐。
 - **遗留目录迁移脚本不得用于活动库.** scripts/migrate_task_dirs_to_project_names.py 仍是唯一 Codemap HIGH：它不属于当前运行链路，但缺少 WAL-aware 备份与文件补偿；在 P2 专项替换前必须保持停用。
-
