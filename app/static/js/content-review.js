@@ -64,7 +64,7 @@ function formatSeconds(value) {
 }
 
 function formatMetric(key, value) {
-  if (["five_second_completion_rate", "two_second_bounce_rate", "cover_click_rate"].includes(key)) {
+  if (["completion_rate", "five_second_completion_rate", "two_second_bounce_rate", "cover_click_rate"].includes(key)) {
     return formatPercent(value);
   }
   if (key === "average_watch_seconds") return formatSeconds(value);
@@ -141,10 +141,18 @@ function appendCell(row, primary, secondary = "") {
   return cell;
 }
 
+function appendDetailedCell(row, primary, details = []) {
+  const cell = document.createElement("td");
+  cell.append(textNode("strong", primary));
+  details.filter(Boolean).forEach((detail) => cell.append(textNode("small", detail)));
+  row.append(cell);
+  return cell;
+}
+
 function matchLabel(status) {
   return {
     matched_exact: "作品 ID 精确匹配",
-    matched_unique: "标题时间唯一匹配",
+    matched_unique: "标题 / 正文 + 时间唯一匹配",
     confirmed_manual: "人工确认",
     ambiguous: "存在多个候选",
     unmatched: "未匹配",
@@ -175,7 +183,7 @@ function renderWorks(works) {
   body.replaceChildren();
   if (!works.length) {
     const row = document.createElement("tr");
-    const cell = textNode("td", "暂无作品级指标。请在登录状态正常时手动点击同步最近 50 条作品。");
+    const cell = textNode("td", "暂无作品级指标。请上传官方作品列表，或点击“自动导出并同步全部作品”。");
     cell.colSpan = 6;
     row.append(cell);
     body.append(row);
@@ -183,11 +191,26 @@ function renderWorks(works) {
   }
   works.forEach((work) => {
     const row = document.createElement("tr");
-    appendCell(row, work.title || work.aweme_id, `${work.aweme_id} · ${formatDateTime(work.published_at)}`);
-    appendCell(
+    const isExportKey = String(work.aweme_id || "").startsWith("export:");
+    const sourceName = work.metric_source_filename || "历史作品快照";
+    appendDetailedCell(
       row,
-      `${formatNumber(work.play_count)} 播放`,
-      `${formatNumber(work.like_count)} 赞 · ${formatNumber(work.comment_count)} 评 · ${formatNumber(work.share_count)} 转`,
+      work.title || "未命名作品",
+      [
+        formatDateTime(work.published_at),
+        `来源：${sourceName}`,
+        `${work.content_genre || "体裁未知"} · ${work.audit_status || "审核状态未知"}`,
+        !isExportKey && work.aweme_id ? `抖音作品 ID：${work.aweme_id}` : "",
+      ],
+    );
+    appendDetailedCell(
+      row,
+      `${formatNumber(work.play_count)} 播放 · ${formatPercent(work.completion_rate)} 完播`,
+      [
+        `${formatNumber(work.like_count)} 赞 · ${formatNumber(work.comment_count)} 评 · ${formatNumber(work.share_count)} 转 · ${formatNumber(work.collect_count)} 藏`,
+        `${formatPercent(work.five_second_completion_rate)} 5s 完播 · ${formatPercent(work.cover_click_rate)} 封面点击 · ${formatPercent(work.two_second_bounce_rate)} 2s 跳出`,
+        `${formatSeconds(work.average_watch_seconds)} 平均播放 · ${formatNumber(work.home_visit_count)} 主页访问 · ${formatNumber(work.follower_gain_count)} 粉丝增量`,
+      ],
     );
     appendCell(
       row,
@@ -309,14 +332,17 @@ function renderImports(imports) {
     item.className = "content-review-import-item";
     const header = document.createElement("header");
     header.append(
-      textNode("strong", batch.source_kind === "douyin_item_sync" ? "作品级同步" : batch.source_filename),
+      textNode("strong", batch.source_kind === "douyin_item_export" ? "官方作品列表" : batch.source_filename),
       textNode("span", batch.status, "status-pill"),
     );
+    const summary = batch.source_kind === "douyin_item_export"
+      ? `${batch.row_count || 0} 条作品 · 唯一匹配 ${batch.matched_count || 0} · 歧义 ${batch.ambiguous_count || 0} · 未匹配 ${Math.max(0, Number(batch.row_count || 0) - Number(batch.matched_count || 0) - Number(batch.ambiguous_count || 0))}`
+      : `${batch.row_count || 0} 天账号趋势 · 未归因历史基线`;
     item.append(
       header,
       textNode(
         "small",
-        `${batch.row_count || 0} 行 · ${batch.period_start || "—"} 至 ${batch.period_end || "—"} · ${formatDateTime(batch.committed_at || batch.created_at)}`,
+        `${summary} · ${batch.period_start || "—"} 至 ${batch.period_end || "—"} · ${formatDateTime(batch.committed_at || batch.created_at)}`,
       ),
     );
     list.append(item);
@@ -330,7 +356,7 @@ async function loadContentReviewData() {
   try {
     const [summary, works, prompts, imports] = await Promise.all([
       contentReviewApi(`/api/content-review/summary?${query}&days=28`),
-      contentReviewApi(`/api/content-review/works?${query}&limit=100`),
+      contentReviewApi(`/api/content-review/works?${query}&limit=200`),
       contentReviewApi(`/api/content-review/prompt-comparison?${query}`),
       contentReviewApi(`/api/content-review/imports?${query}&limit=20`),
     ]);
@@ -366,8 +392,10 @@ contentReviewImportForm?.addEventListener("submit", async (event) => {
     if (contentReviewPreview) contentReviewPreview.hidden = data.already_imported;
     if (!data.already_imported) {
       contentReviewPreview.querySelector("[data-preview-filename]").textContent = data.filename || file.name;
+      contentReviewPreview.querySelector("[data-preview-type]").textContent = data.report_type === "douyin_item_export" ? "官方作品列表" : "账号趋势表";
       contentReviewPreview.querySelector("[data-preview-period]").textContent = `${data.period_start} 至 ${data.period_end}`;
       contentReviewPreview.querySelector("[data-preview-rows]").textContent = `${data.row_count} 行`;
+      contentReviewPreview.querySelector("[data-preview-attribution]").textContent = data.report_type === "douyin_item_export" ? "仅唯一证据自动关联" : "未归因账号历史基线";
     }
     showContentReviewMessage(data.message, data.already_imported ? "info" : "success");
   } catch (error) {
@@ -401,13 +429,13 @@ contentReviewCommit?.addEventListener("click", async () => {
 
 contentReviewSync?.addEventListener("click", async () => {
   contentReviewSync.disabled = true;
-  contentReviewSync.textContent = "同步中…";
-  showContentReviewMessage("正在读取最近 50 条作品；不会触发投稿或自动重试。", "info");
+  contentReviewSync.textContent = "正在导出官方报表…";
+  showContentReviewMessage("正在点击一次“导出数据”并读取全部官方作品；不会触发投稿或自动重试。", "info");
   try {
-    const data = await contentReviewApi("/api/content-review/douyin/sync-preview", {
+    const data = await contentReviewApi("/api/content-review/douyin/export-sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ account_id: currentAccountId(), limit: 50 }),
+      body: JSON.stringify({ account_id: currentAccountId() }),
     });
     showContentReviewMessage(data.message, "success");
     await loadContentReviewData();
@@ -415,7 +443,7 @@ contentReviewSync?.addEventListener("click", async () => {
     showContentReviewMessage(`同步已安全停止：${error.message}`, "error");
   } finally {
     contentReviewSync.disabled = false;
-    contentReviewSync.textContent = "一键同步最近 50 条作品";
+    contentReviewSync.textContent = "自动导出并同步全部作品";
   }
 });
 

@@ -48,7 +48,7 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
         ).fetchall()
         indexes = _index_names(connection)
 
-    assert len(migrations) == 3
+    assert len(migrations) == 4
     migrations_by_version = {row["version"]: row for row in migrations}
     publish_migration = migrations_by_version[database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_VERSION]
     assert publish_migration["name"] == database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_NAME
@@ -62,9 +62,19 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
     assert content_review_migration["name"] == database_module.CONTENT_REVIEW_MIGRATION_NAME
     assert content_review_migration["checksum"] == database_module.CONTENT_REVIEW_MIGRATION_CHECKSUM
     assert content_review_migration["applied_at"]
+    export_migration = migrations_by_version[database_module.DOUYIN_ITEM_EXPORT_MIGRATION_VERSION]
+    assert export_migration["name"] == database_module.DOUYIN_ITEM_EXPORT_MIGRATION_NAME
+    assert export_migration["checksum"] == database_module.DOUYIN_ITEM_EXPORT_MIGRATION_CHECKSUM
+    assert export_migration["applied_at"]
     assert database_module.PUBLISH_ACTIVE_UNIQUE_INDEX_NAME in indexes
     assert database_module.PUBLISH_ACTIVE_UNIQUE_INDEX_LEGACY_NAME not in indexes
     assert set(database_module.CONTENT_REVIEW_REQUIRED_INDEXES) <= indexes
+    with _connect(isolated_database) as connection:
+        item_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(douyin_item_metric_snapshots)")
+        }
+    assert set(database_module.DOUYIN_ITEM_EXPORT_COLUMNS) <= item_columns
 
 
 def test_checksum_drift_refuses_startup(isolated_database):
@@ -140,6 +150,31 @@ def test_legacy_nas_task_is_backed_up_and_normalized(isolated_database):
     }
     assert ledger_count == 1
     assert len(backups) == 1
+
+
+def test_official_item_export_migration_is_backed_up_and_recorded(isolated_database):
+    database_module.init_db()
+    with _connect(isolated_database) as connection:
+        connection.execute(
+            "DELETE FROM schema_migrations WHERE version = ?",
+            (database_module.DOUYIN_ITEM_EXPORT_MIGRATION_VERSION,),
+        )
+        connection.commit()
+
+    database_module.init_db()
+
+    backups = list(
+        (isolated_database.parent / "backups").glob(
+            "workflow-before-douyin-official-item-export-*.sqlite3"
+        )
+    )
+    with _connect(isolated_database) as connection:
+        ledger = connection.execute(
+            "SELECT checksum FROM schema_migrations WHERE version = ?",
+            (database_module.DOUYIN_ITEM_EXPORT_MIGRATION_VERSION,),
+        ).fetchone()
+    assert len(backups) == 1
+    assert ledger["checksum"] == database_module.DOUYIN_ITEM_EXPORT_MIGRATION_CHECKSUM
 
 
 def test_applied_migration_with_drifted_index_refuses_startup(isolated_database):

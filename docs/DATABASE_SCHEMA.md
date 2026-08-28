@@ -1,5 +1,15 @@
 # 数据库结构说明
 
+## 2026-08-29：抖音官方作品报表完整指标
+
+- 新迁移账本版本：`20260829_01_douyin_official_item_export`。它只追加字段，不修改已应用的 `20260828_01_content_review_v1` 名称、定义或 checksum。
+- `douyin_item_metric_snapshots` 新增 `completion_rate REAL`、`home_visit_count INTEGER`、`follower_gain_count INTEGER`、`content_genre TEXT`、`audit_status TEXT`。
+- 既有 `play_count / like_count / comment_count / share_count / collect_count / five_second_completion_rate / cover_click_rate / two_second_bounce_rate / average_watch_seconds` 继续复用；`completion_rate` 与 `five_second_completion_rate` 是两个独立字段。
+- 官方作品报表没有平台作品 ID。`aweme_id` 对这类快照保存 `export:<SHA-256>` 稳定内部键，哈希输入为规范化标题和北京时间发布时间；它只用于批次内唯一性，不在页面伪装成抖音作品 ID。
+- `content_metric_import_batches.source_kind` 对自动下载和人工作品上传统一为 `douyin_item_export`；`source_sha256` 是规范化白名单 JSON 的 SHA-256，因此两个入口可以交叉幂等。账号趋势表仍为 `account_daily_file`，继续使用原文件哈希。
+- 批次只保存安全文件名、规范化白名单 JSON、行数、周期和匹配统计；不保存原始 Excel、Cookie、Token、本机临时路径或页面响应。
+- 最新作品查询优先以 `publish_job_id` 作为归并键；未关联记录才使用内部作品键，避免平台标题修改后把同一发布记录重复展示。
+
 ## 2026-08-28：内容复盘、Prompt 版本与指标快照
 
 - `clip_candidates.source_analysis_run_id`：候选片段来源 AI Run；历史候选只在任务能唯一确定 Run 时回填。

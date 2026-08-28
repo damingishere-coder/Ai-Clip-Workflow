@@ -80,10 +80,12 @@ class PublishWorkerClient:
                 "VERIFICATION_REQUIRED",
                 "RATE_LIMITED",
                 "PAGE_CHANGED",
+                "INVALID_EXPORT",
+                "DOWNLOAD_FAILED",
                 "WORKER_UNAVAILABLE",
             }:
                 raise PublishError(str(detail), detail_code) from exc
-            if exc.code in {409, 422, 429}:
+            if exc.code in {409, 422, 429, 502}:
                 raise PublishError(str(detail), "publish_worker_rejected") from exc
             raise PublishWorkerUnavailable(
                 f"Windows 发布 Worker 返回 HTTP {exc.code}：{detail}",
@@ -133,13 +135,12 @@ class PublishWorkerClient:
         account_id = validate_worker_identifier(account_id, "account_id", max_length=120)
         return self._request("POST", "/v1/accounts/open-center", {"platform": platform, "account_id": account_id})
 
-    def analytics_sync(self, account_id: str, limit: int = 50) -> dict[str, Any]:
+    def analytics_export_sync(self, account_id: str) -> dict[str, Any]:
         account_id = validate_worker_identifier(account_id, "account_id", max_length=120)
-        safe_limit = max(1, min(50, int(limit)))
         return self._request(
             "POST",
-            "/v1/analytics/douyin/sync",
-            {"account_id": account_id, "limit": safe_limit},
+            "/v1/analytics/douyin/export-sync",
+            {"account_id": account_id},
         )
 
     def publish(self, payload: dict[str, Any]) -> PublishResult:

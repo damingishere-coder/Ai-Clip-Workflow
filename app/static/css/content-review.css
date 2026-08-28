@@ -172,7 +172,14 @@
 }
 
 .content-review-works-table {
-  min-width: 1120px;
+  min-width: 1380px;
+}
+
+.content-review-works-table th:nth-child(1),
+.content-review-works-table td:nth-child(1),
+.content-review-works-table th:nth-child(2),
+.content-review-works-table td:nth-child(2) {
+  min-width: 280px;
 }
 
 .content-review-match-tools {

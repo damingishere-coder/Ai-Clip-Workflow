@@ -13,7 +13,6 @@ import os
 import subprocess
 import sys
 import threading
-import time
 import weakref
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +28,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.core.config import settings  # noqa: E402
+from app.services.content_review_service import (  # noqa: E402
+    ContentReviewError,
+    parse_douyin_item_export,
+)
 from app.services.publish_time import utc_now_iso  # noqa: E402
 from app.services.publishers.base import (  # noqa: E402
     PublishError,
@@ -88,9 +91,8 @@ class OpenCliRunRequest(BaseModel):
     timeout: int = Field(default=600, ge=1, le=1800)
 
 
-class AnalyticsSyncRequest(BaseModel):
+class AnalyticsExportSyncRequest(BaseModel):
     account_id: str = Field(min_length=1, max_length=120)
-    limit: int = Field(default=50, ge=1, le=50)
 
     @field_validator("account_id")
     @classmethod
@@ -103,10 +105,11 @@ ANALYTICS_ERROR_STATUS = {
     "VERIFICATION_REQUIRED": 409,
     "RATE_LIMITED": 429,
     "PAGE_CHANGED": 422,
+    "INVALID_EXPORT": 422,
+    "DOWNLOAD_FAILED": 502,
     "WORKER_UNAVAILABLE": 503,
 }
 DOUYIN_CONTENT_MANAGE_URL = "https://creator.douyin.com/creator-micro/content/manage"
-DOUYIN_METRICS_TREND_URL = "https://creator.douyin.com/janus/douyin/creator/data/item_analysis/metrics_trend"
 
 
 class AnalyticsSyncError(RuntimeError):
@@ -123,171 +126,6 @@ def _analytics_http_error(error_code: str, message: str) -> HTTPException:
     )
 
 
-def _first_value(mapping: dict[str, Any], keys: tuple[str, ...]) -> Any:
-    for key in keys:
-        value = mapping.get(key)
-        if value not in (None, ""):
-            return value
-    return None
-
-
-def _nested_dict(mapping: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
-    for key in keys:
-        value = mapping.get(key)
-        if isinstance(value, dict):
-            return value
-    return {}
-
-
-def _as_nonnegative_int(value: Any) -> int | None:
-    if value in (None, ""):
-        return None
-    try:
-        return max(0, int(float(str(value).replace(",", ""))))
-    except (TypeError, ValueError):
-        return None
-
-
-def _as_optional_float(value: Any) -> float | None:
-    if value in (None, ""):
-        return None
-    try:
-        number = float(str(value).rstrip("%"))
-    except (TypeError, ValueError):
-        return None
-    if str(value).strip().endswith("%") or (1 < number <= 100):
-        number /= 100
-    return number if number >= 0 else None
-
-
-def _published_at(value: Any) -> str | None:
-    if value in (None, ""):
-        return None
-    if isinstance(value, str) and "-" in value:
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).isoformat(timespec="seconds")
-        except ValueError:
-            return value[:40]
-    try:
-        timestamp = float(value)
-        if timestamp > 10_000_000_000:
-            timestamp /= 1000
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat(timespec="seconds")
-    except (TypeError, ValueError, OSError):
-        return None
-
-
-def _normalize_douyin_item(candidate: dict[str, Any]) -> dict[str, Any] | None:
-    stats = _nested_dict(candidate, ("statistics", "stats", "stat", "metrics"))
-    video = _nested_dict(candidate, ("video", "video_info", "videoInfo"))
-    aweme_id = _first_value(candidate, ("aweme_id", "awemeId", "item_id", "itemId"))
-    if aweme_id in (None, "") and any(key in candidate for key in ("create_time", "publish_time", "desc")):
-        aweme_id = candidate.get("id")
-    aweme_id = str(aweme_id or "").strip()
-    if not aweme_id:
-        return None
-    duration = _first_value(candidate, ("duration", "duration_seconds", "video_duration"))
-    if duration in (None, ""):
-        duration = _first_value(video, ("duration", "duration_seconds"))
-    try:
-        duration_value = float(duration) if duration not in (None, "") else None
-        if duration_value is not None and duration_value > 3600:
-            duration_value /= 1000
-    except (TypeError, ValueError):
-        duration_value = None
-    merged = {**candidate, **stats}
-    return {
-        "aweme_id": aweme_id[:120],
-        "title": str(_first_value(candidate, ("title", "desc", "caption", "name")) or "")[:240],
-        "published_at": _published_at(
-            _first_value(candidate, ("create_time", "publish_time", "published_at", "createTime"))
-        ),
-        "duration_seconds": duration_value,
-        "play_count": _as_nonnegative_int(_first_value(merged, ("play_count", "playCount", "play"))),
-        "like_count": _as_nonnegative_int(_first_value(merged, ("like_count", "digg_count", "likeCount"))),
-        "comment_count": _as_nonnegative_int(_first_value(merged, ("comment_count", "commentCount"))),
-        "share_count": _as_nonnegative_int(_first_value(merged, ("share_count", "shareCount"))),
-        "collect_count": _as_nonnegative_int(_first_value(merged, ("collect_count", "collectCount"))),
-        "five_second_completion_rate": _as_optional_float(
-            _first_value(merged, ("five_second_completion_rate", "five_sec_play_rate", "play_5s_rate"))
-        ),
-        "two_second_bounce_rate": _as_optional_float(
-            _first_value(merged, ("two_second_bounce_rate", "two_sec_jump_rate", "skip_2s_rate"))
-        ),
-        "cover_click_rate": _as_optional_float(
-            _first_value(merged, ("cover_click_rate", "coverClickRate"))
-        ),
-        "average_watch_seconds": _as_optional_float(
-            _first_value(merged, ("average_watch_seconds", "avg_play_duration", "average_play_time"))
-        ),
-    }
-
-
-def _extract_douyin_work_items(payload: Any, limit: int = 50) -> list[dict[str, Any]]:
-    """从作品列表 XHR 的常见嵌套结构中提取白名单字段，不保留原始响应。"""
-    candidates: list[dict[str, Any]] = []
-
-    def visit(value: Any, depth: int = 0) -> None:
-        if depth > 10 or len(candidates) >= 500:
-            return
-        if isinstance(value, list):
-            for item in value:
-                if isinstance(item, dict):
-                    normalized = _normalize_douyin_item(item)
-                    if normalized is not None:
-                        candidates.append(normalized)
-                    visit(item, depth + 1)
-            return
-        if isinstance(value, dict):
-            for nested in value.values():
-                if isinstance(nested, (dict, list)):
-                    visit(nested, depth + 1)
-
-    visit(payload)
-    unique: dict[str, dict[str, Any]] = {}
-    for candidate in candidates:
-        aweme_id = candidate["aweme_id"]
-        if aweme_id not in unique or sum(value is not None for value in candidate.values()) > sum(
-            value is not None for value in unique[aweme_id].values()
-        ):
-            unique[aweme_id] = candidate
-    return sorted(
-        unique.values(),
-        key=lambda item: str(item.get("published_at") or ""),
-        reverse=True,
-    )[: max(1, min(50, int(limit)))]
-
-
-def _metric_values(payload: Any) -> dict[str, Any]:
-    items = _extract_douyin_work_items(payload, limit=1)
-    if items:
-        return {key: value for key, value in items[0].items() if key.endswith("_count") and value is not None}
-    found: dict[str, Any] = {}
-
-    def visit(value: Any, depth: int = 0) -> None:
-        if depth > 10 or not isinstance(value, (dict, list)):
-            return
-        if isinstance(value, list):
-            for nested in value:
-                visit(nested, depth + 1)
-            return
-        aliases = {
-            "play_count": ("play_count", "playCount"),
-            "like_count": ("like_count", "digg_count", "likeCount"),
-            "comment_count": ("comment_count", "commentCount"),
-            "share_count": ("share_count", "shareCount"),
-        }
-        for field, keys in aliases.items():
-            parsed = _as_nonnegative_int(_first_value(value, keys))
-            if parsed is not None:
-                found[field] = parsed
-        for nested in value.values():
-            visit(nested, depth + 1)
-
-    visit(payload)
-    return found
-
-
 def _page_requires_login(page: Any) -> bool:
     url = str(getattr(page, "url", "") or "").lower()
     if any(marker in url for marker in ("passport", "/login", "login.douyin")):
@@ -299,17 +137,22 @@ def _page_requires_login(page: Any) -> bool:
     return any(marker in text for marker in ("登录后使用", "请先登录", "登录创作者中心", "扫码登录"))
 
 
-def _metric_start_timestamp(value: Any, fallback: int) -> int:
-    if not value:
-        return fallback
-    try:
-        return max(0, int(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()))
-    except (TypeError, ValueError, OSError):
-        return fallback
+def _douyin_export_button(page: Any) -> Any:
+    candidates = (
+        page.get_by_role("button", name="导出数据", exact=True),
+        page.get_by_text("导出数据", exact=True),
+    )
+    for candidate in candidates:
+        try:
+            locator = candidate.first
+            locator.wait_for(state="visible", timeout=3000)
+            return locator
+        except Exception:
+            continue
+    raise AnalyticsSyncError("没有找到“导出数据”按钮，平台页面结构可能已变化", "PAGE_CHANGED")
 
 
-def _sync_douyin_analytics(runtime: BrowserRuntime, limit: int) -> dict[str, Any]:
-    captured_payloads: list[Any] = []
+def _export_douyin_item_report(runtime: BrowserRuntime) -> dict[str, Any]:
     response_state = {"rate_limited": False, "login_required": False}
     with runtime.page(DOUYIN_CONTENT_MANAGE_URL) as page:
         if _page_requires_login(page):
@@ -321,27 +164,16 @@ def _sync_douyin_analytics(runtime: BrowserRuntime, limit: int) -> dict[str, Any
 
         def capture_response(response: Any) -> None:
             try:
-                url = str(response.url or "").lower()
-                resource_type = str(response.request.resource_type or "").lower()
-                if resource_type not in {"xhr", "fetch"}:
-                    return
                 if int(response.status) == 429:
                     response_state["rate_limited"] = True
-                    return
                 if int(response.status) in {401, 403}:
                     response_state["login_required"] = True
-                    return
-                if not any(marker in url for marker in ("aweme", "item", "content/manage", "video/list")):
-                    return
-                if int(response.status) == 200:
-                    captured_payloads.append(response.json())
             except Exception:
                 return
 
         page.on("response", capture_response)
         try:
-            page.reload(wait_until="domcontentloaded", timeout=settings.publish_browser_navigation_timeout_ms)
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(1500)
         except Exception as exc:
             raise AnalyticsSyncError(f"抖音作品页加载失败：{exc}", "WORKER_UNAVAILABLE") from exc
         if response_state["rate_limited"]:
@@ -352,79 +184,63 @@ def _sync_douyin_analytics(runtime: BrowserRuntime, limit: int) -> dict[str, Any
             runtime.detect_manual_challenge(page)
         except PublishNeedsReview as exc:
             raise AnalyticsSyncError(exc.message, "VERIFICATION_REQUIRED") from exc
-
-        items: list[dict[str, Any]] = []
-        for payload in captured_payloads:
-            items.extend(_extract_douyin_work_items(payload, limit=limit))
-        deduplicated = {item["aweme_id"]: item for item in items}
-        items = sorted(
-            deduplicated.values(),
-            key=lambda item: str(item.get("published_at") or ""),
-            reverse=True,
-        )[:limit]
-        if not items:
-            raise AnalyticsSyncError(
-                "没有从作品列表请求中识别到作品数据，平台页面结构可能已变化",
-                "PAGE_CHANGED",
-            )
-
-        now_timestamp = int(time.time())
-        metric_input = [
-            {
-                "aweme_id": item["aweme_id"],
-                "start_time": _metric_start_timestamp(
-                    item.get("published_at"),
-                    now_timestamp - 90 * 86400,
-                ),
-                "end_time": now_timestamp,
-            }
-            for item in items
-        ]
-        metric_result = page.evaluate(
-            """
-            async ({endpoint, works}) => {
-              const results = [];
-              for (const work of works) {
-                const response = await fetch(endpoint, {
-                  method: 'POST',
-                  credentials: 'same-origin',
-                  headers: {'Content-Type': 'application/json'},
-                  body: JSON.stringify({
-                    aweme_id: work.aweme_id,
-                    start_time: work.start_time,
-                    end_time: work.end_time,
-                    metrics: ['play_count', 'like_count', 'comment_count', 'share_count']
-                  })
-                });
-                if (!response.ok) return {error_status: response.status, results};
-                let payload;
-                try { payload = await response.json(); }
-                catch (_error) { return {error_status: 520, results}; }
-                results.push({aweme_id: work.aweme_id, payload});
-              }
-              return {results};
-            }
-            """,
-            {"endpoint": DOUYIN_METRICS_TREND_URL, "works": metric_input},
-        )
-        if not isinstance(metric_result, dict):
-            raise AnalyticsSyncError("作品指标接口返回格式已变化", "PAGE_CHANGED")
-        error_status = int(metric_result.get("error_status") or 0)
-        if error_status == 429:
-            raise AnalyticsSyncError("抖音返回 429 限流，已停止同步且不会自动重试", "RATE_LIMITED")
-        if error_status in {401, 403}:
-            raise AnalyticsSyncError("抖音创作者中心登录已失效，请先重新登录", "LOGIN_REQUIRED")
-        if error_status:
-            raise AnalyticsSyncError(f"作品指标接口返回 HTTP {error_status}", "PAGE_CHANGED")
-        by_id = {item["aweme_id"]: item for item in items}
-        for result in metric_result.get("results") or []:
-            if not isinstance(result, dict) or str(result.get("aweme_id") or "") not in by_id:
-                continue
-            by_id[str(result["aweme_id"])].update(_metric_values(result.get("payload")))
+        export_button = _douyin_export_button(page)
+        download_path: Path | None = None
+        try:
+            try:
+                with page.expect_download(
+                    timeout=settings.publish_browser_navigation_timeout_ms
+                ) as download_info:
+                    export_button.click()
+                download = download_info.value
+            except Exception as exc:
+                raise AnalyticsSyncError(
+                    f"等待抖音官方作品报表下载失败：{exc}",
+                    "DOWNLOAD_FAILED",
+                ) from exc
+            try:
+                raw_path = download.path()
+            except Exception as exc:
+                raise AnalyticsSyncError(
+                    f"抖音官方作品报表没有生成可读临时文件：{exc}",
+                    "DOWNLOAD_FAILED",
+                ) from exc
+            if raw_path:
+                download_path = Path(raw_path)
+            if response_state["rate_limited"]:
+                raise AnalyticsSyncError("抖音返回 429 限流，已停止同步且不会自动重试", "RATE_LIMITED")
+            if response_state["login_required"] or _page_requires_login(page):
+                raise AnalyticsSyncError("抖音创作者中心登录已失效，请先重新登录", "LOGIN_REQUIRED")
+            try:
+                runtime.detect_manual_challenge(page)
+            except PublishNeedsReview as exc:
+                raise AnalyticsSyncError(exc.message, "VERIFICATION_REQUIRED") from exc
+            failure = download.failure()
+            if failure:
+                raise AnalyticsSyncError(f"抖音官方作品报表下载失败：{failure}", "DOWNLOAD_FAILED")
+            if download_path is None:
+                raise AnalyticsSyncError("抖音官方作品报表没有生成临时文件", "DOWNLOAD_FAILED")
+            try:
+                content = download_path.read_bytes()
+            except OSError as exc:
+                raise AnalyticsSyncError(f"读取抖音官方作品报表失败：{exc}", "DOWNLOAD_FAILED") from exc
+            try:
+                items = parse_douyin_item_export(content)
+            except ContentReviewError as exc:
+                raise AnalyticsSyncError(str(exc), "INVALID_EXPORT") from exc
+            source_filename = Path(str(download.suggested_filename or "作品列表导出.xlsx")).name
+        finally:
+            if download_path is not None:
+                try:
+                    download_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
         return {
             "status": "ok",
             "captured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "items": list(by_id.values())[:limit],
+            "source_filename": source_filename,
+            "row_count": len(items),
+            "items": items,
         }
 
 
@@ -876,8 +692,8 @@ def create_worker_app(token: str | None = None) -> FastAPI:
         background_tasks.add_task(login_background, payload, lock)
         return {"status": "started", "message": "已打开平台创作者中心"}
 
-    @worker.post("/v1/analytics/douyin/sync", dependencies=[Depends(require_token)])
-    def sync_douyin_analytics(payload: AnalyticsSyncRequest) -> dict[str, Any]:
+    @worker.post("/v1/analytics/douyin/export-sync", dependencies=[Depends(require_token)])
+    def export_sync_douyin_analytics(payload: AnalyticsExportSyncRequest) -> dict[str, Any]:
         lock = _account_lock("douyin", payload.account_id)
         if not lock.acquire(blocking=False):
             raise _analytics_http_error(
@@ -886,7 +702,7 @@ def create_worker_app(token: str | None = None) -> FastAPI:
             )
         try:
             runtime = BrowserRuntime("douyin", payload.account_id)
-            return _sync_douyin_analytics(runtime, payload.limit)
+            return _export_douyin_item_report(runtime)
         except AnalyticsSyncError as exc:
             raise _analytics_http_error(exc.error_code, exc.message) from exc
         except PublishNeedsReview as exc:
@@ -899,8 +715,8 @@ def create_worker_app(token: str | None = None) -> FastAPI:
             )
             raise _analytics_http_error(error_code, exc.message) from exc
         except Exception as exc:
-            logger.exception("抖音作品指标同步失败：account_id=%s", payload.account_id)
-            raise _analytics_http_error("WORKER_UNAVAILABLE", f"Windows Worker 同步失败：{exc}") from exc
+            logger.exception("抖音官方作品报表同步失败：account_id=%s", payload.account_id)
+            raise _analytics_http_error("WORKER_UNAVAILABLE", f"Windows Worker 导出同步失败：{exc}") from exc
         finally:
             lock.release()
 

@@ -10,6 +10,7 @@ import statistics
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from app.db.database import get_connection
 
@@ -19,7 +20,8 @@ MAX_IMPORT_ROWS = 10_000
 MAX_IMPORT_COLUMNS = 50
 PREVIEW_TTL_HOURS = 24
 DAILY_SOURCE_KIND = "account_daily_file"
-DOUYIN_SYNC_SOURCE_KIND = "douyin_item_sync"
+DOUYIN_ITEM_EXPORT_SOURCE_KIND = "douyin_item_export"
+BEIJING_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 DAILY_HEADERS = (
     "日期",
@@ -32,6 +34,61 @@ DAILY_HEADERS = (
     "2秒跳出率",
     "封面点击率",
     "平均播放时长",
+)
+
+DOUYIN_ITEM_EXPORT_HEADERS = (
+    "作品名称",
+    "发布时间",
+    "体裁",
+    "审核状态",
+    "播放量",
+    "完播率",
+    "5s完播率",
+    "封面点击率",
+    "2s跳出率",
+    "平均播放时长",
+    "点赞量",
+    "分享量",
+    "评论量",
+    "收藏量",
+    "主页访问量",
+    "粉丝增量",
+)
+
+DOUYIN_ITEM_EXPORT_COUNT_FIELDS = {
+    "播放量": "play_count",
+    "点赞量": "like_count",
+    "分享量": "share_count",
+    "评论量": "comment_count",
+    "收藏量": "collect_count",
+    "主页访问量": "home_visit_count",
+    "粉丝增量": "follower_gain_count",
+}
+DOUYIN_ITEM_EXPORT_RATE_FIELDS = {
+    "完播率": "completion_rate",
+    "5s完播率": "five_second_completion_rate",
+    "封面点击率": "cover_click_rate",
+    "2s跳出率": "two_second_bounce_rate",
+}
+DOUYIN_ITEM_EXPORT_FIELDS = (
+    "aweme_id",
+    "title",
+    "published_at",
+    "duration_seconds",
+    "content_genre",
+    "audit_status",
+    "play_count",
+    "completion_rate",
+    "five_second_completion_rate",
+    "cover_click_rate",
+    "two_second_bounce_rate",
+    "average_watch_seconds",
+    "like_count",
+    "share_count",
+    "comment_count",
+    "collect_count",
+    "home_visit_count",
+    "follower_gain_count",
 )
 
 COUNT_FIELDS = {
@@ -117,7 +174,7 @@ def _trim_row(row: tuple | list) -> list:
     return values
 
 
-def _load_xlsx_rows(content: bytes) -> list[list]:
+def _load_xlsx_report(content: bytes) -> tuple[str, list[list]]:
     try:
         from openpyxl import load_workbook
 
@@ -130,7 +187,7 @@ def _load_xlsx_rows(content: bytes) -> list[list]:
     except Exception as exc:
         raise ContentReviewError("Excel 文件无法读取，可能已损坏或不是有效的 .xlsx 文件") from exc
 
-    matching_sheets: list[tuple[str, list[list]]] = []
+    matching_sheets: list[tuple[str, str, list[list]]] = []
     try:
         for worksheet in workbook.worksheets:
             if int(worksheet.max_column or 0) > MAX_IMPORT_COLUMNS:
@@ -145,18 +202,26 @@ def _load_xlsx_rows(content: bytes) -> list[list]:
                     raise ContentReviewError(f"工作表“{worksheet.title}”超过 {MAX_IMPORT_ROWS} 行数据限制")
             if not rows:
                 continue
-            normalized = {_normalize_header(value) for value in rows[0]}
-            if set(DAILY_HEADERS) <= normalized:
-                matching_sheets.append((worksheet.title, rows))
+            normalized_headers = [_normalize_header(value) for value in rows[0]]
+            normalized_set = set(normalized_headers)
+            if (
+                len(normalized_headers) == len(DOUYIN_ITEM_EXPORT_HEADERS)
+                and len(normalized_set) == len(DOUYIN_ITEM_EXPORT_HEADERS)
+                and normalized_set == set(DOUYIN_ITEM_EXPORT_HEADERS)
+            ):
+                matching_sheets.append((worksheet.title, DOUYIN_ITEM_EXPORT_SOURCE_KIND, rows))
+            elif set(DAILY_HEADERS) <= normalized_set:
+                matching_sheets.append((worksheet.title, DAILY_SOURCE_KIND, rows))
     finally:
         workbook.close()
 
     if not matching_sheets:
-        raise ContentReviewError("没有找到包含完整抖音日汇总表头的工作表")
+        raise ContentReviewError("没有找到可识别的抖音账号趋势表或官方 16 列作品列表表")
     if len(matching_sheets) > 1:
-        names = "、".join(name for name, _ in matching_sheets)
+        names = "、".join(name for name, _, _ in matching_sheets)
         raise ContentReviewError(f"发现多个可导入工作表（{names}），请只保留一个数据工作表")
-    return matching_sheets[0][1]
+    _, source_kind, rows = matching_sheets[0]
+    return source_kind, rows
 
 
 def _load_csv_rows(content: bytes) -> list[list]:
@@ -248,6 +313,208 @@ def _parse_seconds(value, *, row_number: int) -> float:
     return round(seconds, 4)
 
 
+def _is_empty_export_value(value) -> bool:
+    return value is None or str(value).strip() in {"", "-"}
+
+
+def _parse_optional_count(value, *, header: str, row_number: int) -> int | None:
+    if _is_empty_export_value(value):
+        return None
+    return _parse_count(value, header=header, row_number=row_number)
+
+
+def _parse_optional_rate(value, *, header: str, row_number: int) -> float | None:
+    if _is_empty_export_value(value):
+        return None
+    return _parse_rate(value, header=header, row_number=row_number)
+
+
+def _parse_optional_seconds(value, *, row_number: int) -> float | None:
+    if _is_empty_export_value(value):
+        return None
+    return _parse_seconds(value, row_number=row_number)
+
+
+def _parse_beijing_datetime(value, *, row_number: int) -> str:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, date):
+        parsed = datetime.combine(value, datetime.min.time())
+    else:
+        text = str(value or "").strip()
+        if not text or text == "-":
+            raise ContentReviewError(f"第 {row_number} 行“发布时间”不能为空")
+        parsed = None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+        if parsed is None:
+            for fmt in (
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M",
+                "%Y/%m/%d %H:%M:%S",
+                "%Y/%m/%d %H:%M",
+                "%Y.%m.%d %H:%M:%S",
+                "%Y.%m.%d %H:%M",
+            ):
+                try:
+                    parsed = datetime.strptime(text, fmt)
+                    break
+                except ValueError:
+                    continue
+        if parsed is None:
+            raise ContentReviewError(f"第 {row_number} 行“发布时间”无法识别：{text}")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=BEIJING_TIMEZONE)
+    else:
+        parsed = parsed.astimezone(BEIJING_TIMEZONE)
+    return parsed.isoformat(timespec="seconds")
+
+
+def _optional_export_text(value) -> str | None:
+    if _is_empty_export_value(value):
+        return None
+    return str(value).strip()
+
+
+def _export_internal_key(title: str, published_at: str) -> str:
+    identity = f"{normalize_title(title)}|{published_at}"
+    return "export:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _normalize_douyin_item_export_rows(rows: list[list]) -> list[dict]:
+    if len(rows) < 2:
+        raise ContentReviewError("作品列表文件只有表头，没有可导入的作品")
+    normalized_headers = [_normalize_header(value) for value in rows[0]]
+    if (
+        len(normalized_headers) != len(DOUYIN_ITEM_EXPORT_HEADERS)
+        or len(set(normalized_headers)) != len(DOUYIN_ITEM_EXPORT_HEADERS)
+        or set(normalized_headers) != set(DOUYIN_ITEM_EXPORT_HEADERS)
+    ):
+        raise ContentReviewError("作品列表必须严格包含官方 16 列表头，且不能增加、缺少或重复列")
+    header_index = {
+        header: normalized_headers.index(header)
+        for header in DOUYIN_ITEM_EXPORT_HEADERS
+    }
+    result: list[dict] = []
+    seen_ids: set[str] = set()
+    for row_number, row in enumerate(rows[1:], start=2):
+        if not row or all(_is_empty_export_value(value) for value in row):
+            continue
+
+        def value_for(header: str):
+            index = header_index[header]
+            return row[index] if index < len(row) else None
+
+        title = str(value_for("作品名称") or "").strip()
+        if not title or title == "-":
+            raise ContentReviewError(f"第 {row_number} 行“作品名称”不能为空")
+        published_at = _parse_beijing_datetime(value_for("发布时间"), row_number=row_number)
+        aweme_id = _export_internal_key(title, published_at)
+        if aweme_id in seen_ids:
+            continue
+        seen_ids.add(aweme_id)
+        item = {
+            "aweme_id": aweme_id,
+            "title": title,
+            "published_at": published_at,
+            "duration_seconds": None,
+            "content_genre": _optional_export_text(value_for("体裁")),
+            "audit_status": _optional_export_text(value_for("审核状态")),
+        }
+        for header, field in DOUYIN_ITEM_EXPORT_COUNT_FIELDS.items():
+            item[field] = _parse_optional_count(
+                value_for(header),
+                header=header,
+                row_number=row_number,
+            )
+        for header, field in DOUYIN_ITEM_EXPORT_RATE_FIELDS.items():
+            item[field] = _parse_optional_rate(
+                value_for(header),
+                header=header,
+                row_number=row_number,
+            )
+        item["average_watch_seconds"] = _parse_optional_seconds(
+            value_for("平均播放时长"),
+            row_number=row_number,
+        )
+        result.append(item)
+    if not result:
+        raise ContentReviewError("作品列表中没有可导入的有效作品")
+    result.sort(key=lambda item: (item["published_at"], item["aweme_id"]), reverse=True)
+    return result
+
+
+def parse_douyin_item_export(content: bytes) -> list[dict]:
+    """解析抖音创作者中心官方作品列表；不保存原始文件或浏览器数据。"""
+    if not content:
+        raise ContentReviewError("下载的作品列表为空")
+    if len(content) > MAX_IMPORT_BYTES:
+        raise ContentReviewError("作品列表超过 10MB 限制")
+    source_kind, rows = _load_xlsx_report(content)
+    if source_kind != DOUYIN_ITEM_EXPORT_SOURCE_KIND:
+        raise ContentReviewError("下载文件不是抖音官方 16 列作品列表")
+    return _normalize_douyin_item_export_rows(rows)
+
+
+def normalize_douyin_item_export_items(items: list[dict]) -> list[dict]:
+    """重新校验 Worker 白名单数据，保证自动和人工导入使用完全相同的规范。"""
+    if not isinstance(items, list) or not items:
+        raise ContentReviewError("作品列表没有可导入数据")
+    if len(items) > MAX_IMPORT_ROWS:
+        raise ContentReviewError(f"作品列表超过 {MAX_IMPORT_ROWS} 行数据限制")
+    normalized: list[dict] = []
+    seen_ids: set[str] = set()
+    for row_number, raw in enumerate(items, start=2):
+        if not isinstance(raw, dict):
+            raise ContentReviewError(f"第 {row_number} 行作品数据格式不正确")
+        title = str(raw.get("title") or "").strip()
+        if not title:
+            raise ContentReviewError(f"第 {row_number} 行“作品名称”不能为空")
+        published_at = _parse_beijing_datetime(raw.get("published_at"), row_number=row_number)
+        aweme_id = _export_internal_key(title, published_at)
+        if aweme_id in seen_ids:
+            continue
+        seen_ids.add(aweme_id)
+        item = {
+            "aweme_id": aweme_id,
+            "title": title,
+            "published_at": published_at,
+            "duration_seconds": None,
+            "content_genre": _optional_export_text(raw.get("content_genre")),
+            "audit_status": _optional_export_text(raw.get("audit_status")),
+        }
+        for field in DOUYIN_ITEM_EXPORT_COUNT_FIELDS.values():
+            item[field] = _parse_optional_count(
+                raw.get(field),
+                header=field,
+                row_number=row_number,
+            )
+        for field in DOUYIN_ITEM_EXPORT_RATE_FIELDS.values():
+            item[field] = _parse_optional_rate(
+                raw.get(field),
+                header=field,
+                row_number=row_number,
+            )
+        item["average_watch_seconds"] = _parse_optional_seconds(
+            raw.get("average_watch_seconds"),
+            row_number=row_number,
+        )
+        normalized.append(item)
+    if not normalized:
+        raise ContentReviewError("作品列表中没有可导入的有效作品")
+    normalized.sort(key=lambda item: (item["published_at"], item["aweme_id"]), reverse=True)
+    return normalized
+
+
+def _canonical_export_payload(items: list[dict]) -> tuple[list[dict], str, str]:
+    normalized_items = normalize_douyin_item_export_items(items)
+    payload_json = json.dumps(normalized_items, ensure_ascii=False, separators=(",", ":"))
+    payload_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+    return normalized_items, payload_json, payload_hash
+
+
 def _normalize_daily_rows(rows: list[list]) -> list[dict]:
     if len(rows) < 2:
         raise ContentReviewError("文件只有表头，没有可导入的数据行")
@@ -300,13 +567,33 @@ def preview_metric_import(*, account_id: str, filename: str, content: bytes) -> 
     extension = Path(safe_filename).suffix.lower()
     if extension not in {".xlsx", ".csv"}:
         raise ContentReviewError("仅支持 .xlsx 和 .csv；不支持旧 .xls、宏文件或其他格式")
-    rows = _load_xlsx_rows(content) if extension == ".xlsx" else _load_csv_rows(content)
-    normalized_rows = _normalize_daily_rows(rows)
-    source_sha256 = hashlib.sha256(content).hexdigest()
+    if extension == ".xlsx":
+        source_kind, rows = _load_xlsx_report(content)
+    else:
+        source_kind, rows = DAILY_SOURCE_KIND, _load_csv_rows(content)
+    if source_kind == DOUYIN_ITEM_EXPORT_SOURCE_KIND:
+        normalized_rows = _normalize_douyin_item_export_rows(rows)
+        normalized_rows, normalized_json, source_sha256 = _canonical_export_payload(normalized_rows)
+        published_dates = [str(item["published_at"])[:10] for item in normalized_rows]
+        period_start = min(published_dates)
+        period_end = max(published_dates)
+        attribution = "item_level_pending_matching"
+        message = "官方作品列表预览通过；确认后会写入作品快照并按唯一证据关联发布记录。"
+        batch_prefix = "export"
+        report_type = "douyin_item_export"
+    else:
+        normalized_rows = _normalize_daily_rows(rows)
+        normalized_json = json.dumps(normalized_rows, ensure_ascii=False, separators=(",", ":"))
+        source_sha256 = hashlib.sha256(content).hexdigest()
+        period_start = normalized_rows[0]["metric_date"]
+        period_end = normalized_rows[-1]["metric_date"]
+        attribution = "unattributed_historical_baseline"
+        message = "账号趋势表预览通过；确认后才会写入账号级历史基线。"
+        batch_prefix = "metric"
+        report_type = "account_daily"
     now = _now()
     now_iso = now.isoformat(timespec="seconds")
     expires_at = (now + timedelta(hours=PREVIEW_TTL_HOURS)).isoformat(timespec="seconds")
-    normalized_json = json.dumps(normalized_rows, ensure_ascii=False, separators=(",", ":"))
 
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -316,19 +603,21 @@ def preview_metric_import(*, account_id: str, filename: str, content: bytes) -> 
             FROM content_metric_import_batches
             WHERE account_id = ? AND source_kind = ? AND source_sha256 = ?
             """,
-            (resolved_account_id, DAILY_SOURCE_KIND, source_sha256),
+            (resolved_account_id, source_kind, source_sha256),
         ).fetchone()
         if existing is not None and existing["status"] == "committed":
             connection.commit()
             return {
                 "status": "already_imported",
                 "already_imported": True,
-                "message": "这个账号已经导入过相同文件，无需重复导入。",
+                "message": "这个账号已经导入过相同的规范化数据，无需重复导入。",
                 "batch_id": existing["id"],
                 "account_id": resolved_account_id,
+                "filename": safe_filename,
+                "report_type": report_type,
                 "row_count": len(normalized_rows),
-                "period_start": normalized_rows[0]["metric_date"],
-                "period_end": normalized_rows[-1]["metric_date"],
+                "period_start": period_start,
+                "period_end": period_end,
             }
         if existing is not None:
             batch_id = str(existing["id"])
@@ -342,8 +631,8 @@ def preview_metric_import(*, account_id: str, filename: str, content: bytes) -> 
                 """,
                 (
                     safe_filename,
-                    normalized_rows[0]["metric_date"],
-                    normalized_rows[-1]["metric_date"],
+                    period_start,
+                    period_end,
                     normalized_json,
                     len(normalized_rows),
                     now_iso,
@@ -352,7 +641,7 @@ def preview_metric_import(*, account_id: str, filename: str, content: bytes) -> 
                 ),
             )
         else:
-            batch_id = f"metric-{uuid4().hex[:16]}"
+            batch_id = f"{batch_prefix}-{uuid4().hex[:16]}"
             connection.execute(
                 """
                 INSERT INTO content_metric_import_batches (
@@ -364,11 +653,11 @@ def preview_metric_import(*, account_id: str, filename: str, content: bytes) -> 
                 (
                     batch_id,
                     resolved_account_id,
-                    DAILY_SOURCE_KIND,
+                    source_kind,
                     safe_filename,
                     source_sha256,
-                    normalized_rows[0]["metric_date"],
-                    normalized_rows[-1]["metric_date"],
+                    period_start,
+                    period_end,
                     normalized_json,
                     len(normalized_rows),
                     now_iso,
@@ -379,16 +668,17 @@ def preview_metric_import(*, account_id: str, filename: str, content: bytes) -> 
     return {
         "status": "previewed",
         "already_imported": False,
-        "message": "预览校验通过；确认后才会写入账号级历史基线。",
+        "message": message,
         "batch_id": batch_id,
         "account_id": resolved_account_id,
         "filename": safe_filename,
+        "report_type": report_type,
         "row_count": len(normalized_rows),
-        "period_start": normalized_rows[0]["metric_date"],
-        "period_end": normalized_rows[-1]["metric_date"],
+        "period_start": period_start,
+        "period_end": period_end,
         "expires_at": expires_at,
         "sample_rows": normalized_rows[:5],
-        "attribution": "unattributed_historical_baseline",
+        "attribution": attribution,
     }
 
 
@@ -431,6 +721,32 @@ def commit_metric_import(batch_id: str) -> dict:
         if not isinstance(rows, list) or not rows:
             connection.rollback()
             raise ContentReviewError("预览没有可导入数据，请重新上传文件", status_code=409)
+        if batch["source_kind"] == DOUYIN_ITEM_EXPORT_SOURCE_KIND:
+            normalized_items, _payload_json, payload_hash = _canonical_export_payload(rows)
+            if payload_hash != str(batch["source_sha256"]):
+                connection.rollback()
+                raise ContentReviewError("作品预览规范化哈希校验失败，请重新上传文件", status_code=409)
+            stats = _commit_export_batch_with_connection(
+                connection,
+                batch_id=str(batch["id"]),
+                account_id=str(batch["account_id"]),
+                items=normalized_items,
+                captured_at=now_iso,
+                committed_at=now_iso,
+            )
+            connection.commit()
+            return {
+                "status": "committed",
+                "already_imported": False,
+                "batch_id": batch_id,
+                **stats,
+                "message": (
+                    f"已导入 {stats['row_count']} 条官方作品数据；"
+                    f"唯一匹配 {stats['matched_count']} 条，歧义 {stats['ambiguous_count']} 条，"
+                    f"未匹配 {stats['unmatched_count']} 条。"
+                ),
+                "attribution": "item_level_unique_only",
+            }
         for row in rows:
             connection.execute(
                 """
@@ -620,8 +936,13 @@ def list_content_review_works(account_id: str = "", limit: int = 100) -> list[di
             """
             WITH latest_items AS (
                 SELECT i.*,
+                       b.source_kind AS metric_source_kind,
+                       b.source_filename AS metric_source_filename,
                        ROW_NUMBER() OVER (
-                           PARTITION BY i.aweme_id
+                           PARTITION BY CASE
+                               WHEN i.publish_job_id IS NOT NULL THEN 'job:' || i.publish_job_id
+                               ELSE 'work:' || i.aweme_id
+                           END
                            ORDER BY i.captured_at DESC, i.created_at DESC, i.rowid DESC
                        ) AS item_rank
                 FROM douyin_item_metric_snapshots i
@@ -703,7 +1024,10 @@ def get_prompt_comparison(account_id: str = "") -> dict:
             WITH latest_items AS (
                 SELECT i.*,
                        ROW_NUMBER() OVER (
-                           PARTITION BY i.aweme_id
+                           PARTITION BY CASE
+                               WHEN i.publish_job_id IS NOT NULL THEN 'job:' || i.publish_job_id
+                               ELSE 'work:' || i.aweme_id
+                           END
                            ORDER BY i.captured_at DESC, i.created_at DESC, i.rowid DESC
                        ) AS item_rank
                 FROM douyin_item_metric_snapshots i
@@ -883,176 +1207,279 @@ def normalize_title(value: str) -> str:
     return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(value or "").lower())
 
 
+def _matching_datetime(value) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=BEIJING_TIMEZONE)
+    return parsed.astimezone(BEIJING_TIMEZONE)
+
+
 def match_douyin_item_with_connection(connection, *, account_id: str, item: dict) -> dict:
     aweme_id = str(item.get("aweme_id") or "").strip()
-    exact_rows = connection.execute(
-        """
-        SELECT id FROM publish_jobs
-        WHERE platform = 'douyin' AND account_id = ?
-          AND (platform_item_id = ? OR remote_video_id = ?)
-        """,
-        (account_id, aweme_id, aweme_id),
-    ).fetchall()
-    if len(exact_rows) == 1:
-        return {"status": "matched_exact", "method": "platform_item_id", "publish_job_id": exact_rows[0]["id"]}
-    if len(exact_rows) > 1:
-        return {"status": "ambiguous", "method": "platform_item_id", "publish_job_id": None}
+    if aweme_id and not aweme_id.startswith("export:"):
+        exact_rows = connection.execute(
+            """
+            SELECT id FROM publish_jobs
+            WHERE platform = 'douyin' AND account_id = ?
+              AND (platform_item_id = ? OR remote_video_id = ?)
+            """,
+            (account_id, aweme_id, aweme_id),
+        ).fetchall()
+        if len(exact_rows) == 1:
+            return {
+                "status": "matched_exact",
+                "method": "platform_item_id",
+                "publish_job_id": exact_rows[0]["id"],
+            }
+        if len(exact_rows) > 1:
+            return {"status": "ambiguous", "method": "platform_item_id", "publish_job_id": None}
 
     normalized_title = normalize_title(str(item.get("title") or ""))
-    published_at = item.get("published_at")
-    if not normalized_title or not published_at:
-        return {"status": "unmatched", "method": None, "publish_job_id": None}
-    try:
-        item_time = datetime.fromisoformat(str(published_at).replace("Z", "+00:00"))
-    except ValueError:
+    item_time = _matching_datetime(item.get("published_at"))
+    if not normalized_title or item_time is None:
         return {"status": "unmatched", "method": None, "publish_job_id": None}
     candidates = connection.execute(
         """
-        SELECT pj.id, pj.title, pj.published_at, oc.source_duration_ms
+        SELECT pj.id, pj.title, pj.description, pj.caption, pj.published_at,
+               oc.source_duration_ms
         FROM publish_jobs pj
         LEFT JOIN output_clip oc ON oc.id = pj.output_clip_id
         WHERE pj.platform = 'douyin' AND pj.account_id = ? AND pj.published_at IS NOT NULL
         """,
         (account_id,),
     ).fetchall()
-    matches = []
+    exact_matches: list = []
+    contains_matches: list = []
     for candidate in candidates:
-        if normalize_title(str(candidate["title"] or "")) != normalized_title:
+        candidate_time = _matching_datetime(candidate["published_at"])
+        if candidate_time is None:
             continue
-        try:
-            candidate_time = datetime.fromisoformat(str(candidate["published_at"]).replace("Z", "+00:00"))
-            seconds_apart = abs((candidate_time - item_time).total_seconds())
-        except (TypeError, ValueError):
-            continue
+        seconds_apart = abs((candidate_time - item_time).total_seconds())
         if seconds_apart > 600:
             continue
         item_duration = float(item.get("duration_seconds") or 0)
         candidate_duration = float(candidate["source_duration_ms"] or 0) / 1000
         if item_duration and candidate_duration and abs(item_duration - candidate_duration) > 3:
             continue
-        matches.append(candidate)
-    if len(matches) == 1:
-        return {"status": "matched_unique", "method": "title_time_duration", "publish_job_id": matches[0]["id"]}
-    if len(matches) > 1:
-        return {"status": "ambiguous", "method": "title_time_duration", "publish_job_id": None}
+        candidate_texts = {
+            normalize_title(candidate[field])
+            for field in ("title", "description", "caption")
+            if normalize_title(candidate[field])
+        }
+        if normalized_title in candidate_texts:
+            exact_matches.append(candidate)
+            continue
+        if len(normalized_title) < 8:
+            continue
+        if any(
+            len(candidate_text) >= 8
+            and (
+                normalized_title in candidate_text
+                or candidate_text in normalized_title
+            )
+            for candidate_text in candidate_texts
+        ):
+            contains_matches.append(candidate)
+    if len(exact_matches) == 1:
+        return {
+            "status": "matched_unique",
+            "method": "title_time_exact",
+            "publish_job_id": exact_matches[0]["id"],
+        }
+    if len(exact_matches) > 1:
+        return {"status": "ambiguous", "method": "title_time_exact", "publish_job_id": None}
+    if len(contains_matches) == 1:
+        return {
+            "status": "matched_unique",
+            "method": "title_time_contains",
+            "publish_job_id": contains_matches[0]["id"],
+        }
+    if len(contains_matches) > 1:
+        return {"status": "ambiguous", "method": "title_time_contains", "publish_job_id": None}
     return {"status": "unmatched", "method": None, "publish_job_id": None}
 
 
-def stage_douyin_item_sync(*, account_id: str, items: list[dict], captured_at: str) -> dict:
-    resolved = _resolve_douyin_account_id(account_id)
-    if len(items) > 50:
-        raise ContentReviewError("单次最多同步最近 50 条作品")
-    normalized_items = []
-    seen_ids = set()
-    allowed_count_fields = ("play_count", "like_count", "comment_count", "share_count", "collect_count")
-    allowed_rate_fields = (
-        "five_second_completion_rate",
-        "two_second_bounce_rate",
-        "cover_click_rate",
-        "average_watch_seconds",
-    )
-    for raw in items:
-        aweme_id = str(raw.get("aweme_id") or "").strip()
-        if not aweme_id or aweme_id in seen_ids:
-            continue
-        seen_ids.add(aweme_id)
-        item = {
-            "aweme_id": aweme_id[:120],
-            "title": str(raw.get("title") or "")[:240],
-            "published_at": raw.get("published_at"),
-            "duration_seconds": raw.get("duration_seconds"),
-        }
-        for field in allowed_count_fields:
-            value = raw.get(field)
-            item[field] = max(0, int(value)) if value is not None else None
-        for field in allowed_rate_fields:
-            value = raw.get(field)
-            item[field] = float(value) if value is not None else None
-        normalized_items.append(item)
-    payload_json = json.dumps(normalized_items, ensure_ascii=False, separators=(",", ":"))
-    payload_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
-    batch_id = f"sync-{uuid4().hex[:16]}"
-    now_iso = _now_iso()
+def _commit_export_batch_with_connection(
+    connection,
+    *,
+    batch_id: str,
+    account_id: str,
+    items: list[dict],
+    captured_at: str,
+    committed_at: str,
+) -> dict:
     matched = ambiguous = 0
+    for item in items:
+        match = match_douyin_item_with_connection(connection, account_id=account_id, item=item)
+        if match["status"] in MATCHED_STATUSES:
+            matched += 1
+        elif match["status"] == "ambiguous":
+            ambiguous += 1
+        connection.execute(
+            """
+            INSERT INTO douyin_item_metric_snapshots (
+                id, batch_id, publish_job_id, account_id, aweme_id, title,
+                published_at, duration_seconds, captured_at, play_count, like_count,
+                comment_count, share_count, collect_count, completion_rate,
+                five_second_completion_rate, two_second_bounce_rate, cover_click_rate,
+                average_watch_seconds, home_visit_count, follower_gain_count,
+                content_genre, audit_status, match_status, match_method, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"item-{uuid4().hex[:16]}",
+                batch_id,
+                match["publish_job_id"],
+                account_id,
+                item["aweme_id"],
+                item["title"],
+                item["published_at"],
+                item["duration_seconds"],
+                captured_at,
+                item["play_count"],
+                item["like_count"],
+                item["comment_count"],
+                item["share_count"],
+                item["collect_count"],
+                item["completion_rate"],
+                item["five_second_completion_rate"],
+                item["two_second_bounce_rate"],
+                item["cover_click_rate"],
+                item["average_watch_seconds"],
+                item["home_visit_count"],
+                item["follower_gain_count"],
+                item["content_genre"],
+                item["audit_status"],
+                match["status"],
+                match["method"],
+                committed_at,
+            ),
+        )
+    connection.execute(
+        """
+        UPDATE content_metric_import_batches
+        SET status = 'committed', matched_count = ?, ambiguous_count = ?, invalid_count = 0,
+            committed_at = ?, expires_at = NULL
+        WHERE id = ?
+        """,
+        (matched, ambiguous, committed_at, batch_id),
+    )
+    return {
+        "row_count": len(items),
+        "matched_count": matched,
+        "ambiguous_count": ambiguous,
+        "unmatched_count": len(items) - matched - ambiguous,
+    }
+
+
+def commit_douyin_item_export(
+    *,
+    account_id: str,
+    items: list[dict],
+    captured_at: str,
+    source_filename: str,
+) -> dict:
+    resolved = _resolve_douyin_account_id(account_id)
+    normalized_items, payload_json, payload_hash = _canonical_export_payload(items)
+    safe_filename = Path(str(source_filename or "作品列表导出.xlsx")).name[:180]
+    if Path(safe_filename).suffix.lower() != ".xlsx":
+        safe_filename = "作品列表导出.xlsx"
+    captured_iso = _parse_beijing_datetime(captured_at, row_number=0)
+    now_iso = _now_iso()
+    published_dates = [str(item["published_at"])[:10] for item in normalized_items]
+    period_start = min(published_dates)
+    period_end = max(published_dates)
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
         existing = connection.execute(
             """
-            SELECT id FROM content_metric_import_batches
+            SELECT id, status, row_count, matched_count, ambiguous_count, source_filename
+            FROM content_metric_import_batches
             WHERE account_id = ? AND source_kind = ? AND source_sha256 = ?
             """,
-            (resolved, DOUYIN_SYNC_SOURCE_KIND, payload_hash),
+            (resolved, DOUYIN_ITEM_EXPORT_SOURCE_KIND, payload_hash),
         ).fetchone()
-        if existing is not None:
+        if existing is not None and existing["status"] == "committed":
+            row_count = int(existing["row_count"] or 0)
+            matched_count = int(existing["matched_count"] or 0)
+            ambiguous_count = int(existing["ambiguous_count"] or 0)
             connection.commit()
             return {
                 "status": "already_imported",
+                "already_imported": True,
                 "batch_id": existing["id"],
-                "message": "最近作品指标没有变化，无需重复保存。",
+                "source_filename": existing["source_filename"],
+                "row_count": row_count,
+                "matched_count": matched_count,
+                "ambiguous_count": ambiguous_count,
+                "unmatched_count": row_count - matched_count - ambiguous_count,
+                "message": "官方作品数据没有变化，规范化内容已导入，无需重复保存。",
             }
-        connection.execute(
-            """
-            INSERT INTO content_metric_import_batches (
-                id, account_id, source_kind, source_filename, source_sha256, status,
-                normalized_payload_json, row_count, created_at, committed_at
-            ) VALUES (?, ?, ?, 'douyin-worker', ?, 'committed', ?, ?, ?, ?)
-            """,
-            (batch_id, resolved, DOUYIN_SYNC_SOURCE_KIND, payload_hash, payload_json, len(normalized_items), now_iso, now_iso),
-        )
-        for item in normalized_items:
-            match = match_douyin_item_with_connection(connection, account_id=resolved, item=item)
-            if match["status"] in MATCHED_STATUSES:
-                matched += 1
-            elif match["status"] == "ambiguous":
-                ambiguous += 1
+        if existing is None:
+            batch_id = f"export-{uuid4().hex[:16]}"
             connection.execute(
                 """
-                INSERT INTO douyin_item_metric_snapshots (
-                    id, batch_id, publish_job_id, account_id, aweme_id, title,
-                    published_at, duration_seconds, captured_at, play_count, like_count,
-                    comment_count, share_count, collect_count, five_second_completion_rate,
-                    two_second_bounce_rate, cover_click_rate, average_watch_seconds,
-                    match_status, match_method, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO content_metric_import_batches (
+                    id, account_id, source_kind, source_filename, source_sha256, status,
+                    period_start, period_end, normalized_payload_json, row_count,
+                    created_at, committed_at
+                ) VALUES (?, ?, ?, ?, ?, 'previewed', ?, ?, ?, ?, ?, NULL)
                 """,
                 (
-                    f"item-{uuid4().hex[:16]}",
                     batch_id,
-                    match["publish_job_id"],
                     resolved,
-                    item["aweme_id"],
-                    item["title"],
-                    item["published_at"],
-                    item["duration_seconds"],
-                    captured_at,
-                    item["play_count"],
-                    item["like_count"],
-                    item["comment_count"],
-                    item["share_count"],
-                    item["collect_count"],
-                    item["five_second_completion_rate"],
-                    item["two_second_bounce_rate"],
-                    item["cover_click_rate"],
-                    item["average_watch_seconds"],
-                    match["status"],
-                    match["method"],
+                    DOUYIN_ITEM_EXPORT_SOURCE_KIND,
+                    safe_filename,
+                    payload_hash,
+                    period_start,
+                    period_end,
+                    payload_json,
+                    len(normalized_items),
                     now_iso,
                 ),
             )
-        connection.execute(
-            """
-            UPDATE content_metric_import_batches
-            SET matched_count = ?, ambiguous_count = ? WHERE id = ?
-            """,
-            (matched, ambiguous, batch_id),
+        else:
+            batch_id = str(existing["id"])
+            connection.execute(
+                """
+                UPDATE content_metric_import_batches
+                SET source_filename = ?, status = 'previewed', period_start = ?, period_end = ?,
+                    normalized_payload_json = ?, row_count = ?, matched_count = 0,
+                    ambiguous_count = 0, invalid_count = 0, created_at = ?,
+                    committed_at = NULL, expires_at = NULL
+                WHERE id = ?
+                """,
+                (
+                    safe_filename,
+                    period_start,
+                    period_end,
+                    payload_json,
+                    len(normalized_items),
+                    now_iso,
+                    batch_id,
+                ),
+            )
+        stats = _commit_export_batch_with_connection(
+            connection,
+            batch_id=batch_id,
+            account_id=resolved,
+            items=normalized_items,
+            captured_at=captured_iso,
+            committed_at=now_iso,
         )
         connection.commit()
     return {
         "status": "committed",
+        "already_imported": False,
         "batch_id": batch_id,
-        "row_count": len(normalized_items),
-        "matched_count": matched,
-        "ambiguous_count": ambiguous,
-        "unmatched_count": len(normalized_items) - matched - ambiguous,
-        "message": f"已同步 {len(normalized_items)} 条作品指标；存在歧义的记录等待人工确认。",
+        "source_filename": safe_filename,
+        **stats,
+        "message": (
+            f"已同步 {stats['row_count']} 条官方作品数据；"
+            f"唯一匹配 {stats['matched_count']} 条，歧义 {stats['ambiguous_count']} 条，"
+            f"未匹配 {stats['unmatched_count']} 条。"
+        ),
     }

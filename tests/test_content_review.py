@@ -110,6 +110,58 @@ def _csv_bytes(rows: list[list] | None = None) -> bytes:
     return output.getvalue().encode("utf-8-sig")
 
 
+def _work_export_row(
+    index: int,
+    *,
+    title: str | None = None,
+    published_at: str | None = None,
+) -> list:
+    return [
+        title or f"官方作品 {index:03d}",
+        published_at or f"2026-08-{28 - (index % 20):02d} {20 - (index % 10):02d}:30",
+        "视频",
+        "审核通过",
+        1000 + index,
+        0.42,
+        "58.5%",
+        0.31,
+        "-" if index == 1 else 0.12,
+        "-" if index == 1 else 18.6,
+        80 + index,
+        12 + index,
+        6 + index,
+        9 + index,
+        20 + index,
+        3 + index,
+    ]
+
+
+def _work_export_xlsx(
+    *,
+    rows: list[list] | None = None,
+    headers: list[str] | None = None,
+    second_matching_sheet: bool = False,
+) -> bytes:
+    canonical_headers = list(content_review_service.DOUYIN_ITEM_EXPORT_HEADERS)
+    headers = headers or canonical_headers
+    rows = rows or [_work_export_row(1)]
+    order = [canonical_headers.index(header) for header in headers if header in canonical_headers]
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Sheet1"
+    worksheet.append(headers)
+    for row in rows:
+        worksheet.append([row[index] for index in order])
+    if second_matching_sheet:
+        duplicate = workbook.create_sheet("Sheet2")
+        duplicate.append(canonical_headers)
+        duplicate.append(_work_export_row(99))
+    output = io.BytesIO()
+    workbook.save(output)
+    workbook.close()
+    return output.getvalue()
+
+
 def test_xlsx_preview_commit_summary_and_duplicate_are_safe():
     account_id = _insert_account()
     content = _xlsx_bytes(headers=list(reversed(content_review_service.DAILY_HEADERS)))
@@ -161,6 +213,99 @@ def test_csv_preview_supports_zero_percentage_and_seconds_suffix():
     assert preview["sample_rows"][0]["average_watch_seconds"] == 19.42
 
 
+def test_official_work_export_parses_all_107_rows_and_full_16_columns():
+    rows = [_work_export_row(index) for index in range(1, 108)]
+    items = content_review_service.parse_douyin_item_export(
+        _work_export_xlsx(rows=rows)
+    )
+
+    assert len(items) == 107
+    assert all(item["aweme_id"].startswith("export:") for item in items)
+    assert items == sorted(
+        items,
+        key=lambda item: (item["published_at"], item["aweme_id"]),
+        reverse=True,
+    )
+    first_input = next(item for item in items if item["title"] == "官方作品 001")
+    assert first_input["published_at"].endswith("+08:00")
+    assert first_input["completion_rate"] == 0.42
+    assert first_input["five_second_completion_rate"] == 0.585
+    assert first_input["two_second_bounce_rate"] is None
+    assert first_input["average_watch_seconds"] is None
+    assert first_input["home_visit_count"] == 21
+    assert first_input["follower_gain_count"] == 4
+    assert first_input["content_genre"] == "视频"
+    assert first_input["audit_status"] == "审核通过"
+
+
+def test_official_work_export_manual_commit_and_auto_path_are_cross_idempotent():
+    account_id = _insert_account()
+    content = _work_export_xlsx(rows=[_work_export_row(1), _work_export_row(2)])
+    preview = content_review_service.preview_metric_import(
+        account_id=account_id,
+        filename="作品列表导出.xlsx",
+        content=content,
+    )
+    committed = content_review_service.commit_metric_import(preview["batch_id"])
+    parsed_items = content_review_service.parse_douyin_item_export(content)
+    duplicate = content_review_service.commit_douyin_item_export(
+        account_id=account_id,
+        items=parsed_items,
+        captured_at="2026-08-29T10:00:00+08:00",
+        source_filename="作品列表导出.xlsx",
+    )
+
+    assert preview["report_type"] == "douyin_item_export"
+    assert committed["row_count"] == 2
+    assert duplicate["status"] == "already_imported"
+    assert duplicate["batch_id"] == preview["batch_id"]
+    with get_connection() as connection:
+        batch = connection.execute(
+            "SELECT source_kind, source_sha256, row_count FROM content_metric_import_batches WHERE id = ?",
+            (preview["batch_id"],),
+        ).fetchone()
+        snapshot = connection.execute(
+            """
+            SELECT completion_rate, five_second_completion_rate, home_visit_count,
+                   follower_gain_count, content_genre, audit_status
+            FROM douyin_item_metric_snapshots
+            WHERE batch_id = ? AND title = '官方作品 001'
+            """,
+            (preview["batch_id"],),
+        ).fetchone()
+    assert batch["source_kind"] == "douyin_item_export"
+    assert len(batch["source_sha256"]) == 64
+    assert batch["row_count"] == 2
+    assert dict(snapshot) == {
+        "completion_rate": 0.42,
+        "five_second_completion_rate": 0.585,
+        "home_visit_count": 21,
+        "follower_gain_count": 4,
+        "content_genre": "视频",
+        "audit_status": "审核通过",
+    }
+
+
+def test_official_work_export_auto_then_manual_is_cross_idempotent():
+    account_id = _insert_account()
+    content = _work_export_xlsx(rows=[_work_export_row(3)])
+    parsed_items = content_review_service.parse_douyin_item_export(content)
+    automatic = content_review_service.commit_douyin_item_export(
+        account_id=account_id,
+        items=parsed_items,
+        captured_at="2026-08-29T10:00:00+08:00",
+        source_filename="作品列表导出.xlsx",
+    )
+    manual = content_review_service.preview_metric_import(
+        account_id=account_id,
+        filename="人工下载的作品列表导出.xlsx",
+        content=content,
+    )
+    assert automatic["status"] == "committed"
+    assert manual["status"] == "already_imported"
+    assert manual["batch_id"] == automatic["batch_id"]
+
+
 @pytest.mark.parametrize(
     ("filename", "content", "message"),
     [
@@ -199,11 +344,39 @@ def test_import_row_limit_and_wrong_sheet_are_rejected(monkeypatch):
     output = io.BytesIO()
     workbook.save(output)
     workbook.close()
-    with pytest.raises(content_review_service.ContentReviewError, match="完整抖音日汇总表头"):
+    with pytest.raises(content_review_service.ContentReviewError, match="可识别的抖音账号趋势表"):
         content_review_service.preview_metric_import(
             account_id=account_id,
             filename="wrong-sheet.xlsx",
             content=output.getvalue(),
+        )
+
+
+def test_official_work_export_rejects_wrong_headers_multiple_sheets_and_limits(monkeypatch):
+    wrong_headers = list(content_review_service.DOUYIN_ITEM_EXPORT_HEADERS)
+    wrong_headers[5] = "错误完播率"
+    with pytest.raises(content_review_service.ContentReviewError, match="可识别"):
+        content_review_service.parse_douyin_item_export(
+            _work_export_xlsx(headers=wrong_headers)
+        )
+    with pytest.raises(content_review_service.ContentReviewError, match="多个可导入工作表"):
+        content_review_service.parse_douyin_item_export(
+            _work_export_xlsx(second_matching_sheet=True)
+        )
+    monkeypatch.setattr(content_review_service, "MAX_IMPORT_ROWS", 1)
+    with pytest.raises(content_review_service.ContentReviewError, match="超过 1 行"):
+        content_review_service.parse_douyin_item_export(
+            _work_export_xlsx(rows=[_work_export_row(1), _work_export_row(2)])
+        )
+
+
+def test_import_rejects_file_over_10mb_before_parsing():
+    account_id = _insert_account()
+    with pytest.raises(content_review_service.ContentReviewError, match="10MB"):
+        content_review_service.preview_metric_import(
+            account_id=account_id,
+            filename="too-large.xlsx",
+            content=b"x" * (content_review_service.MAX_IMPORT_BYTES + 1),
         )
 
 
@@ -214,6 +387,8 @@ def _insert_publish_job(
     published_at: str,
     platform_item_id: str = "",
     duration_seconds: int = 60,
+    description: str = "",
+    caption: str = "",
 ) -> str:
     suffix = uuid4().hex[:8]
     task_id = f"{PREFIX}task-{suffix}"
@@ -237,11 +412,23 @@ def _insert_publish_job(
         connection.execute(
             """
             INSERT INTO publish_jobs (
-                id, task_id, output_clip_id, account_id, platform, title,
-                status, platform_item_id, published_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'douyin', ?, 'PUBLISHED', ?, ?, ?, ?)
+                id, task_id, output_clip_id, account_id, platform, title, description,
+                caption, status, platform_item_id, published_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'douyin', ?, ?, ?, 'PUBLISHED', ?, ?, ?, ?)
             """,
-            (job_id, task_id, output_id, account_id, title, platform_item_id, published_at, now, now),
+            (
+                job_id,
+                task_id,
+                output_id,
+                account_id,
+                title,
+                description,
+                caption,
+                platform_item_id,
+                published_at,
+                now,
+                now,
+            ),
         )
         connection.commit()
     return job_id
@@ -301,15 +488,14 @@ def test_item_matching_exact_unique_ambiguous_and_manual_confirmation():
     assert unique["publish_job_id"] == unique_job
     assert ambiguous["status"] == "ambiguous"
 
-    sync = content_review_service.stage_douyin_item_sync(
+    sync = content_review_service.commit_douyin_item_export(
         account_id=account_id,
         captured_at="2026-08-28T11:00:00+08:00",
+        source_filename="作品列表导出.xlsx",
         items=[
             {
-                "aweme_id": "aweme-ambiguous",
                 "title": "同名作品",
                 "published_at": "2026-08-28T10:01:00+08:00",
-                "duration_seconds": 60,
                 "play_count": 100,
             }
         ],
@@ -317,7 +503,7 @@ def test_item_matching_exact_unique_ambiguous_and_manual_confirmation():
     assert sync["ambiguous_count"] == 1
     with get_connection() as connection:
         snapshot_id = connection.execute(
-            "SELECT id FROM douyin_item_metric_snapshots WHERE aweme_id = 'aweme-ambiguous'"
+            "SELECT id FROM douyin_item_metric_snapshots WHERE title = '同名作品'"
         ).fetchone()[0]
     content_review_service.set_item_match(snapshot_id, ambiguous_a)
     works = content_review_service.list_content_review_works(account_id)
@@ -326,6 +512,112 @@ def test_item_matching_exact_unique_ambiguous_and_manual_confirmation():
     content_review_service.delete_item_match(snapshot_id)
     works = content_review_service.list_content_review_works(account_id)
     assert works[0]["match_status"] == "unmatched"
+
+
+def test_export_matching_uses_unique_contains_but_protects_short_and_ambiguous_titles():
+    account_id = _insert_account()
+    contains_job = _insert_publish_job(
+        account_id,
+        title="发布标题",
+        description="周杰伦谈童年往事完整版精彩片段",
+        published_at="2026-08-28T09:00:00+08:00",
+    )
+    _insert_publish_job(
+        account_id,
+        title="短标题候选",
+        description="康熙来了完整片段",
+        published_at="2026-08-28T10:00:00+08:00",
+    )
+    _insert_publish_job(
+        account_id,
+        title="候选一",
+        caption="小S蔡康永爆笑互怼名场面完整版一",
+        published_at="2026-08-28T11:00:00+08:00",
+    )
+    _insert_publish_job(
+        account_id,
+        title="候选二",
+        caption="小S蔡康永爆笑互怼名场面完整版二",
+        published_at="2026-08-28T11:02:00+08:00",
+    )
+    with get_connection() as connection:
+        contains = content_review_service.match_douyin_item_with_connection(
+            connection,
+            account_id=account_id,
+            item={
+                "aweme_id": "export:test",
+                "title": "周杰伦谈童年往事完整版",
+                "published_at": "2026-08-28T09:05:00+08:00",
+            },
+        )
+        short = content_review_service.match_douyin_item_with_connection(
+            connection,
+            account_id=account_id,
+            item={
+                "aweme_id": "export:short",
+                "title": "康熙",
+                "published_at": "2026-08-28T10:03:00+08:00",
+            },
+        )
+        ambiguous = content_review_service.match_douyin_item_with_connection(
+            connection,
+            account_id=account_id,
+            item={
+                "aweme_id": "export:ambiguous",
+                "title": "小S蔡康永爆笑互怼名场面完整版",
+                "published_at": "2026-08-28T11:01:00+08:00",
+            },
+        )
+    assert contains == {
+        "status": "matched_unique",
+        "method": "title_time_contains",
+        "publish_job_id": contains_job,
+    }
+    assert short["status"] == "unmatched"
+    assert ambiguous["status"] == "ambiguous"
+
+
+def test_latest_export_snapshot_is_grouped_by_publish_job_after_title_change():
+    account_id = _insert_account()
+    original_title = "周杰伦谈童年故事完整版"
+    changed_title = "周杰伦谈童年故事完整版标题已修改"
+    job_id = _insert_publish_job(
+        account_id,
+        title="平台发布标题",
+        description=original_title,
+        published_at="2026-08-28T09:00:00+08:00",
+    )
+    first = content_review_service.commit_douyin_item_export(
+        account_id=account_id,
+        items=[
+            {
+                "title": original_title,
+                "published_at": "2026-08-28T09:00:00+08:00",
+                "play_count": 100,
+            }
+        ],
+        captured_at="2026-08-28T12:00:00+08:00",
+        source_filename="作品列表导出.xlsx",
+    )
+    second = content_review_service.commit_douyin_item_export(
+        account_id=account_id,
+        items=[
+            {
+                "title": changed_title,
+                "published_at": "2026-08-28T09:00:00+08:00",
+                "play_count": 200,
+            }
+        ],
+        captured_at="2026-08-29T12:00:00+08:00",
+        source_filename="作品列表导出.xlsx",
+    )
+    works = content_review_service.list_content_review_works(account_id)
+    assert first["matched_count"] == 1
+    assert second["matched_count"] == 1
+    assert len(works) == 1
+    assert works[0]["publish_job_id"] == job_id
+    assert works[0]["title"] == changed_title
+    assert works[0]["play_count"] == 200
 
 
 def test_content_review_page_and_import_api_flow():
@@ -361,58 +653,54 @@ def test_content_review_page_and_import_api_flow():
     assert summary.json()["current_period"]["play_count"] == 1472
 
 
-def test_sync_api_stages_sanitized_worker_items(monkeypatch):
+def test_export_sync_api_commits_sanitized_worker_items(monkeypatch):
     account_id = _insert_account()
+    worker_items = content_review_service.parse_douyin_item_export(
+        _work_export_xlsx(rows=[_work_export_row(1, title="同步测试")])
+    )
 
-    def worker_sync(_self, *, account_id, limit):
-        assert limit == 50
+    def worker_sync(_self, *, account_id):
         return {
             "captured_at": "2026-08-28T12:00:00+08:00",
-            "items": [
-                {
-                    "aweme_id": "sync-api-1",
-                    "title": "同步测试",
-                    "published_at": "2026-08-28T10:00:00+08:00",
-                    "duration_seconds": 60,
-                    "play_count": 123,
-                    "like_count": 8,
-                }
-            ],
+            "source_filename": "作品列表导出.xlsx",
+            "row_count": 1,
+            "items": worker_items,
         }
 
-    monkeypatch.setattr(PublishWorkerClient, "analytics_sync", worker_sync)
+    monkeypatch.setattr(PublishWorkerClient, "analytics_export_sync", worker_sync)
     response = TestClient(app).post(
-        "/api/content-review/douyin/sync-preview",
-        json={"account_id": account_id, "limit": 50},
+        "/api/content-review/douyin/export-sync",
+        json={"account_id": account_id},
     )
     assert response.status_code == 200
     assert response.json()["row_count"] == 1
     with get_connection() as connection:
         item = connection.execute(
             """
-            SELECT aweme_id, title, play_count, like_count
+            SELECT aweme_id, title, play_count, like_count, completion_rate
             FROM douyin_item_metric_snapshots WHERE account_id = ?
             """,
             (account_id,),
         ).fetchone()
     assert dict(item) == {
-        "aweme_id": "sync-api-1",
+        "aweme_id": worker_items[0]["aweme_id"],
         "title": "同步测试",
-        "play_count": 123,
-        "like_count": 8,
+        "play_count": 1001,
+        "like_count": 81,
+        "completion_rate": 0.42,
     }
 
 
-def test_sync_api_preserves_fixed_worker_error_code(monkeypatch):
+def test_export_sync_api_preserves_fixed_worker_error_code(monkeypatch):
     account_id = _insert_account()
 
-    def rate_limited(_self, *, account_id, limit):
+    def rate_limited(_self, *, account_id):
         raise PublishError("rate limited", "RATE_LIMITED")
 
-    monkeypatch.setattr(PublishWorkerClient, "analytics_sync", rate_limited)
+    monkeypatch.setattr(PublishWorkerClient, "analytics_export_sync", rate_limited)
     response = TestClient(app).post(
-        "/api/content-review/douyin/sync-preview",
-        json={"account_id": account_id, "limit": 50},
+        "/api/content-review/douyin/export-sync",
+        json={"account_id": account_id},
     )
     assert response.status_code == 429
     assert response.json()["detail"]["error_code"] == "RATE_LIMITED"

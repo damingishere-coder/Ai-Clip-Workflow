@@ -3,7 +3,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from app.models.content_review import (
     ContentItemMatchUpdate,
     ContentMetricImportCommitRequest,
-    DouyinAnalyticsSyncPreviewRequest,
+    DouyinAnalyticsExportSyncRequest,
 )
 from app.services import content_review_service
 from app.services.publishers.base import PublishError, PublishWorkerUnavailable
@@ -53,15 +53,22 @@ async def commit_import(
         _raise_content_review_http(exc)
 
 
-@router.post("/douyin/sync-preview")
-async def sync_douyin_items(payload: DouyinAnalyticsSyncPreviewRequest) -> dict:
+@router.post("/douyin/export-sync")
+async def export_sync_douyin_items(payload: DouyinAnalyticsExportSyncRequest) -> dict:
     try:
         account_id = content_review_service._resolve_douyin_account_id(payload.account_id)
-        worker_result = PublishWorkerClient().analytics_sync(account_id=account_id, limit=payload.limit)
-        return content_review_service.stage_douyin_item_sync(
+        worker_result = PublishWorkerClient().analytics_export_sync(account_id=account_id)
+        items = list(worker_result.get("items") or [])
+        if int(worker_result.get("row_count") or 0) != len(items):
+            raise content_review_service.ContentReviewError(
+                "Windows Worker 返回的作品行数校验失败",
+                status_code=502,
+            )
+        return content_review_service.commit_douyin_item_export(
             account_id=account_id,
-            items=list(worker_result.get("items") or []),
+            items=items,
             captured_at=str(worker_result.get("captured_at") or content_review_service._now_iso()),
+            source_filename=str(worker_result.get("source_filename") or "作品列表导出.xlsx"),
         )
     except content_review_service.ContentReviewError as exc:
         _raise_content_review_http(exc)
@@ -72,6 +79,8 @@ async def sync_douyin_items(payload: DouyinAnalyticsSyncPreviewRequest) -> dict:
             "VERIFICATION_REQUIRED": 409,
             "RATE_LIMITED": 429,
             "PAGE_CHANGED": 422,
+            "INVALID_EXPORT": 422,
+            "DOWNLOAD_FAILED": 502,
             "WORKER_UNAVAILABLE": 503,
             "publish_worker_unavailable": 503,
         }.get(error_code, 409)
@@ -95,7 +104,7 @@ async def summary(
 @router.get("/works")
 async def works(
     account_id: str = Query(default="", max_length=120),
-    limit: int = Query(default=100, ge=1, le=200),
+    limit: int = Query(default=200, ge=1, le=200),
 ) -> dict:
     try:
         return {"works": content_review_service.list_content_review_works(account_id, limit)}

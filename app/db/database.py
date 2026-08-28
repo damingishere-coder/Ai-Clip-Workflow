@@ -93,6 +93,27 @@ CONTENT_REVIEW_MIGRATION_SPEC = "\n".join(
 CONTENT_REVIEW_MIGRATION_CHECKSUM = hashlib.sha256(
     CONTENT_REVIEW_MIGRATION_SPEC.encode("utf-8")
 ).hexdigest()
+DOUYIN_ITEM_EXPORT_MIGRATION_VERSION = "20260829_01_douyin_official_item_export"
+DOUYIN_ITEM_EXPORT_MIGRATION_NAME = "抖音官方作品报表完整指标"
+DOUYIN_ITEM_EXPORT_COLUMNS = {
+    "completion_rate": "REAL",
+    "home_visit_count": "INTEGER",
+    "follower_gain_count": "INTEGER",
+    "content_genre": "TEXT",
+    "audit_status": "TEXT",
+}
+DOUYIN_ITEM_EXPORT_MIGRATION_SPEC = "\n".join(
+    (
+        DOUYIN_ITEM_EXPORT_MIGRATION_VERSION,
+        DOUYIN_ITEM_EXPORT_MIGRATION_NAME,
+        *(f"douyin_item_metric_snapshots.{name}:{column_type}" for name, column_type in DOUYIN_ITEM_EXPORT_COLUMNS.items()),
+        "preserve-20260828_01-checksum",
+        "no-raw-xlsx-or-browser-credentials",
+    )
+)
+DOUYIN_ITEM_EXPORT_MIGRATION_CHECKSUM = hashlib.sha256(
+    DOUYIN_ITEM_EXPORT_MIGRATION_SPEC.encode("utf-8")
+).hexdigest()
 
 
 class SchemaMigrationError(RuntimeError):
@@ -133,6 +154,7 @@ def init_db() -> None:
     needs_publish_index_backup = _requires_publish_active_index_migration(settings.database_path)
     needs_task_upload_only_backup = _requires_task_upload_only_migration(settings.database_path)
     needs_content_review_backup = _requires_content_review_schema_migration(settings.database_path)
+    needs_douyin_item_export_backup = _requires_douyin_item_export_migration(settings.database_path)
     if needs_long_live_backup:
         create_schema_migration_backup(
             settings.database_path,
@@ -181,6 +203,12 @@ def init_db() -> None:
             settings.database_path,
             settings.data_dir / "backups",
             "content-review-v1",
+        )
+    if needs_douyin_item_export_backup and not needs_content_review_backup:
+        create_schema_migration_backup(
+            settings.database_path,
+            settings.data_dir / "backups",
+            "douyin-official-item-export",
         )
 
     with get_connection() as connection:
@@ -722,10 +750,15 @@ def init_db() -> None:
                 comment_count INTEGER,
                 share_count INTEGER,
                 collect_count INTEGER,
+                completion_rate REAL,
                 five_second_completion_rate REAL,
                 two_second_bounce_rate REAL,
                 cover_click_rate REAL,
                 average_watch_seconds REAL,
+                home_visit_count INTEGER,
+                follower_gain_count INTEGER,
+                content_genre TEXT,
+                audit_status TEXT,
                 match_status TEXT NOT NULL DEFAULT 'unmatched',
                 match_method TEXT,
                 created_at TEXT NOT NULL,
@@ -939,6 +972,40 @@ def _requires_content_review_schema_migration(database_path) -> bool:
             or not set(CONTENT_REVIEW_REQUIRED_INDEXES) <= index_names
             or ledger_row is None
         )
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _requires_douyin_item_export_migration(database_path) -> bool:
+    """已有作品快照表缺少官方报表字段或账本记录时先创建备份。"""
+    if not database_path.exists() or database_path.stat().st_size == 0:
+        return False
+    connection = None
+    try:
+        connection = sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+        table_names = {
+            row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        if "douyin_item_metric_snapshots" not in table_names:
+            return False
+        item_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(douyin_item_metric_snapshots)").fetchall()
+        }
+        ledger_row = None
+        if "schema_migrations" in table_names:
+            try:
+                ledger_row = connection.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version = ? AND checksum = ?",
+                    (
+                        DOUYIN_ITEM_EXPORT_MIGRATION_VERSION,
+                        DOUYIN_ITEM_EXPORT_MIGRATION_CHECKSUM,
+                    ),
+                ).fetchone()
+            except sqlite3.Error:
+                return True
+        return not set(DOUYIN_ITEM_EXPORT_COLUMNS) <= item_columns or ledger_row is None
     finally:
         if connection is not None:
             connection.close()
@@ -1324,6 +1391,26 @@ def _verify_content_review_migration(connection: sqlite3.Connection) -> None:
             raise SchemaMigrationError(f"Prompt 版本 {row['id']} 的 SHA-256 校验失败")
 
 
+def _apply_douyin_item_export_migration(connection: sqlite3.Connection) -> None:
+    existing_columns = _get_table_columns(connection, "douyin_item_metric_snapshots")
+    for column_name, column_type in DOUYIN_ITEM_EXPORT_COLUMNS.items():
+        if column_name not in existing_columns:
+            connection.execute(
+                f"ALTER TABLE douyin_item_metric_snapshots ADD COLUMN {column_name} {column_type}"
+            )
+
+
+def _verify_douyin_item_export_migration(connection: sqlite3.Connection) -> None:
+    missing = set(DOUYIN_ITEM_EXPORT_COLUMNS) - _get_table_columns(
+        connection,
+        "douyin_item_metric_snapshots",
+    )
+    if missing:
+        raise SchemaMigrationError(
+            "抖音官方作品报表迁移缺少字段：" + ", ".join(sorted(missing))
+        )
+
+
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
     return (
         SchemaMigration(
@@ -1346,6 +1433,13 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             checksum=CONTENT_REVIEW_MIGRATION_CHECKSUM,
             apply=_apply_content_review_migration,
             verify=_verify_content_review_migration,
+        ),
+        SchemaMigration(
+            version=DOUYIN_ITEM_EXPORT_MIGRATION_VERSION,
+            name=DOUYIN_ITEM_EXPORT_MIGRATION_NAME,
+            checksum=DOUYIN_ITEM_EXPORT_MIGRATION_CHECKSUM,
+            apply=_apply_douyin_item_export_migration,
+            verify=_verify_douyin_item_export_migration,
         ),
     )
 
