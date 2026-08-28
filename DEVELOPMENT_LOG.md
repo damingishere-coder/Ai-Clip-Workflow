@@ -1,5 +1,12 @@
 # Development Log
 
+## 2026-08-28 2.1 集成 PR 与 Docker 冒烟修复
+
+- 将当前线性领先 `master` 的 26 个提交完整保留到 `codex/integrate-v2.1-stable`，新增独立空白清理提交并创建顶层集成 PR #60；不 rebase、不 squash，也不自动合并。
+- 本地门禁通过：Python Compileall、Ruff、`801 passed`、4 个 JavaScript 文件、20 个 PowerShell 脚本和三套 Docker Compose 配置均正常。
+- 首轮 GitHub CI 的 Linux 全量测试和 Windows 主机冒烟通过；Docker 镜像构建、启动、健康检查与 Demo 数据写入通过，但主要页面因 CI 端口参数未满足 P1.5 本机访问门禁而返回 403。
+- Docker smoke 改为仅绑定 `127.0.0.1:8001:8001`，并显式设置 `NIUMA_TRUST_DOCKER_LOOPBACK_PROXY=true`；只修正 CI 宿主机到容器的回环识别，不放宽正式环境的远程访问保护。
+
 ## 2026-08-26 工作台每日任务柱状图精简
 
 - 移除工作台“本周每日新增任务”柱状图，不用其他装饰模块填补空间；首页直接从四项核心指标进入最近任务列表。

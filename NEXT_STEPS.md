@@ -1,5 +1,12 @@
 # Next Steps
 
+## 2026-08-28 2.1 集成收口
+
+1. 等待 PR #60 的 Linux、Windows 与 Docker 三组 CI 全部通过；Docker 页面冒烟必须确认 `/`、`/tasks`、`/clips`、`/publish` 均返回成功。
+2. CI 全绿后由用户在 GitHub 使用普通 merge commit 手动合并到 `master`，不要 squash、rebase 或自动合并，以保留原 26 个提交历史。
+3. 合并后确认 `master` 包含提交 `c3e52be`，再关闭被顶层 PR 覆盖的堆叠 PR；不要删除分支，也不要处理无关的 Dependabot #44/#45。
+4. 只有 2.1 基线合并完成，才从最新 `master` 创建 `codex/douyin-content-review` 开始 2.2 内容复盘开发。
+
 ## 2026-08-26 页面动效检查
 
 1. 打开工作台，刷新后只会看到四项核心统计播放一次轻微渐显；最近任务表、导航和静态内容不会反复晃动。

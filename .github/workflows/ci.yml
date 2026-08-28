@@ -151,13 +151,14 @@ jobs:
         run: |
           docker run --detach \
             --name niuma-studio-ci \
-            --publish 8001:8001 \
+            --publish 127.0.0.1:8001:8001 \
             --env DEMO_MODE=true \
             --env DATA_DIR=/app/ci-data \
             --env DATABASE_PATH=/app/ci-data/workflow.sqlite3 \
             --env STORAGE_ROOT=/app/ci-tasks \
             --env TASKS_DIR=/app/ci-tasks \
             --env UPLOAD_TEMP_DIR=/app/ci-tasks/_temp \
+            --env NIUMA_TRUST_DOCKER_LOOPBACK_PROXY=true \
             --env PUBLISH_SCHEDULER_ENABLED=false \
             niuma-studio:ci
 
