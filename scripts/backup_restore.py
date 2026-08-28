@@ -12,12 +12,18 @@ import sqlite3
 import subprocess
 import tempfile
 from typing import BinaryIO, Iterable
+from urllib.error import URLError
+from urllib.request import urlopen
 from uuid import uuid4
 import zipfile
 from zoneinfo import ZoneInfo
 
 from app.core.config import settings
-from app.services.database_backup_service import sqlite_quick_check
+from app.services.database_backup_service import (
+    BackupSafetyError,
+    assert_sqlite_database_ready,
+    sqlite_quick_check,
+)
 
 
 APP_VERSION = "2.1.0"
@@ -38,6 +44,56 @@ LABEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 class BackupRestoreError(RuntimeError):
     """Raised when a backup or restore operation cannot be completed safely."""
+
+
+def _validate_database(database_path: Path, label: str) -> dict[str, object]:
+    try:
+        return assert_sqlite_database_ready(database_path, deep=True, label=label)
+    except BackupSafetyError as exc:
+        raise BackupRestoreError(str(exc)) from exc
+
+
+def _assert_no_active_service(database_path: Path) -> None:
+    """恢复正式数据库前拒绝仍可响应的本机应用服务。"""
+    try:
+        is_runtime_database = (
+            database_path.resolve() == settings.database_path.resolve()
+        )
+    except OSError:
+        is_runtime_database = False
+    if not is_runtime_database:
+        return
+
+    try:
+        with urlopen("http://127.0.0.1:8001/health", timeout=1) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, URLError, UnicodeDecodeError, json.JSONDecodeError):
+        return
+    if isinstance(payload, dict) and payload.get("status") == "ok":
+        raise BackupRestoreError(
+            "检测到牛马片场服务仍在运行，已拒绝恢复；请先停止服务后重试"
+        )
+
+
+def _assert_exclusive_database_access(database_path: Path) -> None:
+    """短暂获取 SQLite 独占事务，证明当前没有活动写入或未释放的锁。"""
+    if not database_path.exists():
+        return
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(str(database_path), timeout=1, isolation_level=None)
+        connection.execute("PRAGMA busy_timeout = 1000")
+        connection.execute("BEGIN EXCLUSIVE")
+        connection.execute("ROLLBACK")
+    except sqlite3.Error as exc:
+        if connection is not None and connection.in_transaction:
+            connection.rollback()
+        raise BackupRestoreError(
+            "无法获取数据库独占锁，可能仍有活动服务或任务正在写入，已拒绝恢复"
+        ) from exc
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 def _now() -> datetime:
@@ -366,11 +422,7 @@ def verify_backup_bundle(archive_path: Path) -> dict[str, object]:
                     database_path.open("wb") as target,
                 ):
                     shutil.copyfileobj(source, target)
-                integrity = sqlite_quick_check(database_path)
-                if integrity != "ok":
-                    raise BackupRestoreError(
-                        f"备份数据库完整性检查失败：{integrity}"
-                    )
+                _validate_database(database_path, "备份数据库")
                 counts = _table_counts(database_path)
                 if counts != manifest.get("table_counts"):
                     raise BackupRestoreError(
@@ -444,11 +496,7 @@ def _atomic_restore_files(
         if new_env is not None:
             os.replace(staged_env, env_path)
 
-        integrity = sqlite_quick_check(database_path)
-        if integrity != "ok":
-            raise BackupRestoreError(
-                f"恢复后的数据库完整性检查失败：{integrity}"
-            )
+        _validate_database(database_path, "恢复后的数据库")
     except Exception:
         if database_path.exists():
             database_path.unlink()
@@ -547,6 +595,9 @@ def restore_backup_bundle(
     backup_dir = backup_dir.resolve()
     backup_dir.mkdir(parents=True, exist_ok=True)
 
+    _assert_no_active_service(database_path)
+    _assert_exclusive_database_access(database_path)
+
     if media_destination is not None:
         _preflight_media_destination(media_destination)
 
@@ -579,11 +630,7 @@ def restore_backup_bundle(
             if new_env is not None:
                 _extract_archive_entry(archive, ENV_ENTRY, new_env)
 
-            integrity = sqlite_quick_check(new_database)
-            if integrity != "ok":
-                raise BackupRestoreError(
-                    f"待恢复数据库完整性检查失败：{integrity}"
-                )
+            _validate_database(new_database, "待恢复数据库")
             expected_counts = manifest.get("table_counts")
             actual_counts = _table_counts(new_database)
             if actual_counts != expected_counts:
@@ -600,6 +647,7 @@ def restore_backup_bundle(
                 media_committed = True
 
             try:
+                _assert_exclusive_database_access(database_path)
                 _atomic_restore_files(
                     new_database=new_database,
                     database_path=database_path,
@@ -614,6 +662,7 @@ def restore_backup_bundle(
                     )
                 raise
 
+    _validate_database(database_path, "正式数据库")
     restored_counts = _table_counts(database_path)
     if restored_counts != manifest.get("table_counts"):
         raise BackupRestoreError(
