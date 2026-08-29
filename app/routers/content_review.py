@@ -1,6 +1,9 @@
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from app.models.content_review import (
+    ContentExperimentAssignmentRequest,
+    ContentExperimentCreateRequest,
+    ContentExperimentDecisionRequest,
     ContentItemMatchUpdate,
     ContentMetricImportCommitRequest,
     DouyinAnalyticsExportSyncRequest,
@@ -116,6 +119,91 @@ async def works(
 async def prompt_comparison(account_id: str = Query(default="", max_length=120)) -> dict:
     try:
         return content_review_service.get_prompt_comparison(account_id)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.get("/insights")
+async def insights(account_id: str = Query(default="", max_length=120)) -> dict:
+    try:
+        return content_review_service.get_content_review_insights(account_id)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.get("/experiments")
+async def experiments(
+    account_id: str = Query(default="", max_length=120),
+    include_closed: bool = Query(default=True),
+) -> dict:
+    try:
+        return {
+            "experiments": content_review_service.list_content_experiments(
+                account_id,
+                include_closed=include_closed,
+            )
+        }
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.post("/experiments")
+async def create_experiment(payload: ContentExperimentCreateRequest) -> dict:
+    try:
+        return content_review_service.create_content_experiment(
+            payload.account_id,
+            payload.recommendation_id,
+        )
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.patch("/experiments/{experiment_id}")
+async def update_experiment(
+    experiment_id: str,
+    payload: ContentExperimentDecisionRequest,
+) -> dict:
+    try:
+        return content_review_service.update_content_experiment(
+            experiment_id,
+            payload.decision,
+        )
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.put("/experiments/{experiment_id}/jobs/{publish_job_id}")
+async def assign_experiment_job(experiment_id: str, publish_job_id: str) -> dict:
+    try:
+        return content_review_service.assign_publish_job_to_experiment(
+            experiment_id,
+            publish_job_id,
+        )
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.delete("/experiments/{experiment_id}/jobs/{publish_job_id}")
+async def remove_experiment_job(experiment_id: str, publish_job_id: str) -> dict:
+    try:
+        return content_review_service.remove_publish_job_from_experiment(
+            experiment_id,
+            publish_job_id,
+        )
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.put("/experiment-assignments/{publish_job_id}")
+async def set_experiment_assignment(
+    publish_job_id: str,
+    payload: ContentExperimentAssignmentRequest,
+) -> dict:
+    try:
+        return content_review_service.set_publish_job_experiment(
+            publish_job_id,
+            payload.experiment_id,
+        )
     except content_review_service.ContentReviewError as exc:
         _raise_content_review_http(exc)
 

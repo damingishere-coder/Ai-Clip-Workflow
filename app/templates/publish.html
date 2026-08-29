@@ -12,7 +12,7 @@
 {% endmacro %}
 
 {% macro content_row(job) %}
-<article class="publish-content-card{% if job.status == 'SCHEDULED' %} is-scheduled{% endif %}" data-publish-row data-job-id="{{ job.id }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-section="content" {% if not job.output_is_active or job.status not in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
+<article class="publish-content-card{% if job.status == 'SCHEDULED' %} is-scheduled{% endif %}" data-publish-row data-job-id="{{ job.id }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-experiment-id="{{ job.content_experiment_id or '' }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-section="content" {% if not job.output_is_active or job.status not in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
   <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
   <div class="publish-content-media">
     <video muted preload="metadata" src="{{ job.video_media_url }}"></video>
@@ -60,6 +60,16 @@
       <label><span>发布账号</span><select name="account_id" data-account-select>{{ account_options(job) }}</select></label>
       <label><span>发布方式</span><select name="publish_mode"><option value="local_browser" {% if job.publish_mode == "local_browser" %}selected{% endif %}>Windows Chrome 真实投稿</option><option value="manual_export" {% if job.publish_mode == "manual_export" %}selected{% endif %}>仅导出本地发布包</option></select></label>
       <label><span>可见范围</span><select name="visibility"><option value="public" {% if job.visibility == "public" %}selected{% endif %}>公开</option><option value="friends" {% if job.visibility == "friends" %}selected{% endif %}>好友可见</option><option value="private" {% if job.visibility == "private" %}selected{% endif %}>仅自己可见</option></select></label>
+      <label class="span-2 publish-experiment-picker">
+        <span>本片属于哪个改进实验（可选）</span>
+        <select name="content_experiment_id" data-experiment-select>
+          <option value="">不参加实验</option>
+          {% for experiment in content_experiments %}
+          <option value="{{ experiment.id }}" data-account-id="{{ experiment.account_id }}" {% if job.content_experiment_id == experiment.id %}selected{% endif %}>{{ experiment.title }} · {{ experiment.action_text }}</option>
+          {% endfor %}
+        </select>
+        <small class="form-hint">只标记确实采用了该规则的作品；投稿执行开始后不能更改。</small>
+      </label>
       <input type="hidden" name="cover_file_path" value="{{ job.cover_file_path or '' }}">
       <input type="hidden" name="cover_time_seconds" value="{{ job.cover_time_seconds or 0 }}">
       <label class="toggle-line"><input type="checkbox" name="allow_download" {% if job.allow_download %}checked{% endif %}>允许保存 / 下载</label>

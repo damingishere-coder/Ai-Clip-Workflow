@@ -2847,7 +2847,13 @@ def get_publish_job(job_id: str) -> dict | None:
                 output_clip.is_active AS output_is_active,
                 publish_accounts.account_name,
                 publish_accounts.login_status AS account_login_status,
-                publish_accounts.login_message AS account_login_message
+                publish_accounts.login_message AS account_login_message,
+                (
+                    SELECT ei.experiment_id
+                    FROM content_improvement_experiment_items ei
+                    WHERE ei.publish_job_id = publish_jobs.id
+                    LIMIT 1
+                ) AS content_experiment_id
             FROM publish_jobs
             LEFT JOIN tasks ON tasks.id = publish_jobs.task_id
             LEFT JOIN output_clip ON output_clip.id = publish_jobs.output_clip_id
@@ -2873,7 +2879,13 @@ def list_publish_jobs(limit: int | None = 100, *, worker_state: dict | None = No
             output_clip.is_active AS output_is_active,
             publish_accounts.account_name,
             publish_accounts.login_status AS account_login_status,
-            publish_accounts.login_message AS account_login_message
+            publish_accounts.login_message AS account_login_message,
+            (
+                SELECT ei.experiment_id
+                FROM content_improvement_experiment_items ei
+                WHERE ei.publish_job_id = publish_jobs.id
+                LIMIT 1
+            ) AS content_experiment_id
         FROM publish_jobs
         LEFT JOIN tasks ON tasks.id = publish_jobs.task_id
         LEFT JOIN output_clip ON output_clip.id = publish_jobs.output_clip_id
@@ -4750,6 +4762,8 @@ def get_publish_center_context(*, focus_task_id: str = "") -> dict:
     }
     missing_cover_count = sum(missing_cover_counts.values())
     opencli_status = _opencli_status()
+    from app.services.content_review_service import list_active_content_experiments_for_publish
+
     return {
         "publish_items": publish_items,
         "send_queue_items": queue_items,
@@ -4763,6 +4777,7 @@ def get_publish_center_context(*, focus_task_id: str = "") -> dict:
         "jobs_by_platform": jobs_by_platform,
         "platforms": [{"id": platform, "label": PLATFORM_LABELS[platform]} for platform in AUTO_PUBLISH_PLATFORMS],
         "accounts": list_accounts(),
+        "content_experiments": list_active_content_experiments_for_publish(),
         "app_timezone": settings.app_timezone,
         "opencli_available": opencli_status["available"],
         "opencli_status": opencli_status,

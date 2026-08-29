@@ -3,7 +3,7 @@
 {% block title %}内容复盘 · {{ settings.app_name }}{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', path='css/content-review.css') }}?v=20260829-export-v1">
+<link rel="stylesheet" href="{{ url_for('static', path='css/content-review.css') }}?v=20260829-feedback-loop-v1">
 {% endblock %}
 
 {% block content %}
@@ -48,8 +48,10 @@
     </div>
     <p>支持账号趋势表和“作品列表导出.xlsx”，系统按官方表头自动识别。先预览校验，再确认导入。</p>
     <form id="content-review-import-form" class="content-review-import-form">
-      <input id="content-review-file" name="file" type="file" accept=".xlsx,.csv" required>
-      <button class="secondary-button" type="submit">预览数据</button>
+      <input class="visually-hidden-file" id="content-review-file" name="file" type="file" accept=".xlsx,.csv" required>
+      <label class="file-upload-button" for="content-review-file">选择数据表</label>
+      <span class="content-review-file-name" id="content-review-file-name">未选择文件</span>
+      <button class="secondary-button" id="content-review-preview-button" type="submit" disabled>预览数据</button>
     </form>
     <div class="content-review-preview" id="content-review-preview" hidden>
       <dl>
@@ -72,6 +74,10 @@
       <span class="status-pill" id="content-review-sync-age">尚未同步</span>
     </div>
     <p>复用 Windows Chrome Worker 的登录态，只点击一次“导出数据”并读取官方 Excel；不会投稿。登录失效、验证码、限流、下载失败或页面变化都会立即停止，不会自动重试。</p>
+    <div class="content-review-export-facts" id="content-review-export-facts">
+      <strong id="content-review-last-export">上次成功导出：尚未同步</strong>
+      <small id="content-review-last-export-stats">等待官方作品数据</small>
+    </div>
     <button class="primary-button" id="content-review-sync" type="button">自动导出并同步全部作品</button>
   </article>
 </section>
@@ -98,12 +104,15 @@
     </article>
     {% endfor %}
   </div>
-  <div class="content-review-history-wrap">
-    <table class="content-review-table compact-table">
-      <thead><tr><th>日期</th><th>投稿</th><th>播放</th><th>互动</th><th>5 秒完播</th><th>2 秒跳出</th><th>封面点击</th><th>平均时长</th></tr></thead>
-      <tbody id="content-review-history"></tbody>
-    </table>
-  </div>
+  <details class="content-review-disclosure" data-content-review-disclosure="account-history">
+    <summary><span>查看每日详细数据</span><small>默认收起，点击展开最近 28 天</small></summary>
+    <div class="content-review-history-wrap">
+      <table class="content-review-table compact-table">
+        <thead><tr><th>日期</th><th>投稿</th><th>播放</th><th>互动</th><th>5 秒完播</th><th>2 秒跳出</th><th>封面点击</th><th>平均时长</th></tr></thead>
+        <tbody id="content-review-history"></tbody>
+      </table>
+    </div>
+  </details>
 </section>
 
 <section class="panel content-review-works-panel">
@@ -112,25 +121,42 @@
       <p class="eyebrow">Attribution Chain</p>
       <h2>作品级归因</h2>
     </div>
-    <span class="status-pill">多结果不强行匹配</span>
+    <span class="status-pill" id="content-review-match-summary">等待作品数据</span>
   </div>
-  <div class="content-review-history-wrap">
-    <table class="content-review-table content-review-works-table">
-      <thead><tr><th>官方作品 / 来源</th><th>官方完整指标</th><th>发布记录</th><th>候选 / 审核</th><th>AI / Prompt</th><th>匹配</th></tr></thead>
-      <tbody id="content-review-works"></tbody>
-    </table>
+  <p class="content-review-note">只有唯一证据才会自动关联；多个候选表示尚未匹配，必须人工确认。</p>
+  <details class="content-review-disclosure" data-content-review-disclosure="work-attribution">
+    <summary><span>查看全部作品归因</span><small>展开后可检查未匹配作品并人工确认</small></summary>
+    <div class="content-review-history-wrap">
+      <table class="content-review-table content-review-works-table">
+        <thead><tr><th>官方作品 / 来源</th><th>官方完整指标</th><th>发布记录</th><th>候选 / 审核</th><th>AI / Prompt</th><th>匹配</th></tr></thead>
+        <tbody id="content-review-works"></tbody>
+      </table>
+    </div>
+  </details>
+</section>
+
+<section class="panel content-review-insights-panel">
+  <div class="section-heading content-review-section-heading">
+    <div><p class="eyebrow">Diagnose → Act → Verify</p><h2>本周改进建议</h2></div>
+    <span class="status-pill" id="content-review-insight-count">等待诊断</span>
   </div>
+  <p class="content-review-note" id="content-review-insight-note">系统只使用已准确匹配的官方指标生成透明建议，不调用 AI，也不会自动修改 Prompt 或投稿。</p>
+  <div id="content-review-insights" class="content-review-insight-list"></div>
+  <div class="content-review-experiment-heading">
+    <div><p class="eyebrow">Controlled Experiments</p><h3>改进实验</h3></div>
+    <small>投稿前标记采用规则的作品；执行开始后归属自动冻结。</small>
+  </div>
+  <div id="content-review-experiments" class="content-review-experiment-list"></div>
 </section>
 
 <section class="content-review-bottom-grid">
   <article class="panel">
-    <div class="section-heading content-review-section-heading">
-      <div><p class="eyebrow">Prompt Evidence</p><h2>Prompt 版本对比</h2></div>
-      <span class="status-pill" id="content-review-cycles">0 / 3 周期</span>
-    </div>
-    <p class="content-review-note" id="content-review-prompt-message">数据不足，暂不生成结论。</p>
-    <div id="content-review-prompts" class="content-review-prompt-list"></div>
-    <p class="content-review-causality">仅相关性，不代表因果；系统不会自动修改 Prompt。</p>
+    <details class="content-review-disclosure content-review-prompt-evidence" data-content-review-disclosure="prompt-evidence">
+      <summary><span>Prompt 与实验依据</span><small id="content-review-cycles">0 / 3 个官方导出周</small></summary>
+      <p class="content-review-note" id="content-review-prompt-message">数据不足，暂不生成 Prompt 结论。</p>
+      <div id="content-review-prompts" class="content-review-prompt-list"></div>
+      <p class="content-review-causality">历史未绑定 Prompt 的作品只作为观察基线；所有对比仅表示相关性。</p>
+    </details>
   </article>
 
   <article class="panel">
@@ -144,5 +170,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-{% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260829-export-v1"></script>{% endif %}
+{% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260829-feedback-loop-v1"></script>{% endif %}
 {% endblock %}

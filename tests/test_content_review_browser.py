@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
 import socket
 import threading
@@ -14,6 +15,7 @@ playwright = pytest.importorskip("playwright.sync_api")
 
 from app.db.database import get_connection, init_db  # noqa: E402
 from app.main import app  # noqa: E402
+from app.services import content_review_service  # noqa: E402
 
 
 def _free_port() -> int:
@@ -38,9 +40,33 @@ def _seed_account() -> str:
 
 
 @pytest.mark.parametrize("width", [1440, 390])
-def test_content_review_page_has_no_document_overflow(width: int):
+def test_content_review_page_has_no_document_overflow(width: int, monkeypatch, tmp_path):
     init_db()
     account_id = _seed_account()
+    monkeypatch.setattr(
+        content_review_service,
+        "_now",
+        lambda: datetime.fromisoformat("2026-08-29T00:48:37+08:00"),
+    )
+    content_review_service.commit_douyin_item_export(
+        account_id=account_id,
+        items=[
+            {
+                "aweme_id": "export:browser-test",
+                "title": "页面测试作品",
+                "published_at": "2026-08-28T20:00:00+08:00",
+                "duration_seconds": 60,
+                "play_count": 100,
+                "completion_rate": 0.4,
+                "five_second_completion_rate": 0.6,
+                "two_second_bounce_rate": 0.2,
+                "average_watch_seconds": 24,
+                "content_genre": "视频",
+            }
+        ],
+        captured_at="2026-08-29T00:47:00+08:00",
+        source_filename="作品列表导出.xlsx",
+    )
     port = _free_port()
     server = uvicorn.Server(
         uvicorn.Config(
@@ -79,6 +105,63 @@ def test_content_review_page_has_no_document_overflow(width: int):
                 assert page.locator("h1").filter(has_text="内容复盘").is_visible()
                 assert page.locator("#content-review-import-form").is_visible()
                 assert page.locator("#content-review-sync").is_visible()
+                page.locator("#content-review-last-export").filter(
+                    has_text="上次成功导出：北京时间 2026-08-29 00:48"
+                ).wait_for()
+                assert page.locator("#content-review-last-export-stats").inner_text() == (
+                    "1 条作品 · 已匹配 0 · 待确认 0 · 未匹配 1"
+                )
+                assert page.locator("label.file-upload-button").is_visible()
+                assert not page.locator("#content-review-file").is_visible()
+                assert page.locator("#content-review-preview-button").is_disabled()
+                sample_file = tmp_path / "页面测试.xlsx"
+                sample_file.write_bytes(b"not-uploaded")
+                page.locator("#content-review-file").set_input_files(str(sample_file))
+                assert page.locator("#content-review-file-name").inner_text() == "页面测试.xlsx"
+                assert page.locator("#content-review-preview-button").is_enabled()
+                account_details = page.locator('[data-content-review-disclosure="account-history"]')
+                work_details = page.locator('[data-content-review-disclosure="work-attribution"]')
+                assert account_details.get_attribute("open") is None
+                assert work_details.get_attribute("open") is None
+                account_details.locator("summary").click()
+                assert account_details.get_attribute("open") is not None
+                page.reload(wait_until="networkidle")
+                assert page.locator(
+                    '[data-content-review-disclosure="account-history"]'
+                ).get_attribute("open") is not None
+                assert page.locator(
+                    '[data-content-review-disclosure="work-attribution"]'
+                ).get_attribute("open") is None
+                page.evaluate(
+                    """
+                    renderSummary({
+                      latest_metric_date: '2026-08-28',
+                      last_export_committed_at: '2026-08-29T00:48:37+08:00',
+                      current_period: {two_second_bounce_rate: 0.30},
+                      previous_period: {two_second_bounce_rate: 0.20},
+                      comparisons: {two_second_bounce_rate: 0.50},
+                      history: [],
+                      match_summary: {}
+                    })
+                    """
+                )
+                bounce_delta = page.locator(
+                    '[data-metric="two_second_bounce_rate"] [data-delta]'
+                )
+                assert "is-down" in (bounce_delta.get_attribute("class") or "")
+                page.evaluate(
+                    """
+                    renderSummary({
+                      latest_metric_date: '2026-08-28',
+                      current_period: {two_second_bounce_rate: 0.18},
+                      previous_period: {two_second_bounce_rate: 0.20},
+                      comparisons: {two_second_bounce_rate: -0.10},
+                      history: [],
+                      match_summary: {}
+                    })
+                    """
+                )
+                assert "is-up" in (bounce_delta.get_attribute("class") or "")
                 overflow = page.evaluate(
                     "document.documentElement.scrollWidth - window.innerWidth"
                 )
@@ -89,6 +172,19 @@ def test_content_review_page_has_no_document_overflow(width: int):
         server.should_exit = True
         thread.join(timeout=10)
         with get_connection() as connection:
+            batch_rows = connection.execute(
+                "SELECT id FROM content_metric_import_batches WHERE account_id = ?",
+                (account_id,),
+            ).fetchall()
+            for batch in batch_rows:
+                connection.execute(
+                    "DELETE FROM douyin_item_metric_snapshots WHERE batch_id = ?",
+                    (batch["id"],),
+                )
+            connection.execute(
+                "DELETE FROM content_metric_import_batches WHERE account_id = ?",
+                (account_id,),
+            )
             connection.execute(
                 "DELETE FROM publish_accounts WHERE id = ?",
                 (account_id,),

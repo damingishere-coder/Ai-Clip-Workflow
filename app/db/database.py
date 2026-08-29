@@ -114,6 +114,30 @@ DOUYIN_ITEM_EXPORT_MIGRATION_SPEC = "\n".join(
 DOUYIN_ITEM_EXPORT_MIGRATION_CHECKSUM = hashlib.sha256(
     DOUYIN_ITEM_EXPORT_MIGRATION_SPEC.encode("utf-8")
 ).hexdigest()
+CONTENT_FEEDBACK_LOOP_MIGRATION_VERSION = "20260829_02_content_feedback_loop"
+CONTENT_FEEDBACK_LOOP_MIGRATION_NAME = "内容复盘诊断与实验闭环"
+CONTENT_FEEDBACK_LOOP_REQUIRED_TABLES = (
+    "content_improvement_experiments",
+    "content_improvement_experiment_items",
+)
+CONTENT_FEEDBACK_LOOP_REQUIRED_INDEXES = (
+    "idx_content_experiments_account_status",
+    "idx_content_experiment_items_experiment",
+)
+CONTENT_FEEDBACK_LOOP_MIGRATION_SPEC = "\n".join(
+    (
+        CONTENT_FEEDBACK_LOOP_MIGRATION_VERSION,
+        CONTENT_FEEDBACK_LOOP_MIGRATION_NAME,
+        *CONTENT_FEEDBACK_LOOP_REQUIRED_TABLES,
+        *CONTENT_FEEDBACK_LOOP_REQUIRED_INDEXES,
+        "one-experiment-per-publish-job",
+        "freeze-baseline-at-creation",
+        "no-automatic-prompt-or-publish-actions",
+    )
+)
+CONTENT_FEEDBACK_LOOP_MIGRATION_CHECKSUM = hashlib.sha256(
+    CONTENT_FEEDBACK_LOOP_MIGRATION_SPEC.encode("utf-8")
+).hexdigest()
 
 
 class SchemaMigrationError(RuntimeError):
@@ -155,6 +179,9 @@ def init_db() -> None:
     needs_task_upload_only_backup = _requires_task_upload_only_migration(settings.database_path)
     needs_content_review_backup = _requires_content_review_schema_migration(settings.database_path)
     needs_douyin_item_export_backup = _requires_douyin_item_export_migration(settings.database_path)
+    needs_content_feedback_loop_backup = _requires_content_feedback_loop_migration(
+        settings.database_path
+    )
     if needs_long_live_backup:
         create_schema_migration_backup(
             settings.database_path,
@@ -209,6 +236,16 @@ def init_db() -> None:
             settings.database_path,
             settings.data_dir / "backups",
             "douyin-official-item-export",
+        )
+    if (
+        needs_content_feedback_loop_backup
+        and not needs_content_review_backup
+        and not needs_douyin_item_export_backup
+    ):
+        create_schema_migration_backup(
+            settings.database_path,
+            settings.data_dir / "backups",
+            "content-feedback-loop",
         )
 
     with get_connection() as connection:
@@ -767,6 +804,41 @@ def init_db() -> None:
                 FOREIGN KEY(publish_job_id) REFERENCES publish_jobs(id),
                 FOREIGN KEY(account_id) REFERENCES publish_accounts(id)
             );
+
+            CREATE TABLE IF NOT EXISTS content_improvement_experiments (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                recommendation_id TEXT NOT NULL,
+                diagnosis_code TEXT NOT NULL,
+                title TEXT NOT NULL,
+                hypothesis TEXT NOT NULL,
+                action_text TEXT NOT NULL,
+                primary_metric TEXT NOT NULL,
+                primary_direction TEXT NOT NULL,
+                guardrail_metrics_json TEXT NOT NULL DEFAULT '[]',
+                baseline_batch_id TEXT NOT NULL,
+                baseline_json TEXT NOT NULL,
+                target_sample_size INTEGER NOT NULL DEFAULT 20,
+                minimum_baseline_size INTEGER NOT NULL DEFAULT 20,
+                minimum_weeks INTEGER NOT NULL DEFAULT 3,
+                status TEXT NOT NULL DEFAULT 'active',
+                decision TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                UNIQUE(account_id, recommendation_id),
+                FOREIGN KEY(account_id) REFERENCES publish_accounts(id),
+                FOREIGN KEY(baseline_batch_id) REFERENCES content_metric_import_batches(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS content_improvement_experiment_items (
+                id TEXT PRIMARY KEY,
+                experiment_id TEXT NOT NULL,
+                publish_job_id TEXT NOT NULL UNIQUE,
+                assigned_at TEXT NOT NULL,
+                FOREIGN KEY(experiment_id) REFERENCES content_improvement_experiments(id) ON DELETE CASCADE,
+                FOREIGN KEY(publish_job_id) REFERENCES publish_jobs(id)
+            );
             """
         )
         _migrate_tasks_table(connection)
@@ -1006,6 +1078,53 @@ def _requires_douyin_item_export_migration(database_path) -> bool:
             except sqlite3.Error:
                 return True
         return not set(DOUYIN_ITEM_EXPORT_COLUMNS) <= item_columns or ledger_row is None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _requires_content_feedback_loop_migration(database_path) -> bool:
+    """实验闭环表或账本缺失时，启动前先生成安全备份。"""
+    if not database_path.exists() or database_path.stat().st_size == 0:
+        return False
+    connection = None
+    try:
+        connection = sqlite3.connect(
+            f"{database_path.resolve().as_uri()}?mode=ro",
+            uri=True,
+            timeout=10,
+        )
+        table_names = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "content_metric_import_batches" not in table_names:
+            return False
+        index_names = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        ledger_row = None
+        if "schema_migrations" in table_names:
+            try:
+                ledger_row = connection.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version = ? AND checksum = ?",
+                    (
+                        CONTENT_FEEDBACK_LOOP_MIGRATION_VERSION,
+                        CONTENT_FEEDBACK_LOOP_MIGRATION_CHECKSUM,
+                    ),
+                ).fetchone()
+            except sqlite3.Error:
+                return True
+        return (
+            not set(CONTENT_FEEDBACK_LOOP_REQUIRED_TABLES) <= table_names
+            or not set(CONTENT_FEEDBACK_LOOP_REQUIRED_INDEXES) <= index_names
+            or ledger_row is None
+        )
     finally:
         if connection is not None:
             connection.close()
@@ -1411,6 +1530,77 @@ def _verify_douyin_item_export_migration(connection: sqlite3.Connection) -> None
         )
 
 
+def _apply_content_feedback_loop_migration(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS content_improvement_experiments (
+            id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            recommendation_id TEXT NOT NULL,
+            diagnosis_code TEXT NOT NULL,
+            title TEXT NOT NULL,
+            hypothesis TEXT NOT NULL,
+            action_text TEXT NOT NULL,
+            primary_metric TEXT NOT NULL,
+            primary_direction TEXT NOT NULL,
+            guardrail_metrics_json TEXT NOT NULL DEFAULT '[]',
+            baseline_batch_id TEXT NOT NULL,
+            baseline_json TEXT NOT NULL,
+            target_sample_size INTEGER NOT NULL DEFAULT 20,
+            minimum_baseline_size INTEGER NOT NULL DEFAULT 20,
+            minimum_weeks INTEGER NOT NULL DEFAULT 3,
+            status TEXT NOT NULL DEFAULT 'active',
+            decision TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT,
+            UNIQUE(account_id, recommendation_id),
+            FOREIGN KEY(account_id) REFERENCES publish_accounts(id),
+            FOREIGN KEY(baseline_batch_id) REFERENCES content_metric_import_batches(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS content_improvement_experiment_items (
+            id TEXT PRIMARY KEY,
+            experiment_id TEXT NOT NULL,
+            publish_job_id TEXT NOT NULL UNIQUE,
+            assigned_at TEXT NOT NULL,
+            FOREIGN KEY(experiment_id) REFERENCES content_improvement_experiments(id) ON DELETE CASCADE,
+            FOREIGN KEY(publish_job_id) REFERENCES publish_jobs(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_content_experiments_account_status
+            ON content_improvement_experiments(account_id, status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_content_experiment_items_experiment
+            ON content_improvement_experiment_items(experiment_id, assigned_at DESC);
+        """
+    )
+
+
+def _verify_content_feedback_loop_migration(connection: sqlite3.Connection) -> None:
+    tables = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    indexes = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+    }
+    missing_tables = sorted(set(CONTENT_FEEDBACK_LOOP_REQUIRED_TABLES) - tables)
+    missing_indexes = sorted(set(CONTENT_FEEDBACK_LOOP_REQUIRED_INDEXES) - indexes)
+    if missing_tables:
+        raise SchemaMigrationError(
+            "内容实验迁移缺少数据表：" + ", ".join(missing_tables)
+        )
+    if missing_indexes:
+        raise SchemaMigrationError(
+            "内容实验迁移缺少索引：" + ", ".join(missing_indexes)
+        )
+
+
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
     return (
         SchemaMigration(
@@ -1440,6 +1630,13 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             checksum=DOUYIN_ITEM_EXPORT_MIGRATION_CHECKSUM,
             apply=_apply_douyin_item_export_migration,
             verify=_verify_douyin_item_export_migration,
+        ),
+        SchemaMigration(
+            version=CONTENT_FEEDBACK_LOOP_MIGRATION_VERSION,
+            name=CONTENT_FEEDBACK_LOOP_MIGRATION_NAME,
+            checksum=CONTENT_FEEDBACK_LOOP_MIGRATION_CHECKSUM,
+            apply=_apply_content_feedback_loop_migration,
+            verify=_verify_content_feedback_loop_migration,
         ),
     )
 
