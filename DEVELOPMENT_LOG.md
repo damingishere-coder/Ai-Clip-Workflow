@@ -1,5 +1,14 @@
 # Development Log
 
+## 2026-08-30 第二次工程复检整改收口
+
+- 使用 Codemap、Code Overhaul 和 SonarQube 26.8 对最终 revision `12ca670` 完成整改后全量复检，并生成 `PROJECT_REAUDIT.md`。
+- 上次 13 个 P0/P1 核心问题保持 `13/13` 关闭；整改前 A-F 六项问题为 `6/6` 关闭。独立复审发现的预览按钮状态回归已在最终 revision 修复，当前没有未关闭的新 P0/P1。
+- Codemap 14 个模块全部完成独立复审，`needs_audit=0`；HIGH 从 1 条降为 0，平均分从 65.4 提升到 66.8，D 模块从 3 个降为 1 个。
+- SonarQube 没有新增 Bug 或 Vulnerability，但增加 4 条 Code Smell；Quality Gate 因没有 `coverage.xml` 和 4 个 new-code 规则问题为 ERROR。本轮如实保留，不为追分继续修改高风险迁移或前端函数。
+- 最终全量 `867 passed`；PR #67、#68、#69 的 Linux、Windows host smoke 和 Docker image smoke 全部通过。活动库只读检查为 `quick_check=ok`、外键违规 0，但本轮新增迁移尚未应用。
+- 当前健康度为 `80/100 · 稳定 V1`，已经达到停止本轮业务代码优化的条件；剩余历史迁移、恢复互斥、文件/lease、Worker 可观测性和启动隔离问题按真实触发条件进入 P2。
+
 ## 2026-08-30 内容复盘异步边界与陈旧预览保护
 
 - 官方作品导出路由将账号解析、同步 Worker 调用、行数校验和 SQLite 提交整体放入线程池；原有登录、验证、限流、页面变化、下载失败和 Worker 不可用错误码保持不变。
