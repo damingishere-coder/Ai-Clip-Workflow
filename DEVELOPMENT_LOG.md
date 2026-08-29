@@ -1441,3 +1441,10 @@
 - 显式片段反馈改为只绑定候选的 `source_analysis_run_id`，并验证 Run 属于同一任务；来源缺失、不存在或跨任务时保留反馈但不归因，绝不回退到当前 active Run。
 - Prompt 对比统一使用“官方导入时长 → 候选时长 → 输出片段源时长”的有效时长口径，官方报表时长为空时仍能计算平均观看比例。
 - 定向回归由修复前 `55 passed` 增加到 `62 passed`，全量回归 `861 passed`；Ruff、Compileall、5 个 JavaScript 语法检查、20 个 PowerShell 解析检查、三套合并 Compose 配置、`pip check` 和 `git diff --check` 均通过。测试只使用临时 SQLite 和本地 mock，未调用真实 Provider、Chrome 或发布平台，也未修改活动数据库。
+
+## 2026-08-30 数据库迁移原子性与 Prompt 外键修复
+
+- 内容实验账本迁移不再调用会隐式提交的 `executescript()`；表、索引、结构校验和账本现在处于同一 `BEGIN IMMEDIATE` 事务，第二张表故障注入后第一张表和账本均可完整回滚并安全重跑。
+- 新增独立迁移补齐历史 `ai_analysis_runs.prompt_version_id` 外键，保留 AI Run 数据、显式索引、触发器和下游反馈引用；未知字段、残留临时表或孤儿 Prompt 引用均 fail-closed。
+- 正式数据库仅做只读核对：当前 39 条 AI Run、0 条孤儿 Prompt 引用、0 条现有外键异常，确认具备无损迁移前提；本阶段没有改写活动 SQLite 或重启服务。
+- 迁移与备份定向回归 `28 passed`，迁移失败、重试、外键、孤儿引用与旧 AI Run 专项 `5 passed`，全量回归 `865 passed`；Ruff、Compileall、5 个 JavaScript 语法检查、20 个 PowerShell 解析检查、三套合并 Compose 配置、`pip check` 和 `git diff --check` 均通过。验证只使用隔离临时库；活动主库大小保持 `10,276,864` bytes，但文件时间被现有后台服务持续更新，因此不把 mtime 作为“未写入”证据。
