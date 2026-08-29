@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path.TrimEnd('\')
 Set-Location -LiteralPath $ProjectRoot
+. (Join-Path $PSScriptRoot 'native_environment.ps1')
 
 function Resolve-NativePath {
     param(
@@ -51,6 +52,10 @@ if ($databaseParent) {
     New-Item -ItemType Directory -Path $databaseParent -Force | Out-Null
 }
 
+$NativeNoProxy = Merge-NativeNoProxy -ExistingValues @(
+    [Environment]::GetEnvironmentVariable('NO_PROXY', 'Process'),
+    [Environment]::GetEnvironmentVariable('no_proxy', 'Process')
+)
 $nativeEnvironment = [ordered]@{
     DATA_DIR = $DataDirPath
     DATABASE_PATH = $DatabasePathPath
@@ -62,6 +67,7 @@ $nativeEnvironment = [ordered]@{
     PUBLISH_WORKER_URL = "http://127.0.0.1:$WorkerPort"
     OPENCLI_HOST_BRIDGE_URL = "http://127.0.0.1:$WorkerPort"
     OPENCLI_LOCAL_BASE_URL = "http://127.0.0.1:$Port"
+    NO_PROXY = $NativeNoProxy
 }
 
 $previousEnvironment = @{}

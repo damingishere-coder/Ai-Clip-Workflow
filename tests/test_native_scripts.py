@@ -1,4 +1,8 @@
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +65,31 @@ def test_native_scripts_set_host_paths_and_loopback_urls_without_env_file_access
     assert ".env" not in runner
     assert "compose" not in start.lower()
     assert "compose" not in runner.lower()
+    for script in (start, runner):
+        assert "native_environment.ps1" in script
+        assert "Merge-NativeNoProxy" in script
+        assert "NO_PROXY = $NativeNoProxy" in script
+
+
+def test_native_no_proxy_merge_preserves_existing_entries_and_adds_loopback():
+    shell = shutil.which("powershell.exe") or shutil.which("pwsh")
+    if not shell:
+        pytest.skip("当前环境没有 PowerShell")
+    helper = (PROJECT_ROOT / "scripts" / "native_environment.ps1").resolve()
+    escaped_helper = str(helper).replace("'", "''")
+    command = (
+        f". '{escaped_helper}'; "
+        "Merge-NativeNoProxy -ExistingValues "
+        "@('corp.internal,localhost', 'api.local,127.0.0.1')"
+    )
+    result = subprocess.run(
+        [shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == "corp.internal,localhost,api.local,127.0.0.1,::1"
 
 
 def test_native_stop_requires_state_identity_and_only_stops_owned_worker():

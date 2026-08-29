@@ -7,7 +7,7 @@ import re
 import socket
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from app.core.config import settings
 from app.services.publishers.base import (
@@ -24,6 +24,12 @@ _WINDOWS_RESERVED_NAMES = {
     *(f"COM{index}" for index in range(1, 10)),
     *(f"LPT{index}" for index in range(1, 10)),
 }
+
+
+def urlopen(request: Request, timeout: int):
+    """直连本机 Worker，不继承宿主进程的系统代理。"""
+    opener = build_opener(ProxyHandler({}))
+    return opener.open(request, timeout=timeout)  # noqa: S310 - Worker URL is local configuration
 
 
 def validate_worker_identifier(value: str, field_name: str, *, max_length: int) -> str:
@@ -92,8 +98,8 @@ class PublishWorkerClient:
                 and not definitely_not_connected
             )
             raise PublishWorkerUnavailable(
-                "发送服务正在随 Docker 中的牛马片场项目自动启动。"
-                "如果刚刚运行项目，请稍候并重新检测；持续未连接时，请在 Docker Desktop 中停止后重新运行本项目。",
+                "Windows 发布 Worker 未连接。请确认 RunDock 中独立托管的 "
+                "Niuma-Publish-Worker 正在运行，并检查本机 127.0.0.1:8765 监听状态。",
                 request_may_have_been_received=timed_out or publish_result_uncertain,
             ) from exc
         if not raw:

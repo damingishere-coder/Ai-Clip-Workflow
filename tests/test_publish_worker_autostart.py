@@ -56,8 +56,11 @@ def test_publish_center_no_longer_requests_manual_start_command():
     worker_client = _read("app/services/publishers/worker_client.py")
 
     assert r".\scripts\start_niuma_studio.ps1" not in template
-    assert "发送服务会在 Docker 中的牛马片场项目运行后自动启动" in template
-    assert "随 Docker 项目自动启动" in javascript
+    assert "RunDock 的 Niuma-Publish-Worker 独立托管" in template
+    assert "RunDock 的 Niuma-Publish-Worker 独立托管" in javascript
+    assert "Docker Desktop" not in template
+    assert "随 Docker 项目自动启动" not in javascript
+    assert "RunDock 中独立托管" in worker_client
     assert r".\scripts\start_niuma_studio.ps1" not in worker_client
 
 

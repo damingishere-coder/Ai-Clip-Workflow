@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import socket
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 
 import pytest
 from fastapi.testclient import TestClient
@@ -79,6 +81,37 @@ def test_worker_client_sends_bearer_token_and_converts_result(monkeypatch):
     assert captured == {"authorization": "Bearer secret-token", "timeout": 7}
 
 
+def test_worker_client_bypasses_environment_proxy_without_no_proxy(monkeypatch):
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = json.dumps({"status": "ok", "worker": "windows_chrome"}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            return
+
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(name, "http://127.0.0.1:1")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), HealthHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = PublishWorkerClient(f"http://127.0.0.1:{server.server_port}", "token", 2).health()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert result == {"status": "ok", "worker": "windows_chrome"}
+
+
 def test_worker_timeout_is_marked_as_possibly_received(monkeypatch):
     def timeout(*_, **__):
         raise socket.timeout("timed out")
@@ -112,7 +145,8 @@ def test_worker_offline_before_connection_is_safe_retry(monkeypatch):
     with pytest.raises(PublishWorkerUnavailable) as caught:
         PublishWorkerClient("http://127.0.0.1:8765", "token", 2).health()
     assert caught.value.request_may_have_been_received is False
-    assert "随 Docker 中的牛马片场项目自动启动" in caught.value.message
+    assert "RunDock 中独立托管" in caught.value.message
+    assert "127.0.0.1:8765" in caught.value.message
     assert r".\scripts" not in caught.value.message
 
 
