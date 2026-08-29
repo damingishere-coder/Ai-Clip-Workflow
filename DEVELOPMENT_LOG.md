@@ -1368,3 +1368,9 @@
 - 强制用原始 `start_time` 后前 3 秒评价钩子，要求 15 秒内出现第一次有效刺激，并把评论动机、单一话题和完整反应闭环设为硬门槛。
 - 片段以 60–90 秒为主，普通可看内容不得虚高到 78 分；本次不修改三阶段分析代码、A/B/C 门槛、候选池或历史分析结果。
 - 相关选片与 Prompt 测试 `43 passed`，Ruff 和 `git diff --check` 通过；活动 SQLite 更新前已生成一致性备份，更新后 `integrity_check=ok`、外键异常为 0，其他 Prompt 与任务记录未变化。
+
+## 2026-08-30 堆叠 PR CI 触发范围修复
+
+- 保留 `master` 分支 push 的既有 CI，同时取消 Pull Request 目标分支限制，让以功能分支为目标的堆叠 PR 也运行 Linux 测试、Windows 主机冒烟和 Docker 镜像冒烟。
+- 不修改 CI Job 内容、权限、Secrets、依赖版本或业务代码；继续使用权限更低的 `pull_request` 事件，不切换到 `pull_request_target`。
+- 本次只恢复自动验收链路。现有堆叠 PR 的依赖、合并顺序与目标分支将在 CI 修复合并后逐一核对，不自动改写历史或合并 PR。
