@@ -267,6 +267,7 @@ def test_ambiguous_window_failure_is_not_retried_after_restart(tmp_path):
     assert second.meta["failed_window_count"] == 1
     assert second.meta["reused_window_count"] == second.meta["window_count"] - 1
     assert second.meta["analysis_incomplete"] is True
+    assert second.meta["quality_degraded"] is False
 
 
 def test_corrupt_completed_window_checkpoint_is_not_rebilled(tmp_path):
@@ -328,6 +329,8 @@ def test_safe_rate_limit_window_is_retried_within_bound(tmp_path):
     result = analyze_long_live_talk(request, provider=provider, sleep_fn=lambda _seconds: None)
     assert provider.calls[1] == 3
     assert result.meta["failed_window_count"] == 0
+    assert result.meta["analysis_incomplete"] is False
+    assert result.meta["quality_degraded"] is False
 
 
 def test_stale_worker_cannot_update_long_live_checkpoint():

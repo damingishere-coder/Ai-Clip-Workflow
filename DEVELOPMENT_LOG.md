@@ -1434,3 +1434,10 @@
 - 保留 `master` 分支 push 的既有 CI，同时取消 Pull Request 目标分支限制，让以功能分支为目标的堆叠 PR 也运行 Linux 测试、Windows 主机冒烟和 Docker 镜像冒烟。
 - 不修改 CI Job 内容、权限、Secrets、依赖版本或业务代码；继续使用权限更低的 `pull_request` 事件，不切换到 `pull_request_target`。
 - 本次只恢复自动验收链路。现有堆叠 PR 的依赖、合并顺序与目标分支将在 CI 修复合并后逐一核对，不自动改写历史或合并 PR。
+
+## 2026-08-30 AI 分析与内容归因契约修复
+
+- 长直播分析结果现在始终显式写入 `quality_degraded=false`；完整结果可通过共享质量校验，不完整窗口仍由 `analysis_incomplete` 和覆盖率门禁阻止切片，没有放宽损坏元数据的 fail-closed 规则。
+- 显式片段反馈改为只绑定候选的 `source_analysis_run_id`，并验证 Run 属于同一任务；来源缺失、不存在或跨任务时保留反馈但不归因，绝不回退到当前 active Run。
+- Prompt 对比统一使用“官方导入时长 → 候选时长 → 输出片段源时长”的有效时长口径，官方报表时长为空时仍能计算平均观看比例。
+- 定向回归由修复前 `55 passed` 增加到 `62 passed`，全量回归 `861 passed`；Ruff、Compileall、5 个 JavaScript 语法检查、20 个 PowerShell 解析检查、三套合并 Compose 配置、`pip check` 和 `git diff --check` 均通过。测试只使用临时 SQLite 和本地 mock，未调用真实 Provider、Chrome 或发布平台，也未修改活动数据库。

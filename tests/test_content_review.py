@@ -965,6 +965,60 @@ def test_prompt_comparison_only_includes_versions_used_by_selected_account():
     assert second["completed_cycles"] == 0
 
 
+@pytest.mark.parametrize(
+    ("candidate_duration", "expected_ratio"),
+    [(60, 0.5), (0, 1 / 3)],
+)
+def test_prompt_comparison_uses_effective_duration_for_official_export_watch_ratio(
+    candidate_duration: int,
+    expected_ratio: float,
+):
+    account_id = _insert_account()
+    published_at = "2026-08-28T10:00:00+08:00"
+    job_id = _insert_publish_job(
+        account_id,
+        title="官方导出时长回退作品",
+        published_at=published_at,
+        duration_seconds=90,
+    )
+    version_id = _attach_prompt_chain(job_id, "时长回退 Prompt")
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE clip_candidates
+            SET duration_seconds = ?
+            WHERE id = (
+                SELECT oc.clip_candidate_id
+                FROM publish_jobs pj
+                JOIN output_clip oc ON oc.id = pj.output_clip_id
+                WHERE pj.id = ?
+            )
+            """,
+            (candidate_duration, job_id),
+        )
+        connection.commit()
+    exported = content_review_service.commit_douyin_item_export(
+        account_id=account_id,
+        captured_at="2026-08-29T12:00:00+08:00",
+        source_filename="作品列表导出.xlsx",
+        items=[
+            _diagnosis_item(
+                301,
+                title="官方导出时长回退作品",
+                published_at=published_at,
+                duration_seconds=None,
+                average_watch_seconds=30,
+            )
+        ],
+    )
+
+    comparison = content_review_service.get_prompt_comparison(account_id)
+    version = next(item for item in comparison["versions"] if item["prompt_version_id"] == version_id)
+
+    assert exported["matched_count"] == 1
+    assert version["average_watch_ratio"] == pytest.approx(expected_ratio)
+
+
 def test_experiment_assignment_is_unique_atomic_and_freezes_after_execution():
     account_id = _insert_account()
     _seed_diagnosis_baseline(account_id)

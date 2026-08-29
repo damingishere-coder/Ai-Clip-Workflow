@@ -236,6 +236,24 @@ def test_quality_degraded_analysis_is_manual_review_only(monkeypatch):
         process_task_video_cuts("test-quality-cut")
 
 
+def test_complete_long_live_analysis_meta_passes_cut_validation():
+    meta = {
+        "schema_version": 2,
+        "selection_profile": "long_live_talk",
+        "analysis_incomplete": False,
+        "quality_degraded": False,
+        "coverage_ratio": 1.0,
+        "coverage_percent": 100.0,
+        "invalid_item_count": 0,
+        "window_count": 2,
+        "completed_window_count": 2,
+        "failed_window_count": 0,
+        "failed_windows": [],
+    }
+
+    assert validate_ai_analysis_meta_for_cut(meta, "long_live_talk") == meta
+
+
 def test_missing_analysis_meta_blocks_manual_and_auto_cut(monkeypatch):
     engine = PipelineEngine()
     monkeypatch.setattr(engine, "_get_task", lambda _task_id: {"selection_profile": "general"})
