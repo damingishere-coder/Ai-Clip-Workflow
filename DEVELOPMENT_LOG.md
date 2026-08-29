@@ -1368,3 +1368,15 @@
 - 强制用原始 `start_time` 后前 3 秒评价钩子，要求 15 秒内出现第一次有效刺激，并把评论动机、单一话题和完整反应闭环设为硬门槛。
 - 片段以 60–90 秒为主，普通可看内容不得虚高到 78 分；本次不修改三阶段分析代码、A/B/C 门槛、候选池或历史分析结果。
 - 相关选片与 Prompt 测试 `43 passed`，Ruff 和 `git diff --check` 通过；活动 SQLite 更新前已生成一致性备份，更新后 `integrity_check=ok`、外键异常为 0，其他 Prompt 与任务记录未变化。
+
+## 2026-08-29 RunDock Worker 回环直连修复
+
+- 定位到 RunDock 同时正常托管 `Niuma-Studio` 与 `Niuma-Publish-Worker`，但 Web 继承系统代理且缺少回环绕过，导致 `127.0.0.1:8765` 请求可能被代理返回 502；问题不是 Worker 未启动。
+- `PublishWorkerClient` 改用显式空代理 opener，所有健康检查、账号检查、登录、创作者中心、投稿与 execution 查询均不再继承系统代理；既有超时与结果不确定边界保持不变。
+- `start_native.ps1` 与 `run_native.ps1` 共用 `native_environment.ps1`，保留已有 `NO_PROXY` 条目、去重并追加 `127.0.0.1,localhost,::1`。
+- 发送中心与后端的旧 Docker Worker 提示改为当前 RunDock 原生双进程托管说明；Web 不会自行启动或合并独立 Worker 注册项。
+- 活动 SQLite 和 RunDock 状态在运行态调整前已备份；本次不修改数据库结构、公开 API、全局代理、AI Provider、账号配置或 E 盘媒体。
+- 仅为 Web 注册项补充 `NO_PROXY=127.0.0.1,localhost,::1` 并受控重启 Web；Worker 注册项和监听进程保持不变。现场复核 8001/8765 各只有一个监听者，调度器 `worker_available=true` 且 `last_scan_at` 连续推进。
+- 依次补发 `ea237f98f568` 与 `2059b5822678`，分别取得 execution `feee7d7789fb44fc8bce2b6a21ec2d11`、`bf7ae642f7d840588761c49879f9149b`；Worker 均为 `confirmed_success`，数据库均为 `PUBLISHED`，无 `NEED_REVIEW`、结果不确定或重复任务。
+- 抖音创作者中心独立核对：作品“小钟一上场就质疑代班主持：这集可以看吗”显示 2026-08-29 23:37 已发布，作品“小钟把英文歌唱成‘虾酥’，竟然真的接到代言”显示 2026-08-29 23:38 已发布；补发后仅剩原有 8 条未来排期。
+- 验证结果：定向测试 `23 passed`，完整测试 `803 passed`；Ruff、Compileall、PowerShell 5/7 静态解析和 `git diff --check` 全部通过。测试期间未调用真实平台，真实投稿严格限定为上述两条漏发任务。

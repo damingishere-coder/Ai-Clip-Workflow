@@ -1442,7 +1442,7 @@ if (publishCenterRoot) {
         const ready = schedulerHealthy && data.worker_available;
         const resultMessage = schedulerFailures
           ? (data.last_error_message || "调度扫描异常，正在自动重试")
-          : (data.worker_available ? "调度器与 Windows Worker 均已连接。" : "发送服务仍在随 Docker 项目自动启动；请稍候，或在 Docker Desktop 中停止后重新运行本项目。");
+          : (data.worker_available ? "调度器与 Windows Worker 均已连接。" : "发送服务由 RunDock 的 Niuma-Publish-Worker 独立托管；请检查该注册项和本机 127.0.0.1:8765 监听状态。");
         showMessage(resultMessage, ready ? "success" : "error");
       }
     } catch (error) {

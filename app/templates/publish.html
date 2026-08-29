@@ -164,7 +164,7 @@
   <button type="button" class="text-button worker-refresh-button" data-refresh-worker>重新检测</button>
   <small data-worker-message>{% if scheduler_health.consecutive_failures %}{{ scheduler_health.last_error_message }} · {% endif %}{{ scheduler_health.worker_message }} · 页面及排期均使用北京时间</small>
   <div class="worker-connection-help" data-worker-help {% if scheduler_health.worker_available %}hidden{% endif %}>
-    <strong>自动连接：</strong><span>发送服务会在 Docker 中的牛马片场项目运行后自动启动。若刚刚运行项目，请稍候并点击“重新检测”；持续未连接时，请在 Docker Desktop 中停止后重新运行本项目。</span>
+    <strong>自动连接：</strong><span>发送服务由 RunDock 的 Niuma-Publish-Worker 独立托管。若刚刚启动项目，请稍候并点击“重新检测”；持续未连接时，请检查该注册项和本机 127.0.0.1:8765 监听状态。</span>
   </div>
 </section>
 
