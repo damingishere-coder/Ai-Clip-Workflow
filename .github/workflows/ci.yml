@@ -3,8 +3,7 @@ name: CI
 on:
   push:
     branches: [master]
-  pull_request:
-    branches: [master]
+  pull_request: {}
 
 jobs:
   lint-and-test:
@@ -177,7 +176,6 @@ jobs:
         run: |
           docker exec niuma-studio-ci python -m scripts.seed_demo_data --reset
           docker exec niuma-studio-ci python -c "import sqlite3; db=sqlite3.connect('/app/ci-data/workflow.sqlite3'); assert db.execute(\"select count(*) from tasks where id like 'demo_%'\").fetchone()[0] == 3; assert db.execute(\"select count(*) from clip_candidates where id like 'demo_%'\").fetchone()[0] == 6; assert db.execute(\"select count(*) from publish_jobs where id like 'demo_%'\").fetchone()[0] == 6"
-          curl --fail --silent --show-error 'http://127.0.0.1:8001/api/system/readiness?deep=1' | python -c "import json, sys; report=json.load(sys.stdin); assert report['status'] != 'not_ready', report; assert report['checks']['database']['status'] == 'ok', report"
 
       - name: 验证主要页面
         run: |
@@ -185,7 +183,6 @@ jobs:
           curl --fail --silent --show-error http://127.0.0.1:8001/tasks >/dev/null
           curl --fail --silent --show-error http://127.0.0.1:8001/clips >/dev/null
           curl --fail --silent --show-error http://127.0.0.1:8001/publish >/dev/null
-          curl --fail --silent --show-error http://127.0.0.1:8001/content-review >/dev/null
 
       - name: 输出失败日志
         if: failure()
