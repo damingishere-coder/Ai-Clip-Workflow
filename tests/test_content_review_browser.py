@@ -151,6 +151,8 @@ def test_content_review_page_has_no_document_overflow(width: int, monkeypatch, t
                     """
                 )
                 page.locator("#content-review-preview-button").click()
+                page.locator("#content-review-account").dispatch_event("change")
+                assert page.locator("#content-review-preview-button").is_enabled()
                 page.locator("#content-review-file").set_input_files(str(replacement_file))
                 page.evaluate("window.__resolveOldContentReviewPreview?.()")
                 page.wait_for_timeout(100)
@@ -158,6 +160,30 @@ def test_content_review_page_has_no_document_overflow(width: int, monkeypatch, t
                 assert page.locator("#content-review-preview").is_hidden()
                 assert page.locator("#content-review-commit").is_disabled()
                 assert "旧预览不应显示" not in page.locator("#content-review-message").inner_text()
+                page.evaluate(
+                    """
+                    window.fetch = ((previousFetch) => (path, options = {}) => {
+                      if (!String(path).includes('/api/content-review/imports/commit-race/commit')) {
+                        return previousFetch(path, options);
+                      }
+                      return new Promise((resolve) => {
+                        window.__resolveOldContentReviewCommit = () => resolve({
+                          ok: true,
+                          json: async () => ({message: '旧提交不应显示'})
+                        });
+                      });
+                    })(window.fetch);
+                    previewBatchId = 'commit-race';
+                    document.querySelector('#content-review-preview').hidden = false;
+                    document.querySelector('#content-review-commit').disabled = false;
+                    """
+                )
+                page.locator("#content-review-commit").click()
+                page.locator("#content-review-account").dispatch_event("change")
+                page.evaluate("window.__resolveOldContentReviewCommit?.()")
+                page.wait_for_timeout(100)
+                assert page.locator("#content-review-commit").is_disabled()
+                assert "旧提交不应显示" not in page.locator("#content-review-message").inner_text()
                 account_details = page.locator('[data-content-review-disclosure="account-history"]')
                 work_details = page.locator('[data-content-review-disclosure="work-attribution"]')
                 assert account_details.get_attribute("open") is None

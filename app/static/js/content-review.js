@@ -24,6 +24,9 @@ function invalidateContentReviewPreview() {
   previewBatchId = "";
   if (contentReviewPreview) contentReviewPreview.hidden = true;
   if (contentReviewCommit) contentReviewCommit.disabled = true;
+  if (contentReviewPreviewButton) {
+    contentReviewPreviewButton.disabled = !contentReviewFile?.files?.[0];
+  }
 }
 
 function showContentReviewMessage(message, tone = "info") {
@@ -681,21 +684,25 @@ contentReviewImportForm?.addEventListener("submit", async (event) => {
 
 contentReviewCommit?.addEventListener("click", async () => {
   if (!previewBatchId) return;
+  const batchId = previewBatchId;
+  const requestSequence = contentReviewPreviewSequence;
   contentReviewCommit.disabled = true;
   try {
-    const data = await contentReviewApi(`/api/content-review/imports/${encodeURIComponent(previewBatchId)}/commit`, {
+    const data = await contentReviewApi(`/api/content-review/imports/${encodeURIComponent(batchId)}/commit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirm: true }),
     });
+    if (requestSequence !== contentReviewPreviewSequence || batchId !== previewBatchId) return;
     showContentReviewMessage(data.message, "success");
     contentReviewPreview.hidden = true;
     previewBatchId = "";
     await loadContentReviewData();
   } catch (error) {
+    if (requestSequence !== contentReviewPreviewSequence || batchId !== previewBatchId) return;
     showContentReviewMessage(`导入失败：${error.message}`, "error");
   } finally {
-    contentReviewCommit.disabled = false;
+    contentReviewCommit.disabled = !previewBatchId;
   }
 });
 
