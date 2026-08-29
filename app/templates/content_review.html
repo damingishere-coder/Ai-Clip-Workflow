@@ -61,7 +61,7 @@
         <div><dt>行数</dt><dd data-preview-rows>—</dd></div>
         <div><dt>归因</dt><dd data-preview-attribution>—</dd></div>
       </dl>
-      <button class="primary-button" id="content-review-commit" type="button">确认导入</button>
+      <button class="primary-button" id="content-review-commit" type="button" disabled>确认导入</button>
     </div>
   </article>
 
@@ -170,5 +170,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-{% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260829-feedback-loop-v1"></script>{% endif %}
+{% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260830-async-boundary-v1"></script>{% endif %}
 {% endblock %}

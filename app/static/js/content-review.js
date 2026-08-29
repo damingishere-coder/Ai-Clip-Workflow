@@ -10,9 +10,23 @@ const contentReviewSync = document.querySelector("#content-review-sync");
 
 let previewBatchId = "";
 let contentReviewLoadSequence = 0;
+let contentReviewPreviewSequence = 0;
+let contentReviewPreviewController = null;
 
 function currentAccountId() {
   return contentReviewAccount?.value || "";
+}
+
+function invalidateContentReviewPreview() {
+  contentReviewPreviewSequence += 1;
+  contentReviewPreviewController?.abort();
+  contentReviewPreviewController = null;
+  previewBatchId = "";
+  if (contentReviewPreview) contentReviewPreview.hidden = true;
+  if (contentReviewCommit) contentReviewCommit.disabled = true;
+  if (contentReviewPreviewButton) {
+    contentReviewPreviewButton.disabled = !contentReviewFile?.files?.[0];
+  }
 }
 
 function showContentReviewMessage(message, tone = "info") {
@@ -605,12 +619,12 @@ async function loadContentReviewData() {
 
 contentReviewFile?.addEventListener("change", () => {
   const file = contentReviewFile.files?.[0];
-  previewBatchId = "";
-  if (contentReviewPreview) contentReviewPreview.hidden = true;
+  invalidateContentReviewPreview();
   if (contentReviewFileName) contentReviewFileName.textContent = file?.name || "未选择文件";
   if (contentReviewPreviewButton) contentReviewPreviewButton.disabled = !file;
   const status = document.querySelector("#content-review-file-status");
   if (status) status.textContent = file ? "已选择" : "尚未选择";
+  showContentReviewMessage("", "info");
 });
 
 contentReviewImportForm?.addEventListener("submit", async (event) => {
@@ -620,20 +634,32 @@ contentReviewImportForm?.addEventListener("submit", async (event) => {
     showContentReviewMessage("请先选择 .xlsx 或 .csv 文件。", "error");
     return;
   }
+  contentReviewPreviewController?.abort();
+  const requestSequence = ++contentReviewPreviewSequence;
+  const accountId = currentAccountId();
+  const controller = new AbortController();
+  contentReviewPreviewController = controller;
   const button = contentReviewImportForm.querySelector("button[type='submit']");
   button.disabled = true;
   showContentReviewMessage("正在只读解析并校验数据表…", "info");
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("account_id", currentAccountId());
+  formData.append("account_id", accountId);
   try {
     const data = await contentReviewApi("/api/content-review/imports/preview", {
       method: "POST",
       body: formData,
+      signal: controller.signal,
     });
+    if (
+      requestSequence !== contentReviewPreviewSequence
+      || accountId !== currentAccountId()
+      || file !== contentReviewFile?.files?.[0]
+    ) return;
     previewBatchId = data.batch_id || "";
     document.querySelector("#content-review-file-status").textContent = data.already_imported ? "已导入" : "预览通过";
     if (contentReviewPreview) contentReviewPreview.hidden = data.already_imported;
+    if (contentReviewCommit) contentReviewCommit.disabled = data.already_imported || !previewBatchId;
     if (!data.already_imported) {
       contentReviewPreview.querySelector("[data-preview-filename]").textContent = data.filename || file.name;
       contentReviewPreview.querySelector("[data-preview-type]").textContent = data.report_type === "douyin_item_export" ? "官方作品列表" : "账号趋势表";
@@ -643,31 +669,40 @@ contentReviewImportForm?.addEventListener("submit", async (event) => {
     }
     showContentReviewMessage(data.message, data.already_imported ? "info" : "success");
   } catch (error) {
+    if (error.name === "AbortError" || requestSequence !== contentReviewPreviewSequence) return;
     previewBatchId = "";
     if (contentReviewPreview) contentReviewPreview.hidden = true;
+    if (contentReviewCommit) contentReviewCommit.disabled = true;
     showContentReviewMessage(`预览失败：${error.message}`, "error");
   } finally {
-    button.disabled = !contentReviewFile?.files?.[0];
+    if (requestSequence === contentReviewPreviewSequence) {
+      if (contentReviewPreviewController === controller) contentReviewPreviewController = null;
+      button.disabled = !contentReviewFile?.files?.[0];
+    }
   }
 });
 
 contentReviewCommit?.addEventListener("click", async () => {
   if (!previewBatchId) return;
+  const batchId = previewBatchId;
+  const requestSequence = contentReviewPreviewSequence;
   contentReviewCommit.disabled = true;
   try {
-    const data = await contentReviewApi(`/api/content-review/imports/${encodeURIComponent(previewBatchId)}/commit`, {
+    const data = await contentReviewApi(`/api/content-review/imports/${encodeURIComponent(batchId)}/commit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirm: true }),
     });
+    if (requestSequence !== contentReviewPreviewSequence || batchId !== previewBatchId) return;
     showContentReviewMessage(data.message, "success");
     contentReviewPreview.hidden = true;
     previewBatchId = "";
     await loadContentReviewData();
   } catch (error) {
+    if (requestSequence !== contentReviewPreviewSequence || batchId !== previewBatchId) return;
     showContentReviewMessage(`导入失败：${error.message}`, "error");
   } finally {
-    contentReviewCommit.disabled = false;
+    contentReviewCommit.disabled = !previewBatchId;
   }
 });
 
@@ -692,8 +727,11 @@ contentReviewSync?.addEventListener("click", async () => {
 });
 
 contentReviewAccount?.addEventListener("change", () => {
-  previewBatchId = "";
-  if (contentReviewPreview) contentReviewPreview.hidden = true;
+  invalidateContentReviewPreview();
+  const file = contentReviewFile?.files?.[0];
+  const status = document.querySelector("#content-review-file-status");
+  if (status) status.textContent = file ? "已选择" : "尚未选择";
+  showContentReviewMessage("", "info");
   loadContentReviewData();
 });
 

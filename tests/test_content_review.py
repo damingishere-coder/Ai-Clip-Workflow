@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 from datetime import datetime
 import hashlib
 import io
 import json
+import threading
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -13,6 +15,8 @@ import pytest
 
 from app.db.database import get_connection, init_db
 from app.main import app
+from app.models.content_review import DouyinAnalyticsExportSyncRequest
+from app.routers import content_review as content_review_router
 from app.services import content_review_service
 from app.services.publishers.base import PublishError
 from app.services.publishers.worker_client import PublishWorkerClient
@@ -835,6 +839,66 @@ def test_export_sync_api_commits_sanitized_worker_items(monkeypatch):
         "like_count": 81,
         "completion_rate": 0.42,
     }
+
+
+def test_export_sync_offloads_worker_validation_and_commit(monkeypatch):
+    caller_thread_id = threading.get_ident()
+    observed_thread_ids = []
+
+    def resolve_account(account_id):
+        observed_thread_ids.append(threading.get_ident())
+        return account_id
+
+    def worker_sync(_self, *, account_id):
+        observed_thread_ids.append(threading.get_ident())
+        return {
+            "captured_at": "2026-08-28T12:00:00+08:00",
+            "source_filename": "作品列表导出.xlsx",
+            "row_count": 0,
+            "items": [],
+        }
+
+    def commit_export(**kwargs):
+        observed_thread_ids.append(threading.get_ident())
+        return {"row_count": len(kwargs["items"]), "message": "同步完成"}
+
+    monkeypatch.setattr(content_review_service, "_resolve_douyin_account_id", resolve_account)
+    monkeypatch.setattr(PublishWorkerClient, "analytics_export_sync", worker_sync)
+    monkeypatch.setattr(content_review_service, "commit_douyin_item_export", commit_export)
+
+    result = asyncio.run(
+        content_review_router.export_sync_douyin_items(
+            DouyinAnalyticsExportSyncRequest(account_id="test-account")
+        )
+    )
+
+    assert result["row_count"] == 0
+    assert len(set(observed_thread_ids)) == 1
+    assert observed_thread_ids[0] != caller_thread_id
+
+
+def test_export_sync_rejects_row_count_mismatch_before_commit(monkeypatch):
+    account_id = _insert_account()
+    committed = False
+
+    def worker_sync(_self, *, account_id):
+        return {"row_count": 1, "items": []}
+
+    def commit_export(**_kwargs):
+        nonlocal committed
+        committed = True
+
+    monkeypatch.setattr(PublishWorkerClient, "analytics_export_sync", worker_sync)
+    monkeypatch.setattr(content_review_service, "commit_douyin_item_export", commit_export)
+
+    response = TestClient(app).post(
+        "/api/content-review/douyin/export-sync",
+        json={"account_id": account_id},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Windows Worker 返回的作品行数校验失败"
+    assert committed is False
 
 
 def test_export_sync_api_preserves_fixed_worker_error_code(monkeypatch):
