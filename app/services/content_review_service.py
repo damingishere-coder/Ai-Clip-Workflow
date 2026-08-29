@@ -1153,7 +1153,12 @@ def get_prompt_comparison(account_id: str = "") -> dict:
                   AND b.source_kind = ?
                   AND i.match_status IN ('matched_exact', 'matched_unique', 'confirmed_manual')
             )
-            SELECT i.*, c.id AS candidate_id, ar.prompt_version_id
+            SELECT i.*, c.id AS candidate_id, ar.prompt_version_id,
+                   COALESCE(
+                       NULLIF(i.duration_seconds, 0),
+                       NULLIF(c.duration_seconds, 0),
+                       NULLIF(oc.source_duration_ms, 0) / 1000.0
+                   ) AS effective_duration_seconds
             FROM latest_items i
             JOIN publish_jobs pj ON pj.id = i.publish_job_id
             JOIN output_clip oc ON oc.id = pj.output_clip_id
@@ -1206,9 +1211,10 @@ def get_prompt_comparison(account_id: str = "") -> dict:
         five_rates = [float(work["five_second_completion_rate"]) for work in works if work["five_second_completion_rate"] is not None]
         bounce_rates = [float(work["two_second_bounce_rate"]) for work in works if work["two_second_bounce_rate"] is not None]
         watch_ratios = [
-            float(work["average_watch_seconds"]) / float(work["duration_seconds"])
+            float(work["average_watch_seconds"]) / float(work["effective_duration_seconds"])
             for work in works
-            if work["average_watch_seconds"] is not None and float(work["duration_seconds"] or 0) > 0
+            if work["average_watch_seconds"] is not None
+            and float(work["effective_duration_seconds"] or 0) > 0
         ]
         interactions = sum(
             int(work["like_count"] or 0)
