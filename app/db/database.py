@@ -138,6 +138,42 @@ CONTENT_FEEDBACK_LOOP_MIGRATION_SPEC = "\n".join(
 CONTENT_FEEDBACK_LOOP_MIGRATION_CHECKSUM = hashlib.sha256(
     CONTENT_FEEDBACK_LOOP_MIGRATION_SPEC.encode("utf-8")
 ).hexdigest()
+AI_PROMPT_VERSION_FK_MIGRATION_VERSION = "20260830_01_ai_prompt_version_fk"
+AI_PROMPT_VERSION_FK_MIGRATION_NAME = "AI 分析 Prompt 版本外键一致性"
+AI_PROMPT_VERSION_FK_MIGRATION_SPEC = "\n".join(
+    (
+        AI_PROMPT_VERSION_FK_MIGRATION_VERSION,
+        AI_PROMPT_VERSION_FK_MIGRATION_NAME,
+        "ai_analysis_runs.prompt_version_id->ai_prompt_versions.id",
+        "on-update-no-action",
+        "on-delete-no-action",
+        "preserve-ai-analysis-run-data-indexes-triggers",
+        "reject-orphan-prompt-version-references",
+        "foreign-key-check-before-ledger-commit",
+    )
+)
+AI_PROMPT_VERSION_FK_MIGRATION_CHECKSUM = hashlib.sha256(
+    AI_PROMPT_VERSION_FK_MIGRATION_SPEC.encode("utf-8")
+).hexdigest()
+AI_ANALYSIS_RUN_COLUMNS = (
+    "id",
+    "task_id",
+    "run_number",
+    "provider",
+    "provider_label",
+    "model",
+    "ai_prompt_preset_id",
+    "ai_prompt_preset_name",
+    "prompt_version_id",
+    "prompt_text_sha256",
+    "requested_clip_count",
+    "clip_count",
+    "analysis_summary",
+    "fallback_notice",
+    "analysis_payload_json",
+    "created_at",
+    "is_active",
+)
 
 
 class SchemaMigrationError(RuntimeError):
@@ -151,6 +187,7 @@ class SchemaMigration:
     checksum: str
     apply: Callable[[sqlite3.Connection], None]
     verify: Callable[[sqlite3.Connection], None]
+    requires_foreign_keys_off: bool = False
 
 
 @contextmanager
@@ -180,6 +217,9 @@ def init_db() -> None:
     needs_content_review_backup = _requires_content_review_schema_migration(settings.database_path)
     needs_douyin_item_export_backup = _requires_douyin_item_export_migration(settings.database_path)
     needs_content_feedback_loop_backup = _requires_content_feedback_loop_migration(
+        settings.database_path
+    )
+    needs_ai_prompt_version_fk_backup = _requires_ai_prompt_version_fk_migration(
         settings.database_path
     )
     if needs_long_live_backup:
@@ -246,6 +286,18 @@ def init_db() -> None:
             settings.database_path,
             settings.data_dir / "backups",
             "content-feedback-loop",
+        )
+    if needs_ai_prompt_version_fk_backup and not any(
+        (
+            needs_content_review_backup,
+            needs_douyin_item_export_backup,
+            needs_content_feedback_loop_backup,
+        )
+    ):
+        create_schema_migration_backup(
+            settings.database_path,
+            settings.data_dir / "backups",
+            "ai-prompt-version-fk",
         )
 
     with get_connection() as connection:
@@ -1130,6 +1182,61 @@ def _requires_content_feedback_loop_migration(database_path) -> bool:
             connection.close()
 
 
+def _requires_ai_prompt_version_fk_migration(database_path) -> bool:
+    """旧 AI Run 表缺少 Prompt 外键或新迁移账本时，重建前先备份。"""
+    if not database_path.exists() or database_path.stat().st_size == 0:
+        return False
+    connection = None
+    try:
+        connection = sqlite3.connect(
+            f"{database_path.resolve().as_uri()}?mode=ro",
+            uri=True,
+            timeout=10,
+        )
+        table_names = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "ai_analysis_runs" not in table_names:
+            return False
+        ledger_row = None
+        if "schema_migrations" in table_names:
+            try:
+                ledger_row = connection.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version = ? AND checksum = ?",
+                    (
+                        AI_PROMPT_VERSION_FK_MIGRATION_VERSION,
+                        AI_PROMPT_VERSION_FK_MIGRATION_CHECKSUM,
+                    ),
+                ).fetchone()
+            except sqlite3.Error:
+                return True
+        return not _has_ai_prompt_version_fk(connection) or ledger_row is None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _has_ai_prompt_version_fk(connection: sqlite3.Connection) -> bool:
+    for row in connection.execute("PRAGMA foreign_key_list(ai_analysis_runs)").fetchall():
+        table_name = row["table"] if isinstance(row, sqlite3.Row) else row[2]
+        source_column = row["from"] if isinstance(row, sqlite3.Row) else row[3]
+        target_column = row["to"] if isinstance(row, sqlite3.Row) else row[4]
+        on_update = row["on_update"] if isinstance(row, sqlite3.Row) else row[5]
+        on_delete = row["on_delete"] if isinstance(row, sqlite3.Row) else row[6]
+        if (
+            table_name == "ai_prompt_versions"
+            and source_column == "prompt_version_id"
+            and target_column == "id"
+            and str(on_update).upper() == "NO ACTION"
+            and str(on_delete).upper() == "NO ACTION"
+        ):
+            return True
+    return False
+
+
 def _get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
     rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row["name"] for row in rows}
@@ -1531,8 +1638,7 @@ def _verify_douyin_item_export_migration(connection: sqlite3.Connection) -> None
 
 
 def _apply_content_feedback_loop_migration(connection: sqlite3.Connection) -> None:
-    connection.executescript(
-        """
+    schema_sql = """
         CREATE TABLE IF NOT EXISTS content_improvement_experiments (
             id TEXT PRIMARY KEY,
             account_id TEXT NOT NULL,
@@ -1573,7 +1679,11 @@ def _apply_content_feedback_loop_migration(connection: sqlite3.Connection) -> No
         CREATE INDEX IF NOT EXISTS idx_content_experiment_items_experiment
             ON content_improvement_experiment_items(experiment_id, assigned_at DESC);
         """
-    )
+    # executescript() 会先隐式提交，账本迁移必须逐条执行以保持整体可回滚。
+    for statement in schema_sql.split(";"):
+        normalized = statement.strip()
+        if normalized:
+            connection.execute(normalized)
 
 
 def _verify_content_feedback_loop_migration(connection: sqlite3.Connection) -> None:
@@ -1599,6 +1709,164 @@ def _verify_content_feedback_loop_migration(connection: sqlite3.Connection) -> N
         raise SchemaMigrationError(
             "内容实验迁移缺少索引：" + ", ".join(missing_indexes)
         )
+
+
+def _apply_ai_prompt_version_fk_migration(connection: sqlite3.Connection) -> None:
+    if _has_ai_prompt_version_fk(connection):
+        return
+    if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 0:
+        raise SchemaMigrationError("重建 AI Run 表前未关闭当前连接的外键检查")
+
+    orphan = connection.execute(
+        """
+        SELECT r.id, r.prompt_version_id
+        FROM ai_analysis_runs r
+        LEFT JOIN ai_prompt_versions p ON p.id = r.prompt_version_id
+        WHERE r.prompt_version_id IS NOT NULL
+          AND TRIM(r.prompt_version_id) != ''
+          AND p.id IS NULL
+        ORDER BY r.id
+        LIMIT 1
+        """
+    ).fetchone()
+    if orphan is not None:
+        raise SchemaMigrationError(
+            "AI Run 存在无法验证的 Prompt 版本引用，已拒绝自动重建："
+            f"{orphan['id']} -> {orphan['prompt_version_id']}"
+        )
+
+    table_info = connection.execute("PRAGMA table_info(ai_analysis_runs)").fetchall()
+    actual_columns = {row["name"] for row in table_info}
+    expected_columns = set(AI_ANALYSIS_RUN_COLUMNS)
+    missing_columns = sorted(expected_columns - actual_columns)
+    unknown_columns = sorted(actual_columns - expected_columns)
+    if missing_columns:
+        raise SchemaMigrationError(
+            "AI Run 表缺少规范字段，已拒绝自动重建：" + ", ".join(missing_columns)
+        )
+    if unknown_columns:
+        raise SchemaMigrationError(
+            "AI Run 表存在未知字段，已拒绝自动重建以避免数据丢失："
+            + ", ".join(unknown_columns)
+        )
+
+    replacement_table = "ai_analysis_runs_prompt_fk_new"
+    replacement_exists = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
+        (replacement_table,),
+    ).fetchone()
+    if replacement_exists is not None:
+        raise SchemaMigrationError(f"检测到残留临时表 {replacement_table}，已拒绝覆盖")
+
+    schema_objects = connection.execute(
+        """
+        SELECT type, name, sql
+        FROM sqlite_master
+        WHERE tbl_name = 'ai_analysis_runs'
+          AND type IN ('index', 'trigger')
+          AND sql IS NOT NULL
+        ORDER BY type, name
+        """
+    ).fetchall()
+    original_count = connection.execute("SELECT COUNT(*) FROM ai_analysis_runs").fetchone()[0]
+    connection.execute(
+        f"""
+        CREATE TABLE {replacement_table} (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            run_number INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            provider_label TEXT NOT NULL,
+            model TEXT NOT NULL,
+            ai_prompt_preset_id TEXT,
+            ai_prompt_preset_name TEXT,
+            prompt_version_id TEXT,
+            prompt_text_sha256 TEXT,
+            requested_clip_count INTEGER NOT NULL DEFAULT 5,
+            clip_count INTEGER NOT NULL DEFAULT 0,
+            analysis_summary TEXT,
+            fallback_notice TEXT,
+            analysis_payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY(task_id) REFERENCES tasks(id),
+            FOREIGN KEY(prompt_version_id) REFERENCES ai_prompt_versions(id)
+        )
+        """
+    )
+    columns_sql = ", ".join(AI_ANALYSIS_RUN_COLUMNS)
+    connection.execute(
+        f"INSERT INTO {replacement_table} ({columns_sql}) "
+        f"SELECT {columns_sql} FROM ai_analysis_runs"
+    )
+    copied_count = connection.execute(
+        f"SELECT COUNT(*) FROM {replacement_table}"
+    ).fetchone()[0]
+    if copied_count != original_count:
+        raise SchemaMigrationError(
+            f"AI Run 表重建行数不一致：原表 {original_count}，新表 {copied_count}"
+        )
+
+    connection.execute("DROP TABLE ai_analysis_runs")
+    connection.execute(f"ALTER TABLE {replacement_table} RENAME TO ai_analysis_runs")
+    for schema_object in schema_objects:
+        connection.execute(schema_object["sql"])
+
+
+def _verify_ai_prompt_version_fk_migration(connection: sqlite3.Connection) -> None:
+    if not _has_ai_prompt_version_fk(connection):
+        raise SchemaMigrationError("AI Run 的 Prompt 版本外键不存在或删除语义不一致")
+    task_fk_exists = False
+    for row in connection.execute("PRAGMA foreign_key_list(ai_analysis_runs)").fetchall():
+        if (
+            row["table"] == "tasks"
+            and row["from"] == "task_id"
+            and row["to"] == "id"
+            and str(row["on_update"]).upper() == "NO ACTION"
+            and str(row["on_delete"]).upper() == "NO ACTION"
+        ):
+            task_fk_exists = True
+            break
+    if not task_fk_exists:
+        raise SchemaMigrationError("AI Run 表重建后丢失任务外键")
+
+    required_indexes = {
+        "idx_ai_analysis_runs_task_created",
+        "idx_ai_analysis_runs_prompt_version",
+    }
+    actual_indexes = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='index' AND tbl_name='ai_analysis_runs'"
+        ).fetchall()
+    }
+    missing_indexes = sorted(required_indexes - actual_indexes)
+    if missing_indexes:
+        raise SchemaMigrationError(
+            "AI Run 表重建后缺少索引：" + ", ".join(missing_indexes)
+        )
+
+    orphan = connection.execute(
+        """
+        SELECT 1
+        FROM ai_analysis_runs r
+        LEFT JOIN ai_prompt_versions p ON p.id = r.prompt_version_id
+        WHERE r.prompt_version_id IS NOT NULL
+          AND TRIM(r.prompt_version_id) != ''
+          AND p.id IS NULL
+        LIMIT 1
+        """
+    ).fetchone()
+    if orphan is not None:
+        raise SchemaMigrationError("AI Run 表仍存在孤儿 Prompt 版本引用")
+    violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        samples = "; ".join(
+            f"{row[0]} rowid={row[1]} parent={row[2]}"
+            for row in violations[:5]
+        )
+        raise SchemaMigrationError("外键检查失败，已拒绝记录迁移账本：" + samples)
 
 
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
@@ -1638,6 +1906,14 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             apply=_apply_content_feedback_loop_migration,
             verify=_verify_content_feedback_loop_migration,
         ),
+        SchemaMigration(
+            version=AI_PROMPT_VERSION_FK_MIGRATION_VERSION,
+            name=AI_PROMPT_VERSION_FK_MIGRATION_NAME,
+            checksum=AI_PROMPT_VERSION_FK_MIGRATION_CHECKSUM,
+            apply=_apply_ai_prompt_version_fk_migration,
+            verify=_verify_ai_prompt_version_fk_migration,
+            requires_foreign_keys_off=True,
+        ),
     )
 
 
@@ -1648,7 +1924,14 @@ def _run_schema_migrations(connection: sqlite3.Connection) -> None:
 
     for migration in _registered_schema_migrations():
         version = migration.version
+        original_foreign_keys = int(connection.execute("PRAGMA foreign_keys").fetchone()[0])
         try:
+            if migration.requires_foreign_keys_off:
+                connection.execute("PRAGMA foreign_keys = OFF")
+                if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 0:
+                    raise SchemaMigrationError(
+                        f"数据库迁移 {version} 无法临时关闭当前连接的外键检查"
+                    )
             connection.execute("BEGIN IMMEDIATE")
             _ensure_schema_migrations_table(connection)
             applied = connection.execute(
@@ -1685,6 +1968,15 @@ def _run_schema_migrations(connection: sqlite3.Connection) -> None:
             if isinstance(exc, SchemaMigrationError):
                 raise
             raise SchemaMigrationError(f"数据库迁移 {version} 执行失败：{exc}") from exc
+        finally:
+            if migration.requires_foreign_keys_off and original_foreign_keys:
+                if connection.in_transaction:
+                    connection.rollback()
+                connection.execute("PRAGMA foreign_keys = ON")
+                if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+                    raise SchemaMigrationError(
+                        f"数据库迁移 {version} 后无法恢复当前连接的外键检查"
+                    )
 
 
 def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
