@@ -1429,6 +1429,12 @@
 - 自动流水线父进程失败收口兼容小写 `ai_analyzing`，与大写 `AI_ANALYZING` 一样写为 `FAILED_AI_ANALYZING / 45%`，不再出现 Job 已失败但页面仍显示 65% 运行中的状态分裂。
 - 定向回归 `52 passed`；Ruff、Compileall 和 `git diff --check` 通过。未重跑当前 AI 单元，未调用真实 AI、ASR、FFmpeg 或发布平台，也未修改活动 SQLite；正式 8001 服务尚未重启加载新代码。
 
+## 2026-08-30 堆叠 PR CI 触发范围修复
+
+- 保留 `master` 分支 push 的既有 CI，同时取消 Pull Request 目标分支限制，让以功能分支为目标的堆叠 PR 也运行 Linux 测试、Windows 主机冒烟和 Docker 镜像冒烟。
+- 不修改 CI Job 内容、权限、Secrets、依赖版本或业务代码；继续使用权限更低的 `pull_request` 事件，不切换到 `pull_request_target`。
+- 本次只恢复自动验收链路。现有堆叠 PR 的依赖、合并顺序与目标分支将在 CI 修复合并后逐一核对，不自动改写历史或合并 PR。
+
 ## 2026-08-30 AI 分析与内容归因契约修复
 
 - 长直播分析结果现在始终显式写入 `quality_degraded=false`；完整结果可通过共享质量校验，不完整窗口仍由 `analysis_incomplete` 和覆盖率门禁阻止切片，没有放宽损坏元数据的 fail-closed 规则。
