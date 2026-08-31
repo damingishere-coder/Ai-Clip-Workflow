@@ -265,6 +265,7 @@ def test_runtime_status_reports_cached_model_and_gpu(monkeypatch, tmp_path) -> N
     assert status["external_cost_yuan"] == 0
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows DLL 搜索路径仅在 Windows 验证")
 def test_windows_dll_directories_include_venv_cublas_and_ctranslate2(monkeypatch, tmp_path) -> None:
     fake_prefix = tmp_path / ".venv"
     cublas_dir = fake_prefix / "Lib" / "site-packages" / "nvidia" / "cublas" / "bin"
@@ -276,7 +277,6 @@ def test_windows_dll_directories_include_venv_cublas_and_ctranslate2(monkeypatch
     (ctranslate2_dir / "cudnn64_9.dll").write_bytes(b"dll")
     added: list[str] = []
 
-    monkeypatch.setattr(local_transcription_runtime.os, "name", "nt")
     monkeypatch.setattr(local_transcription_runtime.sys, "prefix", str(fake_prefix))
     monkeypatch.setattr(
         local_transcription_runtime,
