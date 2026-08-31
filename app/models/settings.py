@@ -1,6 +1,13 @@
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, field_validator
+from pathlib import Path, PureWindowsPath
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.core.transcription_defaults import (
+    PRIMARY_TRANSCRIPTION_MODEL,
+    PRIMARY_TRANSCRIPTION_MODEL_REVISION,
+)
 
 
 _LOCAL_AI_HOSTS = {"localhost", "127.0.0.1", "::1", "host.docker.internal", "host.containers.internal"}
@@ -48,8 +55,30 @@ class AIConfigUpdate(BaseModel):
     ai_codex_model: str = Field(default="gpt-5.6-sol", max_length=200)
     ai_codex_timeout_seconds: int = Field(default=300, ge=10, le=1800)
 
-    transcription_provider: str = Field(default="volcengine", pattern="^(volcengine|local)$", max_length=20)
+    transcription_provider: str = Field(default="local", pattern="^(volcengine|local)$", max_length=20)
     transcription_fallback_provider: str = Field(default="", pattern="^(|volcengine|local)$", max_length=20)
+    transcription_offline_only: bool = Field(default=True)
+    transcription_model: str = Field(
+        default=PRIMARY_TRANSCRIPTION_MODEL,
+        pattern=r"^[A-Za-z0-9._/-]+$",
+        max_length=200,
+    )
+    transcription_model_revision: str = Field(
+        default=PRIMARY_TRANSCRIPTION_MODEL_REVISION,
+        pattern=r"^[0-9a-f]{40}$",
+        max_length=40,
+    )
+    transcription_model_cache_dir: str = Field(
+        default=r"E:\直播间切片工作流存储\_模型\faster-whisper",
+        max_length=2000,
+    )
+    transcription_local_files_only: bool = Field(default=True)
+    transcription_device: str = Field(default="cuda", pattern="^(cuda|cpu|auto)$", max_length=20)
+    transcription_compute_type: str = Field(
+        default="float16",
+        pattern="^(float16|int8_float16|int8|float32|auto)$",
+        max_length=30,
+    )
     volcengine_asr_api_url: str = Field(default="", max_length=2000)
     volcengine_asr_api_key: str = Field(default="", max_length=4096)
     volcengine_asr_app_key: str = Field(default="", max_length=4096)
@@ -112,6 +141,25 @@ class AIConfigUpdate(BaseModel):
     @classmethod
     def validate_volcengine_url(cls, value: str) -> str:
         return _validate_http_url(value, https_only=True)
+
+    @field_validator("transcription_model_cache_dir")
+    @classmethod
+    def validate_transcription_model_cache_dir(cls, value: str) -> str:
+        text = value.strip()
+        if not text or not (Path(text).is_absolute() or PureWindowsPath(text).is_absolute()):
+            raise ValueError("本地转写模型缓存目录必须是绝对路径")
+        return text
+
+    @model_validator(mode="after")
+    def validate_offline_transcription_policy(self):
+        if self.transcription_offline_only:
+            if self.transcription_provider != "local":
+                raise ValueError("完全离线转写开启时，转写方式必须为 local")
+            if self.transcription_fallback_provider not in {"", "local"}:
+                raise ValueError("完全离线转写开启时，不能配置远程转写兜底")
+            if not self.transcription_local_files_only:
+                raise ValueError("完全离线转写开启时，必须只读取本地模型文件")
+        return self
 
     @field_validator(*_REMOTE_URL_FIELDS)
     @classmethod

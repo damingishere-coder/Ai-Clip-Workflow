@@ -2,6 +2,12 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
+from app.core.transcription_defaults import (
+    CPU_FALLBACK_TRANSCRIPTION_MODEL,
+    PRIMARY_TRANSCRIPTION_MODEL,
+    PRIMARY_TRANSCRIPTION_MODEL_REVISION,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EXTERNAL_STORAGE_ROOT = Path(r"E:\直播间切片工作流存储")
@@ -221,13 +227,26 @@ class Settings:
     ai_windows_wsl_setup_acknowledged: str = _env("AI_WINDOWS_WSL_SETUP_ACKNOWLEDGED", "true")
     ai_model_context_window: int = int(_env("AI_MODEL_CONTEXT_WINDOW", "1000000"))
     ai_model_auto_compact_token_limit: int = int(_env("AI_MODEL_AUTO_COMPACT_TOKEN_LIMIT", "900000"))
-    transcription_provider: str = _env("TRANSCRIPTION_PROVIDER", "volcengine")
+    transcription_provider: str = _env("TRANSCRIPTION_PROVIDER", "local")
     transcription_fallback_provider: str = _env("TRANSCRIPTION_FALLBACK_PROVIDER", "")
-    transcription_model: str = _env("TRANSCRIPTION_MODEL", "medium")
+    transcription_offline_only: bool = _env_bool("TRANSCRIPTION_OFFLINE_ONLY", True)
+    transcription_model: str = _env("TRANSCRIPTION_MODEL", PRIMARY_TRANSCRIPTION_MODEL)
+    transcription_model_revision: str = _env(
+        "TRANSCRIPTION_MODEL_REVISION",
+        PRIMARY_TRANSCRIPTION_MODEL_REVISION,
+    )
+    transcription_model_cache_dir: Path = _env_path(
+        "TRANSCRIPTION_MODEL_CACHE_DIR",
+        _env_path("STORAGE_ROOT", EXTERNAL_STORAGE_ROOT) / "_模型" / "faster-whisper",
+    )
+    transcription_local_files_only: bool = _env_bool("TRANSCRIPTION_LOCAL_FILES_ONLY", True)
     transcription_language: str = _env("TRANSCRIPTION_LANGUAGE", "zh")
-    transcription_device: str = _env("TRANSCRIPTION_DEVICE", "cpu")
-    transcription_compute_type: str = _env("TRANSCRIPTION_COMPUTE_TYPE", "int8")
-    transcription_cpu_fallback_model: str = _env("TRANSCRIPTION_CPU_FALLBACK_MODEL", "medium")
+    transcription_device: str = _env("TRANSCRIPTION_DEVICE", "cuda")
+    transcription_compute_type: str = _env("TRANSCRIPTION_COMPUTE_TYPE", "float16")
+    transcription_cpu_fallback_model: str = _env(
+        "TRANSCRIPTION_CPU_FALLBACK_MODEL",
+        CPU_FALLBACK_TRANSCRIPTION_MODEL,
+    )
     transcription_chunk_seconds: int = int(_env("TRANSCRIPTION_CHUNK_SECONDS", "120"))
     transcription_chunk_overlap_seconds: int = int(_env("TRANSCRIPTION_CHUNK_OVERLAP_SECONDS", "5"))
     volcengine_asr_api_url: str = _env(

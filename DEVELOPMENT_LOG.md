@@ -1,5 +1,18 @@
 # Development Log
 
+## 2026-08-31 完全离线长音频转写
+
+- 默认转写 Provider 改为本地 `faster-whisper`，固定 `large-v3@edaa852e / cuda / float16`；`TRANSCRIPTION_OFFLINE_ONLY=true` 时，任务页、自动流水线、重试入口和显式火山请求都会在远程 HTTP 请求前拒绝执行。
+- 新增固定版本模型缓存和 Windows CUDA 运行时管理：模型只从 `E:\直播间切片工作流存储\_模型\faster-whisper` 读取，任务运行中不会偷偷联网下载；当前进程会加载项目 `.venv` 内的 cuBLAS 12 DLL，并复用 CTranslate2 自带的 cuDNN 9。
+- 新增一次性初始化脚本 `scripts/setup_local_transcription.ps1`，锁定下载 `large-v3` GPU 主模型和 `medium` CPU/int8 兜底模型，写入原子模型清单，并支持真实 20 秒音频的 GPU 推理冒烟。
+- 新增 `scripts/benchmark_local_transcription.py`，使用隔离数据库和任务目录执行 10/40 分钟本地验收；支持在指定分块保存 checkpoint 后主动停止，并用同一目录原地续跑，不接触正式任务数据。
+- 保留原 120 秒分块、5 秒重叠和 SQLite checkpoint；checkpoint 在实际 GPU/CPU 模型加载完成后才创建，`transcription_runs.model` 使用带 revision 的模型身份，音频指纹改为完整 SHA-256。
+- `/api/tasks/{id}/transcript-status` 增加离线锁、模型缓存、GPU 和 revision 状态；系统状态页展示完全离线、模型/DLL 就绪度、实际配置设备和外部转写费用 `¥0`，火山配置保留作人工回滚且不删除。
+- 新增离线边界专项回归，覆盖默认 Provider、409 阻断、HTTP 前置拦截、模型缺失、DLL 路径、CPU 兜底、模型 revision 与完整音频指纹；正式 `.env` 和运行中 Web/Worker 尚未切换或重启，等待真实素材验收后再启用。
+- 真实验收已验证主模型 `model.bin` 大小 `3,087,284,237` 字节及官方 SHA-256 `69f74147e3334731bc3a76048724833325d2ec74642fb52620eda87352e3d4f1`；20 秒中文音频 GPU 推理成功，没有退回 CPU。`medium` 兜底模型的 `1,527,906,378` 字节大文件也通过官方 SHA-256 `9b45e1009dcc4ab601eff815b61d80e60ce3fd8c74c1a14f4a282258286b51ae`，并实际以 `cpu / int8` 加载成功；就绪检查同时兼容官方模型使用的 `vocabulary.json` 或 `vocabulary.txt`。
+- 同一份 41 分 18 秒含多人对白和音乐素材，10 分钟样本用时 83.2 秒并输出 336 条；完整素材先在第 1/22 分块后主动中断，再复用该 checkpoint，用时 291.85 秒完成其余分块并输出 1085 条。SQLite 记录为 `large-v3@edaa852e / cuda / float16`、22/22 完成、完整 64 位 SHA-256；运行中转写进程 TCP 连接数为 0，GPU 采样为 65% 且约占 8.1 GB 显存。
+- 已在 `E:\直播间切片工作流存储\_验收\offline-transcription-20260831\41min\spot-checks` 均匀生成 10 个 15 秒试听片段和人工清单；人名、关键对白和剪辑时间点仍待用户试听确认，因此没有切换正式 `.env`，也没有重启 Web/Worker。
+
 ## 2026-08-28 2.1 集成 PR 与 Docker 冒烟修复
 
 - 将当前线性领先 `master` 的 26 个提交完整保留到 `codex/integrate-v2.1-stable`，新增独立空白清理提交并创建顶层集成 PR #60；不 rebase、不 squash，也不自动合并。

@@ -260,6 +260,7 @@ function updateWorkflowButtons(data) {
   if (!startButton) return;
   const progressStatus = data.progress?.status || "";
   const canRetryWithLocal = Boolean(data.local_retry_available);
+  const retryLabel = data.offline_only ? "重新本地转写" : "重新远程转写";
   if (localTranscriptButton) {
     localTranscriptButton.hidden = !canRetryWithLocal;
   }
@@ -277,7 +278,7 @@ function updateWorkflowButtons(data) {
     return;
   }
   if (progressStatus === "failed") {
-    startButton.textContent = "重新远程转写";
+    startButton.textContent = retryLabel;
     startButton.disabled = false;
     startButton.classList.add("js-process-action");
     startButton.dataset.endpoint = `/api/tasks/${transcriptPanel?.dataset.taskId}/process/transcript-workflow?force=true`;
@@ -286,7 +287,7 @@ function updateWorkflowButtons(data) {
     return;
   }
   if (progressStatus === "cancelled" || progressStatus === "stale") {
-    startButton.textContent = progressStatus === "stale" ? "重新远程转写" : "重新生成转写";
+    startButton.textContent = progressStatus === "stale" ? retryLabel : "重新生成转写";
     startButton.disabled = false;
     startButton.classList.add("js-process-action");
     startButton.dataset.endpoint = `/api/tasks/${transcriptPanel?.dataset.taskId}/process/transcript-workflow?force=true`;

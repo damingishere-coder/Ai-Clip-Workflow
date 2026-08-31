@@ -1,5 +1,12 @@
 # Next Steps
 
+## 2026-08-31 完全离线转写验收与启用
+
+1. 固定版本 cuBLAS 12、`large-v3` 主模型和 `medium / CPU / int8` 兜底模型均已初始化并通过加载校验；20 秒、10 分钟和完整 41 分钟 GPU 验收均通过，完整素材续跑约 4 分 52 秒完成并成功复用第一个 checkpoint。
+2. 打开 `E:\直播间切片工作流存储\_验收\offline-transcription-20260831\41min\spot-checks\README.md`，依次试听 10 个 15 秒片段，核对人名、关键对白和剪辑起止点；第 6、10 段已标出需要重点确认的疑似人名/背景声识别。
+3. 只有人工试听确认后，才把正式 `.env` 切换为本地离线配置，并在记录进程、端口和健康状态后受控重启 Web/Worker。当前正式服务仍保持原状。
+4. 回滚时只需恢复旧 `TRANSCRIPTION_PROVIDER` 并设置 `TRANSCRIPTION_OFFLINE_ONLY=false`；不要删除火山配置、E 盘模型缓存、历史 transcript 或 SQLite checkpoint。
+
 ## 2026-08-28 2.1 集成收口
 
 1. 等待 PR #60 的 Linux、Windows 与 Docker 三组 CI 全部通过；Docker 页面冒烟必须确认 `/`、`/tasks`、`/clips`、`/publish` 均返回成功。
