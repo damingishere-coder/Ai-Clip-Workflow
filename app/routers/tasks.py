@@ -222,10 +222,17 @@ async def process_audio(task_id: str) -> dict:
 async def process_transcript(
     task_id: str,
     background_tasks: BackgroundTasks,
-    provider: str | None = Query(default=None, pattern="^(remote|local)$"),
+    provider: str | None = Query(default=None, pattern="^(remote|local|volcengine)$"),
 ) -> dict:
     try:
-        return task_service.process_task_transcript(task_id, background_tasks=background_tasks, provider=provider)
+        resolved_provider = task_service.validate_transcription_provider_choice(provider)
+        return task_service.process_task_transcript(
+            task_id,
+            background_tasks=background_tasks,
+            provider=resolved_provider,
+        )
+    except task_service.TranscriptionOfflinePolicyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -237,9 +244,10 @@ async def process_transcript_workflow(
     task_id: str,
     background_tasks: BackgroundTasks,
     force: bool = Query(default=False),
-    provider: str | None = Query(default=None, pattern="^(remote|local)$"),
+    provider: str | None = Query(default=None, pattern="^(remote|local|volcengine)$"),
 ) -> dict:
     try:
+        resolved_provider = task_service.validate_transcription_provider_choice(provider)
         task = task_service.get_task(task_id, include_video_probe=False)
         if not task:
             raise ValueError("任务不存在")
@@ -248,7 +256,7 @@ async def process_transcript_workflow(
         job, created = job_service.create_or_get_active_job(
             task_id=task_id,
             job_type=job_service.JOB_TYPE_TRANSCRIPT,
-            payload={"force": force, "provider": provider},
+            payload={"force": force, "provider": resolved_provider},
         )
         return {
             "status": job["status"],
@@ -257,6 +265,8 @@ async def process_transcript_workflow(
             "job": job,
             "task": task,
         }
+    except task_service.TranscriptionOfflinePolicyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

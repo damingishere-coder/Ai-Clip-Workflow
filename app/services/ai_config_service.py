@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.models.settings import AIConfigUpdate
 from app.services.ai.codex_cli_provider import CodexCliConfig, CodexCliProvider
 from app.services.ai.diagnostics import fetch_ollama_models
+from app.services.local_transcription_runtime import get_local_transcription_runtime_status
 
 
 SETTING_ATTRS = {
@@ -17,6 +18,13 @@ SETTING_ATTRS = {
     "AI_CODEX_TIMEOUT_SECONDS": "ai_codex_timeout_seconds",
     "TRANSCRIPTION_PROVIDER": "transcription_provider",
     "TRANSCRIPTION_FALLBACK_PROVIDER": "transcription_fallback_provider",
+    "TRANSCRIPTION_OFFLINE_ONLY": "transcription_offline_only",
+    "TRANSCRIPTION_MODEL": "transcription_model",
+    "TRANSCRIPTION_MODEL_REVISION": "transcription_model_revision",
+    "TRANSCRIPTION_MODEL_CACHE_DIR": "transcription_model_cache_dir",
+    "TRANSCRIPTION_LOCAL_FILES_ONLY": "transcription_local_files_only",
+    "TRANSCRIPTION_DEVICE": "transcription_device",
+    "TRANSCRIPTION_COMPUTE_TYPE": "transcription_compute_type",
     "VOLCENGINE_ASR_API_URL": "volcengine_asr_api_url",
     "VOLCENGINE_ASR_API_KEY": "volcengine_asr_api_key",
     "VOLCENGINE_ASR_APP_KEY": "volcengine_asr_app_key",
@@ -82,6 +90,15 @@ INTEGER_ATTRS = {
     "ai_model_auto_compact_token_limit",
 }
 
+BOOLEAN_ATTRS = {
+    "transcription_offline_only",
+    "transcription_local_files_only",
+}
+
+PATH_ATTRS = {
+    "transcription_model_cache_dir",
+}
+
 LOCAL_MODEL_OPTIONS = ["qwen3:8b", "gemma3:12b", "qwen3:14b"]
 REMOTE_MODEL_OPTIONS = ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"]
 REMOTE_PROTOCOL_OPTIONS = ["chat_completions", "responses"]
@@ -117,10 +134,17 @@ ENV_APPEND_GROUPS = [
         ],
     ),
     (
-        "# 1. Audio transcription - Volcengine ASR",
+        "# 1. Audio transcription - offline local primary, Volcengine rollback only",
         [
             "TRANSCRIPTION_PROVIDER",
             "TRANSCRIPTION_FALLBACK_PROVIDER",
+            "TRANSCRIPTION_OFFLINE_ONLY",
+            "TRANSCRIPTION_MODEL",
+            "TRANSCRIPTION_MODEL_REVISION",
+            "TRANSCRIPTION_MODEL_CACHE_DIR",
+            "TRANSCRIPTION_LOCAL_FILES_ONLY",
+            "TRANSCRIPTION_DEVICE",
+            "TRANSCRIPTION_COMPUTE_TYPE",
             "VOLCENGINE_ASR_API_URL",
             "VOLCENGINE_ASR_API_KEY",
             "VOLCENGINE_ASR_APP_KEY",
@@ -238,6 +262,10 @@ def _apply_runtime_values(values: dict[str, str]) -> None:
         os.environ[env_key] = value
         if attr_name in INTEGER_ATTRS:
             object.__setattr__(settings, attr_name, int(value))
+        elif attr_name in BOOLEAN_ATTRS:
+            object.__setattr__(settings, attr_name, value.strip().lower() in {"1", "true", "yes", "on"})
+        elif attr_name in PATH_ATTRS:
+            object.__setattr__(settings, attr_name, Path(value))
         else:
             object.__setattr__(settings, attr_name, value)
     _sync_legacy_runtime_aliases(values)
@@ -302,16 +330,21 @@ def _public_config_values(values: dict[str, str]) -> dict[str, str]:
 def get_ai_config_context() -> dict:
     values = _current_config_values()
     public_values = _public_config_values(values)
+    transcription_runtime = get_local_transcription_runtime_status()
     secret_configured = {
         key: bool(str(values.get(key) or "").strip())
         for key in SECRET_SETTING_KEYS
     }
     transcription_ready = bool(
-        values["TRANSCRIPTION_PROVIDER"] == "local"
+        (
+            values["TRANSCRIPTION_PROVIDER"] == "local"
+            and transcription_runtime["ready"]
+        )
         or (
             values["VOLCENGINE_ASR_API_URL"]
             and values["VOLCENGINE_ASR_RESOURCE_ID"]
             and (values["VOLCENGINE_ASR_API_KEY"] or values["VOLCENGINE_ASR_APP_KEY"])
+            and values["TRANSCRIPTION_OFFLINE_ONLY"].strip().lower() not in {"1", "true", "yes", "on"}
         )
     )
     analysis_ready = _remote_ready(values, "AI_ANALYSIS_REMOTE")
@@ -344,6 +377,7 @@ def get_ai_config_context() -> dict:
         "values": public_values,
         "secret_configured": secret_configured,
         "transcription_ready": transcription_ready,
+        "transcription_runtime": transcription_runtime,
         "analysis_ready": analysis_ready,
         "analysis_key_valid": _key_valid(values["AI_ANALYSIS_REMOTE_API_KEY"]),
         "publish_ready": publish_ready,
@@ -398,8 +432,15 @@ def save_ai_config(payload: AIConfigUpdate) -> dict:
         "AI_CODEX_HOME": payload.ai_codex_home.strip(),
         "AI_CODEX_MODEL": payload.ai_codex_model.strip() or "gpt-5.6-sol",
         "AI_CODEX_TIMEOUT_SECONDS": str(payload.ai_codex_timeout_seconds),
-        "TRANSCRIPTION_PROVIDER": payload.transcription_provider.strip() or "volcengine",
+        "TRANSCRIPTION_PROVIDER": payload.transcription_provider.strip() or "local",
         "TRANSCRIPTION_FALLBACK_PROVIDER": payload.transcription_fallback_provider.strip(),
+        "TRANSCRIPTION_OFFLINE_ONLY": str(payload.transcription_offline_only).lower(),
+        "TRANSCRIPTION_MODEL": payload.transcription_model.strip(),
+        "TRANSCRIPTION_MODEL_REVISION": payload.transcription_model_revision.strip(),
+        "TRANSCRIPTION_MODEL_CACHE_DIR": payload.transcription_model_cache_dir.strip(),
+        "TRANSCRIPTION_LOCAL_FILES_ONLY": str(payload.transcription_local_files_only).lower(),
+        "TRANSCRIPTION_DEVICE": payload.transcription_device.strip(),
+        "TRANSCRIPTION_COMPUTE_TYPE": payload.transcription_compute_type.strip(),
         "VOLCENGINE_ASR_API_URL": payload.volcengine_asr_api_url.strip()
         or "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash",
         "VOLCENGINE_ASR_API_KEY": payload.volcengine_asr_api_key.strip()
