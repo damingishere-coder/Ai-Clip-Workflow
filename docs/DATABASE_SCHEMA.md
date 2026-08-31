@@ -1,5 +1,23 @@
 # 数据库结构说明
 
+## 2026-08-29：内容诊断与实验闭环
+
+迁移账本版本为 `20260829_02_content_feedback_loop`。迁移只新增表和索引，不删除或改写现有作品快照、发布记录、排期或 Prompt 版本；应用前继续通过 SQLite Online Backup 生成 `workflow-before-content-feedback-loop-*` 备份。
+
+### `content_improvement_experiments`
+
+- 以 `account_id + recommendation_id` 唯一标识一次基于固定证据批次的实验，保存诊断类型、假设、唯一动作、主指标方向、护栏指标、基线批次及冻结的中位数/四分位数 JSON。
+- 固定门槛为实验 20 条、对照 20 条、3 个不同官方导出周；状态为 `active / completed / cancelled`，人工结论为 `keep / revert / inconclusive`。
+- `baseline_batch_id` 外键指向官方导入批次；创建后不会随着后续数据重算或改写冻结基线。
+
+### `content_improvement_experiment_items`
+
+- 关联实验与 `publish_jobs`，`publish_job_id` 全局唯一，保证一个作品同一时刻只有一个实验归属。
+- 只允许在 `DRAFT / WAITING / SCHEDULED` 且没有 `claimed_at / started_at / attempt_count` 执行证据时关联、切换或解除；执行开始后永久冻结该作品的实验归属。
+- 发送中心使用原子设置接口完成新增、切换和解除，不会留下“旧关联已删、新关联未写”的中间状态。
+
+诊断本身为只读查询：只读取当前账号最新的 `douyin_item_export` 快照，未匹配、多个候选或核心指标缺失的作品标记为证据不足。官方导出周按 `captured_at` 的北京时间 ISO 自然周去重；账号趋势表不参与周数。Prompt 统计同样按账号和官方作品来源隔离。
+
 ## 2026-08-29：抖音官方作品报表完整指标
 
 - 新迁移账本版本：`20260829_01_douyin_official_item_export`。它只追加字段，不修改已应用的 `20260828_01_content_review_v1` 名称、定义或 checksum。

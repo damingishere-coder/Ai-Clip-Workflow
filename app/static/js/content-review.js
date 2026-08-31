@@ -2,11 +2,14 @@ const contentReviewAccount = document.querySelector("#content-review-account");
 const contentReviewMessage = document.querySelector("#content-review-message");
 const contentReviewImportForm = document.querySelector("#content-review-import-form");
 const contentReviewFile = document.querySelector("#content-review-file");
+const contentReviewFileName = document.querySelector("#content-review-file-name");
+const contentReviewPreviewButton = document.querySelector("#content-review-preview-button");
 const contentReviewPreview = document.querySelector("#content-review-preview");
 const contentReviewCommit = document.querySelector("#content-review-commit");
 const contentReviewSync = document.querySelector("#content-review-sync");
 
 let previewBatchId = "";
+let contentReviewLoadSequence = 0;
 
 function currentAccountId() {
   return contentReviewAccount?.value || "";
@@ -75,17 +78,52 @@ function formatDateTime(value) {
   if (!value) return "—";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return String(value);
-  return parsed.toLocaleString("zh-CN", { hour12: false });
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Shanghai",
+  }).formatToParts(parsed);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}`;
+}
+
+function initializeDisclosures() {
+  document.querySelectorAll("[data-content-review-disclosure]").forEach((details) => {
+    const key = `niuma.content-review.${details.dataset.contentReviewDisclosure}.open`;
+    details.open = window.localStorage.getItem(key) === "true";
+    details.addEventListener("toggle", () => {
+      window.localStorage.setItem(key, details.open ? "true" : "false");
+    });
+  });
 }
 
 function renderSummary(summary) {
   const latestDate = document.querySelector("#content-review-latest-date");
   const syncAge = document.querySelector("#content-review-sync-age");
+  const lastExport = document.querySelector("#content-review-last-export");
+  const lastExportStats = document.querySelector("#content-review-last-export-stats");
+  const matchSummary = document.querySelector("#content-review-match-summary");
   if (latestDate) latestDate.textContent = summary.latest_metric_date || "暂无数据";
   if (syncAge) {
-    syncAge.textContent = summary.days_since_sync == null
-      ? "尚未同步"
-      : summary.days_since_sync === 0 ? "今天已同步" : `${summary.days_since_sync} 天前同步`;
+    syncAge.textContent = summary.last_export_committed_at ? "已同步" : "尚未同步";
+  }
+  if (lastExport) {
+    lastExport.textContent = summary.last_export_committed_at
+      ? `上次成功导出：北京时间 ${formatDateTime(summary.last_export_committed_at)}`
+      : "上次成功导出：尚未同步";
+  }
+  if (lastExportStats) {
+    lastExportStats.textContent = summary.last_export_batch_id
+      ? `${summary.last_export_row_count || 0} 条作品 · 已匹配 ${summary.last_export_matched_count || 0} · 待确认 ${summary.last_export_ambiguous_count || 0} · 未匹配 ${summary.last_export_unmatched_count || 0}`
+      : "等待官方作品数据";
+  }
+  if (matchSummary) {
+    const counts = summary.match_summary || {};
+    matchSummary.textContent = `${counts.matched || 0} 已匹配 / ${counts.ambiguous || 0} 待确认 / ${counts.unmatched || 0} 未匹配`;
   }
   document.querySelectorAll("[data-metric]").forEach((card) => {
     const key = card.dataset.metric;
@@ -100,7 +138,8 @@ function renderSummary(summary) {
       deltaNode.textContent = "暂无可比基线";
     } else {
       deltaNode.textContent = `${delta >= 0 ? "↑" : "↓"} ${Math.abs(Number(delta) * 100).toFixed(1)}%`;
-      deltaNode.classList.add(delta >= 0 ? "is-up" : "is-down");
+      const improvement = key === "two_second_bounce_rate" ? delta <= 0 : delta >= 0;
+      deltaNode.classList.add(improvement ? "is-up" : "is-down");
     }
   });
 
@@ -151,12 +190,12 @@ function appendDetailedCell(row, primary, details = []) {
 
 function matchLabel(status) {
   return {
-    matched_exact: "作品 ID 精确匹配",
-    matched_unique: "标题 / 正文 + 时间唯一匹配",
-    confirmed_manual: "人工确认",
-    ambiguous: "存在多个候选",
-    unmatched: "未匹配",
-  }[status] || status || "未匹配";
+    matched_exact: "已匹配·唯一证据",
+    matched_unique: "已匹配·唯一证据",
+    confirmed_manual: "已匹配·人工确认",
+    ambiguous: "待人工确认·多个候选",
+    unmatched: "未匹配·没有候选",
+  }[status] || status || "未匹配 · 没有候选";
 }
 
 async function updateItemMatch(snapshotId, publishJobId) {
@@ -232,7 +271,7 @@ function renderWorks(works) {
     const matchCell = document.createElement("td");
     const tools = document.createElement("div");
     tools.className = "content-review-match-tools";
-    tools.append(textNode("strong", matchLabel(work.match_status)));
+    tools.append(textNode("strong", work.match_label || matchLabel(work.match_status)));
     if (["ambiguous", "unmatched"].includes(work.match_status)) {
       const input = document.createElement("input");
       input.type = "text";
@@ -277,6 +316,188 @@ function renderWorks(works) {
   });
 }
 
+function metricLabel(key) {
+  return {
+    play_count: "播放",
+    five_second_completion_rate: "5 秒完播",
+    two_second_bounce_rate: "2 秒跳出",
+    completion_rate: "完播率",
+    watch_ratio: "平均观看 / 片长",
+  }[key] || key;
+}
+
+function formatInsightMetric(key, value) {
+  if (["five_second_completion_rate", "two_second_bounce_rate", "completion_rate", "watch_ratio"].includes(key)) {
+    return formatPercent(value);
+  }
+  return formatNumber(value);
+}
+
+async function createExperiment(recommendationId, button) {
+  button.disabled = true;
+  try {
+    const data = await contentReviewApi("/api/content-review/experiments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ account_id: currentAccountId(), recommendation_id: recommendationId }),
+    });
+    showContentReviewMessage(data.message || "实验已建立。", "success");
+    await loadContentReviewData();
+  } catch (error) {
+    showContentReviewMessage(`建立实验失败：${error.message}`, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function recordExperimentDecision(experimentId, decision, button) {
+  button.disabled = true;
+  try {
+    const data = await contentReviewApi(`/api/content-review/experiments/${encodeURIComponent(experimentId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision }),
+    });
+    showContentReviewMessage(data.message || "实验结论已记录。", "success");
+    await loadContentReviewData();
+  } catch (error) {
+    showContentReviewMessage(`记录实验失败：${error.message}`, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderInsights(data) {
+  const count = document.querySelector("#content-review-insight-count");
+  const note = document.querySelector("#content-review-insight-note");
+  const list = document.querySelector("#content-review-insights");
+  const recommendations = Array.from(data.recommendations || []);
+  const recordedRecommendationIds = new Set(
+    (data.experiments || []).map((item) => item.recommendation_id),
+  );
+  if (count) count.textContent = `${recommendations.length} 条建议`;
+  if (note) {
+    const summary = data.summary || {};
+    note.textContent = `${summary.eligible_works || 0} 条作品证据完整，${summary.insufficient_works || 0} 条证据不足。${summary.cover_metric_available ? "已读取作品级封面指标。" : "官方作品级封面点击率缺失，本轮不生成封面建议。"}`;
+  }
+  if (!list) return;
+  list.replaceChildren();
+  if (!recommendations.length) {
+    list.append(textNode("p", "当前没有达到规则阈值的改进建议。请先同步最新官方作品数据，或继续积累准确匹配作品。", "empty-note"));
+    return;
+  }
+  recommendations.forEach((recommendation) => {
+    const item = document.createElement("article");
+    item.className = "content-review-insight-item";
+    const header = document.createElement("header");
+    const identity = document.createElement("div");
+    identity.append(
+      textNode("strong", recommendation.title),
+      textNode("small", recommendation.source_work?.title || "未命名作品"),
+    );
+    header.append(identity, textNode("span", recommendation.baseline?.cohort?.label || "同类对照", "status-pill"));
+    const hypothesis = textNode("p", recommendation.hypothesis);
+    const evidence = document.createElement("div");
+    evidence.className = "content-review-insight-evidence";
+    Object.entries(recommendation.evidence || {}).forEach(([key, value]) => {
+      const metric = document.createElement("div");
+      metric.append(textNode("small", metricLabel(key)), textNode("strong", formatInsightMetric(key, value)));
+      evidence.append(metric);
+    });
+    const action = textNode("p", `建议动作：${recommendation.action_text}`, "content-review-insight-action");
+    const primaryBenchmark = recommendation.comparison_interval?.[recommendation.primary_metric] || {};
+    const benchmark = textNode(
+      "p",
+      `同类对照 ${recommendation.baseline?.work_count || 0} 条：${metricLabel(recommendation.primary_metric)} P25 ${formatInsightMetric(recommendation.primary_metric, primaryBenchmark.p25)} / 中位数 ${formatInsightMetric(recommendation.primary_metric, primaryBenchmark.median)} / P75 ${formatInsightMetric(recommendation.primary_metric, primaryBenchmark.p75)}。`,
+      "content-review-insight-benchmark",
+    );
+    const actions = document.createElement("div");
+    actions.className = "button-row";
+    const recorded = recordedRecommendationIds.has(recommendation.recommendation_id);
+    const button = textNode("button", recorded ? "已记录实验" : "采纳为下轮实验", recorded ? "secondary-button" : "primary-button");
+    button.type = "button";
+    button.disabled = recorded;
+    if (!recorded) button.addEventListener("click", () => createExperiment(recommendation.recommendation_id, button));
+    actions.append(button, textNode("small", `主指标：${metricLabel(recommendation.primary_metric)} · 对照 ${recommendation.baseline?.work_count || 0} 条`));
+    item.append(header, hypothesis, evidence, benchmark, action, actions);
+    list.append(item);
+  });
+}
+
+function experimentStageLabel(experiment) {
+  if (experiment.status === "completed") {
+    return { keep: "已保留改动", revert: "已决定回退", inconclusive: "结论不足" }[experiment.decision] || "已完成";
+  }
+  if (experiment.status === "cancelled") return "已取消";
+  return {
+    collecting: "收集中",
+    early: "早期趋势",
+    decision_ready: "可做决定",
+  }[experiment.progress?.stage] || "收集中";
+}
+
+function renderExperiments(experiments) {
+  const list = document.querySelector("#content-review-experiments");
+  if (!list) return;
+  list.replaceChildren();
+  if (!(experiments || []).length) {
+    list.append(textNode("p", "还没有实验。先从上方建议中选择一条，再去发送中心标记实际采用规则的作品。", "empty-note"));
+    return;
+  }
+  experiments.forEach((experiment) => {
+    const progress = experiment.progress || {};
+    const item = document.createElement("article");
+    item.className = `content-review-experiment-item${experiment.status === "active" ? "" : " is-completed"}`;
+    const header = document.createElement("header");
+    header.append(textNode("strong", experiment.title), textNode("span", experimentStageLabel(experiment), "status-pill"));
+    const action = textNode("p", experiment.action_text);
+    const progressGrid = document.createElement("div");
+    progressGrid.className = "content-review-experiment-progress";
+    [
+      ["投稿前已标记", `${progress.assigned_count || 0} 条`],
+      ["已有官方指标", `${progress.treatment_count || 0} / ${progress.target_sample_size || 20} 条`],
+      ["冻结对照", `${progress.baseline_count || 0} / ${progress.minimum_baseline_size || 20} 条`],
+      ["官方导出周", `${progress.official_export_weeks || 0} / ${progress.minimum_weeks || 3} 周`],
+    ].forEach(([label, value]) => {
+      const cell = document.createElement("div");
+      cell.append(textNode("small", label), textNode("strong", value));
+      progressGrid.append(cell);
+    });
+    const result = textNode(
+      "p",
+      !progress.trend_visible
+        ? `主指标：${metricLabel(experiment.primary_metric)}；累计 10 条实验作品后才显示早期趋势。`
+        : progress.treatment_primary == null
+          ? `主指标：${metricLabel(experiment.primary_metric)}，等待实验作品同步官方指标。`
+        : `主指标：对照 ${formatInsightMetric(experiment.primary_metric, progress.baseline_primary)} → 实验 ${formatInsightMetric(experiment.primary_metric, progress.treatment_primary)}。`,
+    );
+    const guardrails = textNode(
+      "small",
+      `护栏指标：${(experiment.guardrail_metrics || []).map(metricLabel).join("、") || "无"}`,
+      "content-review-experiment-guardrails",
+    );
+    item.append(header, action, progressGrid, result, guardrails);
+    if (experiment.status === "active") {
+      const actions = document.createElement("div");
+      actions.className = "button-row";
+      if (progress.decision_ready) {
+        [["保留改动", "keep"], ["回退", "revert"], ["结论不足", "inconclusive"]].forEach(([label, decision]) => {
+          const button = textNode("button", label, decision === "keep" ? "primary-button" : "secondary-button");
+          button.type = "button";
+          button.addEventListener("click", () => recordExperimentDecision(experiment.id, decision, button));
+          actions.append(button);
+        });
+      }
+      const cancel = textNode("button", "取消实验", "text-button danger");
+      cancel.type = "button";
+      cancel.addEventListener("click", () => recordExperimentDecision(experiment.id, "cancel", cancel));
+      actions.append(cancel);
+      item.append(actions);
+    }
+    list.append(item);
+  });
+}
+
 function promptMetric(label, value) {
   const wrapper = document.createElement("div");
   wrapper.append(textNode("dt", label), textNode("dd", value));
@@ -287,7 +508,7 @@ function renderPromptComparison(data) {
   const cycles = document.querySelector("#content-review-cycles");
   const message = document.querySelector("#content-review-prompt-message");
   const list = document.querySelector("#content-review-prompts");
-  if (cycles) cycles.textContent = `${data.completed_cycles || 0} / ${data.minimum_cycles || 3} 周期`;
+  if (cycles) cycles.textContent = `${data.completed_cycles || 0} / ${data.minimum_cycles || 3} 个官方导出周`;
   if (message) message.textContent = data.message || "数据不足。";
   if (!list) return;
   list.replaceChildren();
@@ -314,7 +535,14 @@ function renderPromptComparison(data) {
       promptMetric("平均观看 / 片长", formatPercent(version.average_watch_ratio)),
       promptMetric("互动率", formatPercent(version.interaction_rate)),
     );
-    item.append(header, metrics);
+    const gap = textNode(
+      "small",
+      version.evaluable
+        ? "已达到单版本评估门槛"
+        : `还差 ${version.remaining_accurate_published_count ?? Math.max(0, 30 - Number(version.accurate_published_count || 0))} 条准确关联作品`,
+      "content-review-sample-gap",
+    );
+    item.append(header, metrics, gap);
     list.append(item);
   });
 }
@@ -352,22 +580,38 @@ function renderImports(imports) {
 async function loadContentReviewData() {
   const accountId = currentAccountId();
   if (!accountId) return;
+  const loadSequence = ++contentReviewLoadSequence;
   const query = `account_id=${encodeURIComponent(accountId)}`;
   try {
-    const [summary, works, prompts, imports] = await Promise.all([
+    const [summary, works, prompts, imports, insights] = await Promise.all([
       contentReviewApi(`/api/content-review/summary?${query}&days=28`),
       contentReviewApi(`/api/content-review/works?${query}&limit=200`),
       contentReviewApi(`/api/content-review/prompt-comparison?${query}`),
       contentReviewApi(`/api/content-review/imports?${query}&limit=20`),
+      contentReviewApi(`/api/content-review/insights?${query}`),
     ]);
+    if (loadSequence !== contentReviewLoadSequence || accountId !== currentAccountId()) return;
     renderSummary(summary);
     renderWorks(works.works || []);
     renderPromptComparison(prompts);
     renderImports(imports.imports || []);
+    renderInsights(insights);
+    renderExperiments(insights.experiments || []);
   } catch (error) {
+    if (loadSequence !== contentReviewLoadSequence) return;
     showContentReviewMessage(`读取复盘数据失败：${error.message}`, "error");
   }
 }
+
+contentReviewFile?.addEventListener("change", () => {
+  const file = contentReviewFile.files?.[0];
+  previewBatchId = "";
+  if (contentReviewPreview) contentReviewPreview.hidden = true;
+  if (contentReviewFileName) contentReviewFileName.textContent = file?.name || "未选择文件";
+  if (contentReviewPreviewButton) contentReviewPreviewButton.disabled = !file;
+  const status = document.querySelector("#content-review-file-status");
+  if (status) status.textContent = file ? "已选择" : "尚未选择";
+});
 
 contentReviewImportForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -403,7 +647,7 @@ contentReviewImportForm?.addEventListener("submit", async (event) => {
     if (contentReviewPreview) contentReviewPreview.hidden = true;
     showContentReviewMessage(`预览失败：${error.message}`, "error");
   } finally {
-    button.disabled = false;
+    button.disabled = !contentReviewFile?.files?.[0];
   }
 });
 
@@ -453,4 +697,5 @@ contentReviewAccount?.addEventListener("change", () => {
   loadContentReviewData();
 });
 
+initializeDisclosures();
 loadContentReviewData();

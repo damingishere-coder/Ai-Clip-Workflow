@@ -48,7 +48,7 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
         ).fetchall()
         indexes = _index_names(connection)
 
-    assert len(migrations) == 4
+    assert len(migrations) == 5
     migrations_by_version = {row["version"]: row for row in migrations}
     publish_migration = migrations_by_version[database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_VERSION]
     assert publish_migration["name"] == database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_NAME
@@ -66,15 +66,27 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
     assert export_migration["name"] == database_module.DOUYIN_ITEM_EXPORT_MIGRATION_NAME
     assert export_migration["checksum"] == database_module.DOUYIN_ITEM_EXPORT_MIGRATION_CHECKSUM
     assert export_migration["applied_at"]
+    feedback_migration = migrations_by_version[database_module.CONTENT_FEEDBACK_LOOP_MIGRATION_VERSION]
+    assert feedback_migration["name"] == database_module.CONTENT_FEEDBACK_LOOP_MIGRATION_NAME
+    assert feedback_migration["checksum"] == database_module.CONTENT_FEEDBACK_LOOP_MIGRATION_CHECKSUM
+    assert feedback_migration["applied_at"]
     assert database_module.PUBLISH_ACTIVE_UNIQUE_INDEX_NAME in indexes
     assert database_module.PUBLISH_ACTIVE_UNIQUE_INDEX_LEGACY_NAME not in indexes
     assert set(database_module.CONTENT_REVIEW_REQUIRED_INDEXES) <= indexes
+    assert set(database_module.CONTENT_FEEDBACK_LOOP_REQUIRED_INDEXES) <= indexes
     with _connect(isolated_database) as connection:
         item_columns = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(douyin_item_metric_snapshots)")
         }
+        tables = {
+            row["name"]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
     assert set(database_module.DOUYIN_ITEM_EXPORT_COLUMNS) <= item_columns
+    assert set(database_module.CONTENT_FEEDBACK_LOOP_REQUIRED_TABLES) <= tables
 
 
 def test_checksum_drift_refuses_startup(isolated_database):

@@ -1303,15 +1303,42 @@ if (publishCenterRoot) {
     if (chosen?.disabled) select.value = "";
   }
 
+  function syncExperimentOptions(form) {
+    if (!form) return;
+    const select = form.elements.content_experiment_id;
+    if (!select) return;
+    const accountId = String(form.elements.account_id?.value || "");
+    Array.from(select.options).forEach((option) => {
+      const optionAccountId = option.dataset.accountId || "";
+      const unavailable = Boolean(optionAccountId && optionAccountId !== accountId);
+      option.hidden = unavailable;
+      option.disabled = unavailable;
+    });
+    if (select.selectedOptions[0]?.disabled) select.value = "";
+  }
+
   function syncPlatformFields(form) {
     if (!form) return;
     const platform = String(form.elements.platform?.value || "douyin");
     const bilibiliFields = form.querySelector("[data-bilibili-fields]");
     if (bilibiliFields) bilibiliFields.hidden = platform !== "bilibili";
     filterAccountOptions(form.elements.account_id, platform);
+    syncExperimentOptions(form);
     const repost = String(form.elements.bilibili_copyright?.value || "original") === "repost";
     const source = form.querySelector("[data-repost-source]");
     if (source) source.hidden = platform !== "bilibili" || !repost;
+  }
+
+  async function saveExperimentAssignment(row, form) {
+    const jobId = String(row?.dataset.jobId || "");
+    const previousId = String(row?.dataset.experimentId || "");
+    const nextId = String(form?.elements.content_experiment_id?.value || "");
+    if (!jobId || previousId === nextId) return;
+    await window.apiFetch(
+      `/api/content-review/experiment-assignments/${encodeURIComponent(jobId)}`,
+      { method: "PUT", body: JSON.stringify({ experiment_id: nextId }) },
+    );
+    row.dataset.experimentId = nextId;
   }
 
   function openAccountDrawer(platform = "") {
@@ -1600,7 +1627,11 @@ if (publishCenterRoot) {
       updateSelectionUi();
     }
     const form = event.target.closest("[data-publish-editor]");
-    if (form && (event.target.matches("[data-platform-select]") || event.target.matches("[data-copyright-select]"))) syncPlatformFields(form);
+    if (form && (
+      event.target.matches("[data-platform-select]")
+      || event.target.matches("[data-copyright-select]")
+      || event.target.matches("[data-account-select]")
+    )) syncPlatformFields(form);
     if (event.target.closest("[data-schedule-form]")) invalidatePreview();
   });
 
@@ -1640,6 +1671,7 @@ if (publishCenterRoot) {
       try {
         await window.apiFetch(`/api/publish/jobs/${jobId}/target`, { method: "PATCH", body: JSON.stringify(target) });
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/send-content`, { method: "PATCH", body: JSON.stringify(content) });
+        await saveExperimentAssignment(row, form);
         updateRowFromJob(data.job);
         if (resultNode) resultNode.textContent = "已保存";
       } catch (error) {

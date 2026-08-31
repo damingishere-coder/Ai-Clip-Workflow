@@ -113,6 +113,13 @@ REJECT_REASON_LABELS = {
     "worth_publishing": "保留",
 }
 MATCHED_STATUSES = {"matched_exact", "matched_unique", "confirmed_manual"}
+MATCH_STATUS_LABELS = {
+    "matched_exact": "已匹配·唯一证据",
+    "matched_unique": "已匹配·唯一证据",
+    "confirmed_manual": "已匹配·人工确认",
+    "ambiguous": "待人工确认·多个候选",
+    "unmatched": "未匹配·没有候选",
+}
 
 
 class ContentReviewError(ValueError):
@@ -126,7 +133,7 @@ def _now() -> datetime:
 
 
 def _now_iso() -> str:
-    return _now().isoformat(timespec="seconds")
+    return _now().astimezone(BEIJING_TIMEZONE).isoformat(timespec="seconds")
 
 
 def _resolve_douyin_account_id(account_id: str = "") -> str:
@@ -849,6 +856,97 @@ def _comparison_delta(current, previous) -> float | None:
     return round((float(current) - float(previous)) / abs(float(previous)), 6)
 
 
+def _parse_iso_datetime(value) -> datetime | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=BEIJING_TIMEZONE)
+    except ValueError:
+        return None
+
+
+def _official_export_context(connection, account_id: str) -> dict:
+    rows = connection.execute(
+        """
+        SELECT b.id, b.committed_at, b.row_count, b.matched_count,
+               b.ambiguous_count, b.invalid_count,
+               MAX(i.captured_at) AS captured_at
+        FROM content_metric_import_batches b
+        LEFT JOIN douyin_item_metric_snapshots i ON i.batch_id = b.id
+        WHERE b.account_id = ? AND b.status = 'committed'
+          AND b.source_kind = ?
+        GROUP BY b.id
+        ORDER BY b.committed_at DESC, b.created_at DESC
+        """,
+        (account_id, DOUYIN_ITEM_EXPORT_SOURCE_KIND),
+    ).fetchall()
+    week_keys = set()
+    for row in rows:
+        captured_at = _parse_iso_datetime(row["captured_at"] or row["committed_at"])
+        if captured_at is None:
+            continue
+        localized = captured_at.astimezone(BEIJING_TIMEZONE)
+        iso_year, iso_week, _ = localized.isocalendar()
+        week_keys.add(f"{iso_year}-W{iso_week:02d}")
+    latest = dict(rows[0]) if rows else {}
+    row_count = int(latest.get("row_count") or 0)
+    matched_count = int(latest.get("matched_count") or 0)
+    ambiguous_count = int(latest.get("ambiguous_count") or 0)
+    invalid_count = int(latest.get("invalid_count") or 0)
+    return {
+        "last_export_batch_id": latest.get("id"),
+        "last_export_committed_at": latest.get("committed_at"),
+        "last_export_captured_at": latest.get("captured_at"),
+        "last_export_row_count": row_count,
+        "last_export_matched_count": matched_count,
+        "last_export_ambiguous_count": ambiguous_count,
+        "last_export_unmatched_count": max(
+            0,
+            row_count - matched_count - ambiguous_count - invalid_count,
+        ),
+        "official_export_weeks": len(week_keys),
+        "official_export_week_keys": sorted(week_keys),
+    }
+
+
+def _latest_match_summary(connection, account_id: str) -> dict:
+    rows = connection.execute(
+        """
+        WITH latest_items AS (
+            SELECT i.match_status,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY CASE
+                           WHEN i.publish_job_id IS NOT NULL THEN 'job:' || i.publish_job_id
+                           ELSE 'work:' || i.aweme_id
+                       END
+                       ORDER BY i.captured_at DESC, i.created_at DESC, i.rowid DESC
+                   ) AS item_rank
+            FROM douyin_item_metric_snapshots i
+            JOIN content_metric_import_batches b ON b.id = i.batch_id
+            WHERE i.account_id = ? AND b.status = 'committed'
+              AND b.source_kind = ?
+        )
+        SELECT match_status, COUNT(*) AS item_count
+        FROM latest_items
+        WHERE item_rank = 1
+        GROUP BY match_status
+        """,
+        (account_id, DOUYIN_ITEM_EXPORT_SOURCE_KIND),
+    ).fetchall()
+    counts = {str(row["match_status"]): int(row["item_count"] or 0) for row in rows}
+    return {
+        "total": sum(counts.values()),
+        "matched": sum(counts.get(status, 0) for status in MATCHED_STATUSES),
+        "ambiguous": counts.get("ambiguous", 0),
+        "unmatched": counts.get("unmatched", 0),
+        "matched_exact": counts.get("matched_exact", 0),
+        "matched_unique": counts.get("matched_unique", 0),
+        "confirmed_manual": counts.get("confirmed_manual", 0),
+    }
+
+
 def get_content_review_summary(account_id: str = "", days: int = 28) -> dict:
     resolved = _resolve_douyin_account_id(account_id)
     safe_days = max(14, min(180, int(days)))
@@ -871,13 +969,14 @@ def get_content_review_summary(account_id: str = "", days: int = 28) -> dict:
         ).fetchall()
         sync_row = connection.execute(
             """
-            SELECT MAX(committed_at) AS last_sync_at,
-                   COUNT(*) AS completed_cycles
+            SELECT MAX(committed_at) AS last_sync_at
             FROM content_metric_import_batches
             WHERE account_id = ? AND status = 'committed'
             """,
             (resolved,),
         ).fetchone()
+        export_context = _official_export_context(connection, resolved)
+        match_summary = _latest_match_summary(connection, resolved)
     history = [dict(row) for row in rows]
     if not history:
         return {
@@ -886,11 +985,13 @@ def get_content_review_summary(account_id: str = "", days: int = 28) -> dict:
             "message": "还没有确认导入的账号级数据。",
             "last_sync_at": None,
             "days_since_sync": None,
-            "completed_cycles": 0,
+            "completed_cycles": export_context["official_export_weeks"],
             "current_period": _aggregate_period([]),
             "previous_period": _aggregate_period([]),
             "comparisons": {},
             "history": [],
+            "match_summary": match_summary,
+            **export_context,
         }
 
     latest_date = date.fromisoformat(history[-1]["metric_date"])
@@ -919,12 +1020,14 @@ def get_content_review_summary(account_id: str = "", days: int = 28) -> dict:
         "latest_metric_date": latest_date.isoformat(),
         "last_sync_at": last_sync_at,
         "days_since_sync": days_since,
-        "completed_cycles": int(sync_row["completed_cycles"] or 0),
+        "completed_cycles": export_context["official_export_weeks"],
         "current_period": current,
         "previous_period": previous,
         "comparisons": comparisons,
         "history": visible_history,
         "attribution": "unattributed_account_daily_baseline",
+        "match_summary": match_summary,
+        **export_context,
     }
 
 
@@ -984,6 +1087,10 @@ def list_content_review_works(account_id: str = "", limit: int = 100) -> list[di
             str(work.get("review_reason_code") or ""),
             str(work.get("review_reason_code") or ""),
         )
+        work["match_label"] = MATCH_STATUS_LABELS.get(
+            str(work.get("match_status") or ""),
+            "未匹配·没有候选",
+        )
         work["attribution_complete"] = bool(
             work.get("publish_job_id")
             and work.get("clip_candidate_id")
@@ -1007,17 +1114,27 @@ def get_prompt_comparison(account_id: str = "") -> dict:
             """
             SELECT pv.id AS prompt_version_id, pv.preset_id, pv.version_number,
                    pv.preset_name_snapshot, pv.created_at,
-                   c.id AS candidate_id, c.enabled,
-                   (
-                       SELECT f.decision FROM clip_feedback f
-                       WHERE f.clip_candidate_id = c.id
-                       ORDER BY f.created_at DESC, f.rowid DESC LIMIT 1
-                   ) AS latest_decision
+                   scoped.candidate_id, scoped.enabled, scoped.latest_decision
             FROM ai_prompt_versions pv
-            LEFT JOIN ai_analysis_runs ar ON ar.prompt_version_id = pv.id
-            LEFT JOIN clip_candidates c ON c.source_analysis_run_id = ar.id AND c.is_deleted = 0
+            JOIN (
+                SELECT DISTINCT ar.prompt_version_id,
+                       c.id AS candidate_id, c.enabled,
+                       (
+                           SELECT f.decision FROM clip_feedback f
+                           WHERE f.clip_candidate_id = c.id
+                           ORDER BY f.created_at DESC, f.rowid DESC LIMIT 1
+                       ) AS latest_decision
+                FROM ai_analysis_runs ar
+                JOIN clip_candidates c
+                  ON c.source_analysis_run_id = ar.id AND c.is_deleted = 0
+                JOIN output_clip oc ON oc.clip_candidate_id = c.id
+                JOIN publish_jobs pj ON pj.output_clip_id = oc.id
+                WHERE pj.account_id = ? AND pj.platform = 'douyin'
+                  AND ar.prompt_version_id IS NOT NULL
+            ) scoped ON scoped.prompt_version_id = pv.id
             ORDER BY pv.created_at, pv.preset_id, pv.version_number
-            """
+            """,
+            (resolved,),
         ).fetchall()
         work_rows = connection.execute(
             """
@@ -1033,6 +1150,7 @@ def get_prompt_comparison(account_id: str = "") -> dict:
                 FROM douyin_item_metric_snapshots i
                 JOIN content_metric_import_batches b ON b.id = i.batch_id
                 WHERE i.account_id = ? AND b.status = 'committed'
+                  AND b.source_kind = ?
                   AND i.match_status IN ('matched_exact', 'matched_unique', 'confirmed_manual')
             )
             SELECT i.*, c.id AS candidate_id, ar.prompt_version_id
@@ -1043,15 +1161,9 @@ def get_prompt_comparison(account_id: str = "") -> dict:
             JOIN ai_analysis_runs ar ON ar.id = c.source_analysis_run_id
             WHERE i.item_rank = 1 AND ar.prompt_version_id IS NOT NULL
             """,
-            (resolved,),
+            (resolved, DOUYIN_ITEM_EXPORT_SOURCE_KIND),
         ).fetchall()
-        cycle_row = connection.execute(
-            """
-            SELECT COUNT(*) FROM content_metric_import_batches
-            WHERE account_id = ? AND status = 'committed'
-            """,
-            (resolved,),
-        ).fetchone()
+        export_context = _official_export_context(connection, resolved)
 
     groups: dict[str, dict] = {}
     for row in candidate_rows:
@@ -1122,6 +1234,8 @@ def get_prompt_comparison(account_id: str = "") -> dict:
                 "average_watch_ratio": statistics.fmean(watch_ratios) if watch_ratios else None,
                 "interaction_rate": _safe_ratio(interactions, total_plays),
                 "evaluable": len(works) >= 30,
+                "required_accurate_published_count": 30,
+                "remaining_accurate_published_count": max(0, 30 - len(works)),
             }
         )
     versions.sort(key=lambda item: (item["created_at"], item["preset_id"], item["version_number"]))
@@ -1136,7 +1250,7 @@ def get_prompt_comparison(account_id: str = "") -> dict:
                 "note": "仅相关性，不代表因果；请结合选题、发布时间和样本结构判断。",
             }
         )
-    completed_cycles = int(cycle_row[0] or 0) if cycle_row else 0
+    completed_cycles = int(export_context["official_export_weeks"] or 0)
     return {
         "account_id": resolved,
         "completed_cycles": completed_cycles,
@@ -1147,10 +1261,792 @@ def get_prompt_comparison(account_id: str = "") -> dict:
         "message": (
             "已达到评估门槛，系统只提供建议，不会自动修改 Prompt。"
             if completed_cycles >= 3 and any(item["evaluable"] for item in versions)
-            else "数据不足：默认需要 3 个完整周期，且当前 Prompt 至少 30 条准确关联作品。"
+            else "数据不足：需要 3 个不同官方导出周，且当前 Prompt 至少 30 条准确关联作品。"
         ),
         "causality_notice": "所有对比仅表示相关性，不代表因果。",
     }
+
+
+DIAGNOSIS_CORE_METRICS = (
+    "play_count",
+    "five_second_completion_rate",
+    "two_second_bounce_rate",
+    "completion_rate",
+    "watch_ratio",
+)
+EXPERIMENT_EDITABLE_JOB_STATUSES = {"DRAFT", "WAITING", "SCHEDULED"}
+EXPERIMENT_DECISIONS = {"keep", "revert", "inconclusive", "cancel"}
+
+
+def _duration_bucket(value) -> str:
+    seconds = float(value or 0)
+    if seconds <= 0:
+        return "时长未知"
+    if seconds <= 60:
+        return "60秒内"
+    if seconds <= 120:
+        return "61-120秒"
+    return "120秒以上"
+
+
+def _publish_age_bucket(published_at, captured_at) -> str:
+    published = _parse_iso_datetime(published_at)
+    captured = _parse_iso_datetime(captured_at)
+    if published is None or captured is None:
+        return "发布年龄未知"
+    days = max(0, (captured - published).days)
+    if days <= 7:
+        return "发布7天内"
+    if days <= 30:
+        return "发布8-30天"
+    return "发布30天以上"
+
+
+def _percentile(values: list[float], fraction: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(float(value) for value in values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * fraction
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _cohort_benchmarks(rows: list[dict]) -> dict:
+    metrics = {}
+    for metric in DIAGNOSIS_CORE_METRICS:
+        values = [float(row[metric]) for row in rows if row.get(metric) is not None]
+        metrics[metric] = {
+            "count": len(values),
+            "p25": round(_percentile(values, 0.25), 6) if values else None,
+            "median": round(statistics.median(values), 6) if values else None,
+            "p75": round(_percentile(values, 0.75), 6) if values else None,
+        }
+    return metrics
+
+
+def _latest_diagnosis_rows(connection, account_id: str) -> list[dict]:
+    rows = connection.execute(
+        """
+        WITH latest_items AS (
+            SELECT i.*, b.id AS metric_batch_id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY CASE
+                           WHEN i.publish_job_id IS NOT NULL THEN 'job:' || i.publish_job_id
+                           ELSE 'work:' || i.aweme_id
+                       END
+                       ORDER BY i.captured_at DESC, i.created_at DESC, i.rowid DESC
+                   ) AS item_rank
+            FROM douyin_item_metric_snapshots i
+            JOIN content_metric_import_batches b ON b.id = i.batch_id
+            WHERE i.account_id = ? AND b.status = 'committed'
+              AND b.source_kind = ?
+        )
+        SELECT i.*, pj.title AS publish_title, oc.clip_candidate_id,
+               c.title AS candidate_title,
+               COALESCE(
+                   NULLIF(i.duration_seconds, 0),
+                   NULLIF(c.duration_seconds, 0),
+                   NULLIF(oc.source_duration_ms, 0) / 1000.0
+               ) AS effective_duration_seconds
+        FROM latest_items i
+        LEFT JOIN publish_jobs pj ON pj.id = i.publish_job_id
+        LEFT JOIN output_clip oc ON oc.id = pj.output_clip_id
+        LEFT JOIN clip_candidates c ON c.id = oc.clip_candidate_id
+        WHERE i.item_rank = 1
+        ORDER BY COALESCE(i.published_at, i.captured_at) DESC
+        """,
+        (account_id, DOUYIN_ITEM_EXPORT_SOURCE_KIND),
+    ).fetchall()
+    result = []
+    for source in rows:
+        row = dict(source)
+        duration = float(row.get("effective_duration_seconds") or 0)
+        average_watch = row.get("average_watch_seconds")
+        row["watch_ratio"] = (
+            round(float(average_watch) / duration, 6)
+            if average_watch is not None and duration > 0
+            else None
+        )
+        row["duration_bucket"] = _duration_bucket(duration)
+        row["age_bucket"] = _publish_age_bucket(
+            row.get("published_at"),
+            row.get("captured_at"),
+        )
+        row["genre_bucket"] = str(row.get("content_genre") or "体裁未知")
+        result.append(row)
+    return result
+
+
+def _select_comparable_cohort(work: dict, eligible: list[dict]) -> tuple[list[dict], dict]:
+    selectors = (
+        (
+            "同体裁、同片长、同发布年龄",
+            lambda item: item["genre_bucket"] == work["genre_bucket"]
+            and item["duration_bucket"] == work["duration_bucket"]
+            and item["age_bucket"] == work["age_bucket"],
+        ),
+        (
+            "同体裁、同片长",
+            lambda item: item["genre_bucket"] == work["genre_bucket"]
+            and item["duration_bucket"] == work["duration_bucket"],
+        ),
+        (
+            "同片长",
+            lambda item: item["duration_bucket"] == work["duration_bucket"],
+        ),
+        ("全部准确匹配作品", lambda _item: True),
+    )
+    for label, selector in selectors:
+        cohort = [item for item in eligible if selector(item)]
+        if len(cohort) >= 8 or label == "全部准确匹配作品":
+            return cohort, {
+                "label": label,
+                "genre": work["genre_bucket"],
+                "duration": work["duration_bucket"],
+                "publish_age": work["age_bucket"],
+            }
+    return eligible, {"label": "全部准确匹配作品"}
+
+
+def _recommendation_definition(code: str) -> dict:
+    definitions = {
+        "weak_opening": {
+            "title": "开头留存偏弱",
+            "hypothesis": "前 1～2 秒的铺垫过长，用户尚未进入冲突、笑点或观点就离开。",
+            "action_text": "下一批只改开头：删除开场铺垫，让前 1～2 秒直接进入冲突、笑点或核心观点。",
+            "primary_metric": "two_second_bounce_rate",
+            "primary_direction": "lower",
+            "guardrail_metrics": ["five_second_completion_rate", "completion_rate"],
+            "priority": 4,
+        },
+        "weak_pacing": {
+            "title": "中段节奏偏弱",
+            "hypothesis": "开头能够留住用户，但中段重复、停顿或解释拖慢了完播。",
+            "action_text": "下一批只改中段：压缩重复、停顿和解释，并把关键结果提前。",
+            "primary_metric": "completion_rate",
+            "primary_direction": "higher",
+            "guardrail_metrics": ["five_second_completion_rate", "two_second_bounce_rate"],
+            "priority": 3,
+        },
+        "distribution_window": {
+            "title": "留存尚可但播放偏低",
+            "hypothesis": "片段本身的早期留存不差，低播放暂不能归咎于 Prompt。",
+            "action_text": "保持选片、剪辑和文案不变，下一批只测试发布时间窗口。",
+            "primary_metric": "play_count",
+            "primary_direction": "higher",
+            "guardrail_metrics": ["five_second_completion_rate", "two_second_bounce_rate"],
+            "priority": 2,
+        },
+        "positive_reference": {
+            "title": "可作为正样本",
+            "hypothesis": "开头、持续观看和完播同时优于同类作品，可作为下批审片参考。",
+            "action_text": "下一批只强化同类开场结构，其他选片条件保持不变。",
+            "primary_metric": "five_second_completion_rate",
+            "primary_direction": "higher",
+            "guardrail_metrics": ["two_second_bounce_rate", "completion_rate"],
+            "priority": 1,
+        },
+    }
+    return definitions[code]
+
+
+def _build_content_review_insights(account_id: str) -> dict:
+    with get_connection() as connection:
+        export_context = _official_export_context(connection, account_id)
+        works = _latest_diagnosis_rows(connection, account_id)
+    eligible = [
+        work
+        for work in works
+        if work.get("publish_job_id")
+        and str(work.get("match_status") or "") in MATCHED_STATUSES
+        and all(work.get(metric) is not None for metric in DIAGNOSIS_CORE_METRICS)
+    ]
+    recommendations = []
+    for work in eligible:
+        cohort, cohort_key = _select_comparable_cohort(work, eligible)
+        benchmarks = _cohort_benchmarks(cohort)
+        five = float(work["five_second_completion_rate"])
+        bounce = float(work["two_second_bounce_rate"])
+        completion = float(work["completion_rate"])
+        watch_ratio = float(work["watch_ratio"])
+        plays = float(work["play_count"])
+        code = ""
+        score = 0.0
+        if (
+            bounce >= float(benchmarks["two_second_bounce_rate"]["p75"])
+            and five <= float(benchmarks["five_second_completion_rate"]["p25"])
+        ):
+            code = "weak_opening"
+            score = bounce - float(benchmarks["two_second_bounce_rate"]["p75"])
+        elif five >= float(benchmarks["five_second_completion_rate"]["median"]) and (
+            completion <= float(benchmarks["completion_rate"]["p25"])
+            or watch_ratio <= float(benchmarks["watch_ratio"]["p25"])
+        ):
+            code = "weak_pacing"
+            score = max(
+                float(benchmarks["completion_rate"]["p25"]) - completion,
+                float(benchmarks["watch_ratio"]["p25"]) - watch_ratio,
+            )
+        elif (
+            plays <= float(benchmarks["play_count"]["p25"])
+            and five >= float(benchmarks["five_second_completion_rate"]["median"])
+            and bounce <= float(benchmarks["two_second_bounce_rate"]["median"])
+        ):
+            code = "distribution_window"
+            score = (
+                float(benchmarks["play_count"]["p25"]) - plays
+            ) / max(float(benchmarks["play_count"]["p25"]), 1.0)
+        elif (
+            five >= float(benchmarks["five_second_completion_rate"]["p75"])
+            and bounce <= float(benchmarks["two_second_bounce_rate"]["p25"])
+            and completion >= float(benchmarks["completion_rate"]["p75"])
+        ):
+            code = "positive_reference"
+            score = five - float(benchmarks["five_second_completion_rate"]["p75"])
+        if not code:
+            continue
+        definition = _recommendation_definition(code)
+        identity = "|".join(
+            (
+                account_id,
+                str(export_context.get("last_export_batch_id") or ""),
+                str(work["publish_job_id"]),
+                code,
+            )
+        )
+        recommendations.append(
+            {
+                "recommendation_id": hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20],
+                "diagnosis_code": code,
+                "title": definition["title"],
+                "hypothesis": definition["hypothesis"],
+                "action_text": definition["action_text"],
+                "primary_metric": definition["primary_metric"],
+                "primary_direction": definition["primary_direction"],
+                "guardrail_metrics": definition["guardrail_metrics"],
+                "source_work": {
+                    "publish_job_id": work["publish_job_id"],
+                    "title": work.get("title") or work.get("publish_title") or "未命名作品",
+                    "published_at": work.get("published_at"),
+                },
+                "evidence": {metric: work.get(metric) for metric in DIAGNOSIS_CORE_METRICS},
+                "baseline": {
+                    "batch_id": export_context.get("last_export_batch_id"),
+                    "work_count": len(cohort),
+                    "cohort": cohort_key,
+                    "metrics": benchmarks,
+                },
+                "comparison_interval": {
+                    metric: {
+                        "p25": values.get("p25"),
+                        "median": values.get("median"),
+                        "p75": values.get("p75"),
+                    }
+                    for metric, values in benchmarks.items()
+                },
+                "data_sufficiency": "sufficient",
+                "priority_score": round(float(definition["priority"]) + score, 6),
+            }
+        )
+    recommendations.sort(key=lambda item: item["priority_score"], reverse=True)
+    selected = []
+    per_code = {}
+    for item in recommendations:
+        code = item["diagnosis_code"]
+        if per_code.get(code, 0) >= 3:
+            continue
+        selected.append(item)
+        per_code[code] = per_code.get(code, 0) + 1
+        if len(selected) >= 12:
+            break
+    unmatched_count = sum(
+        1
+        for work in works
+        if not work.get("publish_job_id")
+        or str(work.get("match_status") or "") not in MATCHED_STATUSES
+    )
+    missing_metric_count = sum(
+        1
+        for work in works
+        if work.get("publish_job_id")
+        and str(work.get("match_status") or "") in MATCHED_STATUSES
+        and any(work.get(metric) is None for metric in DIAGNOSIS_CORE_METRICS)
+    )
+    return {
+        "account_id": account_id,
+        "generated_at": _now_iso(),
+        "baseline_batch_id": export_context.get("last_export_batch_id"),
+        "official_export_weeks": export_context["official_export_weeks"],
+        "summary": {
+            "total_works": len(works),
+            "eligible_works": len(eligible),
+            "insufficient_works": len(works) - len(eligible),
+            "unmatched_works": unmatched_count,
+            "missing_metric_works": missing_metric_count,
+            "recommendation_count": len(selected),
+            "cover_metric_available": any(work.get("cover_click_rate") is not None for work in works),
+            "note": "作品级封面点击率缺失时不会生成封面建议。",
+        },
+        "recommendations": selected,
+    }
+
+
+def _experiment_metric_summary(rows: list[dict]) -> dict:
+    normalized = []
+    for source in rows:
+        row = dict(source)
+        duration = float(row.get("effective_duration_seconds") or 0)
+        row["watch_ratio"] = (
+            float(row["average_watch_seconds"]) / duration
+            if row.get("average_watch_seconds") is not None and duration > 0
+            else None
+        )
+        normalized.append(row)
+    return {
+        metric: (
+            round(statistics.median(values), 6)
+            if (values := [float(row[metric]) for row in normalized if row.get(metric) is not None])
+            else None
+        )
+        for metric in DIAGNOSIS_CORE_METRICS
+    }
+
+
+def _experiment_progress(connection, experiment: dict) -> dict:
+    assigned_count = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM content_improvement_experiment_items WHERE experiment_id = ?",
+            (experiment["id"],),
+        ).fetchone()[0]
+    )
+    rows = connection.execute(
+        """
+        WITH latest_items AS (
+            SELECT i.*,
+                   COALESCE(
+                       NULLIF(i.duration_seconds, 0),
+                       NULLIF(c.duration_seconds, 0),
+                       NULLIF(oc.source_duration_ms, 0) / 1000.0
+                   ) AS effective_duration_seconds,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY i.publish_job_id
+                       ORDER BY i.captured_at DESC, i.created_at DESC, i.rowid DESC
+                   ) AS item_rank
+            FROM content_improvement_experiment_items ei
+            JOIN douyin_item_metric_snapshots i ON i.publish_job_id = ei.publish_job_id
+            LEFT JOIN publish_jobs pj ON pj.id = i.publish_job_id
+            LEFT JOIN output_clip oc ON oc.id = pj.output_clip_id
+            LEFT JOIN clip_candidates c ON c.id = oc.clip_candidate_id
+            JOIN content_metric_import_batches b ON b.id = i.batch_id
+            WHERE ei.experiment_id = ? AND b.status = 'committed'
+              AND b.source_kind = ?
+              AND i.match_status IN ('matched_exact', 'matched_unique', 'confirmed_manual')
+        )
+        SELECT * FROM latest_items WHERE item_rank = 1
+        """,
+        (experiment["id"], DOUYIN_ITEM_EXPORT_SOURCE_KIND),
+    ).fetchall()
+    week_rows = connection.execute(
+        """
+        SELECT DISTINCT i.captured_at
+        FROM content_improvement_experiment_items ei
+        JOIN douyin_item_metric_snapshots i ON i.publish_job_id = ei.publish_job_id
+        JOIN content_metric_import_batches b ON b.id = i.batch_id
+        WHERE ei.experiment_id = ? AND b.status = 'committed'
+          AND b.source_kind = ?
+          AND i.match_status IN ('matched_exact', 'matched_unique', 'confirmed_manual')
+        """,
+        (experiment["id"], DOUYIN_ITEM_EXPORT_SOURCE_KIND),
+    ).fetchall()
+    weeks = set()
+    for week_row in week_rows:
+        captured = _parse_iso_datetime(week_row["captured_at"])
+        if captured is None:
+            continue
+        year, week, _ = captured.astimezone(BEIJING_TIMEZONE).isocalendar()
+        weeks.add(f"{year}-W{week:02d}")
+    baseline = json.loads(str(experiment.get("baseline_json") or "{}"))
+    baseline_count = int(baseline.get("work_count") or 0)
+    treatment_count = len(rows)
+    target = int(experiment.get("target_sample_size") or 20)
+    minimum_baseline = int(experiment.get("minimum_baseline_size") or 20)
+    minimum_weeks = int(experiment.get("minimum_weeks") or 3)
+    decision_ready = (
+        treatment_count >= target
+        and baseline_count >= minimum_baseline
+        and len(weeks) >= minimum_weeks
+    )
+    stage = "decision_ready" if decision_ready else ("early" if treatment_count >= 10 else "collecting")
+    treatment_metrics = _experiment_metric_summary([dict(row) for row in rows])
+    primary_metric = str(experiment.get("primary_metric") or "")
+    baseline_primary = (
+        baseline.get("metrics", {}).get(primary_metric, {}).get("median")
+    )
+    treatment_primary = treatment_metrics.get(primary_metric)
+    primary_delta = (
+        round(float(treatment_primary) - float(baseline_primary), 6)
+        if treatment_primary is not None and baseline_primary is not None
+        else None
+    )
+    return {
+        "assigned_count": assigned_count,
+        "treatment_count": treatment_count,
+        "baseline_count": baseline_count,
+        "official_export_weeks": len(weeks),
+        "official_export_week_keys": sorted(weeks),
+        "target_sample_size": target,
+        "minimum_baseline_size": minimum_baseline,
+        "minimum_weeks": minimum_weeks,
+        "stage": stage,
+        "trend_visible": treatment_count >= 10,
+        "decision_ready": decision_ready,
+        "treatment_metrics": treatment_metrics,
+        "baseline_primary": baseline_primary,
+        "treatment_primary": treatment_primary,
+        "primary_delta": primary_delta,
+    }
+
+
+def list_content_experiments(account_id: str = "", *, include_closed: bool = True) -> list[dict]:
+    resolved = _resolve_douyin_account_id(account_id)
+    status_filter = "" if include_closed else " AND status = 'active'"
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT * FROM content_improvement_experiments
+            WHERE account_id = ?{status_filter}
+            ORDER BY created_at DESC
+            """,
+            (resolved,),
+        ).fetchall()
+        experiments = []
+        for source in rows:
+            experiment = dict(source)
+            experiment["guardrail_metrics"] = json.loads(
+                str(experiment.pop("guardrail_metrics_json") or "[]")
+            )
+            experiment["baseline"] = json.loads(
+                str(experiment.get("baseline_json") or "{}")
+            )
+            experiment["progress"] = _experiment_progress(connection, experiment)
+            experiments.append(experiment)
+    return experiments
+
+
+def list_active_content_experiments_for_publish() -> list[dict]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, account_id, title, action_text, primary_metric, created_at
+            FROM content_improvement_experiments
+            WHERE status = 'active'
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_content_review_insights(account_id: str = "") -> dict:
+    resolved = _resolve_douyin_account_id(account_id)
+    result = _build_content_review_insights(resolved)
+    result["experiments"] = list_content_experiments(resolved)
+    return result
+
+
+def create_content_experiment(account_id: str, recommendation_id: str) -> dict:
+    resolved = _resolve_douyin_account_id(account_id)
+    insights = _build_content_review_insights(resolved)
+    recommendation = next(
+        (
+            item
+            for item in insights["recommendations"]
+            if item["recommendation_id"] == str(recommendation_id or "").strip()
+        ),
+        None,
+    )
+    if recommendation is None:
+        raise ContentReviewError("这条建议已经更新，请刷新页面后重新选择", status_code=409)
+    baseline = recommendation["baseline"]
+    if not baseline.get("batch_id"):
+        raise ContentReviewError("还没有可冻结的官方作品导出基线", status_code=409)
+    experiment_id = f"experiment-{uuid4().hex[:16]}"
+    now = _now_iso()
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        existing = connection.execute(
+            """
+            SELECT id FROM content_improvement_experiments
+            WHERE account_id = ? AND recommendation_id = ?
+            """,
+            (resolved, recommendation["recommendation_id"]),
+        ).fetchone()
+        if existing is not None:
+            connection.rollback()
+            raise ContentReviewError("这条建议已经记录过实验，不能重复挑选同一批证据", status_code=409)
+        connection.execute(
+            """
+            INSERT INTO content_improvement_experiments (
+                id, account_id, recommendation_id, diagnosis_code, title,
+                hypothesis, action_text, primary_metric, primary_direction,
+                guardrail_metrics_json, baseline_batch_id, baseline_json,
+                target_sample_size, minimum_baseline_size, minimum_weeks,
+                status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 20, 20, 3, 'active', ?, ?)
+            """,
+            (
+                experiment_id,
+                resolved,
+                recommendation["recommendation_id"],
+                recommendation["diagnosis_code"],
+                recommendation["title"],
+                recommendation["hypothesis"],
+                recommendation["action_text"],
+                recommendation["primary_metric"],
+                recommendation["primary_direction"],
+                json.dumps(recommendation["guardrail_metrics"], ensure_ascii=False),
+                baseline["batch_id"],
+                json.dumps(baseline, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        connection.commit()
+    return {
+        "status": "created",
+        "message": "实验已建立。请在发送中心投稿前标记实际采用该规则的作品。",
+        "experiment_id": experiment_id,
+        "experiment": next(
+            item for item in list_content_experiments(resolved) if item["id"] == experiment_id
+        ),
+    }
+
+
+def update_content_experiment(experiment_id: str, decision: str) -> dict:
+    normalized = str(decision or "").strip().lower()
+    if normalized not in EXPERIMENT_DECISIONS:
+        raise ContentReviewError("实验结论只能是保留、回退、结论不足或取消")
+    now = _now_iso()
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT * FROM content_improvement_experiments WHERE id = ?",
+            (experiment_id,),
+        ).fetchone()
+        if row is None:
+            connection.rollback()
+            raise ContentReviewError("内容实验不存在", status_code=404)
+        experiment = dict(row)
+        if experiment["status"] != "active":
+            connection.rollback()
+            raise ContentReviewError("这个实验已经结束", status_code=409)
+        progress = _experiment_progress(connection, experiment)
+        if normalized != "cancel" and not progress["decision_ready"]:
+            connection.rollback()
+            raise ContentReviewError("样本或官方导出周数还不足，暂时不能记录最终结论", status_code=409)
+        status = "cancelled" if normalized == "cancel" else "completed"
+        stored_decision = None if normalized == "cancel" else normalized
+        connection.execute(
+            """
+            UPDATE content_improvement_experiments
+            SET status = ?, decision = ?, completed_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (status, stored_decision, now, now, experiment_id),
+        )
+        connection.commit()
+    return {"status": status, "decision": stored_decision, "message": "实验结论已记录。"}
+
+
+def _assert_experiment_job_editable(job: dict) -> None:
+    status = str(job.get("status") or "").upper()
+    if (
+        status not in EXPERIMENT_EDITABLE_JOB_STATUSES
+        or job.get("claimed_at")
+        or job.get("started_at")
+        or int(job.get("attempt_count") or 0) > 0
+    ):
+        raise ContentReviewError("投稿执行已经开始，实验归属已冻结", status_code=409)
+
+
+def assign_publish_job_to_experiment(experiment_id: str, publish_job_id: str) -> dict:
+    now = _now_iso()
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        experiment_row = connection.execute(
+            "SELECT * FROM content_improvement_experiments WHERE id = ?",
+            (experiment_id,),
+        ).fetchone()
+        if experiment_row is None:
+            connection.rollback()
+            raise ContentReviewError("内容实验不存在", status_code=404)
+        experiment = dict(experiment_row)
+        if experiment["status"] != "active":
+            connection.rollback()
+            raise ContentReviewError("只能关联进行中的实验", status_code=409)
+        job_row = connection.execute(
+            "SELECT * FROM publish_jobs WHERE id = ?",
+            (publish_job_id,),
+        ).fetchone()
+        if job_row is None:
+            connection.rollback()
+            raise ContentReviewError("发布内容不存在", status_code=404)
+        job = dict(job_row)
+        _assert_experiment_job_editable(job)
+        if job.get("platform") != "douyin" or job.get("account_id") != experiment["account_id"]:
+            connection.rollback()
+            raise ContentReviewError("实验与发布内容的抖音账号不一致", status_code=409)
+        existing = connection.execute(
+            """
+            SELECT experiment_id FROM content_improvement_experiment_items
+            WHERE publish_job_id = ?
+            """,
+            (publish_job_id,),
+        ).fetchone()
+        if existing is not None:
+            if existing["experiment_id"] == experiment_id:
+                connection.commit()
+                return {"status": "already_assigned", "experiment_id": experiment_id}
+            connection.rollback()
+            raise ContentReviewError("这条作品已经属于另一个实验", status_code=409)
+        connection.execute(
+            """
+            INSERT INTO content_improvement_experiment_items (
+                id, experiment_id, publish_job_id, assigned_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (f"experiment-item-{uuid4().hex[:16]}", experiment_id, publish_job_id, now),
+        )
+        connection.commit()
+    return {"status": "assigned", "experiment_id": experiment_id, "publish_job_id": publish_job_id}
+
+
+def set_publish_job_experiment(publish_job_id: str, experiment_id: str = "") -> dict:
+    """原子设置实验归属，避免前端先删旧关联、再加新关联时留下中间状态。"""
+
+    normalized_experiment_id = str(experiment_id or "").strip()
+    now = _now_iso()
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        job_row = connection.execute(
+            "SELECT * FROM publish_jobs WHERE id = ?",
+            (publish_job_id,),
+        ).fetchone()
+        if job_row is None:
+            connection.rollback()
+            raise ContentReviewError("发布内容不存在", status_code=404)
+        job = dict(job_row)
+        _assert_experiment_job_editable(job)
+        existing = connection.execute(
+            """
+            SELECT id, experiment_id
+            FROM content_improvement_experiment_items
+            WHERE publish_job_id = ?
+            """,
+            (publish_job_id,),
+        ).fetchone()
+        if existing is not None:
+            current = connection.execute(
+                "SELECT status FROM content_improvement_experiments WHERE id = ?",
+                (existing["experiment_id"],),
+            ).fetchone()
+            if current is not None and current["status"] != "active":
+                connection.rollback()
+                raise ContentReviewError("实验已经结束，作品归属已冻结", status_code=409)
+        if not normalized_experiment_id:
+            if existing is not None:
+                connection.execute(
+                    "DELETE FROM content_improvement_experiment_items WHERE id = ?",
+                    (existing["id"],),
+                )
+            connection.commit()
+            return {"status": "removed" if existing is not None else "not_assigned", "publish_job_id": publish_job_id}
+
+        experiment_row = connection.execute(
+            "SELECT * FROM content_improvement_experiments WHERE id = ?",
+            (normalized_experiment_id,),
+        ).fetchone()
+        if experiment_row is None:
+            connection.rollback()
+            raise ContentReviewError("内容实验不存在", status_code=404)
+        experiment = dict(experiment_row)
+        if experiment["status"] != "active":
+            connection.rollback()
+            raise ContentReviewError("只能关联进行中的实验", status_code=409)
+        if job.get("platform") != "douyin" or job.get("account_id") != experiment["account_id"]:
+            connection.rollback()
+            raise ContentReviewError("实验与发布内容的抖音账号不一致", status_code=409)
+        if existing is not None and existing["experiment_id"] == normalized_experiment_id:
+            connection.commit()
+            return {"status": "already_assigned", "experiment_id": normalized_experiment_id}
+        if existing is None:
+            connection.execute(
+                """
+                INSERT INTO content_improvement_experiment_items (
+                    id, experiment_id, publish_job_id, assigned_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    f"experiment-item-{uuid4().hex[:16]}",
+                    normalized_experiment_id,
+                    publish_job_id,
+                    now,
+                ),
+            )
+        else:
+            connection.execute(
+                """
+                UPDATE content_improvement_experiment_items
+                SET experiment_id = ?, assigned_at = ?
+                WHERE id = ?
+                """,
+                (normalized_experiment_id, now, existing["id"]),
+            )
+        connection.commit()
+    return {
+        "status": "assigned" if existing is None else "reassigned",
+        "experiment_id": normalized_experiment_id,
+        "publish_job_id": publish_job_id,
+    }
+
+
+def remove_publish_job_from_experiment(experiment_id: str, publish_job_id: str) -> dict:
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        item = connection.execute(
+            """
+            SELECT ei.id, e.status AS experiment_status
+            FROM content_improvement_experiment_items ei
+            JOIN content_improvement_experiments e ON e.id = ei.experiment_id
+            WHERE ei.experiment_id = ? AND ei.publish_job_id = ?
+            """,
+            (experiment_id, publish_job_id),
+        ).fetchone()
+        if item is None:
+            connection.commit()
+            return {"status": "not_assigned"}
+        job_row = connection.execute(
+            "SELECT * FROM publish_jobs WHERE id = ?",
+            (publish_job_id,),
+        ).fetchone()
+        if job_row is None:
+            connection.rollback()
+            raise ContentReviewError("发布内容不存在", status_code=404)
+        _assert_experiment_job_editable(dict(job_row))
+        if item["experiment_status"] != "active":
+            connection.rollback()
+            raise ContentReviewError("实验已经结束，作品归属已冻结", status_code=409)
+        connection.execute(
+            "DELETE FROM content_improvement_experiment_items WHERE id = ?",
+            (item["id"],),
+        )
+        connection.commit()
+    return {"status": "removed", "publish_job_id": publish_job_id}
 
 
 def set_item_match(snapshot_id: str, publish_job_id: str) -> dict:
