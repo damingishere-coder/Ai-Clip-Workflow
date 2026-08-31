@@ -287,6 +287,7 @@ def test_windows_dll_directories_include_venv_cublas_and_ctranslate2(monkeypatch
         local_transcription_runtime.os,
         "add_dll_directory",
         lambda path: added.append(path) or SimpleNamespace(close=lambda: None),
+        raising=False,
     )
     monkeypatch.setattr(local_transcription_runtime, "_DLL_DIRECTORY_HANDLES", [])
     monkeypatch.setattr(local_transcription_runtime, "_DLL_DIRECTORY_PATHS", set())
@@ -297,6 +298,7 @@ def test_windows_dll_directories_include_venv_cublas_and_ctranslate2(monkeypatch
         local_transcription_runtime.ctypes,
         "WinDLL",
         lambda path: loaded.append(path) or SimpleNamespace(),
+        raising=False,
     )
 
     first = local_transcription_runtime.configure_windows_cuda_dll_directories()
