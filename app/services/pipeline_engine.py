@@ -12,6 +12,11 @@ from app.core.config import settings
 from app.db.database import get_connection
 from app.models.task import TaskStatus
 from app.services import job_service, task_service
+from app.services.ai_retry_service import (
+    AIAnalysisRetryConfirmationRequired,
+    get_ai_retry_confirmation,
+    prepare_confirmed_ai_retry,
+)
 from app.services.auto_publish_service import create_auto_publish_jobs, platforms_for_task
 from app.services.metadata_generator import MetadataGenerator
 from app.services.pipeline_checkpoint_service import (
@@ -1375,43 +1380,55 @@ class PipelineEngine:
     def _run_ai_analysis(self, task_id: str, context: dict) -> dict:
         result = task_service.process_task_ai_analysis(task_id)
         clip_count = len(result.get("clips") or [])
+        analysis_meta = (result.get("analysis_run") or {}).get("analysis_meta") or {}
+        self._require_complete_ai_analysis(task_id, analysis_meta)
         append_task_log(task_id, f"全自动 AI 分析完成，候选片段：{clip_count} 条")
         return {
             "clip_count": clip_count,
             "analysis_run_id": result.get("analysis_run_id") or "",
             "analysis_path": result.get("analysis_path") or "",
-            "analysis_meta": (result.get("analysis_run") or {}).get("analysis_meta") or {},
+            "analysis_meta": analysis_meta,
         }
 
-    def _select_clips(self, task_id: str, context: dict) -> dict:
+    def _require_complete_ai_analysis(self, task_id: str, meta: dict | None) -> dict:
         task = self._get_task(task_id)
-        config = context["config"]
-        meta = task_service.get_task_ai_analysis_meta(task_id)
         profile = str(task.get("selection_profile") or "general")
         if not meta:
             raise ValueError(
                 "AI 分析缺少可信的完整性元数据；请重新分析或恢复可信历史，"
                 "当前不会进入自动切片或发送中心。"
             )
-        meta = task_service.validate_ai_analysis_meta_for_cut(meta, profile)
-        coverage = float(meta.get("coverage_percent") or 0)
+        validated = task_service.validate_ai_analysis_meta_for_cut(meta, profile)
+        coverage = float(validated.get("coverage_percent") or 0)
         if profile == "long_live_talk" and (
-            meta.get("analysis_incomplete") or float(meta.get("coverage_ratio") or 0) < 0.90
+            validated.get("analysis_incomplete")
+            or float(validated.get("coverage_ratio") or 0) < 0.90
         ):
             raise ValueError(
                 f"长直播分析覆盖率仅 {coverage:.2f}%，低于 90%；"
                 "请重试 AI 分析补齐缺失窗口，当前不会进入自动切片或发送中心。"
             )
-        if meta.get("analysis_incomplete"):
+        if validated.get("analysis_incomplete"):
             raise ValueError(
                 f"{profile} AI 分析存在未完成单元，当前覆盖率 {coverage:.2f}%；"
                 "请重试 AI 分析补齐失败单元，当前不会进入自动切片或发送中心。"
             )
+        return validated
+
+    def _select_clips(self, task_id: str, context: dict) -> dict:
+        task = self._get_task(task_id)
+        config = context["config"]
+        meta = self._require_complete_ai_analysis(
+            task_id,
+            task_service.get_task_ai_analysis_meta(task_id),
+        )
+        profile = str(task.get("selection_profile") or "general")
         if meta.get("quality_degraded"):
             raise ValueError(
                 f"{profile} AI 分析质量评审未完整通过；"
                 "候选可供人工检查，但当前不会进入自动切片或发送中心。"
             )
+
         candidates = self._list_raw_candidates(task_id)
         if not candidates:
             latest_run = task_service.get_latest_ai_analysis_run(task_id)
@@ -1895,11 +1912,29 @@ def start_auto_pipeline(
     background_tasks: Any | None = None,
     retry: bool = False,
     start_step: TaskStatus | str | None = None,
+    confirm_uncertain_ai: bool = False,
 ) -> dict:
     if background_tasks is not None:
         from app.services import job_service
 
         if retry:
+            confirmation = get_ai_retry_confirmation(task_id)
+            if confirmation and not confirm_uncertain_ai:
+                raise AIAnalysisRetryConfirmationRequired(confirmation)
+            if confirmation:
+                job, requeued, retry_info = prepare_confirmed_ai_retry(task_id)
+                return {
+                    "status": job["status"],
+                    "message": (
+                        "转写输入已变化，已创建新的 AI 分析 Job。"
+                        if retry_info["retry_mode"] == "fresh_ai"
+                        else "已确认计费不确定单元，成功 checkpoint 将继续复用。"
+                    ),
+                    "task_id": task_id,
+                    "job_id": job["id"],
+                    "created": requeued,
+                    **retry_info,
+                }
             job, requeued = job_service.retry_latest_or_get_active_job(
                 task_id,
                 job_service.JOB_TYPE_AUTO_PIPELINE,

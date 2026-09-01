@@ -18,6 +18,10 @@ from app.models.task import (
 )
 from app.services import task_service
 from app.services.ai_prompt_preset_service import update_task_ai_prompt_preset
+from app.services.ai_retry_service import (
+    AIAnalysisRetryConfirmationRequired,
+    AutoPipelineRetryConflictError,
+)
 from app.services.pipeline_engine import start_auto_pipeline
 from app.services.storage_service import (
     allocate_task_dir_name,
@@ -423,9 +427,22 @@ async def process_auto_pipeline(
 
 
 @router.post("/{task_id}/process/auto-retry")
-async def retry_auto_pipeline(task_id: str, background_tasks: BackgroundTasks) -> dict:
+async def retry_auto_pipeline(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    confirm_uncertain_ai: bool = Query(default=False),
+) -> dict:
     try:
-        return start_auto_pipeline(task_id, background_tasks=background_tasks, retry=True)
+        return start_auto_pipeline(
+            task_id,
+            background_tasks=background_tasks,
+            retry=True,
+            confirm_uncertain_ai=confirm_uncertain_ai,
+        )
+    except AIAnalysisRetryConfirmationRequired as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    except AutoPipelineRetryConflictError as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

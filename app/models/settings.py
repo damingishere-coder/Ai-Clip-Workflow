@@ -53,7 +53,7 @@ class AIConfigUpdate(BaseModel):
     ai_codex_path: str = Field(default="codex", max_length=1000)
     ai_codex_home: str = Field(default="", max_length=1000)
     ai_codex_model: str = Field(default="gpt-5.6-sol", max_length=200)
-    ai_codex_timeout_seconds: int = Field(default=300, ge=10, le=1800)
+    ai_codex_timeout_seconds: int = Field(default=600, ge=10, le=1800)
 
     transcription_provider: str = Field(default="local", pattern="^(volcengine|local)$", max_length=20)
     transcription_fallback_provider: str = Field(default="", pattern="^(|volcengine|local)$", max_length=20)
