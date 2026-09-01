@@ -117,10 +117,25 @@ async function handleProcessAction(button) {
     if (result) result.textContent = "正在执行，请稍等...";
 
     try {
-      const response = await fetch(button.dataset.endpoint, { method: "POST" });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "处理失败");
+      let endpoint = button.dataset.endpoint;
+      let data;
+      try {
+        data = await apiFetch(endpoint, { method: "POST" });
+      } catch (error) {
+        const needsAIConfirmation = error.status === 409
+          && error.details?.code === "ai_retry_confirmation_required";
+        if (!needsAIConfirmation) throw error;
+        const confirmed = window.confirm(
+          `${error.details.message}\n\n这一步可能产生新的 AI 调用费用，是否确认继续？`,
+        );
+        if (!confirmed) {
+          if (result) result.textContent = "已取消 AI 重试，原失败 Job 和证据保持不变。";
+          return;
+        }
+        const separator = endpoint.includes("?") ? "&" : "?";
+        endpoint = `${endpoint}${separator}confirm_uncertain_ai=true`;
+        if (result) result.textContent = "已确认，正在安全创建或恢复 AI 分析 Job...";
+        data = await apiFetch(endpoint, { method: "POST" });
       }
       if (result) result.textContent = data.message || "处理完成，正在刷新页面...";
       if (button.dataset.endpoint.includes("/process/transcript")) {
@@ -2439,7 +2454,7 @@ if (aiConfigForm) {
     const formData = new FormData(aiConfigForm);
     const payload = Object.fromEntries(formData.entries());
     payload.ai_request_timeout_seconds = Number(payload.ai_request_timeout_seconds || 120);
-    payload.ai_codex_timeout_seconds = Number(payload.ai_codex_timeout_seconds || 300);
+    payload.ai_codex_timeout_seconds = Number(payload.ai_codex_timeout_seconds || 600);
     payload.volcengine_asr_timeout_seconds = Number(payload.volcengine_asr_timeout_seconds || 300);
     payload.ai_analysis_request_timeout_seconds = Number(payload.ai_analysis_request_timeout_seconds || 120);
     payload.ai_publish_request_timeout_seconds = Number(payload.ai_publish_request_timeout_seconds || 120);
