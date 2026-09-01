@@ -1,5 +1,15 @@
 # Development Log
 
+## 2026-09-01 最新任务恢复与本地转写简体化
+
+- 本地 `faster-whisper` 的段落和逐词文本在写入分段 checkpoint 前统一经过 OpenCC `t2s.json`；只转换繁简字形，继续保留“计程车、软体”等台湾用词，英文、数字和时间戳不变。
+- 固定新增 `opencc==1.4.2`；本地转写 checkpoint 模型身份加入 `opencc-t2s-v1`，旧繁体分块不会被新任务静默复用。转写进度 JSON 同步记录实际文本标准化版本。
+- AI 完整性门禁前移到 `AI_ANALYZING`：覆盖率或单元不完整会直接进入 `FAILED_AI_ANALYZING`；`CLIP_SELECTING` 保留二次防护，不会继续生成切片或发布记录。
+- `/api/tasks/{task_id}/process/auto-retry` 在发现计费结果不确定的 AI 单元时先返回结构化 409。任务详情会明确说明风险并要求二次确认；取消时旧 Job 和全部证据保持不变。
+- 输入未变化时，确认后原位重置不确定单元并复用成功 AI checkpoint；transcript 已变化时，从 `AI_ANALYZING` 创建独立新 Job，旧失败 Job 不修改。有任何下游切片或发布记录时继续 fail-closed。
+- Codex 单窗口默认超时由 300 秒调整为 600 秒；新增 transcript 原位转换工具，转换前写入 `transcripts/backups/`，并校验时间戳、行数和 Markdown 结构。
+- 专项回归 `66 passed`、最终完整回归 `825 passed`；Ruff、Python compileall、JavaScript 语法和 `git diff --check` 均通过。`release_gate.ps1` 因当前分支没有正式版 `acceptance-results/latest.json` 按设计拒绝放行；正式服务部署和任务 `614fb38401e0` 的现场恢复继续单独验收。
+
 ## 2026-08-31 完全离线长音频转写
 
 - 默认转写 Provider 改为本地 `faster-whisper`，固定 `large-v3@edaa852e / cuda / float16`；`TRANSCRIPTION_OFFLINE_ONLY=true` 时，任务页、自动流水线、重试入口和显式火山请求都会在远程 HTTP 请求前拒绝执行。

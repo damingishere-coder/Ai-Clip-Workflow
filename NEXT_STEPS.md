@@ -1,5 +1,13 @@
 # Next Steps
 
+## 2026-09-01 最新任务恢复验收
+
+1. 代码测试通过后，将代码提交同步到 `codex/runtime-offline-transcription-cutover`，安装固定 OpenCC 依赖，并只把运行 `.env` 的 Codex 超时调整为 600 秒。
+2. 先备份活动 SQLite，复核 `quick_check`、外键、活动 Job、切片和发布记录；再备份任务 `614fb38401e0` 的 `transcript.md` 并原位转为 `t2s` 简体字形。
+3. 只通过 Alter 重启 `Niuma-Studio` Web，不重启 8765 发布 Worker；核对 8001 新 Listener PID、祖先进程、运行工作树、健康检查、深度 readiness 和 Scheduler 扫描时间。
+4. 使用 `confirm_uncertain_ai=true` 从 `AI_ANALYZING` 创建独立 Job，持续检查覆盖率达到 100% 并进入正常字幕审核阶段；不要点击立即发送，也不要创建或修改抖音/B站排期。
+5. PR #72 只更新普通提交和 Push，等待 CI；本轮不合并 PR、不删分支、不改写历史。
+
 ## 2026-08-31 完全离线转写验收与启用
 
 1. 固定版本 cuBLAS 12、`large-v3` 主模型和 `medium / CPU / int8` 兜底模型均已初始化并通过加载校验；20 秒、10 分钟和完整 41 分钟 GPU 验收均通过，完整素材续跑约 4 分 52 秒完成并成功复用第一个 checkpoint。
