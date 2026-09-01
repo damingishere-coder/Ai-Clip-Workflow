@@ -5,6 +5,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.core.config import settings
 from app.services.ai_prompt_preset_service import list_ai_prompt_presets
+from app.services.content_review_service import list_douyin_accounts
 from app.services.publish_service import (
     get_publish_center_context,
     get_publish_link_states,
@@ -287,5 +288,20 @@ async def system_status_page(request: Request):
             "active_page": "system",
             "settings": settings,
             **get_system_status_context(),
+        },
+    )
+
+
+@router.get("/content-review")
+async def content_review_page(request: Request):
+    accounts = list_douyin_accounts()
+    return templates.TemplateResponse(
+        name="content_review.html",
+        request=request,
+        context={
+            "request": request,
+            "active_page": "content_review",
+            "settings": settings,
+            "accounts": accounts,
         },
     )

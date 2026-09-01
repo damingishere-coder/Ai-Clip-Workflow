@@ -1,5 +1,18 @@
 # Development Log
 
+## 2026-08-28 v2.2.0 抖音内容复盘与 Prompt 归因
+
+- 审片页以“保存审核选择”为唯一写入边界：首次保存自动形成 `keep/reject`，相同状态不重复，决策或淘汰原因变化时新增事件；AI 历史上下文只采用每个候选最新反馈。
+- 新增不可变 `ai_prompt_versions`，候选片段关联来源 AI Run，AI Run 固定关联 Prompt 版本与 SHA-256；历史记录只做可唯一确定的候选回填，不猜测 Prompt。
+- 新增 `/content-review`：支持抖音账号日汇总 `.xlsx/.csv` 预览与确认导入、7 天环比、作品归因表、人工确认和带 3 周期/30 条/双版本 20 条门槛的 Prompt 对比。
+- Windows Chrome Worker 新增最近 50 条抖音作品指标同步；复用现有登录态和账号锁，只保存指标白名单，登录失效、验证码、429、页面变化时立即停止且不自动重试。
+- 数据库恢复统一执行完整性、外键、迁移账本 checksum 和关键索引校验；正式库恢复前检查活动服务和独占锁。旧任务目录迁移入口永久停用，新增 `/api/system/readiness?deep=0|1`。
+- 14:21 的表结构检查调用了 `init_db()`，活动库因此执行 `20260828_01_content_review_v1`；迁移器先自动生成 `data/backups/workflow-before-content-review-v1-20260828-142159-923806-112221a7.sqlite3`。事后只读复核为 `integrity_check=ok`、`foreign_key_check=0`、备份同样通过完整诊断；Scheduler 正在运行，复核时 `PUBLISHING=0`、保留原有 `SCHEDULED=6`，未触发投稿或更改排期。该提前升级偏离了“先停服务再人工升级”的理想操作顺序，已在交付说明中明确保留。
+- Docker 隔离冒烟发现并修复演示数据仍缺少 2.2 归因的问题；Demo AI Run 现在固定关联 Prompt 版本及哈希，6 条候选均关联来源 Run。重建后深度 readiness 为 `database=ok`、`integrity_check=ok`、`foreign_key_check=0`、迁移 3 条、`PUBLISHING=0`，`/`、`/tasks`、`/clips`、`/publish`、`/content-review` 均返回 HTTP 200；隔离临时容器已删除。
+- 最终隔离回归为 `836 passed`、0 失败；Ruff、Compileall、5 个 JavaScript、20 个 PowerShell、3 套 Compose、`pip check` 和 `git diff --check` 全部通过。内容复盘页使用真实 Chrome 在 1440px 与 390px 验证，无页面级横向溢出。Docker 官方 Debian 源首次受本机代理 500/502 影响，改用 Dockerfile 已支持的阿里云镜像参数后构建及上述冒烟全部通过。
+- `acceptance.ps1` 与 `release_gate.ps1` 保留到 2.2 PR 合并后的干净 `master` 执行，避免功能分支报告被误当成正式发布证据。
+- 版本统一升级为 `2.2.0`。本轮不自动修改 Prompt、不自动发布、不绕过平台验证，也不对单体服务、前端框架或数据库层做全面重构。
+
 ## 2026-08-28 2.1 集成 PR 与 Docker 冒烟修复
 
 - 将当前线性领先 `master` 的 26 个提交完整保留到 `codex/integrate-v2.1-stable`，新增独立空白清理提交并创建顶层集成 PR #60；不 rebase、不 squash，也不自动合并。

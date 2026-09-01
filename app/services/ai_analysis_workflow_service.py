@@ -29,7 +29,7 @@ from app.services.ai.long_live_talk_analyzer import (
 )
 from app.services.ai.diagnostics import ensure_local_ai_ready
 from app.services.ai.base import AIProviderError
-from app.services.ai_prompt_preset_service import get_task_ai_prompt_preset
+from app.services.ai_prompt_preset_service import get_task_ai_prompt_preset, get_task_ai_prompt_snapshot
 from app.services.storage_service import get_artifact_paths
 from app.services.task_log_service import append_task_log, read_task_log_tail
 
@@ -319,16 +319,33 @@ def _clear_clip_candidates(task_id: str) -> None:
         connection.commit()
 
 
-def _insert_clip_candidates(task_id: str, clips: list[dict]) -> None:
+def _insert_clip_candidates(
+    task_id: str,
+    clips: list[dict],
+    source_analysis_run_id: str | None = None,
+) -> None:
     from app.services.task_service import _now_iso
 
     now = _now_iso()
     with get_connection() as connection:
-        _insert_clip_candidates_with_connection(connection, task_id, clips, now)
+        _insert_clip_candidates_with_connection(
+            connection,
+            task_id,
+            clips,
+            now,
+            source_analysis_run_id=source_analysis_run_id,
+        )
         connection.commit()
 
 
-def _insert_clip_candidates_with_connection(connection, task_id: str, clips: list[dict], now: str) -> None:
+def _insert_clip_candidates_with_connection(
+    connection,
+    task_id: str,
+    clips: list[dict],
+    now: str,
+    *,
+    source_analysis_run_id: str | None = None,
+) -> None:
     for index, clip in enumerate(clips, start=1):
         clip_key = str(clip["clip_id"])
         database_id = f"{task_id}_{clip_key}"[:120]
@@ -341,9 +358,10 @@ def _insert_clip_candidates_with_connection(connection, task_id: str, clips: lis
                 confidence_score, quality_tier, quality_score, text_quality_score, humor_score,
                 completeness_score, audio_reaction_score, topic_key, key_moment_time,
                 quality_evidence_json, rejection_reason,
-                selected_by_default, enabled, reviewed, created_at, updated_at
+                selected_by_default, enabled, reviewed, source_analysis_run_id,
+                created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 database_id or f"{task_id}_clip_{index:03d}",
@@ -373,20 +391,31 @@ def _insert_clip_candidates_with_connection(connection, task_id: str, clips: lis
                 1 if selected_by_default else 0,
                 1 if selected_by_default else 0,
                 0,
+                source_analysis_run_id,
                 now,
                 now,
             ),
         )
 
 
-def _replace_clip_candidates(task_id: str, clips: list[dict]) -> None:
+def _replace_clip_candidates(
+    task_id: str,
+    clips: list[dict],
+    source_analysis_run_id: str | None = None,
+) -> None:
     """在同一个事务里替换候选片段，失败时保留原结果。"""
     from app.services.task_service import _now_iso
 
     now = _now_iso()
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        _replace_clip_candidates_with_connection(connection, task_id, clips, now)
+        _replace_clip_candidates_with_connection(
+            connection,
+            task_id,
+            clips,
+            now,
+            source_analysis_run_id=source_analysis_run_id,
+        )
         connection.commit()
 
 
@@ -395,6 +424,8 @@ def _replace_clip_candidates_with_connection(
     task_id: str,
     clips: list[dict],
     now: str,
+    *,
+    source_analysis_run_id: str | None = None,
 ) -> None:
     referenced = connection.execute(
         """
@@ -411,7 +442,13 @@ def _replace_clip_candidates_with_connection(
             "请在片段审核页修改现有候选并重新切片。"
         )
     connection.execute("DELETE FROM clip_candidates WHERE task_id = ?", (task_id,))
-    _insert_clip_candidates_with_connection(connection, task_id, clips, now)
+    _insert_clip_candidates_with_connection(
+        connection,
+        task_id,
+        clips,
+        now,
+        source_analysis_run_id=source_analysis_run_id,
+    )
 
 
 def _assert_ai_task_can_start(connection, task_id: str, current_status: str, *, current_job_id: str = "") -> None:
@@ -702,6 +739,8 @@ def _analysis_run_row_to_dict(row: Row, include_payload: bool = False) -> dict:
         "model": run.get("model") or "",
         "ai_prompt_preset_id": run.get("ai_prompt_preset_id") or "",
         "ai_prompt_preset_name": run.get("ai_prompt_preset_name") or "",
+        "prompt_version_id": run.get("prompt_version_id") or "",
+        "prompt_text_sha256": run.get("prompt_text_sha256") or "",
         "requested_clip_count": int(run.get("requested_clip_count") or 0),
         "clip_count": int(run.get("clip_count") or 0),
         "analysis_summary": run.get("analysis_summary") or "",
@@ -736,6 +775,8 @@ def _analysis_payload_to_preview(task_id: str, payload: dict, fallback: dict | N
         "model": model,
         "ai_prompt_preset_id": fallback.get("ai_prompt_preset_id") or "",
         "ai_prompt_preset_name": fallback.get("ai_prompt_preset_name") or "",
+        "prompt_version_id": meta.get("prompt_version_id") or fallback.get("prompt_version_id") or "",
+        "prompt_text_sha256": meta.get("prompt_sha256") or fallback.get("prompt_text_sha256") or "",
         "requested_clip_count": int(fallback.get("requested_clip_count") or len(clips)),
         "clip_count": len(clips),
         "analysis_summary": payload.get("analysis_summary") or fallback.get("analysis_summary") or "",
@@ -842,8 +883,9 @@ def _insert_ai_analysis_run_with_connection(
     prompt_preset: dict,
     requested_clip_count: int,
     now: str,
+    run_id: str | None = None,
 ) -> str:
-    run_id = uuid4().hex[:12]
+    run_id = run_id or uuid4().hex[:12]
     clips = analysis_payload.get("clips") or []
     run_number = _next_ai_analysis_run_number(connection, task_id)
     connection.execute("UPDATE ai_analysis_runs SET is_active = 0 WHERE task_id = ?", (task_id,))
@@ -851,11 +893,12 @@ def _insert_ai_analysis_run_with_connection(
         """
         INSERT INTO ai_analysis_runs (
             id, task_id, run_number, provider, provider_label, model,
-            ai_prompt_preset_id, ai_prompt_preset_name, requested_clip_count,
+            ai_prompt_preset_id, ai_prompt_preset_name,
+            prompt_version_id, prompt_text_sha256, requested_clip_count,
             clip_count, analysis_summary, fallback_notice, analysis_payload_json,
             is_active, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
@@ -866,6 +909,8 @@ def _insert_ai_analysis_run_with_connection(
             model,
             prompt_preset.get("id") or "",
             prompt_preset.get("name") or "",
+            prompt_preset.get("prompt_version_id"),
+            prompt_preset.get("prompt_sha256"),
             requested_clip_count,
             len(clips),
             analysis_payload.get("analysis_summary") or "",
@@ -1045,6 +1090,7 @@ def restore_ai_analysis_run(task_id: str, run_id: str) -> dict:
                 task_id,
                 payload.get("clips") or [],
                 now,
+                source_analysis_run_id=run_id,
             )
             connection.execute("UPDATE ai_analysis_runs SET is_active = 0 WHERE task_id = ?", (task_id,))
             cursor = connection.execute(
@@ -1086,8 +1132,13 @@ def restore_ai_analysis_run(task_id: str, run_id: str) -> dict:
 
 # ---------- AI 分析核心流程 ----------
 
-def _analyze_with_provider(task_id: str, task: dict, paths: dict[str, Path], provider_name: str):
-    prompt_preset = get_task_ai_prompt_preset(task_id)
+def _analyze_with_provider(
+    task_id: str,
+    task: dict,
+    paths: dict[str, Path],
+    provider_name: str,
+    prompt_preset: dict,
+):
     prompt_template = (prompt_preset.get("prompt_text") or "").strip()
     if not prompt_template:
         raise AIAnalysisError(f"当前选择的 AI Prompt 方案\"{prompt_preset.get('name')}\"还没有填写 Prompt 内容")
@@ -1212,6 +1263,7 @@ def _commit_ai_analysis_result(
     from app.services.task_service import STATUS_PROGRESS, _now_iso
 
     now = _now_iso()
+    run_id = uuid4().hex[:12]
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
         try:
@@ -1237,8 +1289,9 @@ def _commit_ai_analysis_result(
                 task_id,
                 analysis_payload.get("clips") or [],
                 now,
+                source_analysis_run_id=run_id,
             )
-            run_id = _insert_ai_analysis_run_with_connection(
+            _insert_ai_analysis_run_with_connection(
                 connection,
                 task_id=task_id,
                 analysis_payload=analysis_payload,
@@ -1249,6 +1302,7 @@ def _commit_ai_analysis_result(
                 prompt_preset=prompt_preset,
                 requested_clip_count=requested_clip_count,
                 now=now,
+                run_id=run_id,
             )
             cursor = connection.execute(
                 """
@@ -1391,8 +1445,15 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
     try:
         if not paths["transcript_path"].exists():
             raise AIAnalysisError("请先生成带时间戳的转写 Markdown，再开始 AI 分析")
+        prompt_preset = get_task_ai_prompt_snapshot(task_id)
         try:
-            analysis = _analyze_with_provider(task_id, task, paths, provider_name)
+            analysis = _analyze_with_provider(
+                task_id,
+                task,
+                paths,
+                provider_name,
+                prompt_preset,
+            )
         except Exception as provider_exc:
             provider_error = (
                 provider_exc.checkpoint_message()
@@ -1422,9 +1483,10 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             "final_clip_target": int(task.get("final_clip_target") or 5),
             "generated_at": _now_iso(),
             "workflow_job_id": str(job["id"]),
+            "prompt_version_id": prompt_preset.get("prompt_version_id"),
+            "prompt_sha256": prompt_preset.get("prompt_sha256"),
             **long_live_meta,
         }
-        prompt_preset = get_task_ai_prompt_preset(task_id)
         provider_label = _ai_provider_label(used_provider)
         model_name = _ai_model_name(used_provider)
         analysis_run = _commit_ai_analysis_result(

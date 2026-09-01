@@ -5,6 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -68,6 +69,140 @@ def sqlite_quick_check(database_path: Path) -> str:
         return f"error: {exc}"
     finally:
         connection.close()
+
+
+def sqlite_diagnostic_report(
+    database_path: Path,
+    *,
+    deep: bool = False,
+) -> dict[str, Any]:
+    """只读检查数据库、迁移账本及已应用迁移的不变量。"""
+    path = database_path.resolve()
+    report: dict[str, Any] = {
+        "status": "ok",
+        "database_path": str(path),
+        "deep": bool(deep),
+        "readable": False,
+        "integrity_check": "skipped",
+        "foreign_key_violation_count": 0,
+        "foreign_key_violations": [],
+        "migration_count": 0,
+        "migration_errors": [],
+        "errors": [],
+    }
+    errors: list[str] = report["errors"]
+    migration_errors: list[str] = report["migration_errors"]
+    if not path.is_file():
+        errors.append("数据库文件不存在")
+        report["status"] = "error"
+        return report
+
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(
+            f"{path.as_uri()}?mode=ro",
+            uri=True,
+            timeout=3,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only = ON")
+        connection.execute("SELECT 1").fetchone()
+        report["readable"] = True
+
+        table_info = connection.execute(
+            "PRAGMA table_info(schema_migrations)"
+        ).fetchall()
+        required_ledger_columns = {"version", "name", "checksum", "applied_at"}
+        actual_ledger_columns = {str(row["name"]) for row in table_info}
+        missing_columns = sorted(required_ledger_columns - actual_ledger_columns)
+        if not table_info:
+            migration_errors.append("缺少 schema_migrations 迁移账本")
+        elif missing_columns:
+            migration_errors.append(
+                "迁移账本缺少字段：" + ", ".join(missing_columns)
+            )
+        else:
+            version_column = next(
+                row for row in table_info if row["name"] == "version"
+            )
+            if int(version_column["pk"] or 0) != 1:
+                migration_errors.append("迁移账本 version 字段不是主键")
+
+            ledger_rows = connection.execute(
+                "SELECT version, name, checksum FROM schema_migrations ORDER BY version"
+            ).fetchall()
+            report["migration_count"] = len(ledger_rows)
+
+            # 延迟导入可避免 database.py 在加载本服务时产生循环导入。
+            from app.db import database as database_module
+
+            registered = {
+                migration.version: migration
+                for migration in database_module._registered_schema_migrations()
+            }
+            for row in ledger_rows:
+                version = str(row["version"])
+                migration = registered.get(version)
+                if migration is None:
+                    migration_errors.append(f"存在当前程序无法识别的迁移：{version}")
+                    continue
+                if str(row["name"]) != migration.name:
+                    migration_errors.append(f"迁移 {version} 的名称与程序定义不一致")
+                if str(row["checksum"]) != migration.checksum:
+                    migration_errors.append(f"迁移 {version} 的 checksum 与程序定义不一致")
+                    continue
+                try:
+                    migration.verify(connection)
+                except Exception as exc:
+                    migration_errors.append(f"迁移 {version} 校验失败：{exc}")
+
+        if deep:
+            integrity_rows = connection.execute("PRAGMA integrity_check").fetchall()
+            integrity_messages = [str(row[0]) for row in integrity_rows]
+            report["integrity_check"] = (
+                "ok" if integrity_messages == ["ok"] else "; ".join(integrity_messages)
+            )
+            if report["integrity_check"] != "ok":
+                errors.append(f"integrity_check 失败：{report['integrity_check']}")
+
+            foreign_key_rows = connection.execute("PRAGMA foreign_key_check").fetchall()
+            report["foreign_key_violation_count"] = len(foreign_key_rows)
+            report["foreign_key_violations"] = [
+                {
+                    "table": str(row[0]),
+                    "rowid": row[1],
+                    "parent": str(row[2]),
+                    "foreign_key_id": row[3],
+                }
+                for row in foreign_key_rows[:20]
+            ]
+            if foreign_key_rows:
+                errors.append(f"foreign_key_check 发现 {len(foreign_key_rows)} 条异常")
+    except sqlite3.Error as exc:
+        errors.append(f"数据库读取失败：{exc}")
+    except Exception as exc:
+        errors.append(f"数据库诊断失败：{exc}")
+    finally:
+        if connection is not None:
+            connection.close()
+
+    errors.extend(migration_errors)
+    if errors:
+        report["status"] = "error"
+    return report
+
+
+def assert_sqlite_database_ready(
+    database_path: Path,
+    *,
+    deep: bool = True,
+    label: str = "数据库",
+) -> dict[str, Any]:
+    report = sqlite_diagnostic_report(database_path, deep=deep)
+    if report["status"] != "ok":
+        details = "；".join(str(item) for item in report["errors"])
+        raise BackupSafetyError(f"{label}校验失败：{details}")
+    return report
 
 
 def _ensure_safe_backup_path(path: Path, backup_dir: Path) -> None:

@@ -2,6 +2,15 @@
 
 这份文档保存 README 不适合展开的架构、状态、排期和发布细节。面向第一次安装的用户，请先阅读 [PROJECT_GUIDE.md](PROJECT_GUIDE.md)。
 
+## 2026-08-28：v2.2 内容复盘技术边界
+
+- 日汇总导入支持 `.xlsx/.csv`，限制 10MB、10,000 行和 50 列，分为预览与确认；`.xls`、宏文件、外部链接、异常范围和重复日期会被拒绝。
+- 作品同步由用户手动触发，通过现有 Windows Chrome Worker 复用登录态与账号锁，最多读取最近 50 条并只返回白名单指标。固定错误码为 `LOGIN_REQUIRED`、`VERIFICATION_REQUIRED`、`RATE_LIMITED`、`PAGE_CHANGED`、`WORKER_UNAVAILABLE`，不自动重试。
+- 匹配优先平台作品 ID；其次仅在同账号下使用唯一规范化标题、发布时间 ±10 分钟和时长辅助。多结果或证据不足时保留未匹配，等待人工确认。
+- Prompt 对比只纳入准确关联作品：3 个完整同步周期且当前版本至少 30 条才可评估；相邻版本各至少 20 条才显示版本间对比。播放中位数、5 秒完播、2 秒跳出、平均播放时长占比和互动率共同观察，系统不自动改 Prompt。
+- `/health` 继续是轻量存活检查；`/api/system/readiness` 默认检查数据库读取、迁移账本、存储和调度，`deep=1` 增加完整性与外键检查。数据库/任务存储异常为 `not_ready`，Worker/FFmpeg 异常为 `degraded`。
+- GitHub 项目只用于理解 [OpenCLI 的同源指标请求](https://github.com/zhouke2020/OpenCLI/blob/9c132661d39ce2b3edb5fff28eeb69662e1dde1a/clis/douyin/stats.js)和 [cheat-on-content 的作品列表 XHR 捕获](https://github.com/XBuilderLAB/cheat-on-content/blob/4123941f59d1c86b8da94bbd0164475eb19f04e9/adapters/perf-data/douyin-session/crawler.py)思路；实现未复制其代码、未新增其为依赖，也不绕过登录、验证码或平台风控。
+
 ## 1. 运行形态
 
 - 操作系统：Windows 本地单用户。

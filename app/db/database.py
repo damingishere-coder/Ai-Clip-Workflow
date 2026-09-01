@@ -62,6 +62,37 @@ TASK_UPLOAD_ONLY_MIGRATION_CHECKSUM = hashlib.sha256(
         f"{TASK_UPLOAD_ONLY_MIGRATION_SQL}"
     ).encode("utf-8")
 ).hexdigest()
+CONTENT_REVIEW_MIGRATION_VERSION = "20260828_01_content_review_v1"
+CONTENT_REVIEW_MIGRATION_NAME = "内容复盘归因与指标快照基础结构"
+CONTENT_REVIEW_REQUIRED_INDEXES = (
+    "idx_clip_candidates_source_analysis_run",
+    "idx_ai_analysis_runs_prompt_version",
+    "idx_clip_feedback_candidate_created",
+    "idx_content_metric_import_batches_account_created",
+    "idx_douyin_account_daily_account_date",
+    "idx_douyin_item_metrics_account_published",
+    "idx_douyin_item_metrics_match_status",
+)
+CONTENT_REVIEW_MIGRATION_SPEC = "\n".join(
+    (
+        CONTENT_REVIEW_MIGRATION_VERSION,
+        CONTENT_REVIEW_MIGRATION_NAME,
+        "clip_candidates.source_analysis_run_id",
+        "ai_analysis_runs.prompt_version_id",
+        "ai_analysis_runs.prompt_text_sha256",
+        "clip_feedback.decision_source",
+        "ai_prompt_versions",
+        "content_metric_import_batches",
+        "douyin_account_daily_metric_snapshots",
+        "douyin_item_metric_snapshots",
+        *CONTENT_REVIEW_REQUIRED_INDEXES,
+        "backfill-candidate-only-when-one-analysis-run",
+        "do-not-guess-historical-prompt-version",
+    )
+)
+CONTENT_REVIEW_MIGRATION_CHECKSUM = hashlib.sha256(
+    CONTENT_REVIEW_MIGRATION_SPEC.encode("utf-8")
+).hexdigest()
 
 
 class SchemaMigrationError(RuntimeError):
@@ -101,6 +132,7 @@ def init_db() -> None:
     needs_subtitle_auto_backup = _requires_subtitle_auto_schema_migration(settings.database_path)
     needs_publish_index_backup = _requires_publish_active_index_migration(settings.database_path)
     needs_task_upload_only_backup = _requires_task_upload_only_migration(settings.database_path)
+    needs_content_review_backup = _requires_content_review_schema_migration(settings.database_path)
     if needs_long_live_backup:
         create_schema_migration_backup(
             settings.database_path,
@@ -143,6 +175,12 @@ def init_db() -> None:
             settings.database_path,
             settings.data_dir / "backups",
             "task-upload-only",
+        )
+    if needs_content_review_backup:
+        create_schema_migration_backup(
+            settings.database_path,
+            settings.data_dir / "backups",
+            "content-review-v1",
         )
 
     with get_connection() as connection:
@@ -211,6 +249,7 @@ def init_db() -> None:
                 selected_by_default INTEGER NOT NULL DEFAULT 1,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 reviewed INTEGER NOT NULL DEFAULT 0,
+                source_analysis_run_id TEXT,
                 is_deleted INTEGER NOT NULL DEFAULT 0,
                 deleted_at TEXT,
                 created_at TEXT NOT NULL,
@@ -247,6 +286,19 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS ai_prompt_versions (
+                id TEXT PRIMARY KEY,
+                preset_id TEXT NOT NULL,
+                version_number INTEGER NOT NULL,
+                preset_name_snapshot TEXT NOT NULL,
+                prompt_text TEXT NOT NULL,
+                prompt_sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(preset_id, version_number),
+                UNIQUE(preset_id, prompt_sha256),
+                FOREIGN KEY(preset_id) REFERENCES ai_prompt_presets(id)
+            );
+
             CREATE TABLE IF NOT EXISTS ai_analysis_runs (
                 id TEXT PRIMARY KEY,
                 task_id TEXT NOT NULL,
@@ -256,13 +308,16 @@ def init_db() -> None:
                 model TEXT NOT NULL,
                 ai_prompt_preset_id TEXT,
                 ai_prompt_preset_name TEXT,
+                prompt_version_id TEXT,
+                prompt_text_sha256 TEXT,
                 requested_clip_count INTEGER NOT NULL DEFAULT 5,
                 clip_count INTEGER NOT NULL DEFAULT 0,
                 analysis_summary TEXT,
                 fallback_notice TEXT,
                 analysis_payload_json TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                FOREIGN KEY(task_id) REFERENCES tasks(id)
+                FOREIGN KEY(task_id) REFERENCES tasks(id),
+                FOREIGN KEY(prompt_version_id) REFERENCES ai_prompt_versions(id)
             );
 
             CREATE TABLE IF NOT EXISTS subtitle_style_presets (
@@ -600,6 +655,7 @@ def init_db() -> None:
                 selection_profile TEXT NOT NULL DEFAULT 'general',
                 decision TEXT NOT NULL,
                 reason_code TEXT NOT NULL,
+                decision_source TEXT NOT NULL DEFAULT 'explicit_feedback',
                 note TEXT,
                 title_snapshot TEXT,
                 summary_snapshot TEXT,
@@ -608,6 +664,75 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(task_id) REFERENCES tasks(id),
                 FOREIGN KEY(analysis_run_id) REFERENCES ai_analysis_runs(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS content_metric_import_batches (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_filename TEXT NOT NULL,
+                source_sha256 TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'previewed',
+                period_start TEXT,
+                period_end TEXT,
+                normalized_payload_json TEXT NOT NULL DEFAULT '[]',
+                row_count INTEGER NOT NULL DEFAULT 0,
+                matched_count INTEGER NOT NULL DEFAULT 0,
+                ambiguous_count INTEGER NOT NULL DEFAULT 0,
+                invalid_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                committed_at TEXT,
+                expires_at TEXT,
+                UNIQUE(account_id, source_kind, source_sha256),
+                FOREIGN KEY(account_id) REFERENCES publish_accounts(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS douyin_account_daily_metric_snapshots (
+                id TEXT PRIMARY KEY,
+                batch_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                metric_date TEXT NOT NULL,
+                post_count INTEGER NOT NULL DEFAULT 0,
+                play_count INTEGER NOT NULL DEFAULT 0,
+                like_count INTEGER NOT NULL DEFAULT 0,
+                share_count INTEGER NOT NULL DEFAULT 0,
+                comment_count INTEGER NOT NULL DEFAULT 0,
+                five_second_completion_rate REAL,
+                two_second_bounce_rate REAL,
+                cover_click_rate REAL,
+                average_watch_seconds REAL,
+                created_at TEXT NOT NULL,
+                UNIQUE(batch_id, metric_date),
+                FOREIGN KEY(batch_id) REFERENCES content_metric_import_batches(id) ON DELETE CASCADE,
+                FOREIGN KEY(account_id) REFERENCES publish_accounts(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS douyin_item_metric_snapshots (
+                id TEXT PRIMARY KEY,
+                batch_id TEXT NOT NULL,
+                publish_job_id TEXT,
+                account_id TEXT NOT NULL,
+                aweme_id TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                published_at TEXT,
+                duration_seconds REAL,
+                captured_at TEXT NOT NULL,
+                play_count INTEGER,
+                like_count INTEGER,
+                comment_count INTEGER,
+                share_count INTEGER,
+                collect_count INTEGER,
+                five_second_completion_rate REAL,
+                two_second_bounce_rate REAL,
+                cover_click_rate REAL,
+                average_watch_seconds REAL,
+                match_status TEXT NOT NULL DEFAULT 'unmatched',
+                match_method TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(batch_id, aweme_id),
+                FOREIGN KEY(batch_id) REFERENCES content_metric_import_batches(id) ON DELETE CASCADE,
+                FOREIGN KEY(publish_job_id) REFERENCES publish_jobs(id),
+                FOREIGN KEY(account_id) REFERENCES publish_accounts(id)
             );
             """
         )
@@ -774,6 +899,51 @@ def _requires_task_upload_only_migration(database_path) -> bool:
             connection.close()
 
 
+def _requires_content_review_schema_migration(database_path) -> bool:
+    """已有库缺少内容复盘基础结构时，账本迁移前先创建可恢复备份。"""
+    if not database_path.exists() or database_path.stat().st_size == 0:
+        return False
+    connection = None
+    try:
+        connection = sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+        table_names = {
+            row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        if "clip_candidates" not in table_names:
+            return False
+        clip_columns = {row[1] for row in connection.execute("PRAGMA table_info(clip_candidates)").fetchall()}
+        run_columns = {row[1] for row in connection.execute("PRAGMA table_info(ai_analysis_runs)").fetchall()}
+        feedback_columns = {row[1] for row in connection.execute("PRAGMA table_info(clip_feedback)").fetchall()}
+        index_names = {
+            row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
+        }
+        ledger_row = None
+        if "schema_migrations" in table_names:
+            try:
+                ledger_row = connection.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version = ? AND checksum = ?",
+                    (CONTENT_REVIEW_MIGRATION_VERSION, CONTENT_REVIEW_MIGRATION_CHECKSUM),
+                ).fetchone()
+            except sqlite3.Error:
+                return True
+        return (
+            "source_analysis_run_id" not in clip_columns
+            or not {"prompt_version_id", "prompt_text_sha256"} <= run_columns
+            or "decision_source" not in feedback_columns
+            or not {
+                "ai_prompt_versions",
+                "content_metric_import_batches",
+                "douyin_account_daily_metric_snapshots",
+                "douyin_item_metric_snapshots",
+            } <= table_names
+            or not set(CONTENT_REVIEW_REQUIRED_INDEXES) <= index_names
+            or ledger_row is None
+        )
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def _get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
     rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row["name"] for row in rows}
@@ -927,6 +1097,233 @@ def _verify_task_upload_only_migration(connection: sqlite3.Connection) -> None:
         raise SchemaMigrationError("仍存在未归一化的 NAS 视频来源记录")
 
 
+def _apply_content_review_migration(connection: sqlite3.Connection) -> None:
+    clip_columns = _get_table_columns(connection, "clip_candidates")
+    if "source_analysis_run_id" not in clip_columns:
+        connection.execute("ALTER TABLE clip_candidates ADD COLUMN source_analysis_run_id TEXT")
+
+    run_columns = _get_table_columns(connection, "ai_analysis_runs")
+    if "prompt_version_id" not in run_columns:
+        connection.execute("ALTER TABLE ai_analysis_runs ADD COLUMN prompt_version_id TEXT")
+    if "prompt_text_sha256" not in run_columns:
+        connection.execute("ALTER TABLE ai_analysis_runs ADD COLUMN prompt_text_sha256 TEXT")
+
+    feedback_columns = _get_table_columns(connection, "clip_feedback")
+    if "decision_source" not in feedback_columns:
+        connection.execute(
+            "ALTER TABLE clip_feedback ADD COLUMN decision_source "
+            "TEXT NOT NULL DEFAULT 'explicit_feedback'"
+        )
+
+    schema_sql = """
+        CREATE TABLE IF NOT EXISTS ai_prompt_versions (
+            id TEXT PRIMARY KEY,
+            preset_id TEXT NOT NULL,
+            version_number INTEGER NOT NULL,
+            preset_name_snapshot TEXT NOT NULL,
+            prompt_text TEXT NOT NULL,
+            prompt_sha256 TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(preset_id, version_number),
+            UNIQUE(preset_id, prompt_sha256),
+            FOREIGN KEY(preset_id) REFERENCES ai_prompt_presets(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS content_metric_import_batches (
+            id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            source_filename TEXT NOT NULL,
+            source_sha256 TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'previewed',
+            period_start TEXT,
+            period_end TEXT,
+            normalized_payload_json TEXT NOT NULL DEFAULT '[]',
+            row_count INTEGER NOT NULL DEFAULT 0,
+            matched_count INTEGER NOT NULL DEFAULT 0,
+            ambiguous_count INTEGER NOT NULL DEFAULT 0,
+            invalid_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            committed_at TEXT,
+            expires_at TEXT,
+            UNIQUE(account_id, source_kind, source_sha256),
+            FOREIGN KEY(account_id) REFERENCES publish_accounts(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS douyin_account_daily_metric_snapshots (
+            id TEXT PRIMARY KEY,
+            batch_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            metric_date TEXT NOT NULL,
+            post_count INTEGER NOT NULL DEFAULT 0,
+            play_count INTEGER NOT NULL DEFAULT 0,
+            like_count INTEGER NOT NULL DEFAULT 0,
+            share_count INTEGER NOT NULL DEFAULT 0,
+            comment_count INTEGER NOT NULL DEFAULT 0,
+            five_second_completion_rate REAL,
+            two_second_bounce_rate REAL,
+            cover_click_rate REAL,
+            average_watch_seconds REAL,
+            created_at TEXT NOT NULL,
+            UNIQUE(batch_id, metric_date),
+            FOREIGN KEY(batch_id) REFERENCES content_metric_import_batches(id) ON DELETE CASCADE,
+            FOREIGN KEY(account_id) REFERENCES publish_accounts(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS douyin_item_metric_snapshots (
+            id TEXT PRIMARY KEY,
+            batch_id TEXT NOT NULL,
+            publish_job_id TEXT,
+            account_id TEXT NOT NULL,
+            aweme_id TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            published_at TEXT,
+            duration_seconds REAL,
+            captured_at TEXT NOT NULL,
+            play_count INTEGER,
+            like_count INTEGER,
+            comment_count INTEGER,
+            share_count INTEGER,
+            collect_count INTEGER,
+            five_second_completion_rate REAL,
+            two_second_bounce_rate REAL,
+            cover_click_rate REAL,
+            average_watch_seconds REAL,
+            match_status TEXT NOT NULL DEFAULT 'unmatched',
+            match_method TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(batch_id, aweme_id),
+            FOREIGN KEY(batch_id) REFERENCES content_metric_import_batches(id) ON DELETE CASCADE,
+            FOREIGN KEY(publish_job_id) REFERENCES publish_jobs(id),
+            FOREIGN KEY(account_id) REFERENCES publish_accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_clip_candidates_source_analysis_run
+            ON clip_candidates(source_analysis_run_id);
+        CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_prompt_version
+            ON ai_analysis_runs(prompt_version_id);
+        CREATE INDEX IF NOT EXISTS idx_clip_feedback_candidate_created
+            ON clip_feedback(clip_candidate_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_content_metric_import_batches_account_created
+            ON content_metric_import_batches(account_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_douyin_account_daily_account_date
+            ON douyin_account_daily_metric_snapshots(account_id, metric_date DESC);
+        CREATE INDEX IF NOT EXISTS idx_douyin_item_metrics_account_published
+            ON douyin_item_metric_snapshots(account_id, published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_douyin_item_metrics_match_status
+            ON douyin_item_metric_snapshots(match_status, created_at DESC);
+        """
+    # sqlite3.executescript() 会隐式提交，账本迁移必须逐条执行以保持同一事务。
+    for statement in schema_sql.split(";"):
+        normalized = statement.strip()
+        if normalized:
+            connection.execute(normalized)
+
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    presets = connection.execute(
+        "SELECT id, name, prompt_text FROM ai_prompt_presets ORDER BY slot"
+    ).fetchall()
+    for preset in presets:
+        prompt_text = str(preset["prompt_text"] or "").strip()
+        prompt_sha256 = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
+        existing = connection.execute(
+            "SELECT 1 FROM ai_prompt_versions WHERE preset_id = ? AND prompt_sha256 = ?",
+            (preset["id"], prompt_sha256),
+        ).fetchone()
+        if existing is not None:
+            continue
+        version_number = int(
+            connection.execute(
+                "SELECT COALESCE(MAX(version_number), 0) + 1 FROM ai_prompt_versions WHERE preset_id = ?",
+                (preset["id"],),
+            ).fetchone()[0]
+        )
+        version_id = f"promptv_{preset['id']}_{version_number:03d}"
+        connection.execute(
+            """
+            INSERT INTO ai_prompt_versions (
+                id, preset_id, version_number, preset_name_snapshot,
+                prompt_text, prompt_sha256, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                version_id,
+                preset["id"],
+                version_number,
+                str(preset["name"] or "未命名方案"),
+                prompt_text,
+                prompt_sha256,
+                now,
+            ),
+        )
+
+    connection.execute(
+        """
+        UPDATE clip_candidates
+        SET source_analysis_run_id = (
+            SELECT MIN(r.id) FROM ai_analysis_runs r WHERE r.task_id = clip_candidates.task_id
+        )
+        WHERE source_analysis_run_id IS NULL
+          AND 1 = (
+              SELECT COUNT(*) FROM ai_analysis_runs r WHERE r.task_id = clip_candidates.task_id
+          )
+        """
+    )
+
+
+def _verify_content_review_migration(connection: sqlite3.Connection) -> None:
+    required_columns = {
+        "clip_candidates": {"source_analysis_run_id"},
+        "ai_analysis_runs": {"prompt_version_id", "prompt_text_sha256"},
+        "clip_feedback": {"decision_source"},
+    }
+    for table_name, expected in required_columns.items():
+        missing = expected - _get_table_columns(connection, table_name)
+        if missing:
+            raise SchemaMigrationError(
+                f"内容复盘迁移后的 {table_name} 缺少字段：{', '.join(sorted(missing))}"
+            )
+
+    required_tables = {
+        "ai_prompt_versions",
+        "content_metric_import_batches",
+        "douyin_account_daily_metric_snapshots",
+        "douyin_item_metric_snapshots",
+    }
+    actual_tables = {
+        row[0]
+        for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+    }
+    missing_tables = sorted(required_tables - actual_tables)
+    if missing_tables:
+        raise SchemaMigrationError("内容复盘迁移缺少数据表：" + ", ".join(missing_tables))
+
+    actual_indexes = {
+        row[0]
+        for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'index'").fetchall()
+    }
+    missing_indexes = sorted(set(CONTENT_REVIEW_REQUIRED_INDEXES) - actual_indexes)
+    if missing_indexes:
+        raise SchemaMigrationError("内容复盘迁移缺少索引：" + ", ".join(missing_indexes))
+
+    stale_candidates = connection.execute(
+        """
+        SELECT 1
+        FROM clip_candidates c
+        WHERE c.source_analysis_run_id IS NULL
+          AND 1 = (SELECT COUNT(*) FROM ai_analysis_runs r WHERE r.task_id = c.task_id)
+        LIMIT 1
+        """
+    ).fetchone()
+    if stale_candidates is not None:
+        raise SchemaMigrationError("存在可唯一归因但尚未关联 AI 分析记录的历史候选片段")
+
+    for row in connection.execute("SELECT id, prompt_text, prompt_sha256 FROM ai_prompt_versions"):
+        actual_hash = hashlib.sha256(str(row["prompt_text"] or "").encode("utf-8")).hexdigest()
+        if actual_hash != row["prompt_sha256"]:
+            raise SchemaMigrationError(f"Prompt 版本 {row['id']} 的 SHA-256 校验失败")
+
+
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
     return (
         SchemaMigration(
@@ -942,6 +1339,13 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             checksum=TASK_UPLOAD_ONLY_MIGRATION_CHECKSUM,
             apply=_apply_task_upload_only_migration,
             verify=_verify_task_upload_only_migration,
+        ),
+        SchemaMigration(
+            version=CONTENT_REVIEW_MIGRATION_VERSION,
+            name=CONTENT_REVIEW_MIGRATION_NAME,
+            checksum=CONTENT_REVIEW_MIGRATION_CHECKSUM,
+            apply=_apply_content_review_migration,
+            verify=_verify_content_review_migration,
         ),
     )
 

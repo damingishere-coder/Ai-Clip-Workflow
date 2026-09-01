@@ -69,9 +69,21 @@ class PublishWorkerClient:
                 detail = json.loads(raw).get("detail") or raw
             except json.JSONDecodeError:
                 detail = raw or str(exc)
+            detail_code = ""
+            if isinstance(detail, dict):
+                detail_code = str(detail.get("error_code") or "")
+                detail = str(detail.get("message") or detail_code or "Worker 拒绝了请求")
             if exc.code in {401, 403}:
                 raise PublishError(str(detail), "publish_worker_unauthorized") from exc
-            if exc.code in {409, 422}:
+            if detail_code in {
+                "LOGIN_REQUIRED",
+                "VERIFICATION_REQUIRED",
+                "RATE_LIMITED",
+                "PAGE_CHANGED",
+                "WORKER_UNAVAILABLE",
+            }:
+                raise PublishError(str(detail), detail_code) from exc
+            if exc.code in {409, 422, 429}:
                 raise PublishError(str(detail), "publish_worker_rejected") from exc
             raise PublishWorkerUnavailable(
                 f"Windows 发布 Worker 返回 HTTP {exc.code}：{detail}",
@@ -120,6 +132,15 @@ class PublishWorkerClient:
     def open_creator_center(self, platform: str, account_id: str) -> dict[str, Any]:
         account_id = validate_worker_identifier(account_id, "account_id", max_length=120)
         return self._request("POST", "/v1/accounts/open-center", {"platform": platform, "account_id": account_id})
+
+    def analytics_sync(self, account_id: str, limit: int = 50) -> dict[str, Any]:
+        account_id = validate_worker_identifier(account_id, "account_id", max_length=120)
+        safe_limit = max(1, min(50, int(limit)))
+        return self._request(
+            "POST",
+            "/v1/analytics/douyin/sync",
+            {"account_id": account_id, "limit": safe_limit},
+        )
 
     def publish(self, payload: dict[str, Any]) -> PublishResult:
         safe_payload = dict(payload)

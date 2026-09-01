@@ -43,7 +43,10 @@ from app.services.ai_analysis_workflow_service import (
     queue_task_ai_analysis,
     restore_ai_analysis_run,
 )
-from app.services.clip_feedback_service import save_clip_feedback
+from app.services.clip_feedback_service import (
+    record_review_toggle_feedback_with_connection,
+    save_clip_feedback,
+)
 from app.services.storage_service import (
     get_artifact_paths,
     get_source_video_path,
@@ -897,14 +900,21 @@ def list_clip_candidates(task_id: str) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, task_id, clip_key, title, start_time, end_time, duration_seconds, cover_time_seconds,
+            SELECT c.id, c.task_id, c.clip_key, c.title, c.start_time, c.end_time,
+                   c.duration_seconds, c.cover_time_seconds,
                    summary, reason, highlight_reason, spread_value, suggested_editing, confidence_score,
                    quality_tier, quality_score, text_quality_score, humor_score, completeness_score,
                    audio_reaction_score, topic_key, key_moment_time, quality_evidence_json, rejection_reason,
-                   selected_by_default, enabled, reviewed, is_deleted, deleted_at, created_at, updated_at
-            FROM clip_candidates
-            WHERE task_id = ? AND is_deleted = 0
-            ORDER BY start_time ASC
+                   selected_by_default, enabled, reviewed, source_analysis_run_id,
+                   is_deleted, deleted_at, c.created_at, c.updated_at,
+                   (
+                       SELECT f.reason_code FROM clip_feedback f
+                       WHERE f.task_id = c.task_id AND f.clip_candidate_id = c.id
+                       ORDER BY f.created_at DESC, f.rowid DESC LIMIT 1
+                   ) AS feedback_reason_code
+            FROM clip_candidates c
+            WHERE c.task_id = ? AND c.is_deleted = 0
+            ORDER BY c.start_time ASC
             """,
             (task_id,),
         ).fetchall()
@@ -939,6 +949,12 @@ def list_clip_candidates(task_id: str) -> list[dict]:
                 "key_moment_time": clip.get("key_moment_time") or "",
                 "quality_evidence": quality_evidence,
                 "rejection_reason": clip.get("rejection_reason") or "",
+                "feedback_reason_code": (
+                    clip.get("feedback_reason_code")
+                    if clip.get("feedback_reason_code")
+                    in {"not_funny", "fragmented", "missing_setup", "duplicate", "dragging", "other"}
+                    else ""
+                ),
                 "ai_source_label": ai_source_label,
                 "selected_by_default": bool(clip.get("selected_by_default")),
                 "enabled": bool(clip.get("enabled")),
@@ -1035,6 +1051,18 @@ def update_clip_candidate(task_id: str, clip_id: str, payload: ClipCandidateUpda
     data = _validate_clip_update(task, payload)
     now = _now_iso()
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        current = connection.execute(
+            """
+            SELECT id, source_analysis_run_id
+            FROM clip_candidates
+            WHERE id = ? AND task_id = ? AND is_deleted = 0
+            """,
+            (clip_id, task_id),
+        ).fetchone()
+        if current is None:
+            connection.rollback()
+            raise ValueError("候选片段不存在")
         cursor = connection.execute(
             """
             UPDATE clip_candidates
@@ -1054,6 +1082,19 @@ def update_clip_candidate(task_id: str, clip_id: str, payload: ClipCandidateUpda
                 task_id,
             ),
         )
+        record_review_toggle_feedback_with_connection(
+            connection,
+            task_id=task_id,
+            clip={
+                "id": clip_id,
+                "source_analysis_run_id": current["source_analysis_run_id"],
+                **data,
+            },
+            selection_profile=task.get("selection_profile") or "general",
+            enabled=bool(data["enabled"]),
+            reason_code=payload.feedback_reason_code,
+            now=now,
+        )
         connection.execute("UPDATE tasks SET updated_at = ? WHERE id = ?", (now, task_id))
         connection.commit()
 
@@ -1072,61 +1113,83 @@ def update_clip_candidates_batch(task_id: str, payloads: list[ClipCandidateBatch
 
     validated = []
     for payload in payloads:
-        validated.append((payload.id, _validate_clip_update(task, payload)))
+        validated.append((payload.id, _validate_clip_update(task, payload), payload.feedback_reason_code))
 
     now = _now_iso()
     changed_count = 0
+    feedback_count = 0
     with get_connection() as connection:
-        for clip_id, data in validated:
-            current = connection.execute(
-                """
-                SELECT title, start_time, end_time, duration_seconds, enabled, summary
-                FROM clip_candidates
-                WHERE id = ? AND task_id = ? AND is_deleted = 0
-                """,
-                (clip_id, task_id),
-            ).fetchone()
-            if current is None:
-                raise ValueError(f"候选片段不存在：{clip_id}")
-            if any(
-                (
-                    str(current["title"] or "") != data["title"],
-                    str(current["start_time"] or "") != data["start_time"],
-                    str(current["end_time"] or "") != data["end_time"],
-                    int(current["duration_seconds"] or 0) != int(data["duration_seconds"]),
-                    int(current["enabled"] or 0) != int(data["enabled"]),
-                    str(current["summary"] or "") != data["summary"],
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            for clip_id, data, feedback_reason_code in validated:
+                current = connection.execute(
+                    """
+                    SELECT title, start_time, end_time, duration_seconds, enabled, summary,
+                           source_analysis_run_id
+                    FROM clip_candidates
+                    WHERE id = ? AND task_id = ? AND is_deleted = 0
+                    """,
+                    (clip_id, task_id),
+                ).fetchone()
+                if current is None:
+                    raise ValueError(f"候选片段不存在：{clip_id}")
+                if any(
+                    (
+                        str(current["title"] or "") != data["title"],
+                        str(current["start_time"] or "") != data["start_time"],
+                        str(current["end_time"] or "") != data["end_time"],
+                        int(current["duration_seconds"] or 0) != int(data["duration_seconds"]),
+                        int(current["enabled"] or 0) != int(data["enabled"]),
+                        str(current["summary"] or "") != data["summary"],
+                    )
+                ):
+                    changed_count += 1
+                cursor = connection.execute(
+                    """
+                    UPDATE clip_candidates
+                    SET title = ?, start_time = ?, end_time = ?, duration_seconds = ?,
+                        enabled = ?, summary = ?, reviewed = 1, updated_at = ?
+                    WHERE id = ? AND task_id = ? AND is_deleted = 0
+                    """,
+                    (
+                        data["title"],
+                        data["start_time"],
+                        data["end_time"],
+                        data["duration_seconds"],
+                        data["enabled"],
+                        data["summary"],
+                        now,
+                        clip_id,
+                        task_id,
+                    ),
                 )
-            ):
-                changed_count += 1
-            cursor = connection.execute(
-                """
-                UPDATE clip_candidates
-                SET title = ?, start_time = ?, end_time = ?, duration_seconds = ?,
-                    enabled = ?, summary = ?, reviewed = 1, updated_at = ?
-                WHERE id = ? AND task_id = ? AND is_deleted = 0
-                """,
-                (
-                    data["title"],
-                    data["start_time"],
-                    data["end_time"],
-                    data["duration_seconds"],
-                    data["enabled"],
-                    data["summary"],
-                    now,
-                    clip_id,
-                    task_id,
-                ),
-            )
-            if cursor.rowcount == 0:
-                raise ValueError(f"候选片段不存在：{clip_id}")
-        connection.execute("UPDATE tasks SET updated_at = ? WHERE id = ?", (now, task_id))
-        connection.commit()
+                if cursor.rowcount == 0:
+                    raise ValueError(f"候选片段不存在：{clip_id}")
+                if record_review_toggle_feedback_with_connection(
+                    connection,
+                    task_id=task_id,
+                    clip={
+                        "id": clip_id,
+                        "source_analysis_run_id": current["source_analysis_run_id"],
+                        **data,
+                    },
+                    selection_profile=task.get("selection_profile") or "general",
+                    enabled=bool(data["enabled"]),
+                    reason_code=feedback_reason_code,
+                    now=now,
+                ):
+                    feedback_count += 1
+            connection.execute("UPDATE tasks SET updated_at = ? WHERE id = ?", (now, task_id))
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
 
     _append_task_log(task_id, f"已批量保存 {len(validated)} 条候选片段审核修改")
     return {
         "message": f"已保存 {len(validated)} 条候选片段，任务状态仍保持 AI 结果待检查。",
         "changed_count": changed_count,
+        "feedback_count": feedback_count,
         "task": get_task(task_id, include_video_probe=False),
         "clips": list_clip_candidates(task_id),
     }

@@ -15,12 +15,67 @@ from app.services.task_log_service import append_task_log
 FEEDBACK_REASON_LABELS = {
     "worth_publishing": "值得发",
     "not_funny": "不好笑",
-    "fragmented": "内容太碎",
-    "missing_setup": "铺垫不足",
+    "fragmented": "片段不完整",
+    "missing_setup": "铺垫缺失",
     "duplicate": "内容重复",
     "dragging": "节奏拖沓",
     "other": "其他",
 }
+
+
+def record_review_toggle_feedback_with_connection(
+    connection,
+    *,
+    task_id: str,
+    clip: dict,
+    selection_profile: str,
+    enabled: bool,
+    reason_code: str | None,
+    now: str,
+) -> bool:
+    """在候选保存事务中记录开关反馈；相同状态和原因不会重复写入。"""
+    decision = "keep" if enabled else "reject"
+    normalized_reason = "worth_publishing" if enabled else (reason_code or "other")
+    latest = connection.execute(
+        """
+        SELECT decision, reason_code
+        FROM clip_feedback
+        WHERE task_id = ? AND clip_candidate_id = ?
+        ORDER BY created_at DESC, rowid DESC
+        LIMIT 1
+        """,
+        (task_id, clip["id"]),
+    ).fetchone()
+    if latest is not None and (
+        str(latest["decision"] or "") == decision
+        and str(latest["reason_code"] or "") == normalized_reason
+    ):
+        return False
+
+    connection.execute(
+        """
+        INSERT INTO clip_feedback (
+            id, task_id, clip_candidate_id, analysis_run_id, selection_profile,
+            decision, reason_code, decision_source, note, title_snapshot,
+            summary_snapshot, start_time, end_time, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'review_toggle', '', ?, ?, ?, ?, ?)
+        """,
+        (
+            uuid4().hex[:12],
+            task_id,
+            clip["id"],
+            clip.get("source_analysis_run_id"),
+            selection_profile or "general",
+            decision,
+            normalized_reason,
+            clip.get("title") or "",
+            clip.get("summary") or "",
+            clip.get("start_time") or "",
+            clip.get("end_time") or "",
+            now,
+        ),
+    )
+    return True
 
 
 def save_clip_feedback(task_id: str, clip_id: str, payload: ClipFeedbackCreate) -> dict:
@@ -45,9 +100,9 @@ def save_clip_feedback(task_id: str, clip_id: str, payload: ClipFeedbackCreate) 
             """
             INSERT INTO clip_feedback (
                 id, task_id, clip_candidate_id, analysis_run_id, selection_profile,
-                decision, reason_code, note, title_snapshot, summary_snapshot,
+                decision, reason_code, decision_source, note, title_snapshot, summary_snapshot,
                 start_time, end_time, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'explicit_feedback', ?, ?, ?, ?, ?, ?)
             """,
             (
                 uuid4().hex[:12],
@@ -93,9 +148,17 @@ def list_recent_feedback_context(selection_profile: str, limit: int = 20) -> lis
         rows = connection.execute(
             """
             SELECT decision, reason_code, note, title_snapshot, summary_snapshot,
-                   start_time, end_time, created_at
-            FROM clip_feedback
-            WHERE selection_profile = ?
+                   start_time, end_time, created_at, decision_source
+            FROM (
+                SELECT f.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY f.task_id, f.clip_candidate_id
+                           ORDER BY f.created_at DESC, f.rowid DESC
+                       ) AS feedback_rank
+                FROM clip_feedback f
+                WHERE f.selection_profile = ?
+            )
+            WHERE feedback_rank = 1
             ORDER BY created_at DESC
             LIMIT ?
             """,
@@ -104,4 +167,9 @@ def list_recent_feedback_context(selection_profile: str, limit: int = 20) -> lis
     return [dict(row) for row in rows]
 
 
-__all__ = ["FEEDBACK_REASON_LABELS", "list_recent_feedback_context", "save_clip_feedback"]
+__all__ = [
+    "FEEDBACK_REASON_LABELS",
+    "list_recent_feedback_context",
+    "record_review_toggle_feedback_with_connection",
+    "save_clip_feedback",
+]

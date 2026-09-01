@@ -1,5 +1,19 @@
 # 数据库结构说明
 
+## 2026-08-28：内容复盘、Prompt 版本与指标快照
+
+- `clip_candidates.source_analysis_run_id`：候选片段来源 AI Run；历史候选只在任务能唯一确定 Run 时回填。
+- `ai_analysis_runs.prompt_version_id / prompt_text_sha256`：固定本次分析使用的不可变 Prompt 版本和文本哈希。
+- `clip_feedback.decision_source`：区分审片开关自动事件 `review_toggle` 与旧接口 `explicit_feedback`。
+- `ai_prompt_versions`：按预设保存版本号、名称快照、Prompt 全文、SHA-256 和创建时间；同预设内容未变时不新增版本。
+- `content_metric_import_batches`：保存账号、来源类型、文件名、文件哈希、规范化预览 JSON、状态、周期和统计；不保存原文件，预览 24 小时失效。
+- `douyin_account_daily_metric_snapshots`：账号级日汇总，只用于趋势基线，不关联作品、候选或 Prompt。
+- `douyin_item_metric_snapshots`：作品级指标快照，保存平台作品 ID、指标白名单、匹配状态/方法和可空发布记录 ID；仅精确或人工确认数据进入主结论。
+
+完整归因链为：`douyin_item_metric_snapshots → publish_jobs → output_clip → clip_candidates → ai_analysis_runs → ai_prompt_versions`。迁移账本版本为 `20260828_01_content_review_v1`，同时验证内容复盘关键索引与 Prompt SHA-256。
+
+恢复工具对待恢复临时库和替换后的正式库都执行 `PRAGMA integrity_check`、`PRAGMA foreign_key_check`、迁移账本/checksum 和已应用迁移关键索引校验；活动服务或独占锁失败时拒绝恢复。
+
 ## 2026-08-24：字幕自动流水线字段
 
 `subtitle_jobs` 在原有不可变 revision 引用上增加：

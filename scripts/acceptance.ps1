@@ -454,6 +454,7 @@ try {
     Assert-Page -Name '任务列表' -Url 'http://127.0.0.1:8001/tasks'
     Assert-Page -Name '片段总览' -Url 'http://127.0.0.1:8001/clips'
     Assert-Page -Name '发送中心' -Url 'http://127.0.0.1:8001/publish'
+    Assert-Page -Name '内容复盘' -Url 'http://127.0.0.1:8001/content-review'
 
     $containerHealth = ''
     foreach ($attempt in 1..45) {

@@ -396,6 +396,9 @@ class ClipCandidateUpdate(BaseModel):
     end_time: str = Field(..., min_length=1, max_length=16)
     enabled: bool = True
     summary: Optional[str] = Field(default=None, max_length=1000)
+    feedback_reason_code: Optional[
+        Literal["not_funny", "fragmented", "missing_setup", "duplicate", "dragging", "other"]
+    ] = None
 
 
 class ClipCandidateBatchItem(ClipCandidateUpdate):

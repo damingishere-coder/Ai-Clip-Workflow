@@ -12,7 +12,17 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.db.database import init_db
-from app.routers import ai_prompts, media, pages, publish, settings as settings_router, subtitles, tasks
+from app.routers import (
+    ai_prompts,
+    content_review,
+    media,
+    pages,
+    publish,
+    settings as settings_router,
+    subtitles,
+    system,
+    tasks,
+)
 from app.services.publish_scheduler import start_scheduler_background
 from app.services.storage_service import configure_runtime_media_storage
 from app.services.job_worker import WorkflowJobRunner
@@ -145,7 +155,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     description=settings.app_description,
-    version="2.1.0",
+    version="2.2.0",
     lifespan=lifespan,
 )
 
@@ -237,7 +247,9 @@ app.include_router(tasks.router)
 app.include_router(subtitles.router)
 app.include_router(media.router)
 app.include_router(publish.router)
+app.include_router(content_review.router)
 app.include_router(settings_router.router)
+app.include_router(system.router)
 
 
 @app.get("/favicon.ico", include_in_schema=False)

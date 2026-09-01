@@ -48,7 +48,7 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
         ).fetchall()
         indexes = _index_names(connection)
 
-    assert len(migrations) == 2
+    assert len(migrations) == 3
     migrations_by_version = {row["version"]: row for row in migrations}
     publish_migration = migrations_by_version[database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_VERSION]
     assert publish_migration["name"] == database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_NAME
@@ -58,8 +58,13 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
     assert upload_migration["name"] == database_module.TASK_UPLOAD_ONLY_MIGRATION_NAME
     assert upload_migration["checksum"] == database_module.TASK_UPLOAD_ONLY_MIGRATION_CHECKSUM
     assert upload_migration["applied_at"]
+    content_review_migration = migrations_by_version[database_module.CONTENT_REVIEW_MIGRATION_VERSION]
+    assert content_review_migration["name"] == database_module.CONTENT_REVIEW_MIGRATION_NAME
+    assert content_review_migration["checksum"] == database_module.CONTENT_REVIEW_MIGRATION_CHECKSUM
+    assert content_review_migration["applied_at"]
     assert database_module.PUBLISH_ACTIVE_UNIQUE_INDEX_NAME in indexes
     assert database_module.PUBLISH_ACTIVE_UNIQUE_INDEX_LEGACY_NAME not in indexes
+    assert set(database_module.CONTENT_REVIEW_REQUIRED_INDEXES) <= indexes
 
 
 def test_checksum_drift_refuses_startup(isolated_database):

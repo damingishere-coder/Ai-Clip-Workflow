@@ -139,6 +139,14 @@ try {
     Assert-Page '任务列表' 'http://127.0.0.1:8001/tasks'
     Assert-Page '片段总览' 'http://127.0.0.1:8001/clips'
     Assert-Page '发送中心' 'http://127.0.0.1:8001/publish'
+    Assert-Page '内容复盘' 'http://127.0.0.1:8001/content-review'
+
+    $readiness = Invoke-RestMethod -Uri 'http://127.0.0.1:8001/api/system/readiness?deep=1' -TimeoutSec 30
+    if ($readiness.status -eq 'not_ready' -or $readiness.checks.database.status -ne 'ok') {
+        throw "Windows 原生深度 readiness 未通过：$($readiness | ConvertTo-Json -Depth 8 -Compress)"
+    }
+    Write-StepLog 'Deep readiness database diagnostic passed.'
+    Write-Host '[OK] 深度 readiness 数据库诊断通过。'
 
     $verifyScript = Join-Path $TempRoot 'verify_counts.py'
     @'

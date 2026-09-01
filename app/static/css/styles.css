@@ -1763,12 +1763,6 @@ fieldset input.visually-hidden-file {
   background: rgba(0, 122, 255, 0.1);
 }
 
-.clip-feedback .feedback-positive.is-active {
-  border-color: rgba(52, 199, 89, 0.55);
-  color: #11643f;
-  background: rgba(52, 199, 89, 0.12);
-}
-
 .compact-button {
   min-height: 34px;
   padding: 0 12px;
