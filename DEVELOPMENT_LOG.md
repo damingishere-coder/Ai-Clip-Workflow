@@ -9,6 +9,11 @@
 - 输入未变化时，确认后原位重置不确定单元并复用成功 AI checkpoint；transcript 已变化时，从 `AI_ANALYZING` 创建独立新 Job，旧失败 Job 不修改。有任何下游切片或发布记录时继续 fail-closed。
 - Codex 单窗口默认超时由 300 秒调整为 600 秒；新增 transcript 原位转换工具，转换前写入 `transcripts/backups/`，并校验时间戳、行数和 Markdown 结构。
 - 专项回归 `66 passed`、最终完整回归 `825 passed`；Ruff、Python compileall、JavaScript 语法和 `git diff --check` 均通过。`release_gate.ps1` 因当前分支没有正式版 `acceptance-results/latest.json` 按设计拒绝放行；正式服务部署和任务 `614fb38401e0` 的现场恢复继续单独验收。
+- 已把两项代码提交同步到运行工作树 `codex/runtime-offline-transcription-cutover`，项目环境确认安装 `opencc==1.4.2`；运行 `.env` 先备份，再只把 `AI_CODEX_TIMEOUT_SECONDS` 从 300 调整为 600。
+- 活动 SQLite 已通过 Online Backup 保存到 `data/backups/workflow-before-latest-ai-retry-20260901-165534-858701-d0d0492a.sqlite3`；备份及活动库均为 `quick_check=ok`、外键违规 0。恢复前任务无活动 Job、无切片、无发布记录。
+- 任务 `614fb38401e0` 的原 transcript 已备份到任务目录 `transcripts/backups/transcript.before-t2s-20260901-165555.md`，原 SHA-256 为 `d4f17ff7...d09f9d`；原位转换后的 SHA-256 为 `c666a5dc...43f18d`，1407 行、2781 个时间戳和 Markdown 结构保持不变。
+- 只通过 Alter 重启了 `Niuma-Studio` Web：8001 Listener 更新为 PID `151000`，祖先进程落在运行工作树；8765 发布 Worker Listener 仍为 PID `39056`。`/health`、深度 readiness、Scheduler 和 Worker 均健康。
+- 未确认重试先按设计返回 `409 / ai_retry_confirmation_required`；显式确认后创建独立 Job `dec329256a0b`，旧失败 Job `434da2a9bc97` 及证据保持不变。新 AI Run `6c497a6ac3f7` 完成 `18/18` 单元、覆盖率 100%，随后生成 5 个切片并停在 `PENDING_SUBTITLE_REVIEW`；发布记录仍为 0，未触发抖音或 B站投稿。
 
 ## 2026-08-31 完全离线长音频转写
 
