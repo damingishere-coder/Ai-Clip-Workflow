@@ -127,7 +127,7 @@ jobs:
 
       - name: 上传 Windows 冒烟证据
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-host-smoke-${{ github.run_id }}
           path: acceptance-results/windows-ci
