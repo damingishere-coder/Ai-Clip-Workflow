@@ -130,7 +130,7 @@ CONTENT_FEEDBACK_LOOP_MIGRATION_SPEC = "\n".join(
         CONTENT_FEEDBACK_LOOP_MIGRATION_NAME,
         *CONTENT_FEEDBACK_LOOP_REQUIRED_TABLES,
         *CONTENT_FEEDBACK_LOOP_REQUIRED_INDEXES,
-        "one-experiment-per-publish-job",
+        "one-active-experiment-per-publish-job",
         "freeze-baseline-at-creation",
         "no-automatic-prompt-or-publish-actions",
     )
