@@ -18,6 +18,10 @@ from uuid import uuid4
 
 from app.core.config import settings
 from app.services import job_service
+from app.services.chinese_text_service import (
+    SIMPLIFIED_CHINESE_NORMALIZATION_ID,
+    simplify_chinese_text,
+)
 from app.services.managed_process_service import popen_process_group, terminate_process_tree
 from app.services.local_transcription_runtime import (
     configure_windows_cuda_dll_directories,
@@ -244,7 +248,7 @@ def write_transcript_markdown(
             task_id=task_id,
             source_path=audio_path,
             provider=_ACTIVE_TRANSCRIPTION_PROVIDER,
-            model=_ACTIVE_TRANSCRIPTION_MODEL,
+            model=_transcription_checkpoint_model(),
             device=_ACTIVE_TRANSCRIPTION_DEVICE,
             compute_type=_ACTIVE_TRANSCRIPTION_COMPUTE_TYPE,
             chunk_seconds=settings.transcription_chunk_seconds,
@@ -1130,6 +1134,11 @@ def _write_transcript_progress(
         "compute_type": _transcription_compute_type_label(),
         "chunk_seconds": settings.transcription_chunk_seconds,
         "chunk_overlap_seconds": settings.transcription_chunk_overlap_seconds,
+        "text_normalization": (
+            SIMPLIFIED_CHINESE_NORMALIZATION_ID
+            if _ACTIVE_TRANSCRIPTION_PROVIDER == "local"
+            else ""
+        ),
         "updated_at": datetime.now().isoformat(timespec="seconds"),
     }
     temp_path = progress_path.with_name(f"{progress_path.name}.tmp")
@@ -1225,19 +1234,27 @@ def _transcribe_audio_with_model(model, audio_path: Path) -> list[TranscriptSegm
     )
     results: list[TranscriptSegment] = []
     for segment in raw_segments:
-        text = normalize_transcript_text(segment.text)
+        text = _normalize_local_transcript_text(segment.text)
         if not text:
             continue
-        words = tuple(
-            TranscriptWord(
-                start_ms=round(float(word.start) * 1000),
-                end_ms=round(float(word.end) * 1000),
-                text=normalize_transcript_text(word.word),
-                confidence=float(word.probability) if getattr(word, "probability", None) is not None else None,
+        normalized_words: list[TranscriptWord] = []
+        for word in (getattr(segment, "words", None) or []):
+            word_text = _normalize_local_transcript_text(getattr(word, "word", ""))
+            if not word_text:
+                continue
+            normalized_words.append(
+                TranscriptWord(
+                    start_ms=round(float(word.start) * 1000),
+                    end_ms=round(float(word.end) * 1000),
+                    text=word_text,
+                    confidence=(
+                        float(word.probability)
+                        if getattr(word, "probability", None) is not None
+                        else None
+                    ),
+                )
             )
-            for word in (getattr(segment, "words", None) or [])
-            if normalize_transcript_text(getattr(word, "word", ""))
-        )
+        words = tuple(normalized_words)
         avg_logprob = getattr(segment, "avg_logprob", None)
         confidence = max(0.0, min(1.0, 2.718281828 ** float(avg_logprob))) if avg_logprob is not None else None
         results.append(
@@ -1494,6 +1511,16 @@ def build_transcript_markdown(
 
 def normalize_transcript_text(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _normalize_local_transcript_text(text: str) -> str:
+    return simplify_chinese_text(normalize_transcript_text(text))
+
+
+def _transcription_checkpoint_model() -> str:
+    if _ACTIVE_TRANSCRIPTION_PROVIDER != "local":
+        return _ACTIVE_TRANSCRIPTION_MODEL
+    return f"{_ACTIVE_TRANSCRIPTION_MODEL}|text={SIMPLIFIED_CHINESE_NORMALIZATION_ID}"
 
 
 def escape_markdown_table_text(text: str) -> str:
