@@ -529,6 +529,24 @@ def test_frontend_uses_one_selection_semantic_and_no_schedule_reload():
     assert "data-use-latest-schedule" in template
     assert "正在生成预览…" in script
     assert 'scheduleForm?.addEventListener("input", () =>' in script
+    assert 'const JOB_REFRESH_INTERVAL_MS = 15000;' in script
+    assert 'const SERVICE_REFRESH_INTERVAL_MS = 30000;' in script
+    assert 'const POLL_REQUEST_TIMEOUT_MS = 10000;' in script
+    assert 'const TASK_GROUP_EXPANSION_STORAGE_KEY = "niuma.publish.task-group-expansion.v1";' in script
+    assert "window.setInterval" not in script
+    assert 'document.addEventListener("visibilitychange"' in script
+    assert "if (jobsRefreshPromise) return jobsRefreshPromise;" in script
+    assert "if (accountsRefreshPromise) return accountsRefreshPromise;" in script
+    assert "schedulerHealthRefreshPromise = promise;" in script
+    assert "const controller = new AbortController();" in script
+    assert "historyRefreshController?.abort();" in script
+    assert "pollingApiFetch" in script
+    assert "Promise.allSettled(requests)" in script
+    assert "syncTaskGroups: false" in script
+    assert "if (syncTaskGroups) syncContentTaskGroups();" in script
+    assert "if (showResult && button) button.disabled = true;" in script
+    assert "setTaskGroupExpanded(visibleGroups[0], true)" not in script
+    assert "?v=20260901-polling-state" in template
 
 
 def test_run_once_module_command(tmp_path):

@@ -2,6 +2,10 @@ const publishCenterRoot = document.querySelector("[data-center-panel]");
 
 if (publishCenterRoot) {
   const APP_TIMEZONE = "Asia/Shanghai";
+  const TASK_GROUP_EXPANSION_STORAGE_KEY = "niuma.publish.task-group-expansion.v1";
+  const JOB_REFRESH_INTERVAL_MS = 15000;
+  const SERVICE_REFRESH_INTERVAL_MS = 30000;
+  const POLL_REQUEST_TIMEOUT_MS = 10000;
   const selectedJobIds = new Set();
   const messageNode = document.querySelector("#send-center-message");
   const selectionBar = document.querySelector("[data-selection-bar]");
@@ -64,12 +68,22 @@ if (publishCenterRoot) {
   let historyRefreshInFlight = false;
   let historyRefreshQueuedCalendar = false;
   let historyRefreshQueuedRecords = false;
+  let historyRefreshController = null;
   const selectedHistoryJobIds = new Set();
   let scheduleRefreshFrame = 0;
   let scheduleRowOrderSequence = 0;
   const scheduleRowOrders = new WeakMap();
   let workerAvailable = schedulerHealthNode?.dataset.workerAvailable === "true";
   let workerMessage = document.querySelector("[data-worker-message]")?.textContent?.split(" · ")[0] || "Windows 发布 Worker 未连接";
+  let expandedTaskGroupIds = new Set();
+  let jobsRefreshPromise = null;
+  let accountsRefreshPromise = null;
+  let schedulerHealthRefreshPromise = null;
+  let jobsRefreshController = null;
+  let accountsRefreshController = null;
+  let schedulerHealthRefreshController = null;
+  let jobsRefreshTimer = 0;
+  let servicesRefreshTimer = 0;
 
   function showMessage(message, tone = "info") {
     if (!messageNode) return;
@@ -275,8 +289,84 @@ if (publishCenterRoot) {
     window.setTimeout(() => row.classList.remove("is-calendar-focus"), 1600);
   }
 
-  function setTaskGroupExpanded(group, expanded) {
+  function readTaskGroupExpansionState() {
+    try {
+      const raw = window.sessionStorage.getItem(TASK_GROUP_EXPANSION_STORAGE_KEY);
+      if (raw === null) return null;
+      const taskIds = JSON.parse(raw);
+      if (!Array.isArray(taskIds) || taskIds.some((taskId) => typeof taskId !== "string" || !taskId)) {
+        throw new Error("invalid task group expansion state");
+      }
+      return new Set(taskIds);
+    } catch (_error) {
+      try {
+        window.sessionStorage.removeItem(TASK_GROUP_EXPANSION_STORAGE_KEY);
+      } catch (_storageError) {
+        // 浏览器禁用会话存储时仍保留当前页面内的展开状态。
+      }
+      return null;
+    }
+  }
+
+  function pollingRequestWasAborted(error, controller) {
+    return controller?.signal.aborted || error?.name === "AbortError";
+  }
+
+  function pollingApiFetch(url, controller) {
+    const timeout = window.setTimeout(() => controller.abort(), POLL_REQUEST_TIMEOUT_MS);
+    return window.apiFetch(url, { signal: controller.signal })
+      .finally(() => window.clearTimeout(timeout));
+  }
+
+  function persistTaskGroupExpansionState() {
+    try {
+      window.sessionStorage.setItem(
+        TASK_GROUP_EXPANSION_STORAGE_KEY,
+        JSON.stringify(Array.from(expandedTaskGroupIds).sort()),
+      );
+    } catch (_error) {
+      // 会话存储不可用时不影响当前页面交互。
+    }
+  }
+
+  function initializeTaskGroupExpansionState() {
+    const stored = readTaskGroupExpansionState();
+    if (stored !== null) {
+      if (stored.size === 0) {
+        expandedTaskGroupIds = stored;
+        return;
+      }
+      const availableTaskIds = new Set(
+        Array.from(document.querySelectorAll("[data-publish-task-group]"))
+          .map((group) => group.dataset.taskId || "")
+          .filter(Boolean),
+      );
+      const recognizedTaskIds = new Set(Array.from(stored).filter((taskId) => availableTaskIds.has(taskId)));
+      if (recognizedTaskIds.size > 0) {
+        expandedTaskGroupIds = recognizedTaskIds;
+        if (recognizedTaskIds.size !== stored.size) persistTaskGroupExpansionState();
+        return;
+      }
+    }
+    const defaultGroup = Array.from(document.querySelectorAll("[data-publish-task-group]"))
+      .find((group) => Array.from(group.querySelectorAll('[data-publish-row][data-section="content"]'))
+        .some((row) => (
+          row.dataset.outputActive !== "false"
+          && row.dataset.platform === activePlatform
+          && sectionAllows("content", String(row.dataset.status || "").toUpperCase())
+        )));
+    expandedTaskGroupIds = new Set(defaultGroup?.dataset.taskId ? [defaultGroup.dataset.taskId] : []);
+    if (defaultGroup) persistTaskGroupExpansionState();
+  }
+
+  function setTaskGroupExpanded(group, expanded, { remember = false } = {}) {
     if (!group) return;
+    const taskId = group.dataset.taskId || "";
+    if (remember && taskId) {
+      if (expanded) expandedTaskGroupIds.add(taskId);
+      else expandedTaskGroupIds.delete(taskId);
+      persistTaskGroupExpansionState();
+    }
     group.dataset.expanded = expanded ? "true" : "false";
     const body = group.querySelector("[data-task-group-body]");
     const toggle = group.querySelector("[data-task-group-toggle]");
@@ -310,22 +400,21 @@ if (publishCenterRoot) {
 
   function syncContentTaskGroups() {
     const groups = Array.from(document.querySelectorAll("[data-publish-task-group]"));
-    const visibleGroups = [];
+    let visibleGroupCount = 0;
     groups.forEach((group) => {
       const rows = Array.from(group.querySelectorAll('[data-publish-row][data-section="content"]'));
       const visibleCount = rows.filter((row) => !row.hidden).length;
       const count = group.querySelector("[data-task-group-count]");
       if (count) count.textContent = `${visibleCount} 条待准备`;
       group.hidden = visibleCount === 0;
-      if (visibleCount > 0) visibleGroups.push(group);
-      if (visibleCount === 0) setTaskGroupExpanded(group, false);
+      if (visibleCount > 0) visibleGroupCount += 1;
+      setTaskGroupExpanded(
+        group,
+        visibleCount > 0 && expandedTaskGroupIds.has(group.dataset.taskId || ""),
+      );
       syncTaskGroupSelectionUi(group);
     });
-    if (visibleGroups.length && !visibleGroups.some((group) => group.dataset.expanded === "true")) {
-      setTaskGroupExpanded(visibleGroups[0], true);
-    }
-    visibleGroups.forEach((group) => setTaskGroupExpanded(group, group.dataset.expanded === "true"));
-    if (contentEmpty) contentEmpty.hidden = visibleGroups.length > 0;
+    if (contentEmpty) contentEmpty.hidden = visibleGroupCount > 0;
   }
 
   function platformLabel(platform = activePlatform) {
@@ -759,7 +848,7 @@ if (publishCenterRoot) {
   }
 
   async function refreshHistory(options = {}) {
-    if (!historyListNode || !historyPanelIsActive()) return;
+    if (!historyListNode || !historyPanelIsActive() || document.hidden) return;
     const includeCalendar = options.calendar !== false && !historyDeletedView;
     const includeRecords = options.records !== false;
     if (historyRefreshInFlight) {
@@ -768,13 +857,17 @@ if (publishCenterRoot) {
       return;
     }
     historyRefreshInFlight = true;
+    const controller = new AbortController();
+    historyRefreshController = controller;
     const sequence = ++historyRequestSequence;
     const requests = [];
     if (includeCalendar) {
       const calendarUrl = `/api/publish/history/calendar?platform=${encodeURIComponent(activePlatform)}&month=${encodeURIComponent(historyMonthKey())}`;
       requests.push(
-        window.apiFetch(calendarUrl).then((data) => {
-          if (sequence === historyRequestSequence) renderHistoryCalendar(data);
+        pollingApiFetch(calendarUrl, controller).then((data) => {
+          if (sequence === historyRequestSequence && !controller.signal.aborted && !document.hidden) {
+            renderHistoryCalendar(data);
+          }
         }),
       );
     }
@@ -788,16 +881,27 @@ if (publishCenterRoot) {
       });
       if (historySelectedDate && !historyDeletedView) params.set("date", historySelectedDate);
       requests.push(
-        window.apiFetch(`/api/publish/history/records?${params.toString()}`).then((data) => {
-          if (sequence === historyRequestSequence) renderHistoryRecords(data);
+        pollingApiFetch(`/api/publish/history/records?${params.toString()}`, controller).then((data) => {
+          if (sequence === historyRequestSequence && !controller.signal.aborted && !document.hidden) {
+            renderHistoryRecords(data);
+          }
         }),
       );
     }
     try {
-      await Promise.all(requests);
-    } catch (error) {
-      if (sequence === historyRequestSequence) showMessage(`加载执行记录失败：${error.message}`, "error");
+      const results = await Promise.allSettled(requests);
+      const failure = results.find((result) => result.status === "rejected");
+      if (
+        failure
+        && !pollingRequestWasAborted(failure.reason, controller)
+        && sequence === historyRequestSequence
+        && !document.hidden
+      ) {
+        showMessage(`加载执行记录失败：${failure.reason?.message || "未知错误"}`, "error");
+      }
     } finally {
+      if (historyRefreshController !== controller) return;
+      historyRefreshController = null;
       historyRefreshInFlight = false;
       if (historyRefreshQueuedCalendar || historyRefreshQueuedRecords) {
         const queuedCalendar = historyRefreshQueuedCalendar;
@@ -810,7 +914,7 @@ if (publishCenterRoot) {
   }
 
   function queueHistoryRefresh(includeCalendar = true) {
-    if (!historyPanelIsActive()) return;
+    if (!historyPanelIsActive() || document.hidden) return;
     historyRefreshCalendar = historyRefreshCalendar || includeCalendar;
     if (historyRefreshFrame) window.cancelAnimationFrame(historyRefreshFrame);
     historyRefreshFrame = window.requestAnimationFrame(() => {
@@ -1133,7 +1237,7 @@ if (publishCenterRoot) {
     if (tab === "history") void refreshHistory({ calendar: true, records: true });
   }
 
-  function updateRowFromJob(job) {
+  function updateRowFromJob(job, { syncTaskGroups = true } = {}) {
     if (!job?.id) return;
     document.querySelectorAll(`[data-publish-row][data-job-id="${CSS.escape(job.id)}"]`).forEach((row) => {
       const status = String(job.status || row.dataset.status || "").toUpperCase();
@@ -1220,6 +1324,7 @@ if (publishCenterRoot) {
     applyHistoryFilter();
     queueScheduleRefresh();
     updateBackfillCoversButton();
+    if (syncTaskGroups) syncContentTaskGroups();
   }
 
   function cloneRowsForRetry(sourceId, job) {
@@ -1421,62 +1526,172 @@ if (publishCenterRoot) {
   }
 
   async function refreshJobs() {
+    if (jobsRefreshPromise) return jobsRefreshPromise;
+    const controller = new AbortController();
+    jobsRefreshController = controller;
+    const promise = (async () => {
+      try {
+        const data = await pollingApiFetch("/api/publish/jobs", controller);
+        if (!controller.signal.aborted && !document.hidden) {
+          (data.jobs || []).forEach((job) => updateRowFromJob(job, { syncTaskGroups: false }));
+          syncContentTaskGroups();
+        }
+      } catch (error) {
+        if (pollingRequestWasAborted(error, controller)) return;
+        // 后台轮询失败不遮挡用户正在编辑的内容。
+      }
+    })();
+    jobsRefreshPromise = promise;
     try {
-      const data = await window.apiFetch("/api/publish/jobs");
-      (data.jobs || []).forEach(updateRowFromJob);
-    } catch (_error) {
-      // 后台轮询失败不遮挡用户正在编辑的内容。
+      return await promise;
+    } finally {
+      if (jobsRefreshPromise === promise) jobsRefreshPromise = null;
+      if (jobsRefreshController === controller) jobsRefreshController = null;
     }
   }
 
   async function refreshAccounts() {
+    if (accountsRefreshPromise) return accountsRefreshPromise;
+    const controller = new AbortController();
+    accountsRefreshController = controller;
+    const promise = (async () => {
+      try {
+        const data = await pollingApiFetch("/api/publish/accounts", controller);
+        if (!controller.signal.aborted && !document.hidden) (data.accounts || []).forEach(updateAccountRow);
+      } catch (error) {
+        if (pollingRequestWasAborted(error, controller)) return;
+        // 登录窗口仍可继续使用；下一轮会自动重试同步状态。
+      }
+    })();
+    accountsRefreshPromise = promise;
     try {
-      const data = await window.apiFetch("/api/publish/accounts");
-      (data.accounts || []).forEach(updateAccountRow);
-    } catch (_error) {
-      // 登录窗口仍可继续使用；下一轮会自动重试同步状态。
+      return await promise;
+    } finally {
+      if (accountsRefreshPromise === promise) accountsRefreshPromise = null;
+      if (accountsRefreshController === controller) accountsRefreshController = null;
     }
+  }
+
+  async function performSchedulerHealthRefresh(controller) {
+    const data = await pollingApiFetch("/api/publish/scheduler/health", controller);
+    if (controller.signal.aborted || document.hidden) return null;
+    const statusNode = document.querySelector("[data-worker-status]");
+    const runtimeNode = document.querySelector("[data-scheduler-runtime]");
+    const message = document.querySelector("[data-worker-message]");
+    const help = document.querySelector("[data-worker-help]");
+    const dot = document.querySelector("[data-scheduler-health] .health-dot");
+    workerAvailable = Boolean(data.worker_available);
+    workerMessage = data.worker_message || "Windows 发布 Worker 未连接";
+    const schedulerFailures = Number(data.consecutive_failures || 0);
+    const schedulerHealthy = Boolean(data.running && schedulerFailures === 0);
+    if (schedulerHealthNode) {
+      schedulerHealthNode.dataset.workerAvailable = workerAvailable ? "true" : "false";
+      schedulerHealthNode.dataset.schedulerFailures = String(schedulerFailures);
+    }
+    if (statusNode) statusNode.textContent = data.worker_available ? "正常" : "未连接";
+    if (runtimeNode) runtimeNode.textContent = schedulerFailures ? "异常重试中" : (data.running ? "正常" : "已停止");
+    if (message) {
+      const schedulerMessage = schedulerFailures ? `${data.last_error_message || "调度扫描异常，正在自动重试"} · ` : "";
+      message.textContent = `${schedulerMessage}${data.worker_message} · 页面及排期均使用北京时间`;
+    }
+    if (help) help.hidden = Boolean(data.worker_available);
+    if (dot) dot.classList.toggle("is-ok", Boolean(schedulerHealthy && data.worker_available));
+    document.querySelectorAll('[data-publish-row][data-section="schedule"], [data-publish-row][data-section="history"]').forEach((row) => applyRowReadiness(row));
+    return {
+      ready: Boolean(schedulerHealthy && data.worker_available),
+      message: schedulerFailures
+        ? (data.last_error_message || "调度扫描异常，正在自动重试")
+        : (data.worker_available ? "调度器与 Windows Worker 均已连接。" : "发送服务仍在随 Docker 项目自动启动；请稍候，或在 Docker Desktop 中停止后重新运行本项目。"),
+    };
   }
 
   async function refreshSchedulerHealth(showResult = false) {
     const button = document.querySelector("[data-refresh-worker]");
-    if (button) button.disabled = true;
+    if (showResult && button) button.disabled = true;
     try {
-      const data = await window.apiFetch("/api/publish/scheduler/health");
-      const statusNode = document.querySelector("[data-worker-status]");
-      const runtimeNode = document.querySelector("[data-scheduler-runtime]");
-      const message = document.querySelector("[data-worker-message]");
-      const help = document.querySelector("[data-worker-help]");
-      const dot = document.querySelector("[data-scheduler-health] .health-dot");
-      workerAvailable = Boolean(data.worker_available);
-      workerMessage = data.worker_message || "Windows 发布 Worker 未连接";
-      const schedulerFailures = Number(data.consecutive_failures || 0);
-      const schedulerHealthy = Boolean(data.running && schedulerFailures === 0);
-      if (schedulerHealthNode) {
-        schedulerHealthNode.dataset.workerAvailable = workerAvailable ? "true" : "false";
-        schedulerHealthNode.dataset.schedulerFailures = String(schedulerFailures);
+      if (!schedulerHealthRefreshPromise) {
+        const controller = new AbortController();
+        schedulerHealthRefreshController = controller;
+        const promise = performSchedulerHealthRefresh(controller)
+          .finally(() => {
+            if (schedulerHealthRefreshPromise === promise) schedulerHealthRefreshPromise = null;
+            if (schedulerHealthRefreshController === controller) schedulerHealthRefreshController = null;
+          });
+        schedulerHealthRefreshPromise = promise;
       }
-      if (statusNode) statusNode.textContent = data.worker_available ? "正常" : "未连接";
-      if (runtimeNode) runtimeNode.textContent = schedulerFailures ? "异常重试中" : (data.running ? "正常" : "已停止");
-      if (message) {
-        const schedulerMessage = schedulerFailures ? `${data.last_error_message || "调度扫描异常，正在自动重试"} · ` : "";
-        message.textContent = `${schedulerMessage}${data.worker_message} · 页面及排期均使用北京时间`;
-      }
-      if (help) help.hidden = Boolean(data.worker_available);
-      if (dot) dot.classList.toggle("is-ok", Boolean(schedulerHealthy && data.worker_available));
-      document.querySelectorAll('[data-publish-row][data-section="schedule"], [data-publish-row][data-section="history"]').forEach((row) => applyRowReadiness(row));
-      if (showResult) {
-        const ready = schedulerHealthy && data.worker_available;
-        const resultMessage = schedulerFailures
-          ? (data.last_error_message || "调度扫描异常，正在自动重试")
-          : (data.worker_available ? "调度器与 Windows Worker 均已连接。" : "发送服务仍在随 Docker 项目自动启动；请稍候，或在 Docker Desktop 中停止后重新运行本项目。");
-        showMessage(resultMessage, ready ? "success" : "error");
-      }
+      const result = await schedulerHealthRefreshPromise;
+      if (showResult && result) showMessage(result.message, result.ready ? "success" : "error");
+      return result;
     } catch (error) {
-      if (showResult) showMessage(`检测失败：${error.message}`, "error");
+      if (showResult && error?.name !== "AbortError") showMessage(`检测失败：${error.message}`, "error");
+      return null;
     } finally {
-      if (button) button.disabled = false;
+      if (showResult && button) button.disabled = false;
     }
+  }
+
+  function clearPublishCenterPollingTimers() {
+    if (jobsRefreshTimer) window.clearTimeout(jobsRefreshTimer);
+    if (servicesRefreshTimer) window.clearTimeout(servicesRefreshTimer);
+    jobsRefreshTimer = 0;
+    servicesRefreshTimer = 0;
+  }
+
+  function stopPublishCenterPolling() {
+    clearPublishCenterPollingTimers();
+    if (historyRefreshFrame) window.cancelAnimationFrame(historyRefreshFrame);
+    historyRefreshFrame = 0;
+    historyRefreshCalendar = false;
+    historyRefreshQueuedCalendar = false;
+    historyRefreshQueuedRecords = false;
+    historyRefreshInFlight = false;
+    historyRequestSequence += 1;
+    historyRefreshController?.abort();
+    jobsRefreshController?.abort();
+    accountsRefreshController?.abort();
+    schedulerHealthRefreshController?.abort();
+    historyRefreshController = null;
+    jobsRefreshController = null;
+    accountsRefreshController = null;
+    schedulerHealthRefreshController = null;
+    jobsRefreshPromise = null;
+    accountsRefreshPromise = null;
+    schedulerHealthRefreshPromise = null;
+  }
+
+  function scheduleJobsRefresh() {
+    if (document.hidden) return;
+    if (jobsRefreshTimer) window.clearTimeout(jobsRefreshTimer);
+    jobsRefreshTimer = window.setTimeout(async () => {
+      jobsRefreshTimer = 0;
+      if (!document.hidden) await refreshJobs();
+      scheduleJobsRefresh();
+    }, JOB_REFRESH_INTERVAL_MS);
+  }
+
+  function scheduleServicesRefresh() {
+    if (document.hidden) return;
+    if (servicesRefreshTimer) window.clearTimeout(servicesRefreshTimer);
+    servicesRefreshTimer = window.setTimeout(async () => {
+      servicesRefreshTimer = 0;
+      if (!document.hidden) await Promise.all([refreshAccounts(), refreshSchedulerHealth()]);
+      scheduleServicesRefresh();
+    }, SERVICE_REFRESH_INTERVAL_MS);
+  }
+
+  function startPublishCenterPolling({ refreshImmediately = false } = {}) {
+    clearPublishCenterPollingTimers();
+    if (document.hidden) return;
+    if (refreshImmediately) {
+      void refreshJobs().finally(() => {
+        if (historyPanelIsActive()) queueHistoryRefresh(true);
+        scheduleJobsRefresh();
+      });
+      void Promise.all([refreshAccounts(), refreshSchedulerHealth()]).finally(scheduleServicesRefresh);
+      return;
+    }
+    scheduleJobsRefresh();
+    scheduleServicesRefresh();
   }
 
   document.querySelectorAll("[data-center-tab]").forEach((button) => {
@@ -1713,7 +1928,11 @@ if (publishCenterRoot) {
     const taskGroupToggle = event.target.closest("[data-task-group-toggle]");
     if (taskGroupToggle) {
       const group = taskGroupToggle.closest("[data-publish-task-group]");
-      setTaskGroupExpanded(group, group?.dataset.expanded !== "true");
+      setTaskGroupExpanded(
+        group,
+        !expandedTaskGroupIds.has(group?.dataset.taskId || ""),
+        { remember: true },
+      );
       return;
     }
 
@@ -1844,7 +2063,7 @@ if (publishCenterRoot) {
         const contentRow = document.querySelector(
           `[data-publish-row][data-section="content"][data-job-id="${CSS.escape(jobId)}"]`,
         );
-        setTaskGroupExpanded(contentRow?.closest("[data-publish-task-group]"), true);
+        setTaskGroupExpanded(contentRow?.closest("[data-publish-task-group]"), true, { remember: true });
         switchTab("content");
         contentRow?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
         showMessage(data.message || "已取消发送并返回内容准备。", "success");
@@ -2225,6 +2444,7 @@ if (publishCenterRoot) {
     syncPlatformFields(form);
     syncCopyCounters(form);
   });
+  initializeTaskGroupExpansionState();
   const focus = document.querySelector("[data-publish-focus]");
   if (focus?.dataset.platform) setActivePlatform(focus.dataset.platform);
   if (focus?.dataset.tab) switchTab(focus.dataset.tab);
@@ -2237,11 +2457,22 @@ if (publishCenterRoot) {
       `[data-publish-task-group][data-task-id="${CSS.escape(focus.dataset.taskId)}"]`,
     );
     if (group && !group.hidden) {
-      setTaskGroupExpanded(group, true);
+      setTaskGroupExpanded(group, true, { remember: true });
       group.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "start" });
     } else {
       showMessage("已定位到该处理任务，但当前没有可准备的抖音新版本内容。可返回任务页重新同步。");
     }
   }
-  window.setInterval(() => { refreshJobs(); refreshAccounts(); refreshSchedulerHealth(); }, 5000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      stopPublishCenterPolling();
+      return;
+    }
+    startPublishCenterPolling({ refreshImmediately: true });
+  });
+  window.addEventListener("pagehide", stopPublishCenterPolling);
+  window.addEventListener("pageshow", (event) => {
+    if (!document.hidden) startPublishCenterPolling({ refreshImmediately: event.persisted });
+  });
+  startPublishCenterPolling();
 }

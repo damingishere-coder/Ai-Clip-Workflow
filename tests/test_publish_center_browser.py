@@ -92,6 +92,7 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
     unscheduled = _seed_job(tmp_path, 0)
     first = douyin_jobs[0]
     newest = douyin_jobs[-1]
+    newest_task_id = publish_service.get_publish_job(newest)["task_id"]
     bilibili = _seed_job(tmp_path, 11, "bilibili")
     failed = _seed_job(tmp_path, 12)
     failed_schedule = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -271,6 +272,150 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             assert first_content.locator("[data-publish-select]").is_checked()
             assert second_content.locator("[data-publish-select]").is_checked()
             group_select.uncheck()
+
+            newest_group.locator("[data-task-group-toggle]").click()
+            assert first_content.is_hidden()
+            assert newest_content.is_hidden()
+            page.wait_for_timeout(16_000)
+            assert first_content.is_hidden()
+            assert newest_content.is_hidden()
+
+            page.reload(wait_until="networkidle")
+            assert first_content.is_hidden()
+            assert newest_content.is_hidden()
+            assert newest_group.locator("[data-task-group-toggle]").inner_text() == "展开"
+
+            page.locator('[data-center-tab="history"]').click()
+            page.wait_for_timeout(500)
+            poll_requests: list[str] = []
+            page.on(
+                "request",
+                lambda request: poll_requests.append(request.url)
+                if any(
+                    endpoint in request.url
+                    for endpoint in (
+                        "/api/publish/jobs",
+                        "/api/publish/accounts",
+                        "/api/publish/scheduler/health",
+                        "/api/publish/history/calendar",
+                        "/api/publish/history/records",
+                    )
+                )
+                else None,
+            )
+            page.evaluate(
+                """
+                () => {
+                  window.__testDocumentHidden = true;
+                  Object.defineProperty(document, "hidden", {
+                    configurable: true,
+                    get: () => window.__testDocumentHidden,
+                  });
+                  document.dispatchEvent(new Event("visibilitychange"));
+                }
+                """
+            )
+            page.wait_for_timeout(16_000)
+            assert poll_requests == []
+
+            page.evaluate(
+                """
+                () => {
+                  window.__testDocumentHidden = false;
+                  document.dispatchEvent(new Event("visibilitychange"));
+                  document.dispatchEvent(new Event("visibilitychange"));
+                }
+                """
+            )
+            page.wait_for_timeout(1_000)
+            assert sum(url.endswith("/api/publish/jobs") for url in poll_requests) == 1
+            assert sum(url.endswith("/api/publish/accounts") for url in poll_requests) == 1
+            assert sum(url.endswith("/api/publish/scheduler/health") for url in poll_requests) == 1
+            assert sum("/api/publish/history/calendar" in url for url in poll_requests) == 1
+            assert sum("/api/publish/history/records" in url for url in poll_requests) == 1
+            page.locator('[data-center-tab="content"]').click()
+            assert newest_content.is_hidden()
+
+            fresh_page = context.new_page()
+            fresh_page.goto(f"http://127.0.0.1:{port}/publish", wait_until="networkidle")
+            fresh_newest_content = fresh_page.locator(
+                f'[data-publish-row][data-section="content"][data-job-id="{newest}"]'
+            )
+            assert fresh_newest_content.is_visible()
+            fresh_newest_group = fresh_newest_content.locator(
+                "xpath=ancestor::section[@data-publish-task-group]"
+            )
+            with get_connection() as connection:
+                connection.execute("UPDATE publish_jobs SET status = 'PUBLISHED' WHERE id = ?", (newest,))
+                connection.commit()
+            fresh_page.evaluate(
+                """
+                () => {
+                  window.__testDocumentHidden = true;
+                  Object.defineProperty(document, "hidden", {
+                    configurable: true,
+                    get: () => window.__testDocumentHidden,
+                  });
+                  document.dispatchEvent(new Event("visibilitychange"));
+                  window.__testDocumentHidden = false;
+                  document.dispatchEvent(new Event("visibilitychange"));
+                }
+                """
+            )
+            fresh_newest_group.wait_for(state="hidden")
+            with get_connection() as connection:
+                connection.execute("UPDATE publish_jobs SET status = 'WAITING' WHERE id = ?", (newest,))
+                connection.commit()
+            fresh_page.evaluate(
+                """
+                () => {
+                  window.__testDocumentHidden = true;
+                  document.dispatchEvent(new Event("visibilitychange"));
+                  window.__testDocumentHidden = false;
+                  document.dispatchEvent(new Event("visibilitychange"));
+                }
+                """
+            )
+            fresh_newest_group.wait_for(state="visible")
+            assert fresh_newest_content.is_visible()
+            assert fresh_newest_group.locator("[data-task-group-toggle]").inner_text() == "收起"
+            fresh_page.close()
+
+            corrupt_page = context.new_page()
+            corrupt_page.add_init_script(
+                "window.sessionStorage.setItem('niuma.publish.task-group-expansion.v1', 'invalid-json');"
+            )
+            corrupt_page.goto(f"http://127.0.0.1:{port}/publish", wait_until="networkidle")
+            corrupt_newest_content = corrupt_page.locator(
+                f'[data-publish-row][data-section="content"][data-job-id="{newest}"]'
+            )
+            assert corrupt_newest_content.is_visible()
+            assert corrupt_page.evaluate(
+                "JSON.parse(window.sessionStorage.getItem('niuma.publish.task-group-expansion.v1'))"
+            ) == [newest_task_id]
+            corrupt_page.close()
+
+            stale_page = context.new_page()
+            stale_page.add_init_script(
+                "window.sessionStorage.setItem('niuma.publish.task-group-expansion.v1', "
+                "JSON.stringify(['missing-task']));"
+            )
+            stale_page.goto(f"http://127.0.0.1:{port}/publish", wait_until="networkidle")
+            stale_newest_content = stale_page.locator(
+                f'[data-publish-row][data-section="content"][data-job-id="{newest}"]'
+            )
+            assert stale_newest_content.is_visible()
+            assert stale_page.evaluate(
+                "JSON.parse(window.sessionStorage.getItem('niuma.publish.task-group-expansion.v1'))"
+            ) == [newest_task_id]
+            stale_page.close()
+
+            page.goto(
+                f"http://127.0.0.1:{port}/publish?task_id={newest_task_id}",
+                wait_until="networkidle",
+            )
+            assert newest_content.is_visible()
+            assert newest_group.locator("[data-task-group-toggle]").inner_text() == "收起"
 
             page.locator('[data-center-tab="schedule"]').click()
             assert page.locator("[data-batch-ai]").is_hidden()
