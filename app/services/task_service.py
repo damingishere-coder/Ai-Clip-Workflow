@@ -83,6 +83,7 @@ from app.services.subtitle_workflow_service import (
     update_default_subtitle_style,
 )
 from app.services.transcript_service import read_transcript_progress, read_transcript_range
+from app.services.local_transcription_runtime import TranscriptionOfflinePolicyError
 from app.services.transcript_workflow_service import (
     TranscriptCancelledError,
     _can_retry_transcript_with_local,
@@ -99,6 +100,7 @@ from app.services.transcript_workflow_service import (
     process_task_audio,
     process_task_transcript,
     process_task_transcript_workflow,
+    validate_transcription_provider_choice,
 )
 from app.services.video_cut_workflow_service import process_task_video_cuts
 

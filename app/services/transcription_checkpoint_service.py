@@ -50,6 +50,16 @@ def fingerprint_file(path_value: str | Path) -> str:
     return digest.hexdigest()
 
 
+def fingerprint_file_full(path_value: str | Path) -> str:
+    """完整读取转写音频，避免相同大小且头尾相同的文件误复用 checkpoint。"""
+    path = Path(path_value).resolve()
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(4 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 class TranscriptionCheckpoint:
     def __init__(
         self,
@@ -65,7 +75,7 @@ class TranscriptionCheckpoint:
         allow_uncertain_retry: bool = False,
     ) -> None:
         self.task_id = task_id
-        self.source_fingerprint = fingerprint_file(source_path)
+        self.source_fingerprint = fingerprint_file_full(source_path)
         self.provider = provider
         self.model = model
         self.device = device

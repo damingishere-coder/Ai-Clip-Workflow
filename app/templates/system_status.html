@@ -50,6 +50,12 @@
     <strong>{{ ai_config.configured_count }}</strong>
     <small>转写 {{ "正常" if ai_config.transcription_ready else "待配置" }} · 分析 {{ "正常" if ai_config.analysis_ready else "待配置" }} · 文案 {{ "正常" if ai_config.publish_ready else "待配置" }}</small>
   </article>
+  <article class="stat-card tone-{{ 'green' if ai_config.transcription_runtime.ready else 'amber' }}">
+    <div class="stat-icon"></div>
+    <span>完全离线转写</span>
+    <strong>¥{{ ai_config.transcription_runtime.external_cost_yuan }}</strong>
+    <small>{{ ai_config.transcription_runtime.model_identity }} · GPU {{ "可用" if ai_config.transcription_runtime.gpu_ready else "待初始化" }} · 模型 {{ "已缓存" if ai_config.transcription_runtime.model_ready else "待下载" }}</small>
+  </article>
 </section>
 
 <section class="stat-grid system-grid" aria-label="任务状态统计">
@@ -145,14 +151,37 @@
     <div class="ai-interface-grid">
       <div class="settings-section ai-interface-section">
         <h3>1. 音频转写</h3>
+        <p class="form-hint">当前：{{ "完全离线" if ai_config.transcription_runtime.offline_only else "允许远程" }} · {{ ai_config.transcription_runtime.model_identity }} · {{ ai_config.transcription_runtime.device }}/{{ ai_config.transcription_runtime.compute_type }} · 外部费用 ¥{{ ai_config.transcription_runtime.external_cost_yuan }}</p>
+        <div class="form-row">
+          <label>
+            <span>网络边界</span>
+            <select name="transcription_offline_only">
+              <option value="true" {{ "selected" if ai_config['values']['TRANSCRIPTION_OFFLINE_ONLY'] | lower in ['true', '1', 'yes', 'on'] else "" }}>完全离线（推荐）</option>
+              <option value="false" {{ "selected" if ai_config['values']['TRANSCRIPTION_OFFLINE_ONLY'] | lower not in ['true', '1', 'yes', 'on'] else "" }}>允许远程回滚</option>
+            </select>
+          </label>
+          <label>
+            <span>转写方式</span>
+            <select name="transcription_provider">
+              <option value="local" {{ "selected" if ai_config['values']['TRANSCRIPTION_PROVIDER'] == "local" else "" }}>本地 faster-whisper</option>
+              <option value="volcengine" {{ "selected" if ai_config['values']['TRANSCRIPTION_PROVIDER'] == "volcengine" else "" }}>火山引擎（仅回滚）</option>
+            </select>
+          </label>
+        </div>
         <label>
-          <span>转写方式</span>
-          <select name="transcription_provider">
-            <option value="volcengine" {{ "selected" if ai_config['values']['TRANSCRIPTION_PROVIDER'] == "volcengine" else "" }}>火山引擎远程转写</option>
-            <option value="local" {{ "selected" if ai_config['values']['TRANSCRIPTION_PROVIDER'] == "local" else "" }}>本地 faster-whisper</option>
-          </select>
+          <span>固定模型</span>
+          <input name="transcription_model" value="{{ ai_config['values']['TRANSCRIPTION_MODEL'] }}" readonly>
         </label>
+        <label><span>模型 Revision</span><input name="transcription_model_revision" value="{{ ai_config['values']['TRANSCRIPTION_MODEL_REVISION'] }}" readonly></label>
+        <label><span>模型缓存目录</span><input name="transcription_model_cache_dir" value="{{ ai_config['values']['TRANSCRIPTION_MODEL_CACHE_DIR'] }}" readonly></label>
+        <div class="form-row">
+          <label><span>设备</span><input name="transcription_device" value="{{ ai_config['values']['TRANSCRIPTION_DEVICE'] }}" readonly></label>
+          <label><span>计算精度</span><input name="transcription_compute_type" value="{{ ai_config['values']['TRANSCRIPTION_COMPUTE_TYPE'] }}" readonly></label>
+        </div>
+        <input name="transcription_local_files_only" type="hidden" value="{{ ai_config['values']['TRANSCRIPTION_LOCAL_FILES_ONLY'] }}">
         <input name="transcription_fallback_provider" type="hidden" value="{{ ai_config['values']['TRANSCRIPTION_FALLBACK_PROVIDER'] }}">
+        <p class="form-hint">模型 {{ "已缓存" if ai_config.transcription_runtime.model_ready else "未缓存" }} · cuBLAS {{ "正常" if ai_config.transcription_runtime.cublas_ready else "缺失" }} · cuDNN {{ "正常" if ai_config.transcription_runtime.cudnn_ready else "缺失" }}。缺失时请运行 scripts/setup_local_transcription.ps1。</p>
+        <h4>火山引擎回滚配置</h4>
         <label><span>接口地址</span><input name="volcengine_asr_api_url" value="{{ ai_config['values']['VOLCENGINE_ASR_API_URL'] }}"></label>
         <label><span>API Key</span><input name="volcengine_asr_api_key" type="password" value="" autocomplete="new-password" placeholder="{{ '已配置，留空保持' if ai_config.secret_configured['VOLCENGINE_ASR_API_KEY'] else '尚未配置' }}"></label>
         <div class="form-row">
@@ -268,7 +297,8 @@
       <li>任务资料根目录：{{ storage_root }}</li>
       <li>数据库文件：{{ database_path }}（{{ "已存在" if database_exists else "尚未创建" }}）</li>
       <li>AI 接口配置文件：项目本地 .env（{{ "已存在" if ai_config.env_exists else "尚未创建" }}）</li>
-      <li>1. 音频转写：{{ ai_config['values']['VOLCENGINE_ASR_API_URL'] }} · {{ ai_config['values']['VOLCENGINE_ASR_RESOURCE_ID'] }} · Key {{ "已填写" if ai_config.secret_configured['VOLCENGINE_ASR_API_KEY'] or ai_config.secret_configured['VOLCENGINE_ASR_APP_KEY'] else "未填写" }}</li>
+      <li>1. 音频转写：{{ ai_config.transcription_runtime.model_identity }} · {{ ai_config.transcription_runtime.device }}/{{ ai_config.transcription_runtime.compute_type }} · 模型 {{ "已缓存" if ai_config.transcription_runtime.model_ready else "待初始化" }} · GPU {{ "可用" if ai_config.transcription_runtime.gpu_ready else "待初始化" }} · 外部费用 ¥{{ ai_config.transcription_runtime.external_cost_yuan }}</li>
+      <li>火山回滚配置：{{ ai_config['values']['VOLCENGINE_ASR_RESOURCE_ID'] }} · Key {{ "已保留" if ai_config.secret_configured['VOLCENGINE_ASR_API_KEY'] or ai_config.secret_configured['VOLCENGINE_ASR_APP_KEY'] else "未填写" }} · {{ "完全离线锁已阻断" if ai_config.transcription_runtime.offline_only else "允许手动回滚" }}</li>
       <li>2. 分析文字稿，生成候选切片：{{ ai_config['values']['AI_ANALYSIS_REMOTE_BASE_URL'] }} · {{ ai_config['values']['AI_ANALYSIS_REMOTE_PROTOCOL'] }} · {{ ai_config['values']['AI_ANALYSIS_REMOTE_MODEL'] }} · Key {{ "有效" if ai_config.analysis_key_valid else "异常" }}</li>
       <li>3. 发送中心生成发布文案：{{ ai_config['values']['AI_PUBLISH_REMOTE_BASE_URL'] }} · {{ ai_config['values']['AI_PUBLISH_REMOTE_PROTOCOL'] }} · {{ ai_config['values']['AI_PUBLISH_REMOTE_MODEL'] }} · Key {{ "有效" if ai_config.publish_key_valid else "异常" }}</li>
       <li>本地 AI：{{ ai_config['values']['AI_LOCAL_BASE_URL'] }} · {{ ai_config['values']['AI_LOCAL_MODEL'] }} · Ollama {{ "在线" if ai_config.local_ollama_online else "离线" }}</li>

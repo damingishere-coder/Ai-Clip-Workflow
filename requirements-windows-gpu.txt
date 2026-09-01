@@ -1,0 +1,4 @@
+# Optional Windows GPU runtime for local faster-whisper transcription.
+# Install after requirements.txt with scripts/setup_local_transcription.ps1.
+nvidia-cublas-cu12==12.9.2.10
+nvidia-cuda-nvrtc-cu12==12.9.86

@@ -1,5 +1,20 @@
 # Next Steps
 
+## 2026-09-01 最新任务恢复验收
+
+1. [x] 运行工作树已同步代码并固定安装 OpenCC；运行 `.env` 只把 Codex 单窗口超时调整为 600 秒，原配置已备份。
+2. [x] 活动 SQLite、当前 transcript 均已先备份；数据库完整性正常，transcript 已转为仅字形简体且结构保持不变。
+3. [x] 只通过 Alter 重启 `Niuma-Studio` Web；8001 新进程、祖先链、深度 readiness 和 Scheduler 正常，8765 发布 Worker 未重启且健康。
+4. [x] 独立 Job `dec329256a0b` 已完成，AI 覆盖率 `18/18（100%）`，生成 5 个切片并停在 `PENDING_SUBTITLE_REVIEW`；旧失败 Job 保留，发布记录为 0。
+5. 下一步由用户在任务详情页人工审核字幕和切片。不要点击立即发送，也不要创建或修改抖音/B站排期；PR #72 等 CI 通过后仍需用户确认才可合并。
+
+## 2026-08-31 完全离线转写验收与启用
+
+1. 固定版本 cuBLAS 12、`large-v3` 主模型和 `medium / CPU / int8` 兜底模型均已初始化并通过加载校验；20 秒、10 分钟和完整 41 分钟 GPU 验收均通过，完整素材续跑约 4 分 52 秒完成并成功复用第一个 checkpoint。
+2. 打开 `E:\直播间切片工作流存储\_验收\offline-transcription-20260831\41min\spot-checks\README.md`，依次试听 10 个 15 秒片段，核对人名、关键对白和剪辑起止点；第 6、10 段已标出需要重点确认的疑似人名/背景声识别。
+3. 只有人工试听确认后，才把正式 `.env` 切换为本地离线配置，并在记录进程、端口和健康状态后受控重启 Web/Worker。当前正式服务仍保持原状。
+4. 回滚时只需恢复旧 `TRANSCRIPTION_PROVIDER` 并设置 `TRANSCRIPTION_OFFLINE_ONLY=false`；不要删除火山配置、E 盘模型缓存、历史 transcript 或 SQLite checkpoint。
+
 ## 2026-08-28 2.1 集成收口
 
 1. 等待 PR #60 的 Linux、Windows 与 Docker 三组 CI 全部通过；Docker 页面冒烟必须确认 `/`、`/tasks`、`/clips`、`/publish` 均返回成功。

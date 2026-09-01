@@ -60,6 +60,22 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+若要启用 Windows NVIDIA GPU 的完全离线转写，再运行一次：
+
+```powershell
+.\scripts\setup_local_transcription.ps1
+```
+
+脚本会安装固定版本 cuBLAS 12（及其固定 NVRTC 依赖），并把 `large-v3` 主模型与 `medium` CPU 兜底模型下载到 E 盘。模型大文件按 64 MiB 官方分片下载，可跨次运行续传；合并后必须同时通过固定大小和 SHA-256 校验才会启用。两套模型和运行库首次约需 5.2 GB；初始化完成后，任务运行只读取本地缓存，音频不会上传，也不会在任务过程中自动联网下载。可通过 `-AudioPath "真实音频路径"` 同时执行前 20 秒 GPU 推理冒烟。脚本默认让 PyPI 安装直连，避免本机代理拖慢 500 MB 以上的 Windows wheel；只有网络必须经代理时才增加 `-UseEnvironmentProxyForPip`。
+
+长音频验收可使用隔离基准脚本，不会写入正式数据库或任务目录：
+
+```powershell
+python .\scripts\benchmark_local_transcription.py "E:\素材\source.wav" "E:\直播间切片工作流存储\_验收\offline-asr" --seconds 600
+```
+
+要验证 checkpoint 续跑，首次增加 `--stop-after-chunks 1`；脚本会在第一个 120 秒分块安全落盘后主动停止。随后使用相同音频、相同验收目录和相同任务 ID，去掉该参数再次运行，日志应出现“已复用第 1/... 段 checkpoint”。脚本会强制 `HF_HUB_OFFLINE=1`、本地 Provider 和固定模型缓存，即使误配置远程 Key 也不会上传音频。
+
 看到 `Successfully installed ...` 即为成功。
 
 ### 2.4 配置环境变量
@@ -77,7 +93,9 @@ copy .env.example .env
 - `AI_CODEX_PATH`：受控 Codex CLI 命令路径（默认 `codex`）
 - `AI_CODEX_MODEL`：Codex CLI 分析模型（默认 `gpt-5.6-sol`）
 - `AI_ANALYSIS_REMOTE_API_KEY`：DeepSeek API Key（可选，用远程 AI 分析时需要）
-- `VOLCENGINE_ASR_API_KEY`：火山引擎转写 Key（可选，用远程转写时需要）
+- `TRANSCRIPTION_MODEL_CACHE_DIR`：离线模型缓存目录，默认 `E:\直播间切片工作流存储\_模型\faster-whisper`
+- `TRANSCRIPTION_OFFLINE_ONLY`：默认 `true`，阻断所有远程语音转写请求
+- `VOLCENGINE_ASR_API_KEY`：火山引擎回滚 Key（默认不使用，不会删除）
 - `LOCAL_ADMIN_TOKEN`：管理接口鉴权 Token（可留空或设随机字符串）
 
 ### 2.5 启动服务
@@ -273,7 +291,7 @@ Windows 主机（运行 FastAPI）
 | `AI_CODEX_PATH` | `codex` | 受控 Codex CLI 命令路径 |
 | `AI_CODEX_MODEL` | `gpt-5.6-sol` | Codex CLI 分析模型 |
 | `AI_ANALYSIS_REMOTE_API_KEY` | 空 | DeepSeek API Key |
-| `TRANSCRIPTION_PROVIDER` | `volcengine` | 转写引擎：`volcengine` 或 `faster_whisper` |
+| `TRANSCRIPTION_PROVIDER` | `local` | 转写引擎：`local` 或 `volcengine`；完全离线模式只允许 `local` |
 | `AI_PROVIDER` | `codex` | AI 分析引擎：`codex`、`remote` 或 `local` |
 
 ---
