@@ -39,6 +39,7 @@ from app.services.transcription_checkpoint_service import (
     fingerprint_file_full,
 )
 from scripts import setup_local_transcription
+from scripts.normalize_transcript_simplified import normalize_transcript_file
 
 
 @contextmanager
@@ -71,6 +72,50 @@ def test_default_transcription_configuration_is_fully_offline_local() -> None:
     assert settings.transcription_compute_type == "float16"
     assert settings.transcription_chunk_seconds == 120
     assert settings.transcription_chunk_overlap_seconds == 5
+
+
+def test_local_transcription_converts_segments_and_words_to_simplified(tmp_path) -> None:
+    class FakeModel:
+        def transcribe(self, *_args, **_kwargs):
+            word_items = [
+                SimpleNamespace(start=0.0, end=0.5, word="老師", probability=0.9),
+                SimpleNamespace(start=0.5, end=1.0, word="計程車", probability=0.8),
+                SimpleNamespace(start=1.0, end=1.5, word=" ABC-123 ", probability=0.7),
+            ]
+            segment = SimpleNamespace(
+                start=0.0,
+                end=1.5,
+                text="老師讓計程車載著軟體 ABC-123",
+                words=word_items,
+                avg_logprob=-0.1,
+            )
+            return [segment], SimpleNamespace()
+
+    result = transcript_service._transcribe_audio_with_model(FakeModel(), tmp_path / "audio.wav")
+
+    assert result[0].text == "老师让计程车载著软体 ABC-123"
+    assert [word.text for word in result[0].words] == ["老师", "计程车", "ABC-123"]
+    assert "计程车" in result[0].text
+    assert "软体" in result[0].text
+
+
+def test_transcript_file_conversion_backs_up_and_preserves_markdown_structure(tmp_path) -> None:
+    transcript_path = tmp_path / "transcript.md"
+    original = (
+        "# 逐句時間戳原文\r\n\r\n"
+        "| 開始 | 結束 | 文本 |\r\n"
+        "| --- | --- | --- |\r\n"
+        "| 00:00:01 | 00:00:03 | 老師搭計程車，使用軟體。 |\r\n"
+    )
+    transcript_path.write_bytes(original.encode("utf-8"))
+
+    result = normalize_transcript_file(transcript_path, tmp_path / "backups")
+
+    converted = transcript_path.read_text(encoding="utf-8")
+    assert "老师搭计程车，使用软体。" in converted
+    assert len(converted.splitlines()) == len(original.splitlines())
+    assert Path(result["backup_path"]).read_bytes() == original.encode("utf-8")
+    assert result["before_sha256"] != result["after_sha256"]
 
 
 def test_offline_config_rejects_remote_provider_and_network_model_loading() -> None:
@@ -488,6 +533,18 @@ def test_model_revision_and_full_audio_hash_invalidate_checkpoint(tmp_path) -> N
         )
         revision_changed.ensure_run(chunks)
 
+        normalization_changed = TranscriptionCheckpoint(
+            task_id=task_id,
+            source_path=source,
+            provider="local",
+            model="large-v3@edaa852e|text=opencc-t2s-v1",
+            device="cuda",
+            compute_type="float16",
+            chunk_seconds=120,
+            overlap_seconds=5,
+        )
+        normalization_changed.ensure_run(chunks)
+
         source.write_bytes(head + (b"b" * (1024 * 1024)) + tail)
         second_hash = fingerprint_file_full(source)
         content_changed = TranscriptionCheckpoint(
@@ -504,6 +561,7 @@ def test_model_revision_and_full_audio_hash_invalidate_checkpoint(tmp_path) -> N
 
         assert first_hash != second_hash
         assert revision_changed.run_id != first.run_id
+        assert normalization_changed.run_id != first.run_id
         assert content_changed.run_id != first.run_id
         with get_connection() as connection:
             models = {
@@ -513,7 +571,11 @@ def test_model_revision_and_full_audio_hash_invalidate_checkpoint(tmp_path) -> N
                     (task_id,),
                 ).fetchall()
             }
-        assert {"large-v3@edaa852e", "large-v3@12345678"} <= models
+        assert {
+            "large-v3@edaa852e",
+            "large-v3@12345678",
+            "large-v3@edaa852e|text=opencc-t2s-v1",
+        } <= models
     finally:
         with get_connection() as connection:
             connection.execute("DELETE FROM transcription_chunks WHERE task_id = ?", (task_id,))
