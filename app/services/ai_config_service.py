@@ -396,7 +396,7 @@ def save_ai_config(payload: AIConfigUpdate) -> dict:
         "AI_REQUEST_TIMEOUT_SECONDS": str(payload.ai_request_timeout_seconds),
         "AI_CODEX_PATH": payload.ai_codex_path.strip() or "codex",
         "AI_CODEX_HOME": payload.ai_codex_home.strip(),
-        "AI_CODEX_MODEL": payload.ai_codex_model.strip() or "gpt-5.6-sol",
+        "AI_CODEX_MODEL": payload.ai_codex_model.strip() or "gpt-6-astra",
         "AI_CODEX_TIMEOUT_SECONDS": str(payload.ai_codex_timeout_seconds),
         "TRANSCRIPTION_PROVIDER": payload.transcription_provider.strip() or "volcengine",
         "TRANSCRIPTION_FALLBACK_PROVIDER": payload.transcription_fallback_provider.strip(),

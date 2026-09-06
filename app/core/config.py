@@ -90,7 +90,7 @@ class Settings:
     # Codex CLI 复用当前 Windows 用户的 ChatGPT/Codex 登录态，不读取 API Key。
     ai_codex_path: str = _env("AI_CODEX_PATH", "codex")
     ai_codex_home: str = _env("AI_CODEX_HOME", "")
-    ai_codex_model: str = _env("AI_CODEX_MODEL", "gpt-5.6-sol")
+    ai_codex_model: str = _env("AI_CODEX_MODEL", "gpt-6-astra")
     ai_codex_timeout_seconds: int = int(_env("AI_CODEX_TIMEOUT_SECONDS", "300"))
 
     ai_analysis_remote_base_url: str = _env_first(
