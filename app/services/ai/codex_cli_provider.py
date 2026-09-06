@@ -18,7 +18,7 @@ _CODEX_SLOTS = threading.BoundedSemaphore(value=2)
 @dataclass(frozen=True)
 class CodexCliConfig:
     executable: str = "codex"
-    model: str = "gpt-5.6-sol"
+    model: str = "gpt-6-astra"
     timeout_seconds: int = 300
     codex_home: str = ""
 

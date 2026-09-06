@@ -91,7 +91,7 @@ copy .env.example .env
 - `UPLOAD_TEMP_DIR`：浏览器上传大视频时的临时目录，默认 `E:\直播间切片工作流存储\_临时上传`
 - `PUBLISH_SCHEDULER_EXPORT_DIR`：手动发布包目录，默认 `E:\直播间切片工作流存储\_发布包`
 - `AI_CODEX_PATH`：受控 Codex CLI 命令路径（默认 `codex`）
-- `AI_CODEX_MODEL`：Codex CLI 分析模型（默认 `gpt-5.6-sol`）
+- `AI_CODEX_MODEL`：Codex CLI 分析模型（默认 `gpt-6-astra`）
 - `AI_ANALYSIS_REMOTE_API_KEY`：DeepSeek API Key（可选，用远程 AI 分析时需要）
 - `TRANSCRIPTION_MODEL_CACHE_DIR`：离线模型缓存目录，默认 `E:\直播间切片工作流存储\_模型\faster-whisper`
 - `TRANSCRIPTION_OFFLINE_ONLY`：默认 `true`，阻断所有远程语音转写请求
@@ -289,7 +289,7 @@ Windows 主机（运行 FastAPI）
 | `DATA_DIR` | 项目目录 `data/` | 数据库存放目录 |
 | `DATABASE_PATH` | `data/workflow.sqlite3` | 数据库文件路径 |
 | `AI_CODEX_PATH` | `codex` | 受控 Codex CLI 命令路径 |
-| `AI_CODEX_MODEL` | `gpt-5.6-sol` | Codex CLI 分析模型 |
+| `AI_CODEX_MODEL` | `gpt-6-astra` | Codex CLI 分析模型 |
 | `AI_ANALYSIS_REMOTE_API_KEY` | 空 | DeepSeek API Key |
 | `TRANSCRIPTION_PROVIDER` | `local` | 转写引擎：`local` 或 `volcengine`；完全离线模式只允许 `local` |
 | `AI_PROVIDER` | `codex` | AI 分析引擎：`codex`、`remote` 或 `local` |

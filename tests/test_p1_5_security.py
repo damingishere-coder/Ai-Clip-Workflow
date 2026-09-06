@@ -29,7 +29,7 @@ def _fake_ai_values() -> dict[str, str]:
             "AI_REQUEST_TIMEOUT_SECONDS": "120",
             "AI_CODEX_PATH": "codex",
             "AI_CODEX_HOME": "",
-            "AI_CODEX_MODEL": "gpt-5.6-sol",
+            "AI_CODEX_MODEL": "gpt-6-astra",
             "AI_CODEX_TIMEOUT_SECONDS": "300",
             "TRANSCRIPTION_PROVIDER": "volcengine",
             "TRANSCRIPTION_FALLBACK_PROVIDER": "",
