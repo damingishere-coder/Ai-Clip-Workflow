@@ -861,11 +861,20 @@ def test_export_sync_offloads_worker_validation_and_commit(monkeypatch):
 
     def commit_export(**kwargs):
         observed_thread_ids.append(threading.get_ident())
-        return {"row_count": len(kwargs["items"]), "message": "同步完成"}
+        return {"batch_id": "thread-test-batch", "row_count": len(kwargs["items"]), "message": "同步完成"}
 
     monkeypatch.setattr(content_review_service, "_resolve_douyin_account_id", resolve_account)
     monkeypatch.setattr(PublishWorkerClient, "analytics_export_sync", worker_sync)
     monkeypatch.setattr(content_review_service, "commit_douyin_item_export", commit_export)
+
+    from app.services import weekly_review_service
+
+    def queue_review(batch_id):
+        assert batch_id == "thread-test-batch"
+        observed_thread_ids.append(threading.get_ident())
+        return {"status": "queued"}
+
+    monkeypatch.setattr(weekly_review_service, "after_import", queue_review)
 
     result = asyncio.run(
         content_review_router.export_sync_douyin_items(
@@ -874,6 +883,8 @@ def test_export_sync_offloads_worker_validation_and_commit(monkeypatch):
     )
 
     assert result["row_count"] == 0
+    assert result["weekly_review"]["status"] == "queued"
+    assert len(observed_thread_ids) == 4
     assert len(set(observed_thread_ids)) == 1
     assert observed_thread_ids[0] != caller_thread_id
 

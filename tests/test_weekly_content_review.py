@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import hashlib
 from uuid import uuid4
 
 import pytest
@@ -409,4 +410,48 @@ def test_actual_prompt_and_copy_evidence_required_for_assignment(sample):
             "assigned"
         ]
         == 0
+    )
+
+
+def test_existing_metadata_cache_contract_is_preserved(monkeypatch):
+    from app.services.pipeline_engine import PipelineEngine
+
+    monkeypatch.setattr(weekly, "task_rules", lambda _task_id: {})
+    # Persisted pre-upgrade checkpoints contain this v1 wire shape. Adding empty
+    # weekly fields would invalidate them and unnecessarily repeat AI generation.
+    legacy_payload = {
+        "fingerprint_version": 1,
+        "output_clip_id": "existing-clip",
+        "clip_candidate_id": "",
+        "task_name": "",
+        "clip_title": "",
+        "clip_summary": "",
+        "highlight_reason": "",
+        "spread_value": "",
+        "suggested_editing": "",
+        "platform": "douyin",
+        "use_ai": False,
+        "provider": "rule",
+        "model": "",
+        "protocol": "",
+    }
+    expected = hashlib.sha256(
+        json.dumps(
+            legacy_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    actual = PipelineEngine._metadata_request_fingerprint(
+        {"id": "existing-clip"}, "douyin", use_ai=False
+    )
+    assert actual == expected
+    monkeypatch.setattr(
+        weekly,
+        "task_rules",
+        lambda _task_id: {"application_id": "applied", "copy_rules": "new"},
+    )
+    assert (
+        PipelineEngine._metadata_request_fingerprint(
+            {"id": "existing-clip"}, "douyin", use_ai=False
+        )
+        != expected
     )
