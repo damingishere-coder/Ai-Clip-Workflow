@@ -559,10 +559,9 @@ def update_job_checkpoint(
                 connection.rollback()
                 raise ValueError("Workflow Job checkpoint_json 已损坏，拒绝覆盖 AI 恢复证据") from exc
             if isinstance(current_checkpoint, dict) and "_ai_analysis_units_v1" in current_checkpoint:
-                merged_checkpoint.setdefault(
-                    "_ai_analysis_units_v1",
-                    current_checkpoint["_ai_analysis_units_v1"],
-                )
+                # PipelineCheckpoint may still hold the ledger from before this
+                # attempt. Only the unit executor owns updates to the live ledger.
+                merged_checkpoint["_ai_analysis_units_v1"] = current_checkpoint["_ai_analysis_units_v1"]
         cursor = connection.execute(
             f"UPDATE workflow_jobs SET checkpoint_json = ?, checkpoint_updated_at = ?, updated_at = ? WHERE {condition}",
             (json.dumps(merged_checkpoint, ensure_ascii=False), now, now, job_id, *lease_params),

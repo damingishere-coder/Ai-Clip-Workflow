@@ -322,13 +322,22 @@ def _uncertain_units(checkpoint: dict[str, Any]) -> list[tuple[str, dict[str, An
     if not isinstance(namespaces, dict):
         return []
     result: list[tuple[str, dict[str, Any]]] = []
+    legacy: list[tuple[str, dict[str, Any]]] = []
     for namespace, state in namespaces.items():
         units = state.get("units") if isinstance(state, dict) else None
         if not isinstance(units, dict):
             continue
         for unit_id, unit in units.items():
-            if isinstance(unit, dict) and unit.get("status") in {"running", "uncertain"}:
+            if not isinstance(unit, dict):
+                continue
+            if unit.get("status") in {"running", "uncertain"}:
                 result.append((f"{namespace}/{unit_id}", unit))
+            elif (namespace in {"variety_expansion", "variety_global_judge"}
+                  and unit.get("status") == "completed" and not unit.get("request_fingerprint")):
+                legacy.append((f"{namespace}/{unit_id}", unit))
+    # A downstream cutting/metadata retry must not invalidate successful AI.
+    if result or checkpoint.get("current_step") == TaskStatus.AI_ANALYZING.value:
+        result.extend(legacy)
     return result
 
 
@@ -340,14 +349,14 @@ def _confirmation_detail(
     retry_mode: str,
 ) -> dict[str, Any]:
     action = (
-        "只重新请求结果不确定的 AI 单元，并复用其余成功 checkpoint"
+        "补跑未完成单元，重新请求无法可靠复用的扩展或评审批次，并复用其余成功 checkpoint"
         if retry_mode == "resume_uncertain"
         else "转写输入已变化，将从 AI 分析阶段创建全新 Job，不复用旧 AI 单元"
     )
     return {
         "code": "ai_retry_confirmation_required",
         "message": (
-            f"检测到 {uncertain_count} 个 AI 单元的请求可能已经产生费用，但结果未确认。"
+            f"检测到 {uncertain_count} 个 AI 单元的结果未确认或缺少实际输入校验，重新请求可能再次产生费用。"
             f"确认后将{action}。"
         ),
         "task_id": task_id,

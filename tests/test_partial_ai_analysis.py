@@ -17,6 +17,27 @@ from app.services.pipeline_engine import PipelineEngine
 from app.services.video_cut_workflow_service import process_task_video_cuts
 
 
+@pytest.mark.parametrize("items,require_all,valid", [
+    ([], False, True),
+    ([{"source_id": "current"}], True, True),
+    ([{"source_id": "stale"}], False, False),
+    ([{"source_id": "current"}, {"source_id": "current"}], False, False),
+    ([], True, False),
+])
+def test_variety_validates_candidate_identity_before_checkpoint_success(monkeypatch, items, require_all, valid):
+    monkeypatch.setattr(variety_comedy_analyzer, "generate_json_with_safe_retry",
+                        lambda *_args: json.dumps({"clips": items}))
+    def generate():
+        return variety_comedy_analyzer._generate_payload(
+            object(), "prompt", expected_key="clips", known_ids={"current"}, require_all=require_all,
+        )
+    if valid:
+        assert generate() == {"clips": items}
+    else:
+        with pytest.raises(variety_comedy_analyzer.AIAnalysisError):
+            generate()
+
+
 def _valid_general_payload(task_id: str) -> str:
     return json.dumps(
         {
@@ -420,5 +441,7 @@ def test_variety_global_judge_requires_complete_candidate_coverage():
         input_fingerprint="stable-input",
     )
 
-    assert set(judged) == {"candidate-a"}
-    assert "缺少 1 个候选" in warning
+    # Incomplete judging must not be checkpointed as a successful unit: a
+    # confirmed retry needs to call the provider instead of replaying it forever.
+    assert judged == {}
+    assert "遗漏当前候选" in warning

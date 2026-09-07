@@ -563,7 +563,10 @@ def _expand_moments(
             namespace="variety_expansion",
             input_fingerprint=input_fingerprint,
             unit_id=f"batch_{batch_number:03d}",
-            operation=lambda prompt=prompt: _generate_payload(provider, prompt, expected_key="clips"),
+            request_fingerprint=build_unit_fingerprint({"prompt": prompt}),
+            operation=lambda prompt=prompt, known_ids=set(context_rows_by_id): _generate_payload(
+                provider, prompt, expected_key="clips", known_ids=known_ids,
+            ),
         )
         if execution.status != "completed" or not isinstance(execution.payload, dict):
             failed_units += 1
@@ -673,7 +676,11 @@ def _global_judge(
         namespace="variety_global_judge",
         input_fingerprint=input_fingerprint,
         unit_id="judge_001",
-        operation=lambda: _generate_payload(provider, prompt, expected_key="ranked_clips"),
+        request_fingerprint=build_unit_fingerprint({"prompt": prompt}),
+        operation=lambda: _generate_payload(
+            provider, prompt, expected_key="ranked_clips",
+            known_ids={str(item["source_id"]) for item in candidates}, require_all=True,
+        ),
     )
     if execution.status != "completed" or not isinstance(execution.payload, dict):
         return {}, f"全局评审结果不确定，已锁定自动切片：{execution.error or execution.status}"
@@ -738,13 +745,25 @@ def _to_clip_payload(item: dict, index: int) -> dict:
     }
 
 
-def _generate_payload(provider: AIProvider, prompt: str, *, expected_key: str) -> dict:
+def _generate_payload(
+    provider: AIProvider, prompt: str, *, expected_key: str,
+    known_ids: set[str] | None = None, require_all: bool = False,
+) -> dict:
     raw = generate_json_with_safe_retry(provider, prompt)
     payload = _loads_ai_json(raw)
     if not isinstance(payload, dict):
         raise AIAnalysisError("AI 输出必须是 JSON 对象")
     if not isinstance(payload.get(expected_key), list):
         raise AIAnalysisError(f"AI 输出缺少 {expected_key} 数组")
+    if known_ids is not None:
+        returned_ids = [str(item.get("source_id") or "") if isinstance(item, dict) else ""
+                        for item in payload[expected_key]]
+        if any(source_id not in known_ids for source_id in returned_ids):
+            raise AIAnalysisError("AI 返回了不属于当前候选的 source_id，结果未记为成功，请确认后重试此单元")
+        if len(set(returned_ids)) != len(returned_ids):
+            raise AIAnalysisError("AI 返回了重复 source_id，结果未记为成功，请确认后重试此单元")
+        if require_all and set(returned_ids) != known_ids:
+            raise AIAnalysisError("AI 评审遗漏当前候选，结果未记为成功，请确认后重试此单元")
     return payload
 
 
