@@ -1,5 +1,15 @@
 # Development Log
 
+## 2026-09-07 周复盘正式部署验收
+
+- 用户明确授权合并、部署；PR #77 已 Squash 合并为 e119fe3，目标仍为原堆叠分支 codex/docs-post-remediation-reaudit，不代表其他 PR 或 master 已合并。
+- 从实际运行版本 580bfce 集成至 593d8dc，保留离线转写、简体输出、600 秒 Codex 超时、发送中心轮询修复与既有迁移固定校验和；未更改 .env、账号、模型认证或 E 盘媒体。
+- 集成版全量 909 passed，Ruff/JS 检查通过。先在正式库备份副本演练，再通过既有 RunDock 记录停止并启动 Web/Worker；运行目录保持 Ai-Clip-Workflow-offline-runtime。
+- 正式深度检查 ready，迁移账本 7 项、quick_check=ok、外键异常 0；44 个任务、678 条发布记录、484 个输出片段、46 条 AI Run、4 个 Prompt 版本与 3 条排期均未变化。新增冻结任务规则 44 条。
+- 正式 Chrome 页面只读验收通过：完整 Prompt 可展开、折叠卡高 79px、无 JS 错误及横向溢出。周复盘尚未触发真实生成（reports=0），未应用规则或手动触发投稿。
+- 切换后 Web 监听 PID 76468，Worker 监听 PID 103464，均属于原 RunDock 托管链；调度器继续扫描、worker_available=true。
+- 回退资料与截图：主开发目录 data/backups/weekly-deploy-20260907-135211。before-cutover.sqlite3 SHA-256：99c9f637307c762d9de353b6901fde800b6f139e76831ea35a6067eb77dc46a0。回退必须先停相关服务，不能覆盖运行中的数据库。
+
 ## 2026-09-07 三条周总结与可回退的规则改进
 
 - 将逐视频的最多 12 条规则建议替换为 Codex 综合周总结和固定三个建议位置；好坏作品都作为证据，证据不足明确暂不改动。
