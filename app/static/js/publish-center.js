@@ -54,6 +54,9 @@ if (publishCenterRoot) {
   const backfillCoversButton = document.querySelector("[data-backfill-covers]");
   let latestPreviewSignature = "";
   let latestPreviewItems = [];
+  let latestStrategyToken = "";
+  let adaptiveContext = null;
+  let scheduleModeChosen = false;
   let activePlatform = "douyin";
   let calendarMonth = currentBeijingMonth();
   let selectedCalendarDate = "";
@@ -1343,6 +1346,10 @@ if (publishCenterRoot) {
       job_ids: Array.from(selectedJobIds),
       platform: activePlatform,
       action,
+      schedule_mode: activePlatform === "douyin" ? (scheduleForm?.elements.schedule_mode?.value || "interval") : "interval",
+      account_id: adaptiveContext?.policy?.account_id || "",
+      daily_limit: Number(scheduleForm?.elements.daily_limit?.value || 8),
+      min_gap_minutes: Number(scheduleForm?.elements.min_gap_minutes?.value || 90),
       start_at_local: String(scheduleForm?.elements.start_at_local?.value || ""),
       timezone: APP_TIMEZONE,
       interval_minutes: preset === "custom" ? Number(scheduleForm?.elements.interval_minutes?.value || 180) : Number(preset),
@@ -1374,6 +1381,7 @@ if (publishCenterRoot) {
   function invalidatePreview() {
     latestPreviewSignature = "";
     latestPreviewItems = [];
+    latestStrategyToken = "";
     if (confirmScheduleButton) confirmScheduleButton.disabled = true;
     if (previewList) previewList.innerHTML = '<p class="form-hint">请先生成预览，再确认应用。</p>';
     showScheduleFeedback();
@@ -1384,6 +1392,7 @@ if (publishCenterRoot) {
       showMessage("请先选择至少一条任务。", "error");
       return;
     }
+    configureAdaptiveForm();
     drawer.hidden = false;
     drawerBackdrop.hidden = false;
     document.body.classList.add("has-schedule-drawer");
@@ -2336,6 +2345,8 @@ if (publishCenterRoot) {
     const payload = schedulePayload("apply");
     const request = {
       job_ids: payload.job_ids,
+      schedule_mode: payload.schedule_mode, account_id: payload.account_id,
+      daily_limit: payload.daily_limit, min_gap_minutes: payload.min_gap_minutes,
       platform: payload.platform,
       timezone: payload.timezone,
       interval_minutes: payload.interval_minutes,
@@ -2381,13 +2392,14 @@ if (publishCenterRoot) {
       const data = await window.apiFetch("/api/publish/schedules/preview", { method: "POST", body: JSON.stringify(payload) });
       previewList.innerHTML = "";
       latestPreviewItems = data.schedule || [];
+      latestStrategyToken = data.strategy_token || "";
       latestPreviewItems.forEach((item, index) => {
         const row = document.querySelector(`[data-publish-row][data-job-id="${CSS.escape(item.job_id)}"]`);
         const line = document.createElement("div");
         const title = document.createElement("strong");
         const scheduledAt = document.createElement("time");
         title.textContent = `第 ${index + 1} 条：${row?.querySelector("[data-row-title]")?.textContent || item.job_id}`;
-        scheduledAt.textContent = item.scheduled_at_local_display || "";
+        scheduledAt.textContent = `${item.scheduled_at_local_display || ""}${item.reason ? ` · ${item.reason} · ${item.sample_count} 条时段样本` : ""}`;
         line.append(title, scheduledAt);
         previewList.appendChild(line);
       });
@@ -2411,7 +2423,8 @@ if (publishCenterRoot) {
       showScheduleFeedback("排期参数已变化，请重新预览。", "error");
       return;
     }
-    payload.confirmed_schedule = latestPreviewItems;
+    payload.confirmed_schedule = latestPreviewItems.map(({job_id, scheduled_at_utc}) => ({job_id, scheduled_at_utc}));
+    payload.strategy_token = latestStrategyToken;
     confirmScheduleButton.disabled = true;
     confirmScheduleButton.textContent = "正在应用排期…";
     showScheduleFeedback("正在保存已确认的具体发布时间，请稍候。");
@@ -2475,4 +2488,74 @@ if (publishCenterRoot) {
     if (!document.hidden) startPublishCenterPolling({ refreshImmediately: event.persisted });
   });
   startPublishCenterPolling();
+  function configureAdaptiveForm() {
+    const mode = scheduleForm?.elements.schedule_mode;
+    if (!mode) return;
+    const sameAccount = selectedJobIds.size > 0 && Array.from(selectedJobIds).every(id => {
+      const row=document.querySelector(`[data-publish-row][data-job-id="${CSS.escape(id)}"]`);
+      return row?.dataset.accountId === adaptiveContext?.policy?.account_id;
+    });
+    const available = activePlatform === "douyin" && adaptiveContext?.available && sameAccount;
+    if (available && !scheduleModeChosen) {
+      mode.value='adaptive';
+      scheduleForm.elements.daily_end_time.value=adaptiveContext.policy.daily_end_time;
+    }
+    mode.querySelector('[value="adaptive"]').disabled = !available;
+    if (!available) mode.value = "interval";
+    const adaptive = mode.value === "adaptive" && available;
+    document.querySelector('[data-adaptive-fields]').hidden = !adaptive;
+    scheduleForm.elements.interval_preset.closest('label').hidden = adaptive;
+    document.querySelector('[data-custom-interval]').hidden = adaptive || scheduleForm.elements.interval_preset.value !== 'custom';
+    const help = document.querySelector('.schedule-window-help');
+    if (help) help.textContent = adaptive ? '动态排期按自然日计数，结束时间填写 23:59；当天已排期保持不变。' : '固定间隔支持跨午夜；00:00 表示次日午夜，开始结束相同表示全天。';
+  }
+  scheduleForm?.elements.schedule_mode?.addEventListener('change', () => {
+    scheduleModeChosen = true;
+    const adaptive = scheduleForm.elements.schedule_mode.value === 'adaptive';
+    scheduleForm.elements.daily_end_time.value = adaptive ? (adaptiveContext?.policy.daily_end_time || '23:59') : '00:00';
+    configureAdaptiveForm(); invalidatePreview();
+  });
+  async function refreshAdaptive() {
+    try {
+      const data = await window.apiFetch('/api/publish/schedules/adaptive');
+      const firstLoad = !adaptiveContext;
+      adaptiveContext = data;
+      document.querySelector('[data-adaptive-panel]').hidden = !data.available;
+      if (!data.available) return;
+      const p = data.policy;
+      document.querySelector('[data-adaptive-summary]').textContent = `${p.enabled ? '自动调整已开启' : '自动调整未启用'} · 每天最多 ${p.daily_limit} 条 · 最小间隔 ${p.min_gap_minutes} 分钟 · ${data.strategy.captured_at ? '数据更新：'+formatBeijingTimestamp(data.strategy.captured_at) : '尚无数据'} · ${data.strategy.reason}`;
+      document.querySelector('[data-toggle-adaptive]').textContent = p.enabled ? '关闭自动调整（保留当前时间）' : '启用并纳入现有排期';
+      document.querySelector('[data-adaptive-data-note]').textContent = `${data.strategy.sample_count} 条可比较作品 · ${data.strategy.reason}`;
+      const scores = document.querySelector('[data-adaptive-scores]'); scores.replaceChildren();
+      (data.strategy.bins || []).forEach(b => { const line=document.createElement('p'); line.textContent=`${b.label} · ${b.status} · ${b.count} 条 · 播放中位数 ${b.median_play ?? '—'}`; scores.append(line); });
+      const changes = document.querySelector('[data-adaptive-changes]'); changes.replaceChildren();
+      (data.requests || []).slice(0, 3).forEach(r => { const line=document.createElement('p'); line.textContent=`${({pending:"等待调整",completed:"已处理",skipped:"保持原排期",failed:"调整失败"})[r.status] || r.status} · ${r.message || '等待后台计算'}`; changes.append(line); });
+      (data.changes || []).forEach(r => { const line=document.createElement('p'); line.textContent=`${r.title || "已移除的任务"}：${r.old_time ? formatBeijingTimestamp(r.old_time) : '未排期'} → ${formatBeijingTimestamp(r.new_time)} · ${r.reason}`; changes.append(line); });
+      if (firstLoad && activePlatform === 'douyin') {
+        scheduleForm.elements.schedule_mode.value = 'adaptive';
+        for (const name of ['daily_limit','min_gap_minutes','daily_start_time','daily_end_time']) scheduleForm.elements[name].value=p[name];
+      }
+      configureAdaptiveForm();
+    } catch(error) { showMessage(`动态排期数据读取失败：${error.message}`, 'error'); }
+  }
+  document.querySelector('[data-refresh-adaptive]')?.addEventListener('click', refreshAdaptive);
+  document.querySelector('[data-toggle-adaptive]')?.addEventListener('click', async () => {
+    const p=adaptiveContext?.policy; if (!p) return;
+    try {
+      await window.apiFetch(`/api/publish/schedules/adaptive/${encodeURIComponent(p.account_id)}`, {method:'PATCH',body:JSON.stringify({enabled:!p.enabled,include_existing:!p.enabled,daily_limit:p.daily_limit,min_gap_minutes:p.min_gap_minutes,daily_start_time:p.daily_start_time,daily_end_time:p.daily_end_time})});
+      invalidatePreview(); await refreshAdaptive();
+    } catch(error) { showMessage(error.message,'error'); }
+  });
+  async function updateManaged(managed) {
+    if (!selectedJobIds.size) return;
+    let done=0;
+    try {
+      for (const id of selectedJobIds) { await window.apiFetch(`/api/publish/jobs/${encodeURIComponent(id)}/adaptive`,{method:'PATCH',body:JSON.stringify({managed})}); done++; }
+      showMessage(`已${managed ? '加入动态管理' : '固定时间'} ${done} 条任务`); invalidatePreview(); await refreshAdaptive();
+    } catch(error) { showMessage(`已更新 ${done} 条；${error.message}`,'error'); }
+  }
+  document.querySelector('[data-fixed-selected]')?.addEventListener('click',()=>updateManaged(false));
+  document.querySelector('[data-managed-selected]')?.addEventListener('click',()=>updateManaged(true));
+  refreshAdaptive();
+
 }
