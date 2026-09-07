@@ -455,3 +455,39 @@ def test_existing_metadata_cache_contract_is_preserved(monkeypatch):
         )
         != expected
     )
+
+
+def test_draft_requires_evidence_from_target_preset(sample):
+    with get_connection() as connection:
+        evidence = weekly._evidence(connection, sample["account"])
+    sourced = [w for w in evidence["works"] if w["source"]]
+    assert sourced
+    assert {w["source"]["preset_id"] for w in sourced} == {sample["preset"]}
+    assert all(w["source"]["prompt_version_id"] for w in sourced)
+    raw = output_for(evidence, sample["preset"])
+    result = weekly._validated_result(raw, evidence)
+    assert result["changes"][0]["target_evidence_ids"] == sorted(
+        w["id"] for w in sourced
+    )
+    evidence["presets"].append({**evidence["presets"][0], "id": "another-used-preset"})
+    raw["changes"][0]["preset_id"] = "another-used-preset"
+    with pytest.raises(review.ContentReviewError, match="实际使用目标方案"):
+        weekly._validated_result(raw, evidence)
+
+
+def test_replaced_rules_are_explicit_in_draft(sample):
+    with get_connection() as connection:
+        evidence = weekly._evidence(connection, sample["account"])
+    preset = evidence["presets"][0]
+    base = preset["prompt_text"].split(weekly.RULE_MARKER)[0]
+    preset["prompt_text"] = base + weekly.RULE_MARKER + "旧选片要求。"
+    preset["copy_rules"] = "旧文案要求。"
+    result = weekly._validated_result(output_for(evidence, sample["preset"]), evidence)
+    change = result["changes"][0]
+    assert change["removed_rules"] == [
+        {"kind": "选片", "text": "旧选片要求。"},
+        {"kind": "文案", "text": "旧文案要求。"},
+    ]
+    assert change["after_prompt"].startswith(base)
+    assert "旧选片要求。" in change["before_prompt"]
+    assert "旧选片要求。" not in change["after_prompt"]

@@ -552,6 +552,7 @@ function weeklyEvidence(suggestion, evidence) {
     article.append(textNode("strong", `${groups[work.group]} · ${work.title || "未命名作品"}`));
     article.append(textNode("p", Object.entries(work).filter(([key]) => ["play_count","five_second_completion_rate","two_second_bounce_rate","completion_rate","watch_ratio"].includes(key)).map(([key,value]) => `${metricLabel(key)} ${formatInsightMetric(key,value)}`).join(" · ")));
     if (work.comparison_count) article.append(textNode("small", `${work.comparison_label}，对照 ${work.comparison_count} 条；数据截至 ${formatDateTime(work.captured_at)}`));
+    article.append(textNode("small", work.source?.preset_id ? `来源方案：${work.source.preset_name} · 第 ${work.source.version_number} 版` : "历史规则来源不完整"));
     if (work.context?.summary) article.append(textNode("p", `片段内容：${work.context.summary}`));
     if (work.comparison) {
       const metric = suggestion.primary_metric;
@@ -619,8 +620,13 @@ function renderWeeklyReport(data) {
   changes.forEach(change => {
     const card = document.createElement("article"); card.className = "weekly-review-change";
     card.append(textNode("strong", `${change.name} · 对应建议 ${change.suggestion_indexes.map(i=>i+1).join("、")}`),textNode("p",change.explanation));
-    card.append(textNode("p", "影响范围：确认后新建、使用此方案的任务。已有任务和排期保留原规则；文案补充规则仅用于 AI 文案生成。"));
+    card.append(textNode("p", "影响范围：此方案为全局共享，确认后会影响所有账号后续新建并使用此方案的任务。已有任务和排期保留原规则；文案补充规则仅用于 AI 文案生成。"));
     card.append(textNode("p", `新的选片补充规则：${change.analysis_rules || "无补充规则"}`),textNode("p", `新的文案补充规则：${change.copy_rules || "无补充规则"}`));
+    card.append(textNode("p", `直接依据：${(change.target_evidence_ids || []).length} 条实际使用此方案的作品。`));
+    if (change.removed_rules?.length) {
+      card.append(textNode("strong", "以下旧补充规则将被替换或移除，请一起核对："));
+      change.removed_rules.forEach(rule => card.append(textNode("p", `${rule.kind}：${rule.text}`)));
+    }
     const details = document.createElement("details");
     details.append(textNode("summary","查看修改前后差异"),textNode("pre",change.diff));
     card.append(details); changesBox.append(card);
@@ -628,7 +634,7 @@ function renderWeeklyReport(data) {
   const actions = document.createElement("div"); actions.className = "weekly-review-actions";
   if (changes.length && !application) {
     const apply = textNode("button","确认应用这些改动","primary-button"); apply.type = "button";
-    apply.addEventListener("click",()=>weeklyAction(`/api/content-review/weekly-reports/${encodeURIComponent(report.id)}/apply`,apply,"确认应用页面中列出的规则改动？它们将用于后续新建、使用相应方案的任务。"));
+    apply.addEventListener("click",()=>weeklyAction(`/api/content-review/weekly-reports/${encodeURIComponent(report.id)}/apply`,apply,`确认应用页面列出的规则改动？方案为全局共享，会影响所有账号后续新建并使用它的任务。本次有 ${changes.reduce((sum,change)=>sum+(change.removed_rules || []).length,0)} 行旧补充规则被替换或移除，请核对后确认。`));
     actions.append(apply);
   }
   if (application) {

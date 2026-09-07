@@ -132,6 +132,7 @@ def _evidence(connection, account_id):
         item["publish_job_id"] = row.get("publish_job_id")
         item["group"] = "insufficient"
         item["context"] = {}
+        item["source"] = {}
         if row.get("clip_candidate_id"):
             candidate = connection.execute(
                 "SELECT * FROM clip_candidates WHERE id=?", (row["clip_candidate_id"],)
@@ -149,6 +150,28 @@ def _evidence(connection, account_id):
                     )
                 }
                 item["context"]["task_id"] = candidate["task_id"]
+                source = connection.execute(
+                    """
+                    SELECT ar.id AS source_analysis_run_id, pv.id AS prompt_version_id,
+                           pv.preset_id, pv.version_number,
+                           pv.preset_name_snapshot AS preset_name
+                    FROM ai_analysis_runs ar
+                    JOIN ai_prompt_versions pv ON pv.id=ar.prompt_version_id
+                    JOIN output_clip oc ON oc.clip_candidate_id=?
+                    JOIN publish_jobs pj ON pj.output_clip_id=oc.id
+                    WHERE ar.id=? AND ar.task_id=? AND oc.task_id=ar.task_id
+                      AND pj.task_id=ar.task_id AND pj.id=? AND pj.account_id=?
+                    """,
+                    (
+                        candidate["id"],
+                        candidate["source_analysis_run_id"],
+                        candidate["task_id"],
+                        row["publish_job_id"],
+                        account_id,
+                    ),
+                ).fetchone()
+                if source:
+                    item["source"] = dict(source)
         if row in eligible:
             cohort, label = review._select_comparable_cohort(
                 row, [w for w in eligible if w["id"] != row["id"]]
@@ -339,6 +362,17 @@ def _validated_result(raw, evidence):
             for i in refs
         ):
             fail("改动必须对应有证据支持的建议", 422)
+        target_evidence_ids = sorted(
+            {
+                work_id
+                for index in refs
+                for work_id in suggestions[index]["evidence_ids"]
+                if works[work_id]["group"] != "insufficient"
+                and works[work_id].get("source", {}).get("preset_id") == preset_id
+            }
+        )
+        if not target_evidence_ids:
+            fail("改动必须引用实际使用目标方案的有效作品证据", 422)
         for key in ("analysis_rules", "copy_rules", "explanation"):
             if (
                 not isinstance(change.get(key), str)
@@ -356,10 +390,22 @@ def _validated_result(raw, evidence):
             and change["copy_rules"] == preset["copy_rules"]
         ):
             continue
+        old_analysis = preset["prompt_text"].partition(RULE_MARKER)[2]
+        removed_rules = [
+            {"kind": kind, "text": line}
+            for kind, before, after in (
+                ("选片", old_analysis, analysis),
+                ("文案", preset["copy_rules"], change["copy_rules"]),
+            )
+            for line in before.splitlines()
+            if line.strip() and line not in after.splitlines()
+        ]
         validated.append(
             {
                 **change,
                 "name": preset["name"],
+                "target_evidence_ids": target_evidence_ids,
+                "removed_rules": removed_rules,
                 "before_prompt": preset["prompt_text"],
                 "after_prompt": new_prompt,
                 "before_copy": preset["copy_rules"],
@@ -483,6 +529,8 @@ changes 仅生成已有 Prompt 方案的补充规则，不能修改系统代码�
 analysis_rules 只影响连续片段选择和开头边界，不承诺中段重剪、画面调整、改变排期或发布。
 copy_rules 只影响标题简介话题的生成表达，必须服从既有长度、数量和内容校验。
 保留现有有效补充规则，有依据才修订。每个目标方案至多一项改动。
+每项改动对应的建议必须引用 source.preset_id 等于目标 preset_id 的有效作品。
+来源不完整的作品可以参与总结，但不能据此修改方案；方案为全局共享，会影响其他账号后续使用它的新任务。
 输出 JSON：{"summary":"总体总结", "suggestions":[{"title":"总结建议标题","finding":"好坏作品共同说明什么",
 "action":"具体改进","expected_effect":"预期效果","insufficient":false,"evidence_ids":["作品id"],
 "primary_metric":"two_second_bounce_rate"}],"changes":[{"preset_id":"preset_001","suggestion_indexes":[0],
