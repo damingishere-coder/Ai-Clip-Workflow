@@ -1880,8 +1880,6 @@ def _verify_ai_prompt_version_fk_migration(connection: sqlite3.Connection) -> No
 
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
     from app.services import weekly_review_schema
-
-
     from app.services import adaptive_schedule
     return (
         SchemaMigration(
