@@ -14,6 +14,7 @@ from app.main import app  # noqa: E402
 from app.services import ai_config_service  # noqa: E402
 from app.services.publish_scheduler import PublishScheduler  # noqa: E402
 from tests.test_adaptive_schedule import db  # noqa: E402,F401
+from tests.test_adaptive_schedule import seed_metrics  # noqa: E402
 from tests.test_publish_center_browser import _seed_job, _free_port  # noqa: E402
 
 
@@ -25,6 +26,7 @@ def test_adaptive_drawer_confirm_fixed_and_settings(db, monkeypatch, tmp_path): 
     if not chrome.exists():
         pytest.skip("需要本机 Chrome")
     job_id = _seed_job(tmp_path, 1)
+    seed_metrics()
     with get_connection() as c:
         c.execute("UPDATE publish_jobs SET account_id='target' WHERE id=?", (job_id,))
         c.commit()
@@ -98,6 +100,8 @@ def test_adaptive_drawer_confirm_fixed_and_settings(db, monkeypatch, tmp_path): 
                 assert tuple(row) == ("SCHEDULED", 1)
             # Close automatic adjustments without changing the concrete time.
             page.locator("[data-adaptive-panel] summary").click()
+            assert "完播中位数" in page.locator("[data-adaptive-panel]").inner_text()
+            assert "涨粉中位数" in page.locator("[data-adaptive-panel]").inner_text()
             page.locator("[data-refresh-adaptive]").click()
             page.wait_for_function(
                 "document.querySelector('[data-toggle-adaptive]').textContent.includes('关闭')"

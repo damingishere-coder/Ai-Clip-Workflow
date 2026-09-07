@@ -230,11 +230,11 @@ def test_replan_transaction_rolls_back_every_change(db, monkeypatch):
 
     def fail(c, account, schedule, token, request_id=None):
         original(c, account, schedule[:1], token, request_id)
-        raise ValueError("simulated conflict")
+        raise service.ScheduleConflict("simulated conflict")
 
     monkeypatch.setattr(service, "_write_changes", fail)
     result = service.process_pending()
-    assert result[0]["status"] == "failed"
+    assert result[0]["status"] == "pending"
     with get_connection() as c:
         assert (
             c.execute("SELECT scheduled_at FROM publish_jobs WHERE id='a'").fetchone()[
@@ -245,6 +245,14 @@ def test_replan_transaction_rolls_back_every_change(db, monkeypatch):
         assert (
             c.execute("SELECT COUNT(*) FROM adaptive_schedule_changes").fetchone()[0]
             == 0
+        )
+
+    monkeypatch.setattr(service, "_write_changes", original)
+    assert service.process_pending()[0]["status"] == "completed"
+    with get_connection() as c:
+        assert (
+            c.execute("SELECT attempts FROM adaptive_schedule_requests").fetchone()[0]
+            == 2
         )
 
 
