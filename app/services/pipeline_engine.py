@@ -1583,8 +1583,12 @@ class PipelineEngine:
             if use_ai
             else ""
         )
+        from app.services.weekly_review_service import task_rules
+        rule_snapshot = task_rules(output_clip.get("task_id"))
         payload = {
-            "fingerprint_version": 1,
+            "fingerprint_version": 2,
+            "weekly_rule_application_id": rule_snapshot.get("application_id"),
+            "weekly_copy_rules": rule_snapshot.get("copy_rules", ""),
             "output_clip_id": output_clip.get("id") or "",
             "clip_candidate_id": output_clip.get("clip_candidate_id") or "",
             "task_name": output_clip.get("task_name") or "",

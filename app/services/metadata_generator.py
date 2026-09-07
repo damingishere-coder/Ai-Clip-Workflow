@@ -54,6 +54,7 @@ class MetadataGenerator:
             "risk_flags": risk_flags,
             "status": "NEED_REVIEW" if risk_flags else "READY",
             "source": metadata.get("source") or "rule",
+            "weekly_rule_application_id": metadata.get("weekly_rule_application_id"),
             "error": metadata_error,
             "recommend_reason": item.get("highlight_reason") or item.get("clip_summary") or "",
         }

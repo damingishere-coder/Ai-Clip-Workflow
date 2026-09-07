@@ -124,11 +124,16 @@ def _is_public_path(path: str) -> bool:
 async def lifespan(app: FastAPI):
     previous_temp = tempfile.tempdir
     previous_temp_env = {name: os.environ.get(name) for name in ("TEMP", "TMP")}
+    weekly_review_runner = None
     workflow_job_runner = None
     scheduler = None
     try:
         app.state.media_storage = configure_runtime_media_storage()
         init_db()
+        if os.environ.get("NIUMA_WEEKLY_REVIEW_RUNNER_ENABLED", "true").lower() == "true":
+            from app.services.weekly_review_service import WeeklyReviewRunner
+            weekly_review_runner = WeeklyReviewRunner()
+            weekly_review_runner.start()
         workflow_job_runner = WorkflowJobRunner()
         workflow_job_runner.start()
         app.state.workflow_job_runner = workflow_job_runner
@@ -137,6 +142,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         try:
+            if weekly_review_runner:
+                weekly_review_runner.stop()
             if workflow_job_runner:
                 workflow_job_runner.stop()
         finally:

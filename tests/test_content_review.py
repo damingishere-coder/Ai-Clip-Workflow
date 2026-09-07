@@ -37,6 +37,7 @@ def _cleanup() -> None:
         ).fetchall()
         account_ids = [row["id"] for row in account_rows]
         for account_id in account_ids:
+            connection.execute("DELETE FROM weekly_content_reports WHERE account_id=?", (account_id,))
             experiment_rows = connection.execute(
                 "SELECT id FROM content_improvement_experiments WHERE account_id = ?",
                 (account_id,),
