@@ -241,7 +241,9 @@ def get_task_ai_analysis_status(task_id: str) -> dict:
 
     paths = get_artifact_paths(task_id)
     log_lines = read_task_log_tail(task_id)
-    is_running = task.get("status") == TaskStatus.ai_analyzing.value
+    is_running = task.get("status") in {
+        TaskStatus.ai_analyzing.value, TaskStatus.AI_ANALYZING.value,
+    }
     active_payload = _load_active_analysis_payload(task_id)
     has_analysis = bool(active_payload) or paths["analysis_path"].exists()
     if active_payload:
@@ -249,6 +251,7 @@ def get_task_ai_analysis_status(task_id: str) -> dict:
             _materialize_analysis_payload(task_id, active_payload)
         except OSError:
             pass
+    meta = _read_analysis_meta(task_id) if has_analysis else {}
     window_status = (
         get_latest_long_live_window_status(task_id)
         if task.get("selection_profile") == "long_live_talk"
@@ -273,21 +276,25 @@ def get_task_ai_analysis_status(task_id: str) -> dict:
         if any("远程 AI 分析接口不可用" in line for line in log_lines):
             percent = 72
             message = "远程 AI 分析接口暂不可用，已暂停等待你确认下一步。"
-    elif task.get("status") == TaskStatus.pending_review.value and has_analysis:
-        meta = _read_analysis_meta(task_id)
-        status = "incomplete" if meta.get("analysis_incomplete") else "completed"
-        percent = int(float(meta.get("coverage_percent") or 100))
+    elif has_analysis and meta.get("analysis_incomplete"):
+        status = "incomplete"
+        percent = int(float(meta.get("coverage_percent") or 0))
         message = (
             f"{task.get('selection_profile') or 'general'} 分析覆盖 "
             f"{float(meta.get('coverage_percent') or 0):.2f}%，"
             "仍有处理单元失败；请重试 AI 分析补齐结果。"
-            if meta.get("analysis_incomplete")
-            else "AI 分析完成，候选片段已生成，可检查后直接生成切片。"
         )
-    elif task.get("status") == TaskStatus.failed.value and any("AI 分析失败" in line for line in log_lines):
+    elif task.get("status") == TaskStatus.FAILED_AI_ANALYZING.value or (
+        task.get("status") == TaskStatus.failed.value
+        and any("AI 分析失败" in line for line in log_lines)
+    ):
         status = "failed"
-        percent = 100
+        percent = 0
         message = task.get("error_message") or "AI 分析失败，请查看右侧运行日志。"
+    elif task.get("status") == TaskStatus.pending_review.value and has_analysis:
+        status = "completed"
+        percent = 100
+        message = "AI 分析完成，候选片段已生成，可检查后直接生成切片。"
     elif has_analysis:
         status = "completed"
         percent = 100

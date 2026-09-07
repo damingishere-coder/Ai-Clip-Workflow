@@ -21,6 +21,18 @@ from app.services.task_lifecycle_service import create_task_record
 client = TestClient(app)
 
 
+def test_legacy_ai_cache_does_not_block_downstream_retry():
+    from app.services.ai_retry_service import _uncertain_units
+    checkpoint = {"current_step": "VIDEO_CUTTING", "_ai_analysis_units_v1": {"namespaces": {
+        "variety_expansion": {"units": {"batch_001": {"status": "completed"}}},
+    }}}
+    assert _uncertain_units(checkpoint) == []
+    checkpoint["_ai_analysis_units_v1"]["namespaces"]["variety_recall"] = {
+        "units": {"window_007": {"status": "uncertain"}},
+    }
+    assert len(_uncertain_units(checkpoint)) == 2
+
+
 @pytest.fixture(autouse=True)
 def cleanup_ai_retry_data():
     yield
@@ -183,6 +195,33 @@ def test_confirmed_same_input_retries_only_uncertain_unit() -> None:
     ]
     assert stored["checkpoint_json"]["current_step"] == TaskStatus.AI_ANALYZING.value
     assert task_service.get_task(task_id, include_video_probe=False)["status"] == TaskStatus.FAILED_AI_ANALYZING.value
+
+
+def test_legacy_dependent_batches_require_confirmation_and_keep_recall():
+    task_id = "test-ai-retry-legacy-dependent"
+    _create_task(task_id)
+    old_job = _failed_job(task_id)
+    cp = old_job["checkpoint_json"]
+    cp["current_step"] = TaskStatus.AI_ANALYZING.value
+    namespaces = cp["_ai_analysis_units_v1"]["namespaces"]
+    namespaces["variety_recall"]["units"].pop("window_004")
+    namespaces["variety_expansion"] = {
+        "input_fingerprint": "input-v1",
+        "units": {"batch_001": {"status": "completed", "result_json": "{}"}},
+    }
+    with get_connection() as connection:
+        connection.execute("UPDATE workflow_jobs SET checkpoint_json=? WHERE id=?",
+                           (json.dumps(cp), old_job["id"]))
+        connection.commit()
+    response = client.post(f"/api/tasks/{task_id}/process/auto-retry")
+    assert response.status_code == 409
+    assert response.json()["detail"]["uncertain_unit_count"] == 1
+    assert "实际输入校验" in response.json()["detail"]["message"]
+    response = client.post(f"/api/tasks/{task_id}/process/auto-retry?confirm_uncertain_ai=true")
+    assert response.status_code == 200
+    updated = job_service.get_job(old_job["id"])["checkpoint_json"]["_ai_analysis_units_v1"]["namespaces"]
+    assert updated["variety_expansion"]["units"]["batch_001"]["status"] == "retryable_failed"
+    assert updated["variety_recall"] == namespaces["variety_recall"]
 
 
 def test_confirmed_changed_input_creates_fresh_ai_job_and_preserves_old_evidence() -> None:
