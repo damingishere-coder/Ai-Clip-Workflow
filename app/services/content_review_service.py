@@ -2271,6 +2271,8 @@ def _commit_export_batch_with_connection(
         """,
         (matched, ambiguous, committed_at, batch_id),
     )
+    from app.services.adaptive_schedule import enqueue
+    enqueue(connection, account_id, f"import:{batch_id}")
     return {
         "row_count": len(items),
         "matched_count": matched,

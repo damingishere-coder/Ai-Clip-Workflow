@@ -143,7 +143,7 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
         ).fetchall()
         indexes = _index_names(connection)
 
-    assert len(migrations) == 7
+    assert len(migrations) == 8
     from app.services import weekly_review_schema
     weekly_migration = next(row for row in migrations if row["version"] == weekly_review_schema.VERSION)
     assert weekly_migration["checksum"] == weekly_review_schema.CHECKSUM

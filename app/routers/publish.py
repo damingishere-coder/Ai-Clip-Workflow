@@ -1,3 +1,4 @@
+from app.models.task import AdaptivePolicyUpdate, AdaptiveJobUpdate
 from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
@@ -388,6 +389,10 @@ async def update_publish_job_schedule(job_id: str, payload: PublishJobScheduleUp
 @router.patch("/jobs/schedule-batch")
 async def update_publish_jobs_schedule_batch(payload: PublishBatchScheduleUpdate) -> dict:
     try:
+        if payload.schedule_mode == "adaptive" and payload.action == "apply":
+            from app.services import adaptive_schedule
+            return adaptive_schedule.apply(payload.job_ids, payload.account_id, _adaptive_options(payload),
+                payload.start_at_local, payload.strategy_token, payload.confirmed_schedule)
         return PublishScheduler().update_batch_schedule(
             payload.job_ids,
             platform=payload.platform,
@@ -412,6 +417,13 @@ async def preview_publish_jobs_schedule(payload: PublishBatchScheduleUpdate) -> 
     if payload.action != "apply":
         raise HTTPException(status_code=400, detail="排期预览只支持 apply")
     try:
+        if payload.schedule_mode == "adaptive":
+            from app.services import adaptive_schedule
+            scheduler = PublishScheduler()
+            scheduler._validate_batch_jobs(payload.job_ids, "douyin")
+            scheduler._reject_legacy_schedule_apply(payload.job_ids)
+            scheduler._require_ready_jobs(payload.job_ids, resolve_legacy=True, check_worker=True)
+            return adaptive_schedule.preview(payload.job_ids,payload.account_id,_adaptive_options(payload),payload.start_at_local)
         return PublishScheduler().preview_batch_schedule(
             payload.job_ids,
             platform=payload.platform,
@@ -432,6 +444,21 @@ async def preview_publish_jobs_schedule(payload: PublishBatchScheduleUpdate) -> 
 @router.post("/schedules/next-start")
 async def get_publish_jobs_next_schedule_start(payload: PublishScheduleNextStartRequest) -> dict:
     try:
+        if payload.schedule_mode == "adaptive":
+            from app.services import adaptive_schedule
+            from app.services.publish_time import local_display, to_utc_iso
+            options = _adaptive_options(payload)
+            with adaptive_schedule.get_connection() as connection:
+                adaptive_schedule.policy(connection, payload.account_id)
+                occupied = adaptive_schedule._occupied(adaptive_schedule._jobs(connection,payload.account_id), set(payload.job_ids))
+                now = adaptive_schedule._now()
+                latest = max((t for _,t in occupied if t > now), default=now)
+                start = latest + adaptive_schedule.timedelta(minutes=payload.min_gap_minutes)
+            result = adaptive_schedule.preview(payload.job_ids,payload.account_id,options,start.isoformat())
+            item = result["schedule"][0]
+            return {"status":"ok","next_start_at_local":item["scheduled_at_local"][:16],
+                    "next_start_at_utc":item["scheduled_at_utc"],"next_start_at_local_display":item["scheduled_at_local_display"],
+                    "latest_scheduled_at_local_display":local_display(to_utc_iso(latest))}
         return PublishScheduler().next_batch_schedule_start(
             payload.job_ids,
             platform=payload.platform,
@@ -512,3 +539,39 @@ async def cancel_publish_job(job_id: str) -> dict:
         return PublishScheduler().cancel_job(job_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/schedules/adaptive")
+async def adaptive_schedule_context(account_id: str = "") -> dict:
+    from app.services import adaptive_schedule
+    try:
+        return adaptive_schedule.context(account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/schedules/adaptive/{account_id}")
+async def update_adaptive_policy(account_id: str, payload: AdaptivePolicyUpdate) -> dict:
+    from app.services import adaptive_schedule
+    try:
+        values = payload.model_dump(exclude={"include_existing"})
+        return {"policy": adaptive_schedule.save_policy(account_id, values, payload.include_existing)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/jobs/{job_id}/adaptive")
+async def update_adaptive_job(job_id: str, payload: AdaptiveJobUpdate) -> dict:
+    from app.services import adaptive_schedule
+    try:
+        adaptive_schedule.set_managed(job_id, payload.managed)
+        return {"status":"ok"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _adaptive_options(payload):
+    if payload.platform != "douyin" or payload.timezone != "Asia/Shanghai":
+        raise ValueError("动态排期仅使用抖音与北京时间")
+    return {"daily_limit":payload.daily_limit,"min_gap_minutes":payload.min_gap_minutes,
+            "daily_start_time":payload.daily_start_time,"daily_end_time":payload.daily_end_time}

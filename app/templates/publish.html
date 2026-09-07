@@ -12,7 +12,7 @@
 {% endmacro %}
 
 {% macro content_row(job) %}
-<article class="publish-content-card{% if job.status == 'SCHEDULED' %} is-scheduled{% endif %}" data-publish-row data-job-id="{{ job.id }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-experiment-id="{{ job.content_experiment_id or '' }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-section="content" {% if not job.output_is_active or job.status not in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
+<article class="publish-content-card{% if job.status == 'SCHEDULED' %} is-scheduled{% endif %}" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.effective_account_id or job.account_id or '' }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-experiment-id="{{ job.content_experiment_id or '' }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-section="content" {% if not job.output_is_active or job.status not in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
   <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
   <div class="publish-content-media">
     <video muted preload="metadata" src="{{ job.video_media_url }}"></video>
@@ -342,6 +342,15 @@
   </div>
 </section>
 
+<section class="panel" data-adaptive-panel hidden>
+  <details><summary>康熙来了 · 动态排期管理</summary>
+    <p data-adaptive-summary class="form-hint"></p>
+    <button type="button" class="secondary-button" data-toggle-adaptive>启用并纳入现有排期</button>
+    <button type="button" class="text-button" data-refresh-adaptive>刷新数据与记录</button>
+    <div data-adaptive-scores class="schedule-preview-list"></div>
+    <h3>最近调整（北京时间）</h3><div data-adaptive-changes class="schedule-preview-list"></div>
+  </details>
+</section>
 <div class="publish-selection-bar" data-selection-bar hidden>
   <strong>已选 <span data-selected-count>0</span> 条</strong>
   <span class="status-pill tone-blue">仅限 <b data-selection-platform>抖音</b></span>
@@ -349,6 +358,8 @@
   <button type="button" class="secondary-button" data-apply-batch-target>批量设置当前平台账号</button>
   <button type="button" class="secondary-button" data-batch-ai title="立即重写并保存当前勾选内容的标题、话题和简介">AI 重写已选文案</button>
   <button type="button" class="primary-button" data-open-schedule-drawer>设置排期</button>
+  <button type="button" class="text-button" data-fixed-selected>固定所选时间</button>
+  <button type="button" class="text-button" data-managed-selected>所选重新加入动态管理</button>
   <button type="button" class="text-button" data-clear-selection>取消选择</button>
 </div>
 
@@ -356,6 +367,13 @@
 <aside class="schedule-drawer" data-schedule-drawer hidden aria-label="设置排期">
   <div class="schedule-drawer-header"><div><p class="eyebrow">Schedule</p><h2>设置排期</h2><p>已选 <strong data-drawer-count>0</strong> 条</p></div><button type="button" class="icon-button" data-close-schedule-drawer aria-label="关闭">×</button></div>
   <form data-schedule-form>
+    <label><span>排期方式</span><select name="schedule_mode"><option value="interval">固定间隔</option><option value="adaptive" data-adaptive-mode-option disabled>数据动态排期</option></select></label>
+    <div data-adaptive-fields hidden>
+      <p class="form-hint">康熙来了 · 按作品数据选择时间；新数据导入后调整明天以后的排期，当天保持不变。</p>
+      <label><span>每天最多发布</span><input name="daily_limit" type="number" value="8" min="1" max="24"></label>
+      <label><span>最小间隔（分钟）</span><input name="min_gap_minutes" type="number" value="90" min="90" max="1440"></label>
+      <p data-adaptive-data-note class="form-hint"></p>
+    </div>
     <div class="schedule-start-field">
       <label><span>第 1 条发布时间（北京时间）</span><input type="datetime-local" name="start_at_local" required></label>
       <button type="button" class="secondary-button schedule-after-latest-button" data-use-latest-schedule>接在当前平台最晚排期后</button>
@@ -386,4 +404,4 @@
 </aside>
 {% endblock %}
 
-{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260901-polling-state"></script>{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260906-adaptive"></script>{% endblock %}

@@ -161,6 +161,8 @@ class PublishScheduler:
         init_db()
         _SCHEDULER_HEALTH["scanning"] = True
         try:
+            from app.services.adaptive_schedule import process_pending
+            process_pending()
             recovered = self.recover_interrupted_jobs()
             jobs = self.list_due_jobs()
             results: list[dict[str, Any]] = []
@@ -883,7 +885,7 @@ class PublishScheduler:
         with get_connection() as connection:
             cursor = connection.execute(
                 """
-                UPDATE publish_jobs SET account_id = ?, publish_mode = ?,
+                UPDATE publish_jobs SET adaptive_managed = 0, adaptive_fixed = 1, account_id = ?, publish_mode = ?,
                     scheduled_at = ?, next_attempt_at = NULL,
                     timezone = ?, schedule_timezone = ?, status = 'SCHEDULED', updated_at = ?
                 WHERE id = ? AND status = ? AND updated_at = ?
@@ -1094,7 +1096,7 @@ class PublishScheduler:
                 readiness = readiness_map.get(job_id) or {}
                 cursor = connection.execute(
                     """
-                    UPDATE publish_jobs SET account_id = ?, publish_mode = ?,
+                    UPDATE publish_jobs SET adaptive_managed = 0, adaptive_fixed = 1, account_id = ?, publish_mode = ?,
                         scheduled_at = ?, next_attempt_at = NULL,
                         timezone = ?, schedule_timezone = ?, status = ?, updated_at = ?
                     WHERE id = ? AND status = ? AND updated_at = ?

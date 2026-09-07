@@ -212,6 +212,11 @@ def init_db() -> None:
 
     if weekly_review_schema.requires_backup(settings.database_path):
         create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "weekly-review")
+
+    from app.services.adaptive_schedule import needs_migration as needs_adaptive_migration
+    if needs_adaptive_migration(settings.database_path):
+        create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "adaptive-schedule-v1")
+
     needs_long_live_backup = _requires_long_live_schema_migration(settings.database_path)
     needs_workflow_fencing_backup = _requires_workflow_job_fencing_migration(settings.database_path)
     needs_subtitle_editor_backup = _requires_subtitle_editor_schema_migration(settings.database_path)
@@ -1875,7 +1880,7 @@ def _verify_ai_prompt_version_fk_migration(connection: sqlite3.Connection) -> No
 
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
     from app.services import weekly_review_schema
-
+    from app.services import adaptive_schedule
     return (
         SchemaMigration(
             version=PUBLISH_ACTIVE_INDEX_MIGRATION_VERSION,
@@ -1926,6 +1931,11 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             checksum=weekly_review_schema.CHECKSUM,
             apply=weekly_review_schema.apply,
             verify=weekly_review_schema.verify,
+        ),
+        SchemaMigration(
+            version="20260906_01_adaptive_schedule", name="按作品数据动态排期",
+            checksum=adaptive_schedule.CHECKSUM,
+            apply=adaptive_schedule.migrate, verify=adaptive_schedule.verify_schema,
         ),
     )
 
