@@ -17,6 +17,22 @@
 - 分析与发布文案的 Codex CLI 默认模型统一为 `gpt-6-astra`；同步配置表单默认值、保存时空值回退、环境变量示例和部署说明。
 - 当前本机 `AI_CODEX_MODEL` 同步切换；登录方式、供应商选择、任务内容、发布排期和认证配置保持原值。
 - 验证使用本地配置与模拟子进程测试，不提交真实生成或发布任务。
+## 2026-08-30 第二次工程复检整改收口
+
+- 使用 Codemap、Code Overhaul 和 SonarQube 26.8 对最终 revision `12ca670` 完成整改后全量复检，并生成 `PROJECT_REAUDIT.md`。
+- 上次 13 个 P0/P1 核心问题保持 `13/13` 关闭；整改前 A-F 六项问题为 `6/6` 关闭。独立复审发现的预览按钮状态回归已在最终 revision 修复，当前没有未关闭的新 P0/P1。
+- Codemap 14 个模块全部完成独立复审，`needs_audit=0`；HIGH 从 1 条降为 0，平均分从 65.4 提升到 66.8，D 模块从 3 个降为 1 个。
+- SonarQube 没有新增 Bug 或 Vulnerability，但增加 4 条 Code Smell；Quality Gate 因没有 `coverage.xml` 和 4 个 new-code 规则问题为 ERROR。本轮如实保留，不为追分继续修改高风险迁移或前端函数。
+- 最终全量 `867 passed`；PR #67、#68、#69 的 Linux、Windows host smoke 和 Docker image smoke 全部通过。活动库只读检查为 `quick_check=ok`、外键违规 0，但本轮新增迁移尚未应用。
+- 当前健康度为 `80/100 · 稳定 V1`，已经达到停止本轮业务代码优化的条件；剩余历史迁移、恢复互斥、文件/lease、Worker 可观测性和启动隔离问题按真实触发条件进入 P2。
+
+## 2026-08-30 内容复盘异步边界与陈旧预览保护
+
+- 官方作品导出路由将账号解析、同步 Worker 调用、行数校验和 SQLite 提交整体放入线程池；原有登录、验证、限流、页面变化、下载失败和 Worker 不可用错误码保持不变。
+- 人工导入预览新增请求代际、账号、文件对象和 `AbortController` 四重上下文保护；切换账号或文件后，旧响应不能恢复旧批次、预览区或“确认导入”按钮。
+- 独立复审补获并修正了保护逻辑自身的按钮状态回归：账号切换后当前文件仍可重新预览，旧确认请求返回后也不能重新启用无批次按钮或覆盖当前消息。
+- Worker 返回行数与作品数组不一致时继续在数据库提交前以 502 停止；本轮不增加自动重试、后台队列或真实平台操作。
+- 已新增线程边界、提交前校验和真实 Chrome 陈旧响应回归；专项 `39 passed`、全量 `867 passed`，Ruff、Compileall、9 个 JavaScript、20 个 PowerShell、三套 Compose、`pip check` 与 `git diff --check` 全部通过。验证仅使用 Mock Worker、隔离测试库和本地测试文件，不触发真实导出、AI 或投稿。
 
 ## 2026-08-29 内容复盘“数据 → 动作 → 验证”闭环
 
@@ -1446,3 +1462,23 @@
 - Worker 现在把 `checkpoint_updated_at` 与百分比、文案共同视为业务进展；自己每 20 秒写入的 heartbeat 不算进展，避免真正卡死的进程永久占用。
 - 自动流水线父进程失败收口兼容小写 `ai_analyzing`，与大写 `AI_ANALYZING` 一样写为 `FAILED_AI_ANALYZING / 45%`，不再出现 Job 已失败但页面仍显示 65% 运行中的状态分裂。
 - 定向回归 `52 passed`；Ruff、Compileall 和 `git diff --check` 通过。未重跑当前 AI 单元，未调用真实 AI、ASR、FFmpeg 或发布平台，也未修改活动 SQLite；正式 8001 服务尚未重启加载新代码。
+
+## 2026-08-30 堆叠 PR CI 触发范围修复
+
+- 保留 `master` 分支 push 的既有 CI，同时取消 Pull Request 目标分支限制，让以功能分支为目标的堆叠 PR 也运行 Linux 测试、Windows 主机冒烟和 Docker 镜像冒烟。
+- 不修改 CI Job 内容、权限、Secrets、依赖版本或业务代码；继续使用权限更低的 `pull_request` 事件，不切换到 `pull_request_target`。
+- 本次只恢复自动验收链路。现有堆叠 PR 的依赖、合并顺序与目标分支将在 CI 修复合并后逐一核对，不自动改写历史或合并 PR。
+
+## 2026-08-30 AI 分析与内容归因契约修复
+
+- 长直播分析结果现在始终显式写入 `quality_degraded=false`；完整结果可通过共享质量校验，不完整窗口仍由 `analysis_incomplete` 和覆盖率门禁阻止切片，没有放宽损坏元数据的 fail-closed 规则。
+- 显式片段反馈改为只绑定候选的 `source_analysis_run_id`，并验证 Run 属于同一任务；来源缺失、不存在或跨任务时保留反馈但不归因，绝不回退到当前 active Run。
+- Prompt 对比统一使用“官方导入时长 → 候选时长 → 输出片段源时长”的有效时长口径，官方报表时长为空时仍能计算平均观看比例。
+- 定向回归由修复前 `55 passed` 增加到 `62 passed`，全量回归 `861 passed`；Ruff、Compileall、5 个 JavaScript 语法检查、20 个 PowerShell 解析检查、三套合并 Compose 配置、`pip check` 和 `git diff --check` 均通过。测试只使用临时 SQLite 和本地 mock，未调用真实 Provider、Chrome 或发布平台，也未修改活动数据库。
+
+## 2026-08-30 数据库迁移原子性与 Prompt 外键修复
+
+- 内容实验账本迁移不再调用会隐式提交的 `executescript()`；表、索引、结构校验和账本现在处于同一 `BEGIN IMMEDIATE` 事务，第二张表故障注入后第一张表和账本均可完整回滚并安全重跑。
+- 新增独立迁移补齐历史 `ai_analysis_runs.prompt_version_id` 外键，保留 AI Run 数据、显式索引、触发器和下游反馈引用；未知字段、残留临时表或孤儿 Prompt 引用均 fail-closed。
+- 正式数据库仅做只读核对：当前 39 条 AI Run、0 条孤儿 Prompt 引用、0 条现有外键异常，确认具备无损迁移前提；本阶段没有改写活动 SQLite 或重启服务。
+- 迁移与备份定向回归 `28 passed`，迁移失败、重试、外键、孤儿引用与旧 AI Run 专项 `5 passed`，全量回归 `865 passed`；Ruff、Compileall、5 个 JavaScript 语法检查、20 个 PowerShell 解析检查、三套合并 Compose 配置、`pip check` 和 `git diff --check` 均通过。验证只使用隔离临时库；活动主库大小保持 `10,276,864` bytes，但文件时间被现有后台服务持续更新，因此不把 mtime 作为“未写入”证据。

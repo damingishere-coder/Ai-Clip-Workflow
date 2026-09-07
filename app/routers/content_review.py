@@ -1,4 +1,5 @@
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from app.models.content_review import (
     ContentExperimentAssignmentRequest,
@@ -18,6 +19,27 @@ router = APIRouter(prefix="/api/content-review", tags=["content-review"])
 
 def _raise_content_review_http(exc: content_review_service.ContentReviewError):
     raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+def _sync_douyin_export(account_id_input: str) -> dict:
+    account_id = content_review_service._resolve_douyin_account_id(account_id_input)
+    worker_result = PublishWorkerClient().analytics_export_sync(account_id=account_id)
+    items = list(worker_result.get("items") or [])
+    if int(worker_result.get("row_count") or 0) != len(items):
+        raise content_review_service.ContentReviewError(
+            "Windows Worker 返回的作品行数校验失败",
+            status_code=502,
+        )
+    result = content_review_service.commit_douyin_item_export(
+        account_id=account_id,
+        items=items,
+        captured_at=str(worker_result.get("captured_at") or content_review_service._now_iso()),
+        source_filename=str(worker_result.get("source_filename") or "作品列表导出.xlsx"),
+    )
+
+    from app.services.weekly_review_service import after_import
+    result["weekly_review"] = after_import(result["batch_id"])
+    return result
 
 
 @router.get("/accounts")
@@ -44,7 +66,7 @@ async def preview_import(
 
 
 @router.post("/imports/{batch_id}/commit")
-async def commit_import(
+def commit_import(
     batch_id: str,
     payload: ContentMetricImportCommitRequest,
 ) -> dict:
@@ -62,23 +84,7 @@ async def commit_import(
 @router.post("/douyin/export-sync")
 async def export_sync_douyin_items(payload: DouyinAnalyticsExportSyncRequest) -> dict:
     try:
-        account_id = content_review_service._resolve_douyin_account_id(payload.account_id)
-        worker_result = PublishWorkerClient().analytics_export_sync(account_id=account_id)
-        items = list(worker_result.get("items") or [])
-        if int(worker_result.get("row_count") or 0) != len(items):
-            raise content_review_service.ContentReviewError(
-                "Windows Worker 返回的作品行数校验失败",
-                status_code=502,
-            )
-        result = content_review_service.commit_douyin_item_export(
-            account_id=account_id,
-            items=items,
-            captured_at=str(worker_result.get("captured_at") or content_review_service._now_iso()),
-            source_filename=str(worker_result.get("source_filename") or "作品列表导出.xlsx"),
-        )
-        from app.services.weekly_review_service import after_import
-        result["weekly_review"] = after_import(result["batch_id"])
-        return result
+        return await run_in_threadpool(_sync_douyin_export, payload.account_id)
     except content_review_service.ContentReviewError as exc:
         _raise_content_review_http(exc)
     except (PublishError, PublishWorkerUnavailable) as exc:

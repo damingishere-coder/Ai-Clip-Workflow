@@ -1,5 +1,12 @@
 # 数据库结构说明
 
+## 2026-08-30：迁移原子性与 AI Prompt 外键一致性
+
+- 新迁移账本版本为 `20260830_01_ai_prompt_version_fk`。历史库缺少 `ai_analysis_runs.prompt_version_id → ai_prompt_versions.id` 外键时，先生成 `workflow-before-ai-prompt-version-fk-*` 在线备份，再在一个事务内重建 AI Run 表。
+- 重建保留全部规范字段、AI Run 数据、显式索引和触发器；`clip_feedback.analysis_run_id` 等下游引用保持不变。发现未知字段、残留临时表或不存在的 Prompt 版本引用时直接拒绝迁移，不猜测、不清空历史数据。
+- Prompt 外键与新建数据库统一使用 `ON UPDATE NO ACTION / ON DELETE NO ACTION`。结构复制、索引恢复、`PRAGMA foreign_key_check` 与账本写入全部成功后才提交；提交或回滚后恢复当前连接原有的外键检查状态。
+- `20260829_02_content_feedback_loop` 的建表和建索引改为逐条执行，避免 `sqlite3.executescript()` 在账本事务内隐式提交；故障时不会残留半套实验结构或错误账本。
+
 ## 2026-08-29：内容诊断与实验闭环
 
 迁移账本版本为 `20260829_02_content_feedback_loop`。迁移只新增表和索引，不删除或改写现有作品快照、发布记录、排期或 Prompt 版本；应用前继续通过 SQLite Online Backup 生成 `workflow-before-content-feedback-loop-*` 备份。

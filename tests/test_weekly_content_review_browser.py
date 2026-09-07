@@ -1,3 +1,5 @@
+# ruff: noqa: F811
+# pytest discovers the imported fixture; its test argument intentionally has the same name.
 from pathlib import Path
 import os
 import threading
@@ -17,7 +19,7 @@ playwright = pytest.importorskip("playwright.sync_api")
 def test_three_suggestions_preview_apply_rollback_and_compact_disclosure(
     sample,
     width,
-    tmp_path,  # noqa: F811
+    tmp_path,
 ):
     ready_report(sample)
     port = _free_port()
