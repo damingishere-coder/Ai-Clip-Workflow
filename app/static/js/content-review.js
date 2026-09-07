@@ -582,12 +582,20 @@ function renderWeeklyReport(data) {
     option.textContent = `${report.week_key} · 第 ${report.revision} 版 · ${report.evidence.scope === "all" ? "首次全量" : "最近七天"}`;
     history.append(option);
   });
+  if (!weeklyReports.length) {
+    const emptyOption = document.createElement("option");
+    emptyOption.value = ""; emptyOption.textContent = "暂无复盘记录";
+    history.append(emptyOption);
+  }
   history.value = weeklySelectedId;
   list.replaceChildren();
   changesBox.replaceChildren();
   const report = weeklyReports.find(item => item.id === weeklySelectedId);
   const busy = weeklyReports.some(item => ["queued","running"].includes(item.status));
   generate.disabled = busy;
+  generate.setAttribute("aria-busy", String(busy));
+  status.dataset.state = report?.status || "empty";
+  document.querySelector("#weekly-review-summary").dataset.state = report?.status || "empty";
   generate.textContent = busy ? "正在生成周复盘…" : !report ? "生成首次全量复盘" : report.status === "failed" ? "重试生成周复盘" : "更新周复盘";
   clearTimeout(weeklyPollTimer);
   if (busy) weeklyPollTimer = setTimeout(loadContentReviewData, 3000);
