@@ -18,6 +18,12 @@ from app.db.database import get_connection
 from app.services.publish_time import app_zone, parse_datetime, to_utc_iso, utc_now
 
 TARGET_ACCOUNT_NAME = "康熙来了"
+
+
+class ScheduleConflict(ValueError):
+    """A changed task invalidates the whole batch and requires recalculation."""
+
+
 DEFAULTS = dict(
     enabled=False,
     daily_limit=8,
@@ -579,7 +585,7 @@ def _write_changes(connection, account_id, schedule, token, request_id=None):
             (new_time, now, row["id"], account_id, row["updated_at"]),
         )
         if cursor.rowcount != 1:
-            raise ValueError("排期并发冲突，整批未应用，请重新预览")
+            raise ScheduleConflict("排期并发冲突，整批未应用，请重新预览")
         connection.execute(
             """INSERT INTO adaptive_schedule_changes
             (account_id,job_id,request_id,old_time,new_time,reason,strategy_token,created_at) VALUES(?,?,?,?,?,?,?,?)""",
@@ -704,6 +710,10 @@ def process_pending(limit=2):
                         f"已核对 {len(schedule)} 条未来排期，当天保持不变",
                     )
                     connection.execute("RELEASE adaptive_replan")
+                except ScheduleConflict as exc:
+                    connection.execute("ROLLBACK TO adaptive_replan")
+                    connection.execute("RELEASE adaptive_replan")
+                    status, message = "pending", str(exc)
                 except ValueError as exc:
                     connection.execute("ROLLBACK TO adaptive_replan")
                     connection.execute("RELEASE adaptive_replan")
@@ -712,10 +722,17 @@ def process_pending(limit=2):
                 message = "自动调整已关闭，保留当前时间"
             connection.execute(
                 "UPDATE adaptive_schedule_requests SET status=?,message=?,attempts=attempts+1,finished_at=? WHERE id=?",
-                (status, message, to_utc_iso(now), request["id"]),
+                (
+                    status,
+                    message,
+                    None if status == "pending" else to_utc_iso(now),
+                    request["id"],
+                ),
             )
             connection.commit()
             results.append({"id": request["id"], "status": status, "message": message})
+            if status == "pending":
+                break  # Recompute on the next scheduler tick, without a tight retry loop.
     return results
 
 

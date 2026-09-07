@@ -2527,7 +2527,12 @@ if (publishCenterRoot) {
       document.querySelector('[data-toggle-adaptive]').textContent = p.enabled ? '关闭自动调整（保留当前时间）' : '启用并纳入现有排期';
       document.querySelector('[data-adaptive-data-note]').textContent = `${data.strategy.sample_count} 条可比较作品 · ${data.strategy.reason}`;
       const scores = document.querySelector('[data-adaptive-scores]'); scores.replaceChildren();
-      (data.strategy.bins || []).forEach(b => { const line=document.createElement('p'); line.textContent=`${b.label} · ${b.status} · ${b.count} 条 · 播放中位数 ${b.median_play ?? '—'}`; scores.append(line); });
+      (data.strategy.bins || []).forEach(b => {
+        const line = document.createElement('p');
+        const completion = b.completion_rate == null ? '—' : `${(b.completion_rate * 100).toFixed(1)}%`;
+        line.textContent = `${b.label} · ${b.status} · ${b.count} 条 · 相对播放 ${Number(b.score).toFixed(2)} · 播放中位数 ${b.median_play ?? '—'} · 完播中位数 ${completion} · 涨粉中位数 ${b.follower_gain_count ?? '—'}`;
+        scores.append(line);
+      });
       const changes = document.querySelector('[data-adaptive-changes]'); changes.replaceChildren();
       (data.requests || []).slice(0, 3).forEach(r => { const line=document.createElement('p'); line.textContent=`${({pending:"等待调整",completed:"已处理",skipped:"保持原排期",failed:"调整失败"})[r.status] || r.status} · ${r.message || '等待后台计算'}`; changes.append(line); });
       (data.changes || []).forEach(r => { const line=document.createElement('p'); line.textContent=`${r.title || "已移除的任务"}：${r.old_time ? formatBeijingTimestamp(r.old_time) : '未排期'} → ${formatBeijingTimestamp(r.new_time)} · ${r.reason}`; changes.append(line); });
