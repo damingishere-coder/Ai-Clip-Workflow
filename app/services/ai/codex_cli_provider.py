@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+from uuid import uuid4
 
 from app.services.ai.base import AIProviderError
 
@@ -21,6 +24,7 @@ class CodexCliConfig:
     model: str = "gpt-6-astra"
     timeout_seconds: int = 300
     codex_home: str = ""
+    diagnostics_dir: str = ""
 
 
 class CodexCliProvider:
@@ -32,6 +36,16 @@ class CodexCliProvider:
         self.config = config
 
     def generate_json(self, prompt: str, retry_instruction: str | None = None) -> str:
+        return self._generate_json(prompt, retry_instruction)
+
+    def generate_json_with_schema(
+        self, prompt: str, output_schema: dict, retry_instruction: str | None = None,
+    ) -> str:
+        return self._generate_json(prompt, retry_instruction, output_schema)
+
+    def _generate_json(
+        self, prompt: str, retry_instruction: str | None, output_schema: dict | None = None,
+    ) -> str:
         executable = self._resolve_executable()
         if not executable:
             raise AIProviderError(
@@ -57,6 +71,10 @@ class CodexCliProvider:
                     str(output_path),
                     "-",
                 ]
+                if output_schema is not None:
+                    schema_path = Path(temp_dir) / "output-schema.json"
+                    schema_path.write_text(json.dumps(output_schema, ensure_ascii=False), encoding="utf-8")
+                    command[-1:-1] = ["--output-schema", str(schema_path)]
                 environment = os.environ.copy()
                 if self.config.codex_home.strip():
                     environment["CODEX_HOME"] = str(Path(self.config.codex_home).expanduser())
@@ -87,7 +105,8 @@ class CodexCliProvider:
                         billing_uncertain=True,
                     )
 
-                result = _strip_json_fence(output_path.read_text(encoding="utf-8").strip())
+                raw_output = output_path.read_text(encoding="utf-8")
+                result = _strip_json_fence(raw_output.strip())
                 if not result:
                     raise AIProviderError(
                         "Codex CLI 返回空结果",
@@ -97,8 +116,9 @@ class CodexCliProvider:
                 try:
                     parsed = json.loads(result)
                 except json.JSONDecodeError as exc:
+                    diagnostic = self._save_invalid_output(task_prompt, raw_output, str(exc))
                     raise AIProviderError(
-                        "Codex CLI 返回内容不是合法 JSON",
+                        "Codex CLI 返回内容不是合法 JSON" + diagnostic,
                         category="invalid_response_json",
                         billing_uncertain=True,
                     ) from exc
@@ -121,6 +141,24 @@ class CodexCliProvider:
                 category="cli_start_error",
                 safe_to_retry=False,
             ) from exc
+
+    def _save_invalid_output(self, prompt: str, raw_output: str, error: str) -> str:
+        if not self.config.diagnostics_dir:
+            return ""
+        try:
+            directory = Path(self.config.diagnostics_dir)
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f"invalid-json-{uuid4().hex}.json"
+            path.write_text(json.dumps({
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "request_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                "parse_error": error,
+                "raw_output": raw_output[:100_000],
+                "truncated": len(raw_output) > 100_000,
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            return f"；原始返回诊断：{path}"
+        except OSError:
+            return "；原始返回诊断保存失败"
 
     def version_status(self) -> dict[str, str | bool]:
         executable = self._resolve_executable()

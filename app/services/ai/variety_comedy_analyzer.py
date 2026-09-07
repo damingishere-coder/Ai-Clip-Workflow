@@ -48,6 +48,24 @@ QUALITY_B_THRESHOLD = 65
 HUMOR_HARD_GATE = 75
 COMPLETENESS_HARD_GATE = 70
 
+RECALL_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {"moments": {"type": "array", "items": {
+        "type": "object",
+        "properties": {
+            "key_time": {"type": "string"},
+            "title": {"type": "string"},
+            "topic_key": {"type": "string"},
+            "humor_reason": {"type": "string"},
+            "recall_score": {"type": "number"},
+        },
+        "required": ["key_time", "title", "topic_key", "humor_reason", "recall_score"],
+        "additionalProperties": False,
+    }}},
+    "required": ["moments"],
+    "additionalProperties": False,
+}
+
 
 @dataclass(frozen=True)
 class ComedyAnalysisRequest:
@@ -463,7 +481,9 @@ def _recall_moments(
             namespace="variety_recall",
             input_fingerprint=input_fingerprint,
             unit_id=f"window_{window.index:03d}",
-            operation=lambda prompt=prompt: _generate_payload(provider, prompt, expected_key="moments"),
+            operation=lambda prompt=prompt: _generate_payload(
+                provider, prompt, expected_key="moments", output_schema=RECALL_OUTPUT_SCHEMA,
+            ),
         )
         if execution.status != "completed" or not isinstance(execution.payload, dict):
             failed_units += 1
@@ -748,8 +768,10 @@ def _to_clip_payload(item: dict, index: int) -> dict:
 def _generate_payload(
     provider: AIProvider, prompt: str, *, expected_key: str,
     known_ids: set[str] | None = None, require_all: bool = False,
+    output_schema: dict | None = None,
 ) -> dict:
-    raw = generate_json_with_safe_retry(provider, prompt)
+    raw = (generate_json_with_safe_retry(provider, prompt, output_schema=output_schema)
+           if output_schema is not None else generate_json_with_safe_retry(provider, prompt))
     payload = _loads_ai_json(raw)
     if not isinstance(payload, dict):
         raise AIAnalysisError("AI 输出必须是 JSON 对象")
