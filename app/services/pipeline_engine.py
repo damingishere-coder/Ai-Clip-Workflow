@@ -1600,6 +1600,8 @@ class PipelineEngine:
             if use_ai
             else ""
         )
+        from app.services.weekly_review_service import task_rules
+        rule_snapshot = task_rules(output_clip.get("task_id"))
         payload = {
             "fingerprint_version": 1,
             "output_clip_id": output_clip.get("id") or "",
@@ -1616,6 +1618,12 @@ class PipelineEngine:
             "model": model,
             "protocol": settings.ai_publish_remote_protocol if provider == "remote" else "",
         }
+        if rule_snapshot.get("application_id"):
+            payload.update({
+                "fingerprint_version": 2,
+                "weekly_rule_application_id": rule_snapshot["application_id"],
+                "weekly_copy_rules": rule_snapshot.get("copy_rules", ""),
+            })
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

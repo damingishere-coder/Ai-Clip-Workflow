@@ -66,6 +66,24 @@ def _insert_task_and_candidate(*, enabled: bool = True, reviewed: bool = False) 
     return task_id, clip_id
 
 
+def _insert_analysis_run(task_id: str, run_number: int, *, is_active: bool) -> str:
+    run_id = f"{task_id}-run-{run_number}"
+    now = "2026-08-28T10:00:00"
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO ai_analysis_runs (
+                id, task_id, run_number, provider, provider_label, model,
+                requested_clip_count, clip_count, analysis_payload_json,
+                created_at, is_active
+            ) VALUES (?, ?, ?, 'test', 'Test', 'test-model', 1, 1, '{}', ?, ?)
+            """,
+            (run_id, task_id, run_number, now, int(is_active)),
+        )
+        connection.commit()
+    return run_id
+
+
 def _payload(clip_id: str, *, enabled: bool, reason: str | None = None) -> ClipCandidateBatchItem:
     return ClipCandidateBatchItem(
         id=clip_id,
@@ -162,6 +180,64 @@ def test_legacy_feedback_endpoint_marks_source_and_latest_context_uses_one_per_c
     assert task_context[0]["decision"] == "keep"
 
 
+def test_explicit_feedback_uses_candidate_source_run_instead_of_active_run():
+    task_id, clip_id = _insert_task_and_candidate(enabled=True, reviewed=False)
+    source_run_id = _insert_analysis_run(task_id, 1, is_active=False)
+    active_run_id = _insert_analysis_run(task_id, 2, is_active=True)
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE clip_candidates SET source_analysis_run_id = ? WHERE id = ?",
+            (source_run_id, clip_id),
+        )
+        connection.commit()
+
+    save_clip_feedback(
+        task_id,
+        clip_id,
+        ClipFeedbackCreate(decision="reject", reason_code="not_funny"),
+    )
+
+    with get_connection() as connection:
+        feedback = connection.execute(
+            "SELECT analysis_run_id FROM clip_feedback WHERE clip_candidate_id = ?",
+            (clip_id,),
+        ).fetchone()
+    assert feedback["analysis_run_id"] == source_run_id
+    assert feedback["analysis_run_id"] != active_run_id
+
+
+@pytest.mark.parametrize("source_kind", ["missing", "unknown", "cross_task"])
+def test_explicit_feedback_without_trustworthy_source_run_stays_unattributed(source_kind: str):
+    task_id, clip_id = _insert_task_and_candidate(enabled=True, reviewed=False)
+    active_run_id = _insert_analysis_run(task_id, 2, is_active=True)
+    source_run_id = None
+    if source_kind == "unknown":
+        source_run_id = f"{task_id}-missing-run"
+    elif source_kind == "cross_task":
+        other_task_id, _ = _insert_task_and_candidate(enabled=True, reviewed=False)
+        source_run_id = _insert_analysis_run(other_task_id, 1, is_active=True)
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE clip_candidates SET source_analysis_run_id = ? WHERE id = ?",
+            (source_run_id, clip_id),
+        )
+        connection.commit()
+
+    save_clip_feedback(
+        task_id,
+        clip_id,
+        ClipFeedbackCreate(decision="keep", reason_code="worth_publishing"),
+    )
+
+    with get_connection() as connection:
+        feedback = connection.execute(
+            "SELECT analysis_run_id FROM clip_feedback WHERE clip_candidate_id = ?",
+            (clip_id,),
+        ).fetchone()
+    assert feedback["analysis_run_id"] is None
+    assert feedback["analysis_run_id"] != active_run_id
+
+
 def test_prompt_version_changes_only_when_prompt_content_changes():
     suffix = uuid4().hex[:8]
     preset_id = f"{PREFIX}preset-{suffix}"
@@ -197,6 +273,10 @@ def test_prompt_version_changes_only_when_prompt_content_changes():
         preset_id,
         AIPromptPresetUpdate(name="第二版", prompt_text="第二版内容"),
     )
+    # Existing task keeps its frozen rules; an explicit preset re-selection adopts the new version.
+    assert get_task_ai_prompt_snapshot(task_id)["prompt_version_number"] == 1
+    from app.services.ai_prompt_preset_service import update_task_ai_prompt_preset
+    update_task_ai_prompt_preset(task_id, preset_id)
     changed = get_task_ai_prompt_snapshot(task_id)
 
     assert first["prompt_version_id"] == second["prompt_version_id"] == same_content["prompt_version_id"]

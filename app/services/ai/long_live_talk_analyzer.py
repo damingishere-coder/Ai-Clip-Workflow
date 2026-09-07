@@ -261,6 +261,7 @@ def analyze_long_live_talk(
         "coverage_ratio": round(coverage_ratio, 6),
         "coverage_percent": coverage_percent,
         "analysis_incomplete": incomplete,
+        "quality_degraded": False,
         "minimum_complete_coverage": MIN_COMPLETE_COVERAGE,
         "highlight_density_per_hour": density,
         "highlight_total_limit": total_limit,

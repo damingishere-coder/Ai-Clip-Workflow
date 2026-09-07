@@ -156,6 +156,8 @@ def update_task_ai_prompt_preset(task_id: str, preset_id: str) -> dict:
             """,
             (preset_id, now, task_id),
         )
+        from app.services.weekly_review_service import freeze_task
+        freeze_task(connection, task_id, replace=True)
         connection.commit()
     if cursor.rowcount == 0:
         raise ValueError("任务不存在")
@@ -221,6 +223,10 @@ def get_task_ai_prompt_snapshot(task_id: str) -> dict:
             raise ValueError("默认 AI Prompt 方案不存在")
 
         preset = dict(row)
+        from app.services.weekly_review_service import freeze_task
+        frozen = freeze_task(connection, task_id)
+        if frozen and frozen["preset_id"] == preset["id"]:
+            preset["prompt_text"] = frozen["prompt_text"]
         version = ensure_ai_prompt_version_with_connection(
             connection,
             preset_id=str(preset["id"]),

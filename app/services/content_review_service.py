@@ -878,7 +878,7 @@ def _official_export_context(connection, account_id: str) -> dict:
         WHERE b.account_id = ? AND b.status = 'committed'
           AND b.source_kind = ?
         GROUP BY b.id
-        ORDER BY b.committed_at DESC, b.created_at DESC
+        ORDER BY b.committed_at DESC, b.created_at DESC, b.rowid DESC
         """,
         (account_id, DOUYIN_ITEM_EXPORT_SOURCE_KIND),
     ).fetchall()
@@ -1113,7 +1113,7 @@ def get_prompt_comparison(account_id: str = "") -> dict:
         candidate_rows = connection.execute(
             """
             SELECT pv.id AS prompt_version_id, pv.preset_id, pv.version_number,
-                   pv.preset_name_snapshot, pv.created_at,
+                   pv.preset_name_snapshot, pv.prompt_text, pv.created_at,
                    scoped.candidate_id, scoped.enabled, scoped.latest_decision
             FROM ai_prompt_versions pv
             JOIN (
@@ -1153,7 +1153,12 @@ def get_prompt_comparison(account_id: str = "") -> dict:
                   AND b.source_kind = ?
                   AND i.match_status IN ('matched_exact', 'matched_unique', 'confirmed_manual')
             )
-            SELECT i.*, c.id AS candidate_id, ar.prompt_version_id
+            SELECT i.*, c.id AS candidate_id, ar.prompt_version_id,
+                   COALESCE(
+                       NULLIF(i.duration_seconds, 0),
+                       NULLIF(c.duration_seconds, 0),
+                       NULLIF(oc.source_duration_ms, 0) / 1000.0
+                   ) AS effective_duration_seconds
             FROM latest_items i
             JOIN publish_jobs pj ON pj.id = i.publish_job_id
             JOIN output_clip oc ON oc.id = pj.output_clip_id
@@ -1175,6 +1180,7 @@ def get_prompt_comparison(account_id: str = "") -> dict:
                 "preset_id": row["preset_id"],
                 "version_number": int(row["version_number"]),
                 "prompt_name": row["preset_name_snapshot"],
+                "prompt_text": row["prompt_text"],
                 "created_at": row["created_at"],
                 "candidate_ids": set(),
                 "kept_ids": set(),
@@ -1206,9 +1212,10 @@ def get_prompt_comparison(account_id: str = "") -> dict:
         five_rates = [float(work["five_second_completion_rate"]) for work in works if work["five_second_completion_rate"] is not None]
         bounce_rates = [float(work["two_second_bounce_rate"]) for work in works if work["two_second_bounce_rate"] is not None]
         watch_ratios = [
-            float(work["average_watch_seconds"]) / float(work["duration_seconds"])
+            float(work["average_watch_seconds"]) / float(work["effective_duration_seconds"])
             for work in works
-            if work["average_watch_seconds"] is not None and float(work["duration_seconds"] or 0) > 0
+            if work["average_watch_seconds"] is not None
+            and float(work["effective_duration_seconds"] or 0) > 0
         ]
         interactions = sum(
             int(work["like_count"] or 0)
@@ -1223,6 +1230,7 @@ def get_prompt_comparison(account_id: str = "") -> dict:
                 "preset_id": group["preset_id"],
                 "version_number": group["version_number"],
                 "prompt_name": group["prompt_name"],
+                "prompt_text": group["prompt_text"],
                 "created_at": group["created_at"],
                 "candidate_count": candidate_count,
                 "accurate_published_count": len(works),
@@ -1259,9 +1267,9 @@ def get_prompt_comparison(account_id: str = "") -> dict:
         "versions": versions,
         "comparisons": comparisons,
         "message": (
-            "已达到评估门槛，系统只提供建议，不会自动修改 Prompt。"
+            "已达到历史版本观察门槛。新改动仍需确认应用，效果请查看对应改进记录。"
             if completed_cycles >= 3 and any(item["evaluable"] for item in versions)
-            else "数据不足：需要 3 个不同官方导出周，且当前 Prompt 至少 30 条准确关联作品。"
+            else "历史版本效果尚在观察：需覆盖 3 个官方导出周且每版至少 30 条准确关联作品；这不影响生成本周总结和改动草案。"
         ),
         "causality_notice": "所有对比仅表示相关性，不代表因果。",
     }

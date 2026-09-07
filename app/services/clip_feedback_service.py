@@ -88,14 +88,14 @@ def save_clip_feedback(task_id: str, clip_id: str, payload: ClipFeedbackCreate) 
     now = _now_iso()
 
     with get_connection() as connection:
-        active_run = connection.execute(
-            """
-            SELECT id FROM ai_analysis_runs
-            WHERE task_id = ? AND is_active = 1
-            ORDER BY run_number DESC LIMIT 1
-            """,
-            (task_id,),
-        ).fetchone()
+        source_run_id = str(clip.get("source_analysis_run_id") or "").strip() or None
+        if source_run_id is not None:
+            source_run = connection.execute(
+                "SELECT id FROM ai_analysis_runs WHERE id = ? AND task_id = ?",
+                (source_run_id, task_id),
+            ).fetchone()
+            if source_run is None:
+                source_run_id = None
         connection.execute(
             """
             INSERT INTO clip_feedback (
@@ -108,7 +108,7 @@ def save_clip_feedback(task_id: str, clip_id: str, payload: ClipFeedbackCreate) 
                 uuid4().hex[:12],
                 task_id,
                 clip_id,
-                active_run["id"] if active_run else None,
+                source_run_id,
                 task.get("selection_profile") or "general",
                 payload.decision,
                 payload.reason_code,

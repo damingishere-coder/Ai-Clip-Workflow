@@ -1,4 +1,5 @@
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from app.models.content_review import (
     ContentExperimentAssignmentRequest,
@@ -18,6 +19,27 @@ router = APIRouter(prefix="/api/content-review", tags=["content-review"])
 
 def _raise_content_review_http(exc: content_review_service.ContentReviewError):
     raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+def _sync_douyin_export(account_id_input: str) -> dict:
+    account_id = content_review_service._resolve_douyin_account_id(account_id_input)
+    worker_result = PublishWorkerClient().analytics_export_sync(account_id=account_id)
+    items = list(worker_result.get("items") or [])
+    if int(worker_result.get("row_count") or 0) != len(items):
+        raise content_review_service.ContentReviewError(
+            "Windows Worker 返回的作品行数校验失败",
+            status_code=502,
+        )
+    result = content_review_service.commit_douyin_item_export(
+        account_id=account_id,
+        items=items,
+        captured_at=str(worker_result.get("captured_at") or content_review_service._now_iso()),
+        source_filename=str(worker_result.get("source_filename") or "作品列表导出.xlsx"),
+    )
+
+    from app.services.weekly_review_service import after_import
+    result["weekly_review"] = after_import(result["batch_id"])
+    return result
 
 
 @router.get("/accounts")
@@ -44,14 +66,17 @@ async def preview_import(
 
 
 @router.post("/imports/{batch_id}/commit")
-async def commit_import(
+def commit_import(
     batch_id: str,
     payload: ContentMetricImportCommitRequest,
 ) -> dict:
     if not payload.confirm:
         raise HTTPException(status_code=400, detail="请确认后再导入")
     try:
-        return content_review_service.commit_metric_import(batch_id)
+        result = content_review_service.commit_metric_import(batch_id)
+        from app.services.weekly_review_service import after_import
+        result["weekly_review"] = after_import(batch_id)
+        return result
     except content_review_service.ContentReviewError as exc:
         _raise_content_review_http(exc)
 
@@ -59,20 +84,7 @@ async def commit_import(
 @router.post("/douyin/export-sync")
 async def export_sync_douyin_items(payload: DouyinAnalyticsExportSyncRequest) -> dict:
     try:
-        account_id = content_review_service._resolve_douyin_account_id(payload.account_id)
-        worker_result = PublishWorkerClient().analytics_export_sync(account_id=account_id)
-        items = list(worker_result.get("items") or [])
-        if int(worker_result.get("row_count") or 0) != len(items):
-            raise content_review_service.ContentReviewError(
-                "Windows Worker 返回的作品行数校验失败",
-                status_code=502,
-            )
-        return content_review_service.commit_douyin_item_export(
-            account_id=account_id,
-            items=items,
-            captured_at=str(worker_result.get("captured_at") or content_review_service._now_iso()),
-            source_filename=str(worker_result.get("source_filename") or "作品列表导出.xlsx"),
-        )
+        return await run_in_threadpool(_sync_douyin_export, payload.account_id)
     except content_review_service.ContentReviewError as exc:
         _raise_content_review_http(exc)
     except (PublishError, PublishWorkerUnavailable) as exc:
@@ -231,5 +243,51 @@ async def update_item_match(snapshot_id: str, payload: ContentItemMatchUpdate) -
 async def remove_item_match(snapshot_id: str) -> dict:
     try:
         return content_review_service.delete_item_match(snapshot_id)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+# Sync endpoints use FastAPI's thread pool; Codex work only runs in the durable worker.
+@router.get("/weekly-reports")
+def weekly_reports(account_id: str = Query(default="", max_length=120)):
+    from app.services import weekly_review_service as weekly
+    try:
+        return weekly.list_reports(account_id)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.post("/weekly-reports")
+def generate_weekly_report(payload: DouyinAnalyticsExportSyncRequest):
+    from app.services import weekly_review_service as weekly
+    try:
+        return weekly.enqueue(payload.account_id, refresh=True)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.post("/weekly-reports/{report_id}/apply")
+def apply_weekly_report(report_id: str):
+    from app.services import weekly_review_service as weekly
+    try:
+        return weekly.apply_report(report_id)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.post("/rule-applications/{application_id}/revert")
+def revert_weekly_rules(application_id: str):
+    from app.services import weekly_review_service as weekly
+    try:
+        return weekly.revert_application(application_id)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.post("/rule-applications/{application_id}/keep")
+def keep_weekly_rules(application_id: str):
+    from app.services import weekly_review_service as weekly
+    try:
+        return weekly.keep_application(application_id)
     except content_review_service.ContentReviewError as exc:
         _raise_content_review_http(exc)
