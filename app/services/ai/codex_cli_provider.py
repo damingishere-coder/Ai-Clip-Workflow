@@ -146,6 +146,21 @@ class CodexCliProvider:
             "detail": "Codex CLI 可执行" if completed.returncode == 0 else f"退出码 {completed.returncode}",
         }
 
+    def login_status(self) -> dict:
+        executable = self._resolve_executable()
+        if not executable:
+            return {"ok": False, "detail": "未找到 Codex CLI"}
+        environment = os.environ.copy()
+        if self.config.codex_home:
+            environment["CODEX_HOME"] = self.config.codex_home
+        try:
+            completed = subprocess.run([executable, "login", "status"], capture_output=True,
+                timeout=10, check=False, env=environment)
+            ok = completed.returncode == 0
+            return {"ok": ok, "detail": "已登录" if ok else "登录不可用，请检查现有 Codex 登录"}
+        except (OSError, subprocess.TimeoutExpired):
+            return {"ok": False, "detail": "登录状态检查失败"}
+
     def _resolve_executable(self) -> str:
         configured = self.config.executable.strip() or "codex"
         resolved = shutil.which(configured)

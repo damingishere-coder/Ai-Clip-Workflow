@@ -497,6 +497,8 @@ def _assert_ai_task_can_start(connection, task_id: str, current_status: str, *, 
 
 
 def queue_task_ai_analysis(task_id: str, provider: str | None = None) -> tuple[dict, bool]:
+    from app.services.provider_policy import require_codex
+    require_codex(provider or settings.ai_default_provider)
     """原子验证人工请求并创建/复用持久 AI Job。"""
     from app.services import job_service
     from app.services.task_service import _now_iso
@@ -1416,6 +1418,8 @@ def _build_ai_process_result(
 
 
 def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
+    from app.services.provider_policy import require_codex
+    require_codex(provider or settings.ai_default_provider)
     from app.services import job_service
     from app.services.task_service import (
         _now_iso,

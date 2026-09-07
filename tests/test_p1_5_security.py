@@ -69,7 +69,7 @@ def _fake_ai_values() -> dict[str, str]:
 
 def _safe_context(monkeypatch) -> dict:
     monkeypatch.setattr(ai_config_service, "_current_config_values", _fake_ai_values)
-    monkeypatch.setattr(ai_config_service, "fetch_ollama_models", lambda **_kwargs: [])
+    monkeypatch.setattr(ai_config_service.CodexCliProvider, "login_status", lambda self: {"ok": True, "detail": "已登录"})
     monkeypatch.setattr(
         ai_config_service.CodexCliProvider,
         "version_status",
@@ -85,8 +85,7 @@ def test_ai_config_context_never_returns_secret_or_env_path(monkeypatch) -> None
     assert SECRET_SENTINEL not in serialized
     assert "env_path" not in context
     for key in ai_config_service.SECRET_SETTING_KEYS:
-        assert context["values"][key] == ""
-        assert context["secret_configured"][key] is True
+        assert key not in context["values"]
 
 
 def test_system_page_does_not_render_admin_or_provider_secrets(monkeypatch) -> None:
@@ -102,7 +101,7 @@ def test_system_page_does_not_render_admin_or_provider_secrets(monkeypatch) -> N
     assert response.status_code == 200
     assert SECRET_SENTINEL not in response.text
     assert 'meta name="local-admin-token"' not in response.text
-    assert 'name="ai_analysis_remote_api_key" type="password" value=""' in response.text
+    assert 'name="ai_analysis_remote_api_key"' not in response.text
     assert "项目本地 .env" in response.text
 
 
@@ -121,7 +120,7 @@ def test_blank_secret_fields_keep_existing_values_without_returning_them(monkeyp
     response = ai_config_service.save_ai_config(AIConfigUpdate())
 
     for key in ai_config_service.SECRET_SETTING_KEYS:
-        assert captured[key] == current[key]
+        assert key not in captured
     assert SECRET_SENTINEL not in json.dumps(response, ensure_ascii=False)
 
 

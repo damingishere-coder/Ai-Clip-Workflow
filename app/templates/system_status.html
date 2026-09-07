@@ -6,7 +6,7 @@
   <div>
     <p class="eyebrow">System</p>
     <h1>系统状态</h1>
-    <p>检查本地处理链路是否准备好：运行地址、E 盘存储、数据库、FFmpeg、FFprobe 和三类 AI 接口。</p>
+    <p>检查本地处理链路是否准备好：运行地址、E 盘存储、数据库、FFmpeg、FFprobe 和本地转写与 Codex。</p>
   </div>
   <div class="button-row">
     <a class="secondary-button" href="/health">查看 JSON 健康检查</a>
@@ -95,193 +95,31 @@
   <div class="panel-header">
     <div>
       <p class="eyebrow">AI Settings</p>
-      <h2 id="ai-config-title">三类 AI 接口配置</h2>
+      <h2 id="ai-config-title">本地转写与 Codex 设置</h2>
     </div>
     <span class="status-pill">写入 .env</span>
   </div>
-  <form id="ai-config-form" class="settings-form ai-interface-form">
-    <input name="ai_remote_base_url" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_BASE_URL'] }}">
-    <input name="ai_remote_api_key" type="hidden" value="">
-    <input name="ai_remote_model" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_MODEL'] }}">
-    <input name="ai_remote_review_model" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_MODEL'] }}">
-    <input name="ai_remote_publish_model" type="hidden" value="{{ ai_config['values']['AI_PUBLISH_REMOTE_MODEL'] }}">
-    <input name="ai_remote_protocol" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_PROTOCOL'] }}">
-    <input name="ai_remote_reasoning_effort" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_REASONING_EFFORT'] }}">
-    <input name="ai_remote_responses_path" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_RESPONSES_PATH'] }}">
-    <input name="ai_remote_disable_response_storage" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_DISABLE_RESPONSE_STORAGE'] }}">
-    <input name="ai_local_api_key" type="hidden" value="">
-    <input name="ai_local_protocol" type="hidden" value="{{ ai_config['values']['AI_LOCAL_PROTOCOL'] }}">
-    <input name="ai_local_fallback_protocol" type="hidden" value="{{ ai_config['values']['AI_LOCAL_FALLBACK_PROTOCOL'] }}">
-    <input name="ai_network_access" type="hidden" value="{{ ai_config['values']['AI_NETWORK_ACCESS'] }}">
-    <input name="ai_windows_wsl_setup_acknowledged" type="hidden" value="{{ ai_config['values']['AI_WINDOWS_WSL_SETUP_ACKNOWLEDGED'] }}">
-    <input name="ai_model_context_window" type="hidden" value="{{ ai_config['values']['AI_MODEL_CONTEXT_WINDOW'] }}">
-    <input name="ai_model_auto_compact_token_limit" type="hidden" value="{{ ai_config['values']['AI_MODEL_AUTO_COMPACT_TOKEN_LIMIT'] }}">
-
-    <datalist id="remote-model-options">
-      {% for model_name in ai_config['remote_model_options'] %}
-      <option value="{{ model_name }}"></option>
-      {% endfor %}
-    </datalist>
-
-    <div class="settings-section">
-      <h3>通用开关</h3>
-      <div class="form-row">
-        <label>
-          <span>默认分析方式</span>
-          <select name="ai_default_provider">
-            <option value="codex" {{ "selected" if ai_config['values']['AI_DEFAULT_PROVIDER'] == "codex" else "" }}>Codex CLI（复用 ChatGPT 登录）</option>
-            <option value="remote" {{ "selected" if ai_config['values']['AI_DEFAULT_PROVIDER'] == "remote" else "" }}>远程 AI</option>
-            <option value="local" {{ "selected" if ai_config['values']['AI_DEFAULT_PROVIDER'] == "local" else "" }}>本地模型</option>
-          </select>
-        </label>
-        <label>
-          <span>默认请求超时（秒）</span>
-          <input name="ai_request_timeout_seconds" type="number" min="10" max="600" value="{{ ai_config['values']['AI_REQUEST_TIMEOUT_SECONDS'] }}">
-        </label>
+  <form id="ai-config-form" class="settings-form">
+    <div class="form-row">
+      <div class="settings-section">
+        <h3>1. 本地音频转写</h3>
+        <p class="form-hint">完全离线 · 本地 faster-whisper · 音频不上传</p>
+        {% for name, label in [('TRANSCRIPTION_MODEL','模型'), ('TRANSCRIPTION_MODEL_REVISION','模型 Revision'), ('TRANSCRIPTION_MODEL_CACHE_DIR','模型缓存目录'), ('TRANSCRIPTION_DEVICE','设备'), ('TRANSCRIPTION_COMPUTE_TYPE','计算精度')] %}
+        <label><span>{{ label }}</span><input name="{{ name | lower }}" value="{{ ai_config['values'][name] }}"></label>
+        {% endfor %}
+        <p class="form-hint">模型 {{ "已缓存" if ai_config.transcription_runtime.model_ready else "未缓存" }} · cuBLAS {{ "正常" if ai_config.transcription_runtime.cublas_ready else "缺失" }} · cuDNN {{ "正常" if ai_config.transcription_runtime.cudnn_ready else "缺失" }}</p>
       </div>
-      <div class="form-row">
-        <label><span>Codex 可执行文件</span><input name="ai_codex_path" value="{{ ai_config['values']['AI_CODEX_PATH'] }}"></label>
-        <label><span>Codex 模型</span><input name="ai_codex_model" value="{{ ai_config['values']['AI_CODEX_MODEL'] }}"></label>
-        <label><span>Codex 超时（秒）</span><input name="ai_codex_timeout_seconds" type="number" min="10" max="1800" value="{{ ai_config['values']['AI_CODEX_TIMEOUT_SECONDS'] }}"></label>
-      </div>
-      <input name="ai_codex_home" type="hidden" value="{{ ai_config['values']['AI_CODEX_HOME'] }}">
-      <p class="form-hint">状态：{{ ai_config['codex_status']['detail'] }}{% if ai_config['codex_status']['version'] %}（{{ ai_config['codex_status']['version'] }}）{% endif %}。Codex 模式不使用这里保存的远程 API Key。</p>
-    </div>
-
-    <div class="ai-interface-grid">
-      <div class="settings-section ai-interface-section">
-        <h3>1. 音频转写</h3>
-        <p class="form-hint">当前：{{ "完全离线" if ai_config.transcription_runtime.offline_only else "允许远程" }} · {{ ai_config.transcription_runtime.model_identity }} · {{ ai_config.transcription_runtime.device }}/{{ ai_config.transcription_runtime.compute_type }} · 外部费用 ¥{{ ai_config.transcription_runtime.external_cost_yuan }}</p>
-        <div class="form-row">
-          <label>
-            <span>网络边界</span>
-            <select name="transcription_offline_only">
-              <option value="true" {{ "selected" if ai_config['values']['TRANSCRIPTION_OFFLINE_ONLY'] | lower in ['true', '1', 'yes', 'on'] else "" }}>完全离线（推荐）</option>
-              <option value="false" {{ "selected" if ai_config['values']['TRANSCRIPTION_OFFLINE_ONLY'] | lower not in ['true', '1', 'yes', 'on'] else "" }}>允许远程回滚</option>
-            </select>
-          </label>
-          <label>
-            <span>转写方式</span>
-            <select name="transcription_provider">
-              <option value="local" {{ "selected" if ai_config['values']['TRANSCRIPTION_PROVIDER'] == "local" else "" }}>本地 faster-whisper</option>
-              <option value="volcengine" {{ "selected" if ai_config['values']['TRANSCRIPTION_PROVIDER'] == "volcengine" else "" }}>火山引擎（仅回滚）</option>
-            </select>
-          </label>
-        </div>
-        <label>
-          <span>固定模型</span>
-          <input name="transcription_model" value="{{ ai_config['values']['TRANSCRIPTION_MODEL'] }}" readonly>
-        </label>
-        <label><span>模型 Revision</span><input name="transcription_model_revision" value="{{ ai_config['values']['TRANSCRIPTION_MODEL_REVISION'] }}" readonly></label>
-        <label><span>模型缓存目录</span><input name="transcription_model_cache_dir" value="{{ ai_config['values']['TRANSCRIPTION_MODEL_CACHE_DIR'] }}" readonly></label>
-        <div class="form-row">
-          <label><span>设备</span><input name="transcription_device" value="{{ ai_config['values']['TRANSCRIPTION_DEVICE'] }}" readonly></label>
-          <label><span>计算精度</span><input name="transcription_compute_type" value="{{ ai_config['values']['TRANSCRIPTION_COMPUTE_TYPE'] }}" readonly></label>
-        </div>
-        <input name="transcription_local_files_only" type="hidden" value="{{ ai_config['values']['TRANSCRIPTION_LOCAL_FILES_ONLY'] }}">
-        <input name="transcription_fallback_provider" type="hidden" value="{{ ai_config['values']['TRANSCRIPTION_FALLBACK_PROVIDER'] }}">
-        <p class="form-hint">模型 {{ "已缓存" if ai_config.transcription_runtime.model_ready else "未缓存" }} · cuBLAS {{ "正常" if ai_config.transcription_runtime.cublas_ready else "缺失" }} · cuDNN {{ "正常" if ai_config.transcription_runtime.cudnn_ready else "缺失" }}。缺失时请运行 scripts/setup_local_transcription.ps1。</p>
-        <h4>火山引擎回滚配置</h4>
-        <label><span>接口地址</span><input name="volcengine_asr_api_url" value="{{ ai_config['values']['VOLCENGINE_ASR_API_URL'] }}"></label>
-        <label><span>API Key</span><input name="volcengine_asr_api_key" type="password" value="" autocomplete="new-password" placeholder="{{ '已配置，留空保持' if ai_config.secret_configured['VOLCENGINE_ASR_API_KEY'] else '尚未配置' }}"></label>
-        <div class="form-row">
-          <label><span>App Key（可选）</span><input name="volcengine_asr_app_key" type="password" value="" autocomplete="new-password" placeholder="{{ '已配置，留空保持' if ai_config.secret_configured['VOLCENGINE_ASR_APP_KEY'] else '尚未配置' }}"></label>
-          <label><span>Access Key（可选）</span><input name="volcengine_asr_access_key" type="password" value="" autocomplete="new-password" placeholder="{{ '已配置，留空保持' if ai_config.secret_configured['VOLCENGINE_ASR_ACCESS_KEY'] else '尚未配置' }}"></label>
-        </div>
-        <div class="form-row">
-          <label><span>资源 ID</span><input name="volcengine_asr_resource_id" value="{{ ai_config['values']['VOLCENGINE_ASR_RESOURCE_ID'] }}"></label>
-          <label><span>超时（秒）</span><input name="volcengine_asr_timeout_seconds" type="number" min="30" max="1800" value="{{ ai_config['values']['VOLCENGINE_ASR_TIMEOUT_SECONDS'] }}"></label>
-        </div>
-        <label>
-          <span>音频格式</span>
-          <select name="volcengine_asr_audio_format">
-            {% for format_name in ai_config['transcription_audio_format_options'] %}
-            <option value="{{ format_name }}" {{ "selected" if ai_config['values']['VOLCENGINE_ASR_AUDIO_FORMAT'] == format_name else "" }}>{{ format_name }}</option>
-            {% endfor %}
-          </select>
-        </label>
-      </div>
-
-      <div class="settings-section ai-interface-section">
-        <h3>2. 分析文字稿，生成候选切片</h3>
-        <label><span>Base URL</span><input name="ai_analysis_remote_base_url" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_BASE_URL'] }}"></label>
-        <label><span>API Key</span><input name="ai_analysis_remote_api_key" type="password" value="" autocomplete="new-password" placeholder="{{ '已配置，留空保持' if ai_config.secret_configured['AI_ANALYSIS_REMOTE_API_KEY'] else '尚未配置' }}"></label>
-        <div class="form-row">
-          <label><span>模型</span><input name="ai_analysis_remote_model" list="remote-model-options" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_MODEL'] }}"></label>
-          <label>
-            <span>协议</span>
-            <select name="ai_analysis_remote_protocol">
-              {% for protocol_name in ai_config['remote_protocol_options'] %}
-              <option value="{{ protocol_name }}" {{ "selected" if ai_config['values']['AI_ANALYSIS_REMOTE_PROTOCOL'] == protocol_name else "" }}>{{ protocol_name }}</option>
-              {% endfor %}
-            </select>
-          </label>
-        </div>
-        <div class="form-row">
-          <label><span>请求超时（秒）</span><input name="ai_analysis_request_timeout_seconds" type="number" min="10" max="600" value="{{ ai_config['values']['AI_ANALYSIS_REQUEST_TIMEOUT_SECONDS'] }}"></label>
-          <label><span>Reasoning Effort</span><input name="ai_analysis_remote_reasoning_effort" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_REASONING_EFFORT'] }}"></label>
-        </div>
-        <input name="ai_analysis_remote_responses_path" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_RESPONSES_PATH'] }}">
-        <input name="ai_analysis_remote_disable_response_storage" type="hidden" value="{{ ai_config['values']['AI_ANALYSIS_REMOTE_DISABLE_RESPONSE_STORAGE'] }}">
-      </div>
-
-      <div class="settings-section ai-interface-section">
-        <h3>3. 发送中心生成发布文案</h3>
-        <label>
-          <span>发布文案方式</span>
-          <select name="ai_publish_provider">
-            <option value="codex" {{ "selected" if ai_config['values']['AI_PUBLISH_PROVIDER'] == "codex" else "" }}>Codex CLI（推荐）</option>
-            <option value="remote" {{ "selected" if ai_config['values']['AI_PUBLISH_PROVIDER'] == "remote" else "" }}>远程 AI</option>
-            <option value="local" {{ "selected" if ai_config['values']['AI_PUBLISH_PROVIDER'] == "local" else "" }}>本地模型</option>
-          </select>
-        </label>
-        <label><span>Base URL</span><input name="ai_publish_remote_base_url" value="{{ ai_config['values']['AI_PUBLISH_REMOTE_BASE_URL'] }}"></label>
-        <label><span>API Key</span><input name="ai_publish_remote_api_key" type="password" value="" autocomplete="new-password" placeholder="{{ '已配置，留空保持' if ai_config.secret_configured['AI_PUBLISH_REMOTE_API_KEY'] else '尚未配置' }}"></label>
-        <div class="form-row">
-          <label><span>模型</span><input name="ai_publish_remote_model" list="remote-model-options" value="{{ ai_config['values']['AI_PUBLISH_REMOTE_MODEL'] }}"></label>
-          <label>
-            <span>协议</span>
-            <select name="ai_publish_remote_protocol">
-              {% for protocol_name in ai_config['remote_protocol_options'] %}
-              <option value="{{ protocol_name }}" {{ "selected" if ai_config['values']['AI_PUBLISH_REMOTE_PROTOCOL'] == protocol_name else "" }}>{{ protocol_name }}</option>
-              {% endfor %}
-            </select>
-          </label>
-        </div>
-        <div class="form-row">
-          <label><span>请求超时（秒）</span><input name="ai_publish_request_timeout_seconds" type="number" min="10" max="600" value="{{ ai_config['values']['AI_PUBLISH_REQUEST_TIMEOUT_SECONDS'] }}"></label>
-          <label><span>Reasoning Effort</span><input name="ai_publish_remote_reasoning_effort" value="{{ ai_config['values']['AI_PUBLISH_REMOTE_REASONING_EFFORT'] }}"></label>
-        </div>
-        <input name="ai_publish_remote_responses_path" type="hidden" value="{{ ai_config['values']['AI_PUBLISH_REMOTE_RESPONSES_PATH'] }}">
-        <input name="ai_publish_remote_disable_response_storage" type="hidden" value="{{ ai_config['values']['AI_PUBLISH_REMOTE_DISABLE_RESPONSE_STORAGE'] }}">
+      <div class="settings-section">
+        <h3>2. Codex 选片与发布文案</h3>
+        <p class="form-hint">共用 Codex CLI，联网运行，沿用现有登录。不可用时停止并显示原因。</p>
+        <label><span>CLI 路径</span><input name="ai_codex_path" value="{{ ai_config['values']['AI_CODEX_PATH'] }}"></label>
+        <label><span>当前模型</span><input value="{{ ai_config['values']['AI_CODEX_MODEL'] }}" readonly></label>
+        <label><span>超时（秒）</span><input type="number" name="ai_codex_timeout_seconds" min="10" max="1800" value="{{ ai_config['values']['AI_CODEX_TIMEOUT_SECONDS'] }}"></label>
+        <p class="form-hint">{{ ai_config.codex_status.detail }} {{ ai_config.codex_status.version or '' }}</p>
       </div>
     </div>
-
-    <div class="settings-section">
-      <h3>本地模型手动兜底</h3>
-      <div class="form-row">
-        <label><span>Ollama Base URL</span><input name="ai_local_base_url" value="{{ ai_config['values']['AI_LOCAL_BASE_URL'] }}"></label>
-        <label>
-          <span>本地模型</span>
-          <select name="ai_local_model">
-            {% if ai_config['values']['AI_LOCAL_MODEL'] not in ai_config['local_model_options'] %}
-            <option value="{{ ai_config['values']['AI_LOCAL_MODEL'] }}" selected>{{ ai_config['values']['AI_LOCAL_MODEL'] }}</option>
-            {% endif %}
-            {% for model_name in ai_config['local_model_options'] %}
-            <option value="{{ model_name }}" {{ "selected" if ai_config['values']['AI_LOCAL_MODEL'] == model_name else "" }}>{{ model_name }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label><span>健康检查超时（秒）</span><input name="ai_local_health_timeout_seconds" type="number" min="3" max="120" value="{{ ai_config['values']['AI_LOCAL_HEALTH_TIMEOUT_SECONDS'] }}"></label>
-      </div>
-    </div>
-
-    <div class="modal-actions inline-actions">
-      <p class="form-hint" id="ai-config-result"></p>
-      <div class="button-row align-end">
-        <button class="primary-button" type="submit">保存三类 AI 接口配置</button>
-      </div>
-    </div>
+    <p class="form-hint" id="ai-config-result"></p>
+    <button class="primary-button" type="submit">保存设置</button>
   </form>
 </section>
 
@@ -296,17 +134,9 @@
     <ul class="compact-list">
       <li>任务资料根目录：{{ storage_root }}</li>
       <li>数据库文件：{{ database_path }}（{{ "已存在" if database_exists else "尚未创建" }}）</li>
-      <li>AI 接口配置文件：项目本地 .env（{{ "已存在" if ai_config.env_exists else "尚未创建" }}）</li>
-      <li>1. 音频转写：{{ ai_config.transcription_runtime.model_identity }} · {{ ai_config.transcription_runtime.device }}/{{ ai_config.transcription_runtime.compute_type }} · 模型 {{ "已缓存" if ai_config.transcription_runtime.model_ready else "待初始化" }} · GPU {{ "可用" if ai_config.transcription_runtime.gpu_ready else "待初始化" }} · 外部费用 ¥{{ ai_config.transcription_runtime.external_cost_yuan }}</li>
-      <li>火山回滚配置：{{ ai_config['values']['VOLCENGINE_ASR_RESOURCE_ID'] }} · Key {{ "已保留" if ai_config.secret_configured['VOLCENGINE_ASR_API_KEY'] or ai_config.secret_configured['VOLCENGINE_ASR_APP_KEY'] else "未填写" }} · {{ "完全离线锁已阻断" if ai_config.transcription_runtime.offline_only else "允许手动回滚" }}</li>
-      <li>2. 分析文字稿，生成候选切片：{{ ai_config['values']['AI_ANALYSIS_REMOTE_BASE_URL'] }} · {{ ai_config['values']['AI_ANALYSIS_REMOTE_PROTOCOL'] }} · {{ ai_config['values']['AI_ANALYSIS_REMOTE_MODEL'] }} · Key {{ "有效" if ai_config.analysis_key_valid else "异常" }}</li>
-      <li>3. 发送中心生成发布文案：{{ ai_config['values']['AI_PUBLISH_REMOTE_BASE_URL'] }} · {{ ai_config['values']['AI_PUBLISH_REMOTE_PROTOCOL'] }} · {{ ai_config['values']['AI_PUBLISH_REMOTE_MODEL'] }} · Key {{ "有效" if ai_config.publish_key_valid else "异常" }}</li>
-      <li>本地 AI：{{ ai_config['values']['AI_LOCAL_BASE_URL'] }} · {{ ai_config['values']['AI_LOCAL_MODEL'] }} · Ollama {{ "在线" if ai_config.local_ollama_online else "离线" }}</li>
-      {% if ai_config.local_ollama_models %}
-      <li>本地已安装模型：{{ ai_config.local_ollama_models | join(", ") }}</li>
-      {% elif ai_config.local_ollama_error %}
-      <li>本地 AI 检查异常：{{ ai_config.local_ollama_error }}</li>
-      {% endif %}
+      <li>处理配置文件：项目本地 .env（{{ "已存在" if ai_config.env_exists else "尚未创建" }}）</li>
+      <li>音频转写：本地 faster-whisper，完全离线</li>
+      <li>选片与发布文案：Codex CLI，共用现有登录</li>
       <li>健康检查接口：/health</li>
     </ul>
   </article>

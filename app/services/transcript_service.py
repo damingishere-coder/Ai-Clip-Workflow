@@ -307,8 +307,8 @@ def transcribe_audio_with_configured_provider(
     allow_fallback: bool = False,
     checkpoint: TranscriptionCheckpoint | None = None,
 ) -> list[TranscriptSegment]:
-    provider = _normalize_provider_name(provider or settings.transcription_provider)
-    fallback_provider = _normalize_provider_name(settings.transcription_fallback_provider)
+    provider = ensure_transcription_provider_allowed(_normalize_provider_name(provider or settings.transcription_provider))
+    fallback_provider = ""
     try:
         return transcribe_audio_with_provider(
             audio_path, working_dir, progress_path, provider, progress_callback, checkpoint=checkpoint
@@ -627,6 +627,7 @@ def _request_volcengine_transcript(
     *,
     allow_empty: bool,
 ) -> list[TranscriptSegment]:
+    ensure_transcription_provider_allowed("volcengine")
     request = Request(
         settings.volcengine_asr_api_url,
         data=json.dumps(payload).encode("utf-8"),
@@ -913,6 +914,7 @@ def _build_volcengine_flash_payload(audio_path: Path) -> dict:
 
 
 def _ensure_volcengine_configured() -> None:
+    ensure_transcription_provider_allowed("volcengine")
     if not settings.volcengine_asr_api_key and not settings.volcengine_asr_app_key:
         raise RuntimeError("缺少火山引擎转写密钥，请在系统状态页的“1. 音频转写”填写 API Key")
     if not settings.volcengine_asr_resource_id:

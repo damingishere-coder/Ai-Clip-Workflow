@@ -1,3 +1,5 @@
+from typing import Literal
+from pydantic import ConfigDict
 from urllib.parse import urlsplit
 
 from pathlib import Path, PureWindowsPath
@@ -46,7 +48,7 @@ def _validate_http_url(value: str, *, local_only: bool = False, https_only: bool
     return text
 
 
-class AIConfigUpdate(BaseModel):
+class LegacyAIConfigUpdate(BaseModel):
     ai_default_provider: str = Field(default="codex", pattern="^(codex|remote|local)$", max_length=20)
     ai_publish_provider: str = Field(default="codex", pattern="^(codex|remote|local)$", max_length=20)
     ai_request_timeout_seconds: int = Field(default=120, ge=10, le=600)
@@ -178,3 +180,43 @@ class AIConfigUpdate(BaseModel):
         if not text.startswith("/") or text.startswith("//") or "\\" in text or "://" in text:
             raise ValueError("Responses 路径必须是站内绝对路径，例如 /v1/responses")
         return text
+
+
+class AIConfigUpdate(BaseModel):
+    """当前设置仅接受本地转写与 Codex；旧配置不通过此接口暴露。"""
+    model_config = ConfigDict(extra="forbid")
+    ai_default_provider: Literal["codex"] = "codex"
+    ai_publish_provider: Literal["codex"] = "codex"
+    ai_codex_path: str = Field(default="codex", min_length=1, max_length=1000)
+    ai_codex_model: Literal["gpt-6-astra"] = "gpt-6-astra"
+    ai_codex_timeout_seconds: int = Field(default=600, ge=10, le=1800)
+    transcription_provider: Literal["local"] = "local"
+    transcription_offline_only: Literal[True] = True
+    transcription_model: str = Field(
+        default=PRIMARY_TRANSCRIPTION_MODEL,
+        pattern=r"^[A-Za-z0-9._/-]+$",
+        max_length=200,
+    )
+    transcription_model_revision: str = Field(
+        default=PRIMARY_TRANSCRIPTION_MODEL_REVISION,
+        pattern=r"^[0-9a-f]{40}$",
+        max_length=40,
+    )
+    transcription_model_cache_dir: str = Field(
+        default=r"E:\直播间切片工作流存储\_模型\faster-whisper",
+        max_length=2000,
+    )
+    transcription_local_files_only: Literal[True] = True
+    transcription_device: str = Field(default="cuda", pattern="^(cuda|cpu|auto)$", max_length=20)
+    transcription_compute_type: str = Field(
+        default="float16",
+        pattern="^(float16|int8_float16|int8|float32|auto)$",
+        max_length=30,
+    )
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def reject_control_characters(cls, value):
+        if isinstance(value, str) and any(ord(c) < 32 or ord(c) == 127 for c in value):
+            raise ValueError("配置值不能包含换行或控制字符")
+        return value
