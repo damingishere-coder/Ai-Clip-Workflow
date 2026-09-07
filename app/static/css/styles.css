@@ -6492,3 +6492,16 @@ body.motion-enabled {
     animation: none !important;
   }
 }
+
+/* 数据动态排期：隐藏无效输入，选择操作保持可读。 */
+.schedule-drawer [hidden] { display: none !important; }
+[data-adaptive-fields] { display: grid; gap: 14px; }
+[data-adaptive-fields] label { display: grid; gap: 7px; }
+.publish-selection-bar { flex-wrap: wrap; width: min(920px, calc(100vw - 270px)); }
+.publish-selection-bar > * { flex-shrink: 0; white-space: nowrap; }
+.publish-selection-bar select { flex: 1; }
+[data-adaptive-panel] summary { cursor: pointer; font-weight: 650; }
+[data-adaptive-panel] { overflow-wrap: anywhere; }
+@media (max-width: 900px) {
+  .publish-selection-bar { width: calc(100% - 28px); }
+}

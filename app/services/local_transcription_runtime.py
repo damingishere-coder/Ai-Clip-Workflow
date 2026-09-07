@@ -45,7 +45,7 @@ class TranscriptionOfflinePolicyError(RuntimeError):
 
 def ensure_transcription_provider_allowed(provider: str) -> str:
     normalized = (provider or "").strip().lower()
-    if settings.transcription_offline_only and normalized != "local":
+    if normalized != "local":
         raise TranscriptionOfflinePolicyError(
             "已启用完全离线转写，禁止调用火山引擎或其他远程转写服务。"
         )

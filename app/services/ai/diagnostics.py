@@ -23,6 +23,8 @@ def ollama_origin(base_url: str | None = None) -> str:
 
 
 def fetch_ollama_models(timeout_seconds: int | None = None) -> list[str]:
+    from app.services.provider_policy import reject_legacy_provider
+    reject_legacy_provider()
     tags_url = build_url(ollama_origin(), "/api/tags")
     try:
         with urlopen(tags_url, timeout=timeout_seconds or settings.ai_local_health_timeout_seconds) as response:
@@ -41,6 +43,8 @@ def fetch_ollama_models(timeout_seconds: int | None = None) -> list[str]:
 
 
 def ensure_local_ai_ready(model: str | None = None) -> dict[str, Any]:
+    from app.services.provider_policy import reject_legacy_provider
+    reject_legacy_provider()
     target_model = model or settings.ai_local_model
     models = fetch_ollama_models()
     if target_model not in models:
@@ -57,6 +61,8 @@ def ensure_local_ai_ready(model: str | None = None) -> dict[str, Any]:
 
 
 def test_local_json_generation(model: str | None = None, timeout_seconds: int | None = None) -> dict[str, Any]:
+    from app.services.provider_policy import reject_legacy_provider
+    reject_legacy_provider()
     target_model = model or settings.ai_local_model
     ensure_local_ai_ready(target_model)
     provider = LocalModelProvider(
@@ -77,6 +83,8 @@ def test_local_json_generation(model: str | None = None, timeout_seconds: int | 
 
 
 def test_remote_json_generation(timeout_seconds: int | None = None) -> dict[str, Any]:
+    from app.services.provider_policy import reject_legacy_provider
+    reject_legacy_provider()
     if not remote_key_looks_valid():
         raise AIProviderError("远程分析接口 Key 看起来无效或缺失，请检查 AI_ANALYSIS_REMOTE_API_KEY")
     remote_model = settings.ai_analysis_remote_model

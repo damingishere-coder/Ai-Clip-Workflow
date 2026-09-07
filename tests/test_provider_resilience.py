@@ -181,6 +181,7 @@ def test_variety_invalid_json_does_not_call_provider_twice():
 
 
 def test_local_protocol_fallback_only_runs_for_missing_endpoint(monkeypatch):
+    monkeypatch.setattr("app.services.provider_policy.reject_legacy_provider", lambda: None)
     provider = LocalModelProvider(
         ProviderConfig(
             base_url="http://127.0.0.1:11434/v1",
@@ -214,6 +215,7 @@ def test_local_protocol_fallback_only_runs_for_missing_endpoint(monkeypatch):
 
 
 def test_volcengine_retries_429_with_same_request_id(monkeypatch):
+    monkeypatch.setattr(transcript_service, "ensure_transcription_provider_allowed", lambda p: p)
     monkeypatch.setattr(transcript_service, "_ensure_volcengine_configured", lambda: None)
     monkeypatch.setattr(transcript_service, "_build_volcengine_flash_payload", lambda _path: {})
     requests = []
@@ -236,6 +238,7 @@ def test_volcengine_retries_429_with_same_request_id(monkeypatch):
 
 
 def test_volcengine_5xx_and_bad_schema_are_not_retried(monkeypatch):
+    monkeypatch.setattr(transcript_service, "ensure_transcription_provider_allowed", lambda p: p)
     monkeypatch.setattr(transcript_service, "_ensure_volcengine_configured", lambda: None)
     monkeypatch.setattr(transcript_service, "_build_volcengine_flash_payload", lambda _path: {})
     calls = 0
@@ -265,6 +268,7 @@ def test_volcengine_5xx_and_bad_schema_are_not_retried(monkeypatch):
 
 
 def test_volcengine_invalid_success_fields_are_billing_uncertain(monkeypatch):
+    monkeypatch.setattr(transcript_service, "ensure_transcription_provider_allowed", lambda p: p)
     monkeypatch.setattr(transcript_service, "_ensure_volcengine_configured", lambda: None)
     monkeypatch.setattr(transcript_service, "_build_volcengine_flash_payload", lambda _path: {})
     monkeypatch.setattr(
@@ -306,6 +310,7 @@ def test_transcript_cancellation_is_not_wrapped_as_provider_failure(monkeypatch,
 
 
 def test_volcengine_response_reset_is_billing_uncertain(monkeypatch):
+    monkeypatch.setattr(transcript_service, "ensure_transcription_provider_allowed", lambda p: p)
     monkeypatch.setattr(transcript_service, "_ensure_volcengine_configured", lambda: None)
     monkeypatch.setattr(transcript_service, "_build_volcengine_flash_payload", lambda _path: {})
 

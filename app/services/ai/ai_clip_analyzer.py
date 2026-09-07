@@ -222,7 +222,8 @@ def _analyze_task_transcript_in_chunks(
 
 def build_provider(provider_name: str | None = None, purpose: str = "analysis") -> AIProvider:
     default_provider = settings.ai_publish_provider if purpose == "publish" else settings.ai_default_provider
-    resolved = (provider_name or default_provider).lower()
+    from app.services.provider_policy import require_codex
+    resolved = require_codex(provider_name or default_provider)
     if resolved == "codex":
         return CodexCliProvider(
             CodexCliConfig(
@@ -250,6 +251,8 @@ def build_provider(provider_name: str | None = None, purpose: str = "analysis") 
 
 
 def build_remote_provider(model: str | None = None, purpose: str = "analysis") -> AIProvider:
+    from app.services.provider_policy import reject_legacy_provider
+    reject_legacy_provider()
     if purpose == "publish":
         return RemoteResponsesProvider(
             ProviderConfig(

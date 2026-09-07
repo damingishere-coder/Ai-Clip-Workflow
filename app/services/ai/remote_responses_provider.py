@@ -17,6 +17,8 @@ class RemoteResponsesProvider:
         self.config = config
 
     def generate_json(self, prompt: str, retry_instruction: str | None = None) -> str:
+        from app.services.provider_policy import reject_legacy_provider
+        reject_legacy_provider()
         if not self.config.api_key:
             raise AIProviderError(f"缺少 {self.config.api_key_name}，请先在系统状态页填写对应远程接口密钥")
         if self.config.protocol == "responses":
@@ -26,6 +28,8 @@ class RemoteResponsesProvider:
         raise AIProviderError(f"暂不支持远程 AI 协议：{self.config.protocol}")
 
     def _responses(self, prompt: str, retry_instruction: str | None) -> str:
+        from app.services.provider_policy import reject_legacy_provider
+        reject_legacy_provider()
         input_text = _merge_prompt(prompt, retry_instruction)
         payload = {
             "model": self.config.model,
@@ -46,6 +50,8 @@ class RemoteResponsesProvider:
         return extract_responses_text(response)
 
     def _chat_completions(self, prompt: str, retry_instruction: str | None) -> str:
+        from app.services.provider_policy import reject_legacy_provider
+        reject_legacy_provider()
         payload = {
             "model": self.config.model,
             "messages": [

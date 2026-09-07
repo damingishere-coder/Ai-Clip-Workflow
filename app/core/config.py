@@ -232,7 +232,7 @@ class Settings:
     ai_model_auto_compact_token_limit: int = int(_env("AI_MODEL_AUTO_COMPACT_TOKEN_LIMIT", "900000"))
     transcription_provider: str = _env("TRANSCRIPTION_PROVIDER", "local")
     transcription_fallback_provider: str = _env("TRANSCRIPTION_FALLBACK_PROVIDER", "")
-    transcription_offline_only: bool = _env_bool("TRANSCRIPTION_OFFLINE_ONLY", True)
+    transcription_offline_only: bool = True
     transcription_model: str = _env("TRANSCRIPTION_MODEL", PRIMARY_TRANSCRIPTION_MODEL)
     transcription_model_revision: str = _env(
         "TRANSCRIPTION_MODEL_REVISION",
@@ -242,7 +242,7 @@ class Settings:
         "TRANSCRIPTION_MODEL_CACHE_DIR",
         _env_path("STORAGE_ROOT", EXTERNAL_STORAGE_ROOT) / "_模型" / "faster-whisper",
     )
-    transcription_local_files_only: bool = _env_bool("TRANSCRIPTION_LOCAL_FILES_ONLY", True)
+    transcription_local_files_only: bool = True
     transcription_language: str = _env("TRANSCRIPTION_LANGUAGE", "zh")
     transcription_device: str = _env("TRANSCRIPTION_DEVICE", "cuda")
     transcription_compute_type: str = _env("TRANSCRIPTION_COMPUTE_TYPE", "float16")

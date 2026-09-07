@@ -119,9 +119,9 @@ def test_transcript_file_conversion_backs_up_and_preserves_markdown_structure(tm
 
 
 def test_offline_config_rejects_remote_provider_and_network_model_loading() -> None:
-    with pytest.raises(ValidationError, match="转写方式必须为 local"):
+    with pytest.raises(ValidationError, match="transcription_provider"):
         AIConfigUpdate(transcription_provider="volcengine")
-    with pytest.raises(ValidationError, match="必须只读取本地模型文件"):
+    with pytest.raises(ValidationError, match="transcription_local_files_only"):
         AIConfigUpdate(transcription_local_files_only=False)
 
 

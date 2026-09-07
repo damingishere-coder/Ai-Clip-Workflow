@@ -546,7 +546,7 @@ def test_frontend_uses_one_selection_semantic_and_no_schedule_reload():
     assert "if (syncTaskGroups) syncContentTaskGroups();" in script
     assert "if (showResult && button) button.disabled = true;" in script
     assert "setTaskGroupExpanded(visibleGroups[0], true)" not in script
-    assert "?v=20260901-polling-state" in template
+    assert "?v=20260906-adaptive" in template
 
 
 def test_run_once_module_command(tmp_path):

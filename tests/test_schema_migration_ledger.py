@@ -48,7 +48,7 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
         ).fetchall()
         indexes = _index_names(connection)
 
-    assert len(migrations) == 5
+    assert len(migrations) == 6
     migrations_by_version = {row["version"]: row for row in migrations}
     publish_migration = migrations_by_version[database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_VERSION]
     assert publish_migration["name"] == database_module.PUBLISH_ACTIVE_INDEX_MIGRATION_NAME

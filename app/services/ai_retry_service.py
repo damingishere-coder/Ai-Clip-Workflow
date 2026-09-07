@@ -63,6 +63,9 @@ def get_ai_retry_confirmation(task_id: str) -> dict[str, Any] | None:
 
 def prepare_confirmed_ai_retry(task_id: str) -> tuple[dict, bool, dict[str, Any]]:
     """在同一事务中重新验证前提并准备已确认的 AI 重试。"""
+    from app.services.ai_analysis_workflow_service import get_task_ai_analysis_meta
+    from app.services.provider_policy import require_codex
+    require_codex(get_task_ai_analysis_meta(task_id).get("provider") or "codex")
     now = _now_iso()
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")

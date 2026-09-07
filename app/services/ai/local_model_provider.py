@@ -17,6 +17,8 @@ class LocalModelProvider:
         self.config = config
 
     def generate_json(self, prompt: str, retry_instruction: str | None = None) -> str:
+        from app.services.provider_policy import reject_legacy_provider
+        reject_legacy_provider()
         protocols = [self.config.protocol]
         if self.config.fallback_protocol and self.config.fallback_protocol not in protocols:
             protocols.append(self.config.fallback_protocol)
@@ -37,6 +39,8 @@ class LocalModelProvider:
         raise last_error or AIProviderError("本地 AI 调用失败")
 
     def _responses(self, prompt: str, retry_instruction: str | None) -> str:
+        from app.services.provider_policy import reject_legacy_provider
+        reject_legacy_provider()
         payload = {
             "model": self.config.model,
             "input": _merge_prompt(prompt, retry_instruction),
@@ -51,6 +55,8 @@ class LocalModelProvider:
         return extract_responses_text(response)
 
     def _chat_completions(self, prompt: str, retry_instruction: str | None) -> str:
+        from app.services.provider_policy import reject_legacy_provider
+        reject_legacy_provider()
         payload = {
             "model": self.config.model,
             "messages": [

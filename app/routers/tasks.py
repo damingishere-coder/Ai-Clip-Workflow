@@ -295,7 +295,7 @@ async def cancel_transcript(task_id: str) -> dict:
 @router.post("/{task_id}/process/ai")
 async def process_ai_analysis(
     task_id: str,
-    provider: str | None = Query(default=None, pattern="^(codex|remote|local)$"),
+    provider: str | None = Query(default=None, pattern="^codex$"),
 ) -> dict:
     try:
         job, created = task_service.queue_task_ai_analysis(task_id, provider=provider)

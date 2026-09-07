@@ -75,7 +75,7 @@ def _analysis(task_id: str, *, incomplete: bool = False) -> AIClipAnalysisResult
 
 
 def _claim_ai_job(task_id: str, owner: str = "ai-test-owner") -> tuple[dict, str]:
-    job, _created = workflow.queue_task_ai_analysis(task_id, provider="remote")
+    job, _created = workflow.queue_task_ai_analysis(task_id, provider="codex")
     claimed = job_service.claim_job(job["id"], owner)
     assert claimed
     return claimed, owner
@@ -86,8 +86,8 @@ def test_manual_api_creates_and_reuses_persistent_ai_job(monkeypatch):
     monkeypatch.setattr(workflow, "_analyze_with_provider", lambda *_args, **_kwargs: pytest.fail("API 不应直接调用 Provider"))
     client = TestClient(app)
 
-    first = client.post(f"/api/tasks/{task_id}/process/ai?provider=remote")
-    second = client.post(f"/api/tasks/{task_id}/process/ai?provider=remote")
+    first = client.post(f"/api/tasks/{task_id}/process/ai?provider=codex")
+    second = client.post(f"/api/tasks/{task_id}/process/ai?provider=codex")
 
     assert first.status_code == 200
     assert first.json()["status"] == job_service.JOB_STATUS_QUEUED
@@ -126,7 +126,7 @@ def test_failed_ai_job_reuses_original_checkpoint_ledger():
         lease_token=claimed["lease_token"],
     )
 
-    retried, created = workflow.queue_task_ai_analysis(task_id, provider="remote")
+    retried, created = workflow.queue_task_ai_analysis(task_id, provider="codex")
 
     assert created is True
     assert retried["id"] == claimed["id"]
@@ -144,7 +144,7 @@ def test_failed_ai_job_cannot_switch_provider_and_drop_ledger():
         lease_token=claimed["lease_token"],
     )
 
-    with pytest.raises(workflow.AIAnalysisConflictError, match="不能在同一账本中切换"):
+    with pytest.raises(RuntimeError, match="已停用"):
         workflow.queue_task_ai_analysis(task_id, provider="local")
 
     assert job_service.get_job(claimed["id"])["status"] == job_service.JOB_STATUS_FAILED
@@ -386,7 +386,7 @@ def test_ai_result_transaction_rolls_back_on_run_insert_failure(monkeypatch):
     old_run = workflow._insert_ai_analysis_run(
         task_id=task_id,
         analysis_payload=workflow.result_to_jsonable(_analysis(task_id)),
-        provider="remote",
+        provider="codex",
         provider_label="远程 AI",
         model="old-model",
         fallback_notice="",
@@ -403,7 +403,7 @@ def test_ai_result_transaction_rolls_back_on_run_insert_failure(monkeypatch):
 
     with job_service.job_lease_context(claimed["id"], owner, claimed["lease_token"]):
         with pytest.raises(ValueError, match="run insert failed"):
-            workflow.process_task_ai_analysis(task_id, provider="remote")
+            workflow.process_task_ai_analysis(task_id, provider="codex")
 
     assert [clip["title"] for clip in list_clip_candidates(task_id)] == ["隔离候选"]
     runs = workflow.list_ai_analysis_runs(task_id)
@@ -430,7 +430,7 @@ def test_stale_ai_worker_cannot_commit_after_lease_takeover(monkeypatch):
 
     with job_service.job_lease_context(claimed["id"], owner, claimed["lease_token"]):
         with pytest.raises(job_service.JobLeaseLostError):
-            workflow.process_task_ai_analysis(task_id, provider="remote")
+            workflow.process_task_ai_analysis(task_id, provider="codex")
 
     assert replacement["lease_owner"] == "new-owner"
     assert list_clip_candidates(task_id) == []
@@ -450,7 +450,7 @@ def test_taken_over_job_reuses_committed_run_and_rebuilds_file_without_provider(
     monkeypatch.setattr(workflow, "_analyze_with_provider", analyze)
     claimed, owner = _claim_ai_job(task_id, owner="first-owner")
     with job_service.job_lease_context(claimed["id"], owner, claimed["lease_token"]):
-        first = workflow.process_task_ai_analysis(task_id, provider="remote")
+        first = workflow.process_task_ai_analysis(task_id, provider="codex")
     assert first["analysis_run_id"]
     analysis_path: Path = get_artifact_paths(task_id)["analysis_path"]
     analysis_path.unlink(missing_ok=True)
@@ -464,7 +464,7 @@ def test_taken_over_job_reuses_committed_run_and_rebuilds_file_without_provider(
     takeover = job_service.claim_job(claimed["id"], "second-owner")
     assert takeover
     with job_service.job_lease_context(takeover["id"], "second-owner", takeover["lease_token"]):
-        resumed = workflow.process_task_ai_analysis(task_id, provider="remote")
+        resumed = workflow.process_task_ai_analysis(task_id, provider="codex")
 
     assert resumed["analysis_run_id"] == first["analysis_run_id"]
     assert calls == 1

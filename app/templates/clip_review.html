@@ -148,7 +148,7 @@
     <article class="panel empty-state">
       <p class="eyebrow">Empty</p>
       <h2>暂无候选片段</h2>
-      <p>请先完成转写和 AI 片段分析。默认推荐使用 Codex CLI；如果不可用，可以手动改用远程 AI 或本地模型。</p>
+      <p>请先完成转写和 AI 片段分析。使用 Codex CLI 完成分析；不可用时请在系统状态页检查当前 Codex 登录。</p>
       <div class="button-row empty-actions">
         <a class="secondary-button" href="/tasks/{{ task.id }}">返回任务详情</a>
         <button class="secondary-button js-process-action" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/transcript-workflow" {{ "disabled" if task.transcript_exists else "" }}>先生成转写</button>

@@ -4,7 +4,6 @@ from pathlib import Path
 from app.core.config import settings
 from app.models.settings import AIConfigUpdate
 from app.services.ai.codex_cli_provider import CodexCliConfig, CodexCliProvider
-from app.services.ai.diagnostics import fetch_ollama_models
 from app.services.local_transcription_runtime import get_local_transcription_runtime_status
 
 
@@ -258,6 +257,8 @@ def _sync_legacy_runtime_aliases(values: dict[str, str]) -> None:
 
 def _apply_runtime_values(values: dict[str, str]) -> None:
     for env_key, attr_name in SETTING_ATTRS.items():
+        if env_key not in values:
+            continue
         value = values[env_key]
         os.environ[env_key] = value
         if attr_name in INTEGER_ATTRS:
@@ -268,7 +269,6 @@ def _apply_runtime_values(values: dict[str, str]) -> None:
             object.__setattr__(settings, attr_name, Path(value))
         else:
             object.__setattr__(settings, attr_name, value)
-    _sync_legacy_runtime_aliases(values)
 
 
 def _write_env_values(updates: dict[str, str]) -> None:
@@ -328,75 +328,24 @@ def _public_config_values(values: dict[str, str]) -> dict[str, str]:
 
 
 def get_ai_config_context() -> dict:
-    values = _current_config_values()
-    public_values = _public_config_values(values)
-    transcription_runtime = get_local_transcription_runtime_status()
-    secret_configured = {
-        key: bool(str(values.get(key) or "").strip())
-        for key in SECRET_SETTING_KEYS
-    }
-    transcription_ready = bool(
-        (
-            values["TRANSCRIPTION_PROVIDER"] == "local"
-            and transcription_runtime["ready"]
-        )
-        or (
-            values["VOLCENGINE_ASR_API_URL"]
-            and values["VOLCENGINE_ASR_RESOURCE_ID"]
-            and (values["VOLCENGINE_ASR_API_KEY"] or values["VOLCENGINE_ASR_APP_KEY"])
-            and values["TRANSCRIPTION_OFFLINE_ONLY"].strip().lower() not in {"1", "true", "yes", "on"}
-        )
-    )
-    analysis_ready = _remote_ready(values, "AI_ANALYSIS_REMOTE")
-    publish_ready = _remote_ready(values, "AI_PUBLISH_REMOTE")
-    local_ready = bool(values["AI_LOCAL_BASE_URL"] and values["AI_LOCAL_MODEL"])
-    try:
-        local_models = fetch_ollama_models(timeout_seconds=2)
-        local_ollama_online = True
-        local_ollama_error = ""
-    except Exception as exc:
-        local_models = []
-        local_ollama_online = False
-        local_ollama_error = str(exc)
-    codex_status = CodexCliProvider(
-        CodexCliConfig(
-            executable=values["AI_CODEX_PATH"],
-            model=values["AI_CODEX_MODEL"],
-            timeout_seconds=int(values["AI_CODEX_TIMEOUT_SECONDS"]),
-            codex_home=values["AI_CODEX_HOME"],
-        )
-    ).version_status()
-    analysis_ready = bool(codex_status["ok"]) if values["AI_DEFAULT_PROVIDER"] == "codex" else analysis_ready
-    if values["AI_DEFAULT_PROVIDER"] == "local":
-        analysis_ready = local_ready
-    publish_ready = bool(codex_status["ok"]) if values["AI_PUBLISH_PROVIDER"] == "codex" else publish_ready
-    if values["AI_PUBLISH_PROVIDER"] == "local":
-        publish_ready = local_ready
+    active = {name.upper() for name in AIConfigUpdate.model_fields}
+    values = {key: str(getattr(settings, attr)) for key, attr in SETTING_ATTRS.items() if key in active}
+    runtime = get_local_transcription_runtime_status()
+    provider = CodexCliProvider(CodexCliConfig(
+        executable=settings.ai_codex_path, model=settings.ai_codex_model,
+        timeout_seconds=settings.ai_codex_timeout_seconds, codex_home=settings.ai_codex_home,
+    ))
+    codex_status = provider.version_status()
+    login = provider.login_status()
+    codex_status["detail"] += " · " + login["detail"]
+    codex_status["ok"] = codex_status["ok"] and login["ok"]
+    ready = bool(codex_status["ok"])
     return {
-        "env_exists": _env_path().exists(),
-        "values": public_values,
-        "secret_configured": secret_configured,
-        "transcription_ready": transcription_ready,
-        "transcription_runtime": transcription_runtime,
-        "analysis_ready": analysis_ready,
-        "analysis_key_valid": _key_valid(values["AI_ANALYSIS_REMOTE_API_KEY"]),
-        "publish_ready": publish_ready,
-        "publish_key_valid": _key_valid(values["AI_PUBLISH_REMOTE_API_KEY"]),
-        "remote_ready": analysis_ready,
-        "remote_key_valid": _key_valid(values["AI_ANALYSIS_REMOTE_API_KEY"]),
-        "remote_key_warning": "" if analysis_ready else "远程分析接口 Key 或模型未配置完整。",
-        "local_ready": local_ready,
-        "local_ollama_online": local_ollama_online,
-        "local_ollama_models": local_models,
-        "local_ollama_error": local_ollama_error,
-        "default_provider": values["AI_DEFAULT_PROVIDER"],
-        "publish_provider": values["AI_PUBLISH_PROVIDER"],
-        "codex_status": codex_status,
-        "configured_count": int(transcription_ready) + int(analysis_ready) + int(publish_ready),
-        "local_model_options": LOCAL_MODEL_OPTIONS,
-        "remote_model_options": REMOTE_MODEL_OPTIONS,
-        "remote_protocol_options": REMOTE_PROTOCOL_OPTIONS,
-        "transcription_audio_format_options": TRANSCRIPTION_AUDIO_FORMAT_OPTIONS,
+        "env_exists": _env_path().exists(), "values": values,
+        "transcription_ready": bool(runtime["ready"]), "transcription_runtime": runtime,
+        "analysis_ready": ready, "publish_ready": ready,
+        "default_provider": "codex", "publish_provider": "codex", "codex_status": codex_status,
+        "configured_count": int(runtime["ready"]) + 2 * int(ready),
     }
 
 
@@ -414,91 +363,14 @@ def _normalize_reasoning_effort(base_url: str, model: str, protocol: str, value:
 
 
 def save_ai_config(payload: AIConfigUpdate) -> dict:
-    current_values = _current_config_values()
-
-    analysis_base_url = payload.ai_analysis_remote_base_url.strip() or "https://api.deepseek.com"
-    analysis_model = payload.ai_analysis_remote_model.strip() or "deepseek-v4-flash"
-    analysis_protocol = _normalize_remote_protocol(analysis_base_url, payload.ai_analysis_remote_protocol)
-
-    publish_base_url = payload.ai_publish_remote_base_url.strip() or analysis_base_url
-    publish_model = payload.ai_publish_remote_model.strip() or "deepseek-v4-flash"
-    publish_protocol = _normalize_remote_protocol(publish_base_url, payload.ai_publish_remote_protocol)
-
-    updates = {
-        "AI_DEFAULT_PROVIDER": payload.ai_default_provider.strip() or "codex",
-        "AI_PUBLISH_PROVIDER": payload.ai_publish_provider.strip() or "codex",
-        "AI_REQUEST_TIMEOUT_SECONDS": str(payload.ai_request_timeout_seconds),
-        "AI_CODEX_PATH": payload.ai_codex_path.strip() or "codex",
-        "AI_CODEX_HOME": payload.ai_codex_home.strip(),
-        "AI_CODEX_MODEL": payload.ai_codex_model.strip() or "gpt-6-astra",
-        "AI_CODEX_TIMEOUT_SECONDS": str(payload.ai_codex_timeout_seconds),
-        "TRANSCRIPTION_PROVIDER": payload.transcription_provider.strip() or "local",
-        "TRANSCRIPTION_FALLBACK_PROVIDER": payload.transcription_fallback_provider.strip(),
-        "TRANSCRIPTION_OFFLINE_ONLY": str(payload.transcription_offline_only).lower(),
-        "TRANSCRIPTION_MODEL": payload.transcription_model.strip(),
-        "TRANSCRIPTION_MODEL_REVISION": payload.transcription_model_revision.strip(),
-        "TRANSCRIPTION_MODEL_CACHE_DIR": payload.transcription_model_cache_dir.strip(),
-        "TRANSCRIPTION_LOCAL_FILES_ONLY": str(payload.transcription_local_files_only).lower(),
-        "TRANSCRIPTION_DEVICE": payload.transcription_device.strip(),
-        "TRANSCRIPTION_COMPUTE_TYPE": payload.transcription_compute_type.strip(),
-        "VOLCENGINE_ASR_API_URL": payload.volcengine_asr_api_url.strip()
-        or "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash",
-        "VOLCENGINE_ASR_API_KEY": payload.volcengine_asr_api_key.strip()
-        or current_values.get("VOLCENGINE_ASR_API_KEY", ""),
-        "VOLCENGINE_ASR_APP_KEY": payload.volcengine_asr_app_key.strip()
-        or current_values.get("VOLCENGINE_ASR_APP_KEY", ""),
-        "VOLCENGINE_ASR_ACCESS_KEY": payload.volcengine_asr_access_key.strip()
-        or current_values.get("VOLCENGINE_ASR_ACCESS_KEY", ""),
-        "VOLCENGINE_ASR_RESOURCE_ID": payload.volcengine_asr_resource_id.strip()
-        or "volc.bigasr.auc_turbo",
-        "VOLCENGINE_ASR_TIMEOUT_SECONDS": str(payload.volcengine_asr_timeout_seconds),
-        "VOLCENGINE_ASR_AUDIO_FORMAT": payload.volcengine_asr_audio_format.strip() or "mp3",
-        "AI_ANALYSIS_REMOTE_BASE_URL": analysis_base_url,
-        "AI_ANALYSIS_REMOTE_API_KEY": payload.ai_analysis_remote_api_key.strip()
-        or current_values.get("AI_ANALYSIS_REMOTE_API_KEY", ""),
-        "AI_ANALYSIS_REMOTE_MODEL": analysis_model,
-        "AI_ANALYSIS_REMOTE_PROTOCOL": analysis_protocol,
-        "AI_ANALYSIS_REMOTE_REASONING_EFFORT": _normalize_reasoning_effort(
-            analysis_base_url,
-            analysis_model,
-            analysis_protocol,
-            payload.ai_analysis_remote_reasoning_effort,
-        ),
-        "AI_ANALYSIS_REMOTE_RESPONSES_PATH": payload.ai_analysis_remote_responses_path.strip() or "/v1/responses",
-        "AI_ANALYSIS_REMOTE_DISABLE_RESPONSE_STORAGE": str(
-            payload.ai_analysis_remote_disable_response_storage
-        ).lower(),
-        "AI_ANALYSIS_REQUEST_TIMEOUT_SECONDS": str(payload.ai_analysis_request_timeout_seconds),
-        "AI_PUBLISH_REMOTE_BASE_URL": publish_base_url,
-        "AI_PUBLISH_REMOTE_API_KEY": payload.ai_publish_remote_api_key.strip()
-        or current_values.get("AI_PUBLISH_REMOTE_API_KEY", ""),
-        "AI_PUBLISH_REMOTE_MODEL": publish_model,
-        "AI_PUBLISH_REMOTE_PROTOCOL": publish_protocol,
-        "AI_PUBLISH_REMOTE_REASONING_EFFORT": _normalize_reasoning_effort(
-            publish_base_url,
-            publish_model,
-            publish_protocol,
-            payload.ai_publish_remote_reasoning_effort,
-        ),
-        "AI_PUBLISH_REMOTE_RESPONSES_PATH": payload.ai_publish_remote_responses_path.strip() or "/v1/responses",
-        "AI_PUBLISH_REMOTE_DISABLE_RESPONSE_STORAGE": str(
-            payload.ai_publish_remote_disable_response_storage
-        ).lower(),
-        "AI_PUBLISH_REQUEST_TIMEOUT_SECONDS": str(payload.ai_publish_request_timeout_seconds),
-        "AI_LOCAL_BASE_URL": payload.ai_local_base_url.strip() or "http://127.0.0.1:11434/v1",
-        "AI_LOCAL_API_KEY": payload.ai_local_api_key.strip() or current_values.get("AI_LOCAL_API_KEY", "ollama"),
-        "AI_LOCAL_MODEL": payload.ai_local_model.strip() or "qwen3:8b",
-        "AI_LOCAL_PROTOCOL": payload.ai_local_protocol.strip() or "chat_completions",
-        "AI_LOCAL_FALLBACK_PROTOCOL": payload.ai_local_fallback_protocol.strip(),
-        "AI_LOCAL_HEALTH_TIMEOUT_SECONDS": str(payload.ai_local_health_timeout_seconds),
-        "AI_NETWORK_ACCESS": payload.ai_network_access.strip() or "enabled",
-        "AI_WINDOWS_WSL_SETUP_ACKNOWLEDGED": str(payload.ai_windows_wsl_setup_acknowledged).lower(),
-        "AI_MODEL_CONTEXT_WINDOW": str(payload.ai_model_context_window),
-        "AI_MODEL_AUTO_COMPACT_TOKEN_LIMIT": str(payload.ai_model_auto_compact_token_limit),
-    }
+    # Omitted fields retain their runtime/file values. Never rewrite legacy secrets or Codex Home.
+    updates = {}
+    for name in payload.model_fields_set:
+        value = getattr(payload, name)
+        updates[name.upper()] = str(value).lower() if isinstance(value, bool) else str(value).strip()
+    updates.update(AI_DEFAULT_PROVIDER="codex", AI_PUBLISH_PROVIDER="codex",
+                   AI_CODEX_MODEL="gpt-6-astra", TRANSCRIPTION_PROVIDER="local",
+                   TRANSCRIPTION_OFFLINE_ONLY="true", TRANSCRIPTION_LOCAL_FILES_ONLY="true")
     _write_env_values(updates)
     _apply_runtime_values(updates)
-    return {
-        "message": "AI 接口配置已保存到 .env，并已应用到当前运行服务。",
-        "config": get_ai_config_context(),
-    }
+    return {"message": "本地转写与 Codex 设置已保存。", "config": get_ai_config_context()}
