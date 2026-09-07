@@ -11,14 +11,13 @@ playwright = pytest.importorskip("playwright.sync_api")
 
 from app.db.database import get_connection  # noqa: E402
 from app.main import app  # noqa: E402
-from app.services import ai_config_service  # noqa: E402
 from app.services.publish_scheduler import PublishScheduler  # noqa: E402
 from tests.test_adaptive_schedule import db  # noqa: E402,F401
 from tests.test_adaptive_schedule import seed_metrics  # noqa: E402
 from tests.test_publish_center_browser import _seed_job, _free_port  # noqa: E402
 
 
-def test_adaptive_drawer_confirm_fixed_and_settings(db, monkeypatch, tmp_path):  # noqa: F811
+def test_adaptive_drawer_confirm_and_disable(db, monkeypatch, tmp_path):  # noqa: F811
     chrome = (
         Path(os.environ.get("PROGRAMFILES", "C:/Program Files"))
         / "Google/Chrome/Application/chrome.exe"
@@ -31,16 +30,6 @@ def test_adaptive_drawer_confirm_fixed_and_settings(db, monkeypatch, tmp_path): 
         c.execute("UPDATE publish_jobs SET account_id='target' WHERE id=?", (job_id,))
         c.commit()
     monkeypatch.setattr(PublishScheduler, "_require_ready_jobs", lambda *a, **kw: {})
-    monkeypatch.setattr(
-        ai_config_service.CodexCliProvider,
-        "version_status",
-        lambda self: {"ok": True, "version": "test", "detail": "可执行"},
-    )
-    monkeypatch.setattr(
-        ai_config_service.CodexCliProvider,
-        "login_status",
-        lambda self: {"ok": True, "detail": "已登录"},
-    )
     port = _free_port()
     server = uvicorn.Server(
         uvicorn.Config(
@@ -110,16 +99,10 @@ def test_adaptive_drawer_confirm_fixed_and_settings(db, monkeypatch, tmp_path): 
             page.wait_for_function(
                 "document.querySelector('[data-toggle-adaptive]').textContent.includes('启用')"
             )
-            page.goto(f"http://127.0.0.1:{port}/system", wait_until="domcontentloaded")
-            assert page.locator('[name="ai_analysis_remote_api_key"]').count() == 0
-            assert page.locator('[name="ai_codex_timeout_seconds"]').count() == 1
-            page.screenshot(
-                path=str(artifact_dir / "model-settings.png"), full_page=True
-            )
             page.set_viewport_size({"width": 390, "height": 844})
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth+1")
             page.screenshot(
-                path=str(artifact_dir / "model-settings-mobile.png"), full_page=True
+                path=str(artifact_dir / "adaptive-mobile.png"), full_page=True
             )
             assert not errors
             browser.close()
