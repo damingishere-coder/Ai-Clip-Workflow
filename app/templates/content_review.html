@@ -3,7 +3,7 @@
 {% block title %}内容复盘 · {{ settings.app_name }}{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', path='css/content-review.css') }}?v=20260829-feedback-loop-v1">
+<link rel="stylesheet" href="{{ url_for('static', path='css/content-review.css') }}?v=20260907-weekly-review-v1">
 {% endblock %}
 
 {% block content %}
@@ -137,14 +137,21 @@
 
 <section class="panel content-review-insights-panel">
   <div class="section-heading content-review-section-heading">
-    <div><p class="eyebrow">Diagnose → Act → Verify</p><h2>本周改进建议</h2></div>
+    <div><p class="eyebrow">Diagnose → Act → Verify</p><h2>本周总结与三条建议</h2></div>
     <span class="status-pill" id="content-review-insight-count">等待诊断</span>
   </div>
-  <p class="content-review-note" id="content-review-insight-note">系统只使用已准确匹配的官方指标生成透明建议，不调用 AI，也不会自动修改 Prompt 或投稿。</p>
+  <p class="content-review-note" id="content-review-insight-note">同步成功后由 Codex 综合分析好坏作品，汇总三条建议；具体规则改动由你确认后生效。</p>
+  <div class="weekly-review-toolbar">
+    <label>复盘记录 <select id="weekly-review-history" aria-label="选择复盘记录"></select></label>
+    <button type="button" class="secondary-button" id="weekly-review-generate">生成周复盘</button>
+    <span id="weekly-review-status" role="status"></span>
+  </div>
+  <p id="weekly-review-summary" class="weekly-review-summary"></p>
   <div id="content-review-insights" class="content-review-insight-list"></div>
+  <div id="weekly-review-changes"></div>
   <div class="content-review-experiment-heading">
-    <div><p class="eyebrow">Controlled Experiments</p><h3>改进实验</h3></div>
-    <small>投稿前标记采用规则的作品；执行开始后归属自动冻结。</small>
+    <div><p class="eyebrow">Controlled Experiments</p><h3>历史手动实验</h3></div>
+    <small>旧实验只记录人工标记，不代表系统已修改规则。</small>
   </div>
   <div id="content-review-experiments" class="content-review-experiment-list"></div>
 </section>
@@ -152,7 +159,7 @@
 <section class="content-review-bottom-grid">
   <article class="panel">
     <details class="content-review-disclosure content-review-prompt-evidence" data-content-review-disclosure="prompt-evidence">
-      <summary><span>Prompt 与实验依据</span><small id="content-review-cycles">0 / 3 个官方导出周</small></summary>
+      <summary><span>生成规则与改进记录</span><small id="content-review-cycles">0 / 3 个官方导出周</small></summary>
       <p class="content-review-note" id="content-review-prompt-message">数据不足，暂不生成 Prompt 结论。</p>
       <div id="content-review-prompts" class="content-review-prompt-list"></div>
       <p class="content-review-causality">历史未绑定 Prompt 的作品只作为观察基线；所有对比仅表示相关性。</p>
@@ -170,5 +177,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-{% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260830-async-boundary-v1"></script>{% endif %}
+{% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260907-weekly-review-v1"></script>{% endif %}
 {% endblock %}

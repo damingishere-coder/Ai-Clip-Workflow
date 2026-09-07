@@ -443,3 +443,18 @@
     min-height: 118px;
   }
 }
+
+/* Folded cards must not stretch to the height of the adjacent import history. */
+.content-review-bottom-grid { align-items: start; }
+.weekly-review-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 14px 0; }
+.weekly-review-toolbar select { max-width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 10px; }
+.weekly-review-summary { font-size: 16px; line-height: 1.8; white-space: pre-wrap; }
+.weekly-review-change { padding: 16px; margin: 12px 0; background: #f3f7ff; border-radius: 14px; }
+.weekly-review-change pre, .content-review-prompt-item pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 380px; overflow-y: auto; font-size: 12px; }
+.weekly-review-evidence { margin-top: 12px; }
+.weekly-review-evidence article { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
+.weekly-review-actions { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+.content-review-insight-item header small { display: block; }
+#weekly-review-status { color: var(--muted); }
+
+.content-review-experiment-heading[hidden], .content-review-experiment-list[hidden] { display: none; }

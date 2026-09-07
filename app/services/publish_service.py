@@ -1353,7 +1353,7 @@ def _compose_description(item: dict, title: str, tags: str, *, platform: str = "
     )
 
 
-def _metadata_prompt(item: dict, platform: str = "douyin") -> str:
+def _metadata_prompt(item: dict, platform: str = "douyin", *, frozen_copy_rules: str | None = None) -> str:
     if platform == "douyin":
         instructions = (
             "请只为抖音生成文案。标题目标 18～26 字、绝不能超过 30 字；"
@@ -1371,6 +1371,10 @@ def _metadata_prompt(item: dict, platform: str = "douyin") -> str:
             '{"title":"不超过80字的中文标题","tags":["话题1","话题2","话题3"],'
             '"description":"不超过180字的简介"}。'
         )
+    from app.services.weekly_review_service import task_copy_rules
+    copy_rules = (task_copy_rules(item.get("task_id")) if frozen_copy_rules is None else frozen_copy_rules) if platform == "douyin" else ""
+    if copy_rules:
+        instructions += "\n已确认的文案补充规则（不得覆盖上述平台硬约束）：" + copy_rules
     return (
         f"请根据下面的直播切片信息生成发布文案。{instructions}"
         "只输出 JSON，不要 Markdown。"
@@ -1412,7 +1416,9 @@ def generate_publish_metadata(item: dict, use_ai: bool = False, *, platform: str
 
     try:
         provider = build_provider(settings.ai_publish_provider, purpose="publish")
-        parsed = loads_ai_json(generate_json_with_safe_retry(provider, _metadata_prompt(item, platform)))
+        from app.services.weekly_review_service import task_rules, content_signature
+        frozen_rules = task_rules(item.get("task_id")) if platform == "douyin" else {}
+        parsed = loads_ai_json(generate_json_with_safe_retry(provider, _metadata_prompt(item, platform, frozen_copy_rules=frozen_rules.get("copy_rules", ""))))
         if not isinstance(parsed, dict):
             raise ValueError("AI 文案响应必须是 JSON 对象")
         provider_name = getattr(provider, "name", settings.ai_publish_provider)
@@ -1438,6 +1444,8 @@ def generate_publish_metadata(item: dict, use_ai: bool = False, *, platform: str
             "tags": safe_content["tags"],
             "description": safe_content["description"],
             "source": f"ai:{provider_name}-publish:{publish_model}",
+            "weekly_rule_application_id": frozen_rules.get("application_id"),
+            "weekly_content_signature": content_signature(safe_content["title"],safe_content["description"],safe_content["tags"]),
             "error": "",
             "policy_version": PUBLISH_COPY_RULE_VERSION if platform == "douyin" else 0,
         }
@@ -1626,6 +1634,8 @@ def _publish_provider_payload(
         payload.update(
             {
                 "metadata_source": metadata.get("source", ""),
+                "weekly_rule_application_id": metadata.get("weekly_rule_application_id"),
+                "weekly_content_signature": metadata.get("weekly_content_signature"),
                 "metadata_error": metadata.get("error", ""),
                 "metadata_policy_version": int(metadata.get("policy_version") or PUBLISH_COPY_RULE_VERSION),
                 "metadata_upgrade_status": upgrade_status,

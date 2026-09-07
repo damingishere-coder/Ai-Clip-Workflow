@@ -273,6 +273,10 @@ def test_prompt_version_changes_only_when_prompt_content_changes():
         preset_id,
         AIPromptPresetUpdate(name="第二版", prompt_text="第二版内容"),
     )
+    # Existing task keeps its frozen rules; an explicit preset re-selection adopts the new version.
+    assert get_task_ai_prompt_snapshot(task_id)["prompt_version_number"] == 1
+    from app.services.ai_prompt_preset_service import update_task_ai_prompt_preset
+    update_task_ai_prompt_preset(task_id, preset_id)
     changed = get_task_ai_prompt_snapshot(task_id)
 
     assert first["prompt_version_id"] == second["prompt_version_id"] == same_content["prompt_version_id"]

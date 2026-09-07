@@ -347,23 +347,6 @@ function formatInsightMetric(key, value) {
   return formatNumber(value);
 }
 
-async function createExperiment(recommendationId, button) {
-  button.disabled = true;
-  try {
-    const data = await contentReviewApi("/api/content-review/experiments", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ account_id: currentAccountId(), recommendation_id: recommendationId }),
-    });
-    showContentReviewMessage(data.message || "实验已建立。", "success");
-    await loadContentReviewData();
-  } catch (error) {
-    showContentReviewMessage(`建立实验失败：${error.message}`, "error");
-  } finally {
-    button.disabled = false;
-  }
-}
-
 async function recordExperimentDecision(experimentId, decision, button) {
   button.disabled = true;
   try {
@@ -381,66 +364,9 @@ async function recordExperimentDecision(experimentId, decision, button) {
   }
 }
 
-function renderInsights(data) {
-  const count = document.querySelector("#content-review-insight-count");
-  const note = document.querySelector("#content-review-insight-note");
-  const list = document.querySelector("#content-review-insights");
-  const recommendations = Array.from(data.recommendations || []);
-  const recordedRecommendationIds = new Set(
-    (data.experiments || []).map((item) => item.recommendation_id),
-  );
-  if (count) count.textContent = `${recommendations.length} 条建议`;
-  if (note) {
-    const summary = data.summary || {};
-    note.textContent = `${summary.eligible_works || 0} 条作品证据完整，${summary.insufficient_works || 0} 条证据不足。${summary.cover_metric_available ? "已读取作品级封面指标。" : "官方作品级封面点击率缺失，本轮不生成封面建议。"}`;
-  }
-  if (!list) return;
-  list.replaceChildren();
-  if (!recommendations.length) {
-    list.append(textNode("p", "当前没有达到规则阈值的改进建议。请先同步最新官方作品数据，或继续积累准确匹配作品。", "empty-note"));
-    return;
-  }
-  recommendations.forEach((recommendation) => {
-    const item = document.createElement("article");
-    item.className = "content-review-insight-item";
-    const header = document.createElement("header");
-    const identity = document.createElement("div");
-    identity.append(
-      textNode("strong", recommendation.title),
-      textNode("small", recommendation.source_work?.title || "未命名作品"),
-    );
-    header.append(identity, textNode("span", recommendation.baseline?.cohort?.label || "同类对照", "status-pill"));
-    const hypothesis = textNode("p", recommendation.hypothesis);
-    const evidence = document.createElement("div");
-    evidence.className = "content-review-insight-evidence";
-    Object.entries(recommendation.evidence || {}).forEach(([key, value]) => {
-      const metric = document.createElement("div");
-      metric.append(textNode("small", metricLabel(key)), textNode("strong", formatInsightMetric(key, value)));
-      evidence.append(metric);
-    });
-    const action = textNode("p", `建议动作：${recommendation.action_text}`, "content-review-insight-action");
-    const primaryBenchmark = recommendation.comparison_interval?.[recommendation.primary_metric] || {};
-    const benchmark = textNode(
-      "p",
-      `同类对照 ${recommendation.baseline?.work_count || 0} 条：${metricLabel(recommendation.primary_metric)} P25 ${formatInsightMetric(recommendation.primary_metric, primaryBenchmark.p25)} / 中位数 ${formatInsightMetric(recommendation.primary_metric, primaryBenchmark.median)} / P75 ${formatInsightMetric(recommendation.primary_metric, primaryBenchmark.p75)}。`,
-      "content-review-insight-benchmark",
-    );
-    const actions = document.createElement("div");
-    actions.className = "button-row";
-    const recorded = recordedRecommendationIds.has(recommendation.recommendation_id);
-    const button = textNode("button", recorded ? "已记录实验" : "采纳为下轮实验", recorded ? "secondary-button" : "primary-button");
-    button.type = "button";
-    button.disabled = recorded;
-    if (!recorded) button.addEventListener("click", () => createExperiment(recommendation.recommendation_id, button));
-    actions.append(button, textNode("small", `主指标：${metricLabel(recommendation.primary_metric)} · 对照 ${recommendation.baseline?.work_count || 0} 条`));
-    item.append(header, hypothesis, evidence, benchmark, action, actions);
-    list.append(item);
-  });
-}
-
 function experimentStageLabel(experiment) {
   if (experiment.status === "completed") {
-    return { keep: "已保留改动", revert: "已决定回退", inconclusive: "结论不足" }[experiment.decision] || "已完成";
+    return { keep: "已记录保留意见", revert: "已记录回退意见", inconclusive: "结论不足" }[experiment.decision] || "已完成";
   }
   if (experiment.status === "cancelled") return "已取消";
   return {
@@ -454,8 +380,11 @@ function renderExperiments(experiments) {
   const list = document.querySelector("#content-review-experiments");
   if (!list) return;
   list.replaceChildren();
+  const heading = document.querySelector(".content-review-experiment-heading");
+  if (heading) heading.hidden = !(experiments || []).length;
+  list.hidden = !(experiments || []).length;
   if (!(experiments || []).length) {
-    list.append(textNode("p", "还没有实验。先从上方建议中选择一条，再去发送中心标记实际采用规则的作品。", "empty-note"));
+    list.append(textNode("p", "暂无历史手动实验。新的规则改进会在上方直接显示应用记录。", "empty-note"));
     return;
   }
   experiments.forEach((experiment) => {
@@ -557,6 +486,9 @@ function renderPromptComparison(data) {
       "content-review-sample-gap",
     );
     item.append(header, metrics, gap);
+    const promptDetails = document.createElement("details");
+    promptDetails.append(textNode("summary", "查看当时使用的完整生成规则（Prompt）"), textNode("pre", version.prompt_text || "历史规则正文未记录"));
+    item.append(promptDetails);
     list.append(item);
   });
 }
@@ -591,30 +523,170 @@ function renderImports(imports) {
   });
 }
 
+
+let weeklyReports = [];
+let weeklySelectedId = "";
+let weeklyPollTimer;
+
+async function weeklyAction(path, button, confirmText = "", payload = {}) {
+  if (confirmText && !window.confirm(confirmText)) return;
+  button.disabled = true;
+  try {
+    await contentReviewApi(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
+    showContentReviewMessage("操作已记录，正在更新状态。", "success");
+    await loadContentReviewData();
+  } catch (error) {
+    showContentReviewMessage(error.message, "error");
+  } finally { button.disabled = false; }
+}
+
+function weeklyEvidence(suggestion, evidence) {
+  const details = document.createElement("details");
+  details.className = "weekly-review-evidence";
+  const ids = new Set(suggestion.evidence_ids || []);
+  const works = (evidence.works || []).filter(work => ids.has(work.id));
+  details.append(textNode("summary", `查看视频证据（${works.length} 条）`));
+  const groups = {good: "表现较好", weak: "表现较弱", ordinary: "普通表现", insufficient: "证据不足"};
+  works.forEach(work => {
+    const article = document.createElement("article");
+    article.append(textNode("strong", `${groups[work.group]} · ${work.title || "未命名作品"}`));
+    article.append(textNode("p", Object.entries(work).filter(([key]) => ["play_count","five_second_completion_rate","two_second_bounce_rate","completion_rate","watch_ratio"].includes(key)).map(([key,value]) => `${metricLabel(key)} ${formatInsightMetric(key,value)}`).join(" · ")));
+    if (work.comparison_count) article.append(textNode("small", `${work.comparison_label}，对照 ${work.comparison_count} 条；数据截至 ${formatDateTime(work.captured_at)}`));
+    article.append(textNode("small", work.source?.preset_id ? `来源方案：${work.source.preset_name} · 第 ${work.source.version_number} 版` : "历史规则来源不完整"));
+    if (work.context?.summary) article.append(textNode("p", `片段内容：${work.context.summary}`));
+    if (work.comparison) {
+      const metric = suggestion.primary_metric;
+      article.append(textNode("p", `${metricLabel(metric)}：该作品 ${formatInsightMetric(metric,work[metric])}，同类中位数 ${formatInsightMetric(metric,work.comparison[metric]?.median)}。`));
+    }
+    details.append(article);
+  });
+  if (!works.length) details.append(textNode("p", "暂无足够证据，本项不生成规则改动。"));
+  return details;
+}
+
+function renderWeeklyReport(data) {
+  const previousLatestId = weeklyReports[0]?.id;
+  weeklyReports = data.reports || [];
+  if (weeklySelectedId === previousLatestId && weeklyReports[0]?.id !== previousLatestId) weeklySelectedId = weeklyReports[0]?.id || "";
+  const history = document.querySelector("#weekly-review-history");
+  const list = document.querySelector("#content-review-insights");
+  const changesBox = document.querySelector("#weekly-review-changes");
+  const status = document.querySelector("#weekly-review-status");
+  const generate = document.querySelector("#weekly-review-generate");
+  if (!list || !history) return;
+  if (!weeklyReports.some(item => item.id === weeklySelectedId)) weeklySelectedId = weeklyReports[0]?.id || "";
+  history.replaceChildren();
+  weeklyReports.forEach(report => {
+    const option = document.createElement("option");
+    option.value = report.id;
+    option.textContent = `${report.week_key} · 第 ${report.revision} 版 · ${report.evidence.scope === "all" ? "首次全量" : "最近七天"}`;
+    history.append(option);
+  });
+  history.value = weeklySelectedId;
+  list.replaceChildren();
+  changesBox.replaceChildren();
+  const report = weeklyReports.find(item => item.id === weeklySelectedId);
+  const busy = weeklyReports.some(item => ["queued","running"].includes(item.status));
+  generate.disabled = busy;
+  generate.textContent = busy ? "正在生成周复盘…" : !report ? "生成首次全量复盘" : report.status === "failed" ? "重试生成周复盘" : "更新周复盘";
+  clearTimeout(weeklyPollTimer);
+  if (busy) weeklyPollTimer = setTimeout(loadContentReviewData, 3000);
+  if (!report) {
+    status.textContent = "尚未生成。下一次官方作品同步成功后会自动生成，也可以点击首次全量复盘。";
+    document.querySelector("#content-review-insight-count").textContent = "等待复盘";
+    document.querySelector("#weekly-review-summary").textContent = "";
+    return;
+  }
+  const evidence = report.evidence;
+  const labels = {queued:"排队中",running:"Codex 正在综合分析",ready:"复盘已生成",failed:"生成失败"};
+  status.textContent = `${labels[report.status]}${data.new_data_available ? " · 有新数据，可更新复盘" : ""}`;
+  const counts = evidence.counts || {};
+  document.querySelector("#content-review-insight-note").textContent = `${evidence.scope === "all" ? "首次全量分析" : `最近七天：${formatDateTime(evidence.period_start)} 起`} · 数据截至 ${formatDateTime(evidence.cutoff)} · ${(evidence.works || []).length} 条作品（较好 ${counts.good || 0}、较弱 ${counts.weak || 0}、普通 ${counts.ordinary || 0}、证据不足 ${counts.insufficient || 0}）。`;
+  document.querySelector("#weekly-review-summary").textContent = report.error || report.result.summary || "正在综合比较作品表现，请稍候。";
+  const suggestions = report.result.suggestions || [];
+  document.querySelector("#content-review-insight-count").textContent = suggestions.length ? "3 条总结建议" : "等待结果";
+  suggestions.forEach((suggestion,index) => {
+    const card = document.createElement("article"); card.className = "content-review-insight-item";
+    card.append(textNode("strong", `${index+1}. ${suggestion.title}${suggestion.insufficient ? "（暂不改动）" : ""}`));
+    card.append(textNode("p", suggestion.finding),textNode("p", `建议改进：${suggestion.action}`,"content-review-insight-action"),textNode("p", `预期效果：${suggestion.expected_effect}`));
+    card.append(weeklyEvidence(suggestion,evidence));
+    list.append(card);
+  });
+  if (report.status !== "ready") return;
+  const application = report.application;
+  const changes = report.result.changes || [];
+  changesBox.append(textNode("h3", application ? (application.state === "reverted" ? "已回退的改动" : "已应用的改动") : "待你确认的具体改动"));
+  if (!changes.length) changesBox.append(textNode("p", "本轮保持现有规则。证据不足或暂无需要应用的改动。"));
+  changes.forEach(change => {
+    const card = document.createElement("article"); card.className = "weekly-review-change";
+    card.append(textNode("strong", `${change.name} · 对应建议 ${change.suggestion_indexes.map(i=>i+1).join("、")}`),textNode("p",change.explanation));
+    card.append(textNode("p", "影响范围：此方案为全局共享，确认后会影响所有账号后续新建并使用此方案的任务。已有任务和排期保留原规则；文案补充规则仅用于 AI 文案生成。"));
+    card.append(textNode("p", `新的选片补充规则：${change.analysis_rules || "无补充规则"}`),textNode("p", `新的文案补充规则：${change.copy_rules || "无补充规则"}`));
+    card.append(textNode("p", `直接依据：${(change.target_evidence_ids || []).length} 条实际使用此方案的作品。`));
+    if (change.removed_rules?.length) {
+      card.append(textNode("strong", "以下旧补充规则将被替换或移除，请一起核对："));
+      change.removed_rules.forEach(rule => card.append(textNode("p", `${rule.kind}：${rule.text}`)));
+    }
+    const details = document.createElement("details");
+    details.append(textNode("summary","查看修改前后差异"),textNode("pre",change.diff));
+    card.append(details); changesBox.append(card);
+  });
+  const actions = document.createElement("div"); actions.className = "weekly-review-actions";
+  if (changes.length && !application) {
+    const apply = textNode("button","确认应用这些改动","primary-button"); apply.type = "button";
+    apply.addEventListener("click",()=>weeklyAction(`/api/content-review/weekly-reports/${encodeURIComponent(report.id)}/apply`,apply,`确认应用页面列出的规则改动？方案为全局共享，会影响所有账号后续新建并使用它的任务。本次有 ${changes.reduce((sum,change)=>sum+(change.removed_rules || []).length,0)} 行旧补充规则被替换或移除，请核对后确认。`));
+    actions.append(apply);
+  }
+  if (application) {
+    const progress = application.progress || {};
+    changesBox.append(textNode("p",`应用时间：${formatDateTime(application.created_at)}${application.reverted_at ? ` · 回退时间：${formatDateTime(application.reverted_at)}` : ""}`));
+    changesBox.append(textNode("p",`实际关联 ${progress.assigned || 0} 条 · 有效改进作品 ${progress.treatments || 0}/20 · 同体裁/片长/发布年龄对照 ${progress.comparable_baseline || 0}/20（历史可用 ${progress.baseline || 0}） · 官方导出 ${progress.weeks || 0}/3 周`));
+    changesBox.append(textNode("p",progress.message || ""),textNode("strong",progress.assessment || "继续观察"));
+    Object.entries(progress.metrics || {}).forEach(([key,value]) => changesBox.append(textNode("p",`${metricLabel(key)}中位数：对照 ${formatInsightMetric(key,value.before)} → 改进 ${formatInsightMetric(key,value.after)}`)));
+    if (application.state === "applied") {
+      const revert = textNode("button","回退到应用前规则","secondary-button"); revert.type = "button";
+      revert.addEventListener("click",()=>weeklyAction(`/api/content-review/rule-applications/${encodeURIComponent(application.id)}/revert`,revert,"确认恢复这轮改动前的规则？回退只影响之后的新任务。"));
+      actions.append(revert);
+      if (application.decision === "keep") actions.append(textNode("span","已确认保留本轮改动"));
+      else {
+        const keep = textNode("button","确认保留改动","secondary-button"); keep.type = "button"; keep.disabled = !progress.decision_ready;
+        keep.addEventListener("click",()=>weeklyAction(`/api/content-review/rule-applications/${encodeURIComponent(application.id)}/keep`,keep)); actions.append(keep);
+      }
+    }
+  }
+  changesBox.append(actions);
+}
+
+document.querySelector("#weekly-review-history")?.addEventListener("change",event=>{
+  weeklySelectedId = event.target.value;
+  renderWeeklyReport({reports:weeklyReports});
+});
+document.querySelector("#weekly-review-generate")?.addEventListener("click",event=>{
+  weeklySelectedId = "";
+  weeklyAction("/api/content-review/weekly-reports",event.currentTarget,"",{account_id:currentAccountId()});
+});
+
 async function loadContentReviewData() {
   const accountId = currentAccountId();
   if (!accountId) return;
   const loadSequence = ++contentReviewLoadSequence;
   const query = `account_id=${encodeURIComponent(accountId)}`;
-  try {
-    const [summary, works, prompts, imports, insights] = await Promise.all([
-      contentReviewApi(`/api/content-review/summary?${query}&days=28`),
-      contentReviewApi(`/api/content-review/works?${query}&limit=200`),
-      contentReviewApi(`/api/content-review/prompt-comparison?${query}`),
-      contentReviewApi(`/api/content-review/imports?${query}&limit=20`),
-      contentReviewApi(`/api/content-review/insights?${query}`),
-    ]);
-    if (loadSequence !== contentReviewLoadSequence || accountId !== currentAccountId()) return;
-    renderSummary(summary);
-    renderWorks(works.works || []);
-    renderPromptComparison(prompts);
-    renderImports(imports.imports || []);
-    renderInsights(insights);
-    renderExperiments(insights.experiments || []);
-  } catch (error) {
-    if (loadSequence !== contentReviewLoadSequence) return;
-    showContentReviewMessage(`读取复盘数据失败：${error.message}`, "error");
-  }
+  const modules = [
+    ["summary", `/api/content-review/summary?${query}&days=28`, renderSummary],
+    ["works", `/api/content-review/works?${query}&limit=200`, data=>renderWorks(data.works || [])],
+    ["prompts", `/api/content-review/prompt-comparison?${query}`, renderPromptComparison],
+    ["imports", `/api/content-review/imports?${query}&limit=20`, data=>renderImports(data.imports || [])],
+    ["experiments", `/api/content-review/experiments?${query}`, data=>renderExperiments(data.experiments || [])],
+    ["weekly", `/api/content-review/weekly-reports?${query}`, renderWeeklyReport],
+  ];
+  const results = await Promise.allSettled(modules.map(async ([name,url,render])=>{
+    const data = await contentReviewApi(url);
+    if (loadSequence === contentReviewLoadSequence && accountId === currentAccountId()) render(data);
+    return name;
+  }));
+  if (loadSequence !== contentReviewLoadSequence || accountId !== currentAccountId()) return;
+  const errors = results.flatMap((result,index)=>result.status === "rejected" ? [`${modules[index][0]}：${result.reason.message}`] : []);
+  if (errors.length) showContentReviewMessage(`部分复盘模块加载失败，可刷新重试。${errors.join("；")}`,"error");
 }
 
 contentReviewFile?.addEventListener("change", () => {

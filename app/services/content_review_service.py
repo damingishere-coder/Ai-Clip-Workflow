@@ -878,7 +878,7 @@ def _official_export_context(connection, account_id: str) -> dict:
         WHERE b.account_id = ? AND b.status = 'committed'
           AND b.source_kind = ?
         GROUP BY b.id
-        ORDER BY b.committed_at DESC, b.created_at DESC
+        ORDER BY b.committed_at DESC, b.created_at DESC, b.rowid DESC
         """,
         (account_id, DOUYIN_ITEM_EXPORT_SOURCE_KIND),
     ).fetchall()
@@ -1113,7 +1113,7 @@ def get_prompt_comparison(account_id: str = "") -> dict:
         candidate_rows = connection.execute(
             """
             SELECT pv.id AS prompt_version_id, pv.preset_id, pv.version_number,
-                   pv.preset_name_snapshot, pv.created_at,
+                   pv.preset_name_snapshot, pv.prompt_text, pv.created_at,
                    scoped.candidate_id, scoped.enabled, scoped.latest_decision
             FROM ai_prompt_versions pv
             JOIN (
@@ -1180,6 +1180,7 @@ def get_prompt_comparison(account_id: str = "") -> dict:
                 "preset_id": row["preset_id"],
                 "version_number": int(row["version_number"]),
                 "prompt_name": row["preset_name_snapshot"],
+                "prompt_text": row["prompt_text"],
                 "created_at": row["created_at"],
                 "candidate_ids": set(),
                 "kept_ids": set(),
@@ -1229,6 +1230,7 @@ def get_prompt_comparison(account_id: str = "") -> dict:
                 "preset_id": group["preset_id"],
                 "version_number": group["version_number"],
                 "prompt_name": group["prompt_name"],
+                "prompt_text": group["prompt_text"],
                 "created_at": group["created_at"],
                 "candidate_count": candidate_count,
                 "accurate_published_count": len(works),
@@ -1265,9 +1267,9 @@ def get_prompt_comparison(account_id: str = "") -> dict:
         "versions": versions,
         "comparisons": comparisons,
         "message": (
-            "已达到评估门槛，系统只提供建议，不会自动修改 Prompt。"
+            "已达到历史版本观察门槛。新改动仍需确认应用，效果请查看对应改进记录。"
             if completed_cycles >= 3 and any(item["evaluable"] for item in versions)
-            else "数据不足：需要 3 个不同官方导出周，且当前 Prompt 至少 30 条准确关联作品。"
+            else "历史版本效果尚在观察：需覆盖 3 个官方导出周且每版至少 30 条准确关联作品；这不影响生成本周总结和改动草案。"
         ),
         "causality_notice": "所有对比仅表示相关性，不代表因果。",
     }
