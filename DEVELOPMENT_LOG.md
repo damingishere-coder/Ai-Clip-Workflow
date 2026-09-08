@@ -1,5 +1,16 @@
 # Development Log
 
+## 2026-09-08 康熙修复正式部署与第 30 条恢复验收
+
+- 用户明确授权合并、部署并重跑最新任务。PR #82 三项 CI（lint-and-test、Windows、Docker）全部成功，按仓库允许的 squash 合并为 `c650128`，合入原堆叠基线 `codex/fix-codex-recall-json-20260907`；不将其误记为 master 或其他祖先 PR 已合并。
+- 正式 `Ai-Clip-Workflow-offline-runtime` 从 `cfc3c89` 快进到 `c650128`，部署树与 977 项本地回归通过的 `6786982` 完全一致。原始工作区的 codemap 修改与 PROJECT_REAUDIT.md 保留。
+- 部署前无 queued/running Workflow Job、无 PUBLISHING；在线和停服 SQLite 备份、配置副本与快照保存在 `data/backups/kangxi-contracts-deploy-20260908-1235`。副本连续初始化两次，验证 4 号归档幂等、所有提示词正文哈希不变、完整性正常及外键异常 0。
+- 通过原 RunDock 的 Niuma-Studio / Niuma-Publish-Worker 停启对应服务；新监听 PID 为 Web 154512、Worker 20924，祖先链和运行目录核验通过。正式 deep readiness=ready，9 项迁移无错误；配置哈希、所有提示词正文与既有发布记录未变。列表显示 1、2、3 号，4 号归档保留；正式任务页已显示方案、内容修订、分析次数。
+- 通过带 `confirm_uncertain_ai=true` 的 auto-retry 接口恢复最新任务 `05503de15ac1`（第 30 条），继续使用 Job `84458e960805`。转写 SHA-256 一致；12 个召回和 6 个扩展 checkpoint 与部署前逐项完全相等，只有最终评审重新调用 AI。
+- 北京时间 12:36:20，新分析 `a3892b68433f` 完成 19/19 单元、覆盖率 100%、失败 0、invalid_item_count=0。真实评审 5 个候选的 JSON、必填字段及数值评分通过运行契约校验。仍使用 Codex / gpt-6-astra、1 号方案、第 2 次内容修订；此次为第 2 次分析。
+- 最终保留 3 个候选，2 个 A 级（84.1 / 82.4）默认启用，1 个 B 级（66.7）不启用。12:36:30 实际生成 2 个切片；FFprobe 验证均为 H.264 + AAC、480×360，时长分别 62.000 / 70.000 秒，文件大小 5,700,124 / 5,368,498 字节。
+- Workflow Job completed，任务停在原有 `PENDING_SUBTITLE_REVIEW`（78%），错误为空；两条片段字幕草稿已生成。目标任务没有发布记录，既有发布记录与部署前一致。验收证据保存为备份目录的 `acceptance.json`；不将字幕待审核误报为发布完成。
+
 ## 2026-09-08 康熙提示词统一与 AI 输出契约修复（待部署）
 
 - 最终本机隔离全量 `pytest -q --tb=short`：977 passed，9 条既有依赖弃用警告；最后的页面调整另经 29 项契约/Chrome 回归通过。Ruff、Compileall、全部 JavaScript 语法、pip check 与 git diff --check 通过。测试与正式运行状态分开：尚未部署，未真实调用 AI 补跑第 30 条。
