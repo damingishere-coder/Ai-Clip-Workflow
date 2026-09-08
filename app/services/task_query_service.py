@@ -146,7 +146,7 @@ def _batch_clip_candidate_counts(task_ids: list[str]) -> dict[str, dict[str, int
             f"""
             SELECT task_id,
                    COUNT(*) AS total,
-                   SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) AS enabled_count
+                   SUM(CASE WHEN enabled = 1 AND (decision IS NULL OR decision='publish' OR decision_confirmed=1) THEN 1 ELSE 0 END) AS enabled_count
             FROM clip_candidates
             WHERE task_id IN ({placeholders}) AND is_deleted = 0
             GROUP BY task_id

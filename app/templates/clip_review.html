@@ -9,11 +9,14 @@
   <div>
     <p class="eyebrow">Clip Review</p>
     <h1>片段审核 · {{ task.title }}</h1>
-    <p>任务 ID：{{ task.id }} · 候选片段 {{ clip_count }} 条 · 已启用 {{ enabled_clip_count }} 条 · 单条最长 {{ task.max_clip_duration }} 分钟。AI 已按可直接切片的完整短视频单元选取，当前页面用于检查、微调和生成切片。</p>
+    <p>任务 ID：{{ task.id }} · 候选片段 {{ clip_count }} 条 · 已启用 {{ enabled_clip_count }} 条。请按实际开头、主题、笑点、回应和收尾核对；待审核项目需明确确认采用。</p>
   </div>
   <form class="toolbar compact-toolbar" method="get" id="clip-filter-form">
     <select class="control" name="clip_filter" aria-label="筛选">
       <option value="all" {{ "selected" if clip_filter == "all" else "" }}>全部片段</option>
+      <option value="publish" {{ 'selected' if clip_filter == 'publish' else '' }}>可出片</option>
+      <option value="review" {{ 'selected' if clip_filter == 'review' else '' }}>待审核</option>
+      <option value="reject" {{ 'selected' if clip_filter == 'reject' else '' }}>已淘汰</option>
       <option value="enabled" {{ "selected" if clip_filter == "enabled" else "" }}>仅启用</option>
       <option value="high" {{ "selected" if clip_filter == "high" else "" }}>仅 A 级 / 高传播价值</option>
     </select>
@@ -29,6 +32,9 @@
 <section class="review-layout">
   <form class="clip-list" id="clip-review-form" data-task-id="{{ task.id }}" data-max-clip-seconds="{{ task.max_clip_duration * 60 }}">
     {% if clips %}
+    {% if clips|selectattr('decision')|list %}
+    <p class="form-hint">可出片 {{ clips|selectattr('decision', 'equalto', 'publish')|list|length }} · 待审核 {{ clips|selectattr('decision', 'equalto', 'review')|list|length }} · 已淘汰 {{ clips|selectattr('decision', 'equalto', 'reject')|list|length }}。评分仅供参考；待审核或淘汰项需逐条确认后才能采用。</p>
+    {% endif %}
     <div class="clip-bulk-select" data-clip-bulk-select>
       <label class="toggle-line clip-bulk-select-control">
         <input type="checkbox" data-clip-select-all aria-label="全选当前显示的候选片段">
@@ -53,6 +59,8 @@
           <span>启用</span>
         </label>
         <span class="clip-index">{{ "%02d"|format(loop.index) }}</span>
+        {% if clip.decision %}<span class="status-pill">{{ {'publish':'可出片', 'review':'待审核', 'reject':'已淘汰'}[clip.decision] }}</span>
+        {% else %}<span class="status-pill">历史分析 · 未记录 AI 决定</span>{% endif %}
         <button class="link-button danger compact-delete-button" type="button" data-delete-trigger>&#21024;&#38500;</button>
         {% if clip.quality_tier %}
         <span class="quality-tier quality-tier-{{ clip.quality_tier|lower }}">{{ clip.quality_tier }} 级</span>
@@ -71,6 +79,20 @@
         </div>
       </div>
 
+      {% if clip.decision %}
+      <section class="clip-quality-card" aria-label="AI 决定与原文证据">
+        <p><strong>AI 决定理由：</strong>{{ clip.decision_reason }}</p>
+        {% for issue in clip.review_issues %}<p class="quality-warning">{{ issue }}</p>{% endfor %}
+        <details><summary>开头、主题、笑点、回应与收尾证据</summary>
+          {% for point in clip.quality_evidence.get('content_evidence', []) %}
+          <p>{{ {'opening':'开头','topic':'主题','highlight':'笑点','response':'回应','ending':'收尾'}.get(point.role, point.role) }} · {{ point.start_time }}–{{ point.end_time }}：{{ point.quote }}</p>
+          {% endfor %}
+        </details>
+        {% if clip.decision != 'publish' %}
+        <label class="toggle-line"><input type="checkbox" name="confirm_ai_decision" {{ 'checked' if clip.decision_confirmed else '' }}>我已核对原片及上述问题，明确确认采用这一条</label>
+        {% endif %}
+      </section>
+      {% endif %}
       {% if clip.quality_tier %}
       <section class="clip-quality-card" aria-label="笑点质量评分">
         <div class="clip-quality-scores">

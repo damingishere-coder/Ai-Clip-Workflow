@@ -528,7 +528,9 @@ context 无转写时，内容原因只能写成待验证的假设。insufficient
 changes 仅生成已有 Prompt 方案的补充规则，不能修改系统代码、硬约束、时间戳格式或平台校验。
 analysis_rules 只影响连续片段选择和开头边界，不承诺中段重剪、画面调整、改变排期或发布。
 copy_rules 只影响标题简介话题的生成表达，必须服从既有长度、数量和内容校验。
-保留现有有效补充规则，有依据才修订。每个目标方案至多一项改动。
+保留现有有效补充规则，有依据才修订。整轮 changes 最多一项，suggestion_indexes 只能引用一条建议。
+只验证一个明确问题，例如修正无关开头或保留爆点后的回应；选片和文案不能同时改变。不以候选增多证明成功。
+改动先在固定素材与当前正文对照试验，经逐条人工审片确认后才能正式应用。
 每项改动对应的建议必须引用 source.preset_id 等于目标 preset_id 的有效作品。
 来源不完整的作品可以参与总结，但不能据此修改方案；方案为全局共享，会影响其他账号后续使用它的新任务。
 输出 JSON：{"summary":"总体总结", "suggestions":[{"title":"总结建议标题","finding":"好坏作品共同说明什么",
@@ -598,6 +600,8 @@ def apply_report(report_id):
         changes = json.loads(row["result_json"]).get("changes", [])
         if not changes:
             fail("本轮没有需要应用的规则改动")
+        from app.services.content_rule_trial_service import require_accepted_trial
+        require_accepted_trial(connection, report_id, changes)
         for change in changes:
             current = connection.execute(
                 "SELECT p.prompt_text,COALESCE(h.copy_rules,'') AS copy_rules,h.application_id FROM ai_prompt_presets p LEFT JOIN content_rule_heads h ON h.preset_id=p.id WHERE p.id=? AND p.is_archived=0",
@@ -704,6 +708,7 @@ def list_reports(account_id=""):
                 (item["id"],),
             ).fetchone()
             item["application"] = dict(app) if app else None
+            item["trials"] = [dict(t) for t in connection.execute("SELECT id,status,created_at,reviewed_at FROM content_rule_trials WHERE report_id=? ORDER BY created_at DESC", (item["id"],))]
             if app:
                 item["application"]["progress"] = _progress(
                     connection, dict(app), item["evidence"]

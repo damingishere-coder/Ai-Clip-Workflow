@@ -206,6 +206,9 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
+    from app.db import content_decision_migration
+    if content_decision_migration.needs_migration(settings.database_path):
+        create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "content-decisions")
     from app.db import prompt_archive_migration
     if prompt_archive_migration.needs_migration(settings.database_path):
         create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "prompt-archive")
@@ -1883,6 +1886,7 @@ def _verify_ai_prompt_version_fk_migration(connection: sqlite3.Connection) -> No
 
 
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
+    from app.db import content_decision_migration
     from app.db import prompt_archive_migration
     from app.services import weekly_review_schema
     from app.services import adaptive_schedule
@@ -1946,6 +1950,11 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             version=prompt_archive_migration.VERSION, name=prompt_archive_migration.NAME,
             checksum=prompt_archive_migration.CHECKSUM,
             apply=prompt_archive_migration.apply, verify=prompt_archive_migration.verify,
+        ),
+        SchemaMigration(
+            version=content_decision_migration.VERSION, name=content_decision_migration.NAME,
+            checksum=content_decision_migration.CHECKSUM,
+            apply=content_decision_migration.apply, verify=content_decision_migration.verify,
         ),
     )
 

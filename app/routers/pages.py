@@ -139,6 +139,8 @@ async def task_transcript_page(request: Request, task_id: str):
 
 
 def _filter_and_sort_clips(clips: list[dict], clip_filter: str, sort_by: str) -> list[dict]:
+    if clip_filter in {"publish", "review", "reject"}:
+        clips = [clip for clip in clips if clip.get("decision") == clip_filter]
     if clip_filter == "enabled":
         clips = [clip for clip in clips if clip["enabled"]]
     elif clip_filter == "high":

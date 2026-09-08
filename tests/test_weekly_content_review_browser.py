@@ -10,7 +10,7 @@ import uvicorn
 
 from app.main import app
 from tests.test_content_review_browser import _free_port
-from tests.test_weekly_content_review import sample, ready_report  # noqa: F401
+from tests.test_weekly_content_review import sample, ready_report, trial_review_payload  # noqa: F401
 
 playwright = pytest.importorskip("playwright.sync_api")
 
@@ -21,7 +21,7 @@ def test_three_suggestions_preview_apply_rollback_and_compact_disclosure(
     width,
     tmp_path,
 ):
-    ready_report(sample)
+    report_id, _ = ready_report(sample, accepted=False)
     port = _free_port()
     server = uvicorn.Server(
         uvicorn.Config(
@@ -62,6 +62,7 @@ def test_three_suggestions_preview_apply_rollback_and_compact_disclosure(
             page.get_by_text("新的选片补充规则：", exact=False).wait_for()
             page.locator(".weekly-review-evidence summary").first.click()
             page.locator(".weekly-review-evidence[open] article").nth(1).wait_for(state="visible")
+            page.evaluate("renderWeeklyReport({reports:weeklyReports})")
             assert page.locator(".weekly-review-evidence[open] article").count() >= 2
             folded = page.locator('[data-content-review-disclosure="prompt-evidence"]')
             if folded.get_attribute("open") is not None:
@@ -72,7 +73,12 @@ def test_three_suggestions_preview_apply_rollback_and_compact_disclosure(
             assert page.locator(".content-review-prompt-item pre").first.is_visible()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             page.on("dialog", lambda dialog: dialog.accept())
-            page.get_by_role("button", name="确认应用这些改动", exact=True).click()
+            assert page.get_by_role("button", name="确认应用已审片的单项改动", exact=True).is_disabled()
+            page.get_by_role("button", name="建立单项对照试验", exact=True).click()
+            page.get_by_text("试验中：正式正文尚未改变。", exact=False).wait_for()
+            import json
+            page.get_by_label("导入逐条内容审核记录").set_input_files({"name": "review.json", "mimeType": "application/json", "buffer": json.dumps(trial_review_payload(sample)).encode()})
+            page.get_by_role("button", name="确认应用已审片的单项改动", exact=True).click()
             page.get_by_role("heading", name="已应用的改动", exact=True).wait_for()
             page.get_by_role("button", name="回退到应用前规则", exact=True).click()
             page.get_by_role("heading", name="已回退的改动", exact=True).wait_for()

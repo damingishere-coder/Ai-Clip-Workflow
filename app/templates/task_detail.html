@@ -126,15 +126,18 @@
       <span class="status-pill" id="ai-candidate-count-pill">{{ task.candidate_count }} 条候选</span>
     </div>
     <form id="ai-analysis-form" class="settings-form ai-prompt-form" data-task-id="{{ task.id }}" data-selection-profile="{{ task.selection_profile }}">
+      {% if task.selection_profile == 'variety_comedy' %}
+      <label><span>下一次分析数量模式</span><select name="selection_count_mode"><option value="content" selected>按内容自动决定数量</option></select><span class="form-hint">新分析忽略候选上限与启用目标，允许零条；待审核不自动出片。历史数量设置、结果及归因保持不变。</span></label>
+      {% endif %}
       {% if task.selection_profile == "long_live_talk" %}
       <input id="ai-highlight-density" type="hidden" value="{{ task.highlight_density_per_hour or 4 }}">
       <input id="ai-highlight-total-limit" type="hidden" value="{{ task.highlight_total_limit or 30 }}">
       {% endif %}
       <div class="ai-analysis-controls">
         <label>
-          <span>候选池上限</span>
+          <span>{{ '历史候选数量（新分析不设上限）' if task.selection_profile == 'variety_comedy' else '候选池上限' }}</span>
           <span class="unit-input">
-            <input id="ai-candidate-count-input" name="candidate_clip_count" type="number" min="1" max="50" step="1" value="{{ task.candidate_clip_count or 12 }}">
+            <input id="ai-candidate-count-input" name="candidate_clip_count" type="number" min="1" max="50" step="1" value="{{ task.candidate_clip_count or 12 }}" {{ 'readonly' if task.selection_profile == 'variety_comedy' else '' }}>
             <small>条</small>
           </span>
         </label>
@@ -149,9 +152,9 @@
           {% endif %}
         </label>
         <label>
-          <span>最终启用目标</span>
+          <span>{{ '历史启用目标（新分析不截断）' if task.selection_profile == 'variety_comedy' else '最终启用目标' }}</span>
           <span class="unit-input">
-            <input id="ai-final-clip-target" name="final_clip_target" type="number" min="1" max="12" step="1" value="{{ task.final_clip_target or 5 }}">
+            <input id="ai-final-clip-target" name="final_clip_target" type="number" min="1" max="12" step="1" value="{{ task.final_clip_target or 5 }}" {{ 'readonly' if task.selection_profile == 'variety_comedy' else '' }}>
             <small>条</small>
           </span>
         </label>

@@ -185,7 +185,8 @@ def test_archived_prompt_hidden_readable_but_not_editable_or_bindable(leased_tas
 
 def test_weekly_rules_reach_all_stages_without_truncation():
     prompt = presets.get_ai_prompt_preset("preset_001")["prompt_text"]
-    assert "【已确认的周复盘补充规则】" in prompt
+    assert "【已确认的周复盘补充规则】" not in prompt
+    prompt += "\n【已确认的周复盘补充规则】\n经对照审片确认的单项补充。"
     long_prompt = prompt + "\n" + "保留完整规则。" * 500 + "末尾边界规则不能丢失"
     preference = comedy._preference_summary(long_prompt, "")
     window = comedy.ComedyTranscriptWindow(1, 1, 0, 60, (), "转写原文")
@@ -249,7 +250,7 @@ def test_browser_shows_prompt_revision_separately_from_analysis_count(leased_tas
             page.locator('[data-prompt-preset-tab][data-preset-id="preset_002"]').click()
             page.locator('[name="preset_name_preset_002"]').fill("未选择的编辑不能保存")
             page.locator('[data-prompt-preset-tab][data-preset-id="preset_001"]').click()
-            assert "【已确认的周复盘补充规则】" in page.locator('[name="preset_prompt_preset_001"]').input_value()
+            assert "【已确认的周复盘补充规则】" not in page.locator('[name="preset_prompt_preset_001"]').input_value()
             page.locator("#save-ai-prompts-button").click()
             page.locator("#ai-process-result").filter(has_text="当前任务已选择").wait_for()
             assert [presets.get_ai_prompt_preset(f"preset_{index:03d}") for index in (2, 3)] == untouched

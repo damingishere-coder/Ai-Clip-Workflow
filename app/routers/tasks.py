@@ -50,6 +50,7 @@ async def create_upload_task(
     candidate_clip_count: int = Form(12),
     selection_profile: str | None = Form(None),
     final_clip_target: int = Form(5),
+    selection_count_mode: str = Form("content"),
     highlight_density_per_hour: int = Form(4),
     highlight_total_limit: int = Form(30),
     ai_preference: str | None = Form(None),
@@ -86,6 +87,7 @@ async def create_upload_task(
             candidate_clip_count=candidate_clip_count,
             selection_profile=selection_profile,
             final_clip_target=final_clip_target,
+            selection_count_mode=selection_count_mode,
             highlight_density_per_hour=(highlight_density_per_hour if selection_profile == "long_live_talk" else 4),
             highlight_total_limit=(highlight_total_limit if selection_profile == "long_live_talk" else 30),
             ai_preference=ai_preference,
@@ -207,6 +209,7 @@ async def patch_task_selection_settings(task_id: str, payload: TaskSelectionSett
             payload.final_clip_target,
             payload.highlight_density_per_hour,
             payload.highlight_total_limit,
+            payload.selection_count_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

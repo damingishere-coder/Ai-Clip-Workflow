@@ -117,6 +117,10 @@ def update_ai_prompt_preset(preset_id: str, payload: AIPromptPresetUpdate) -> di
     prompt_text = payload.prompt_text.strip()
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        current = connection.execute("SELECT prompt_text FROM ai_prompt_presets WHERE id=? AND is_archived=0", (preset_id,)).fetchone()
+        if current:
+            from app.services.content_rule_trial_service import record_manual_prompt_change
+            record_manual_prompt_change(connection, preset_id, current[0], prompt_text, "人工修改提示词正文", now)
         cursor = connection.execute(
             """
             UPDATE ai_prompt_presets
@@ -144,6 +148,10 @@ def update_ai_prompt_preset(preset_id: str, payload: AIPromptPresetUpdate) -> di
 
 
 def update_task_ai_prompt_preset(task_id: str, preset_id: str) -> dict:
+    with get_connection() as connection:
+        task = connection.execute("SELECT selection_profile FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if task and task[0] == "variety_comedy" and preset_id != "preset_001":
+        raise ValueError("康熙任务统一维护和使用 1 号提示词；历史绑定仍可查看")
     preset = get_ai_prompt_preset(preset_id)
     if not preset:
         raise ValueError("AI Prompt 方案不存在")
