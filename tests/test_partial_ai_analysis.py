@@ -437,6 +437,7 @@ def test_variety_global_judge_requires_complete_candidate_coverage():
         candidates,
         "",
         [],
+        rows=[TranscriptRow("00:00:00", "00:01:00", 0, 60, "实际连续原文")],
         task_id="test-partial-judge",
         input_fingerprint="stable-input",
     )

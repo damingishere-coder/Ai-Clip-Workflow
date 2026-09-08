@@ -22,6 +22,8 @@ from app.services.ai.variety_comedy_analyzer import (
     dedupe_scored_candidates,
     normalize_clip_bounds,
     score_comedy_candidate,
+    _global_judge,
+    _judge_transcript_evidence,
 )
 from app.services.audio_reaction_service import analyze_audio_reaction
 from app.services.clip_feedback_service import list_recent_feedback_context, save_clip_feedback
@@ -331,6 +333,9 @@ class _FakeComedyProvider:
                 },
                 ensure_ascii=False,
             )
+        candidates = json.loads(prompt.rsplit("候选：", 1)[1])
+        assert candidates[0]["transcript_evidence"][0]["text"] == "第 5 句对话"
+        assert candidates[0]["transcript_evidence"][-1]["text"] == "第 12 句对话"
         return json.dumps(
             {
                 "ranked_clips": [
@@ -352,6 +357,48 @@ class _FakeComedyProvider:
             },
             ensure_ascii=False,
         )
+
+
+def test_judge_receives_full_transcript_and_marks_partial_boundary_sentences(monkeypatch):
+    from types import SimpleNamespace
+
+    rows = [
+        _row(50, 60, "片段之前"),
+        _row(59, 62, "跨起点句子"),
+        _row(62, 65, "开头原文"),
+        _row(65, 135, "中间完整连续内容"),
+        _row(135, 142, "跨终点句子"),
+        _row(140, 150, "片段之后"),
+    ]
+    candidate = _base_candidate()
+    evidence = _judge_transcript_evidence(candidate, rows)
+    assert [item["text"] for item in evidence] == [
+        "跨起点句子", "开头原文", "中间完整连续内容", "跨终点句子",
+    ]
+    assert [item["crosses_clip_boundary"] for item in evidence] == [True, False, False, True]
+    assert evidence[0]["start_time"] == "00:00:59"
+
+    calls = []
+    prompts = []
+
+    def execute(**kwargs):
+        calls.append(kwargs["request_fingerprint"])
+        return SimpleNamespace(status="completed", payload=kwargs["operation"]())
+
+    class Provider:
+        def generate_json(self, prompt, retry_instruction=None):
+            prompts.append(prompt)
+            return json.dumps({"ranked_clips": [{"source_id": candidate["source_id"]}]})
+
+    monkeypatch.setattr("app.services.ai.variety_comedy_analyzer.execute_checkpointed_ai_unit", execute)
+    for current_rows in (rows, rows, [_row(62, 65, "已纠正的逐句原文")]):
+        _global_judge(Provider(), [candidate], "按实际原文核验", [], rows=current_rows,
+                      task_id="test-evidence", input_fingerprint="same-task")
+    assert calls[0] == calls[1]
+    assert calls[0] != calls[2]
+    assert "中间完整连续内容" in prompts[0]
+    assert "片段之前" not in prompts[0] and "片段之后" not in prompts[0]
+    assert _judge_transcript_evidence(candidate, []) == []
 
 
 def test_three_stage_flow_allows_weak_episode_to_select_less_than_target(monkeypatch, tmp_path: Path):

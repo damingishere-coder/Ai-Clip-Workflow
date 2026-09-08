@@ -155,6 +155,7 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
         expanded,
         preference,
         feedback,
+        rows=rows,
         task_id=request.task_id,
         input_fingerprint=unit_fingerprint,
     )
@@ -672,6 +673,7 @@ def _global_judge(
     preference: str,
     feedback: list[dict],
     *,
+    rows: list[TranscriptRow],
     task_id: str,
     input_fingerprint: str,
 ) -> tuple[dict[str, dict], str]:
@@ -688,6 +690,7 @@ def _global_judge(
                 "highlight_reason": item["highlight_reason"],
                 "arc_structure": item["arc_structure"],
                 "audio_reaction": item.get("audio_evidence") or {},
+                "transcript_evidence": _judge_transcript_evidence(item, rows),
             }
         )
     prompt = _judge_prompt(prompt_candidates, preference, feedback)
@@ -732,6 +735,22 @@ def _global_judge(
         return judged, warning
     except Exception as exc:
         return {}, f"全局评审调用失败，已使用扩展阶段评分降级：{exc}"
+
+
+def _judge_transcript_evidence(item: dict, rows: list[TranscriptRow]) -> list[dict]:
+    """保留片段内全部逐句原文，明确标记跨切点的句子，不伪造词级对齐。"""
+    start = _time_to_seconds(item["start_time"])
+    end = _time_to_seconds(item["end_time"])
+    return [
+        {
+            "start_time": row.start_time,
+            "end_time": row.end_time,
+            "text": row.text,
+            "crosses_clip_boundary": row.start_seconds < start or row.end_seconds > end,
+        }
+        for row in rows
+        if row.end_seconds > start and row.start_seconds < end
+    ]
 
 
 def _to_clip_payload(item: dict, index: int) -> dict:
@@ -825,6 +844,8 @@ def _judge_prompt(candidates: list[dict], preference: str, feedback: list[dict])
     ]
     return f"""你是《康熙来了》短视频总编。请把所有候选放在一起横向比较，重点淘汰“不够好笑但话题看似刺激”的内容。
 同一故事、相邻时间或同一笑点只能保留最完整的一条。音频信号只是辅助证据，不能弥补笑点闭环和完整度不足。
+每条候选的 transcript_evidence 是实际切片时间范围内的逐句转写原文，请据此核验开头、笑点和连续互动，不能只看 summary 或 highlight_reason。
+时间戳为原片时间。crosses_clip_boundary=true 表示句子跨越切点，文字未做词级对齐，不可假定整句都在成片内；转写未标明的笑声、表情和反应不可自行补全。若原文为空或局部信息不足，明确说明缺失位置与判断限制。
 {preference}
 参考用户近期审片反馈：{json.dumps(feedback_summary, ensure_ascii=False)}
 
