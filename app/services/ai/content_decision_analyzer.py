@@ -173,10 +173,18 @@ def validate_decisions(payload, contexts, *, final, catalog_ids=()):
             if decision == "publish" and not any(
                 start <= first.start_seconds
                 and last.end_seconds <= end
-                and last.end_seconds > first.start_seconds
+                and (
+                    last.end_seconds > first.start_seconds
+                    # Transcript export rounds to seconds. A point strictly
+                    # inside integer cut bounds retains room on both sides;
+                    # a point on either cut cannot prove the utterance is kept.
+                    or start < first.start_seconds == last.end_seconds < end
+                )
                 for first, last in matches
             ):
-                raise AIAnalysisError("可出片证据跨出最终边界，需重新评审")
+                raise AIAnalysisError(
+                    "可出片证据越界或零时长证据落在切点，需重新评审"
+                )
             roles.add(point["role"])
         if decision == "review" and not issues:
             raise AIAnalysisError("待审核必须列出待确认问题")

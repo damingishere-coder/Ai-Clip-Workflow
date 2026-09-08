@@ -148,6 +148,32 @@ def test_rejected_duplicate_can_reference_review_and_keep_uncertain_end_point():
         )
 
 
+@pytest.mark.parametrize("at, accepted", [(0, False), (2, True), (5, False)])
+def test_rounded_zero_duration_evidence_requires_room_on_both_sides(at, accepted):
+    # Transcript export rounds both ends to seconds. A short utterance can become
+    # a point, but a point at either cut cannot prove the whole utterance remains.
+    stamp = f"00:00:{at:02d}"
+    context = [
+        TranscriptRow("00:00:00", stamp, 0, at, "开场问题"),
+        TranscriptRow(stamp, stamp, at, at, "它不是泡面"),
+        TranscriptRow(stamp, "00:00:05", at, 5, "回应收束"),
+    ]
+    candidate = item()
+    for point in candidate["evidence"]:
+        point.update(start_time=stamp, end_time=stamp, quote="它不是泡面")
+    original = deepcopy(candidate)
+    if accepted:
+        analyzer.validate_decisions(
+            {"clips": [candidate]}, {candidate["source_id"]: context}, final=True
+        )
+        assert candidate == original  # No invented duration or rewritten boundary.
+    else:
+        with pytest.raises(AIAnalysisError, match="证据"):
+            analyzer.validate_decisions(
+                {"clips": [candidate]}, {candidate["source_id"]: context}, final=True
+            )
+
+
 @pytest.mark.parametrize("count", [0, 2, 20])
 def test_full_analysis_has_no_quota_or_minimum(monkeypatch, tmp_path, count):
     monkeypatch.setattr(analyzer, "_extract_transcript_rows", lambda text: rows())
