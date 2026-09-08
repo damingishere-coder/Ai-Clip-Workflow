@@ -209,7 +209,7 @@ def _evidence(connection, account_id):
             """
         SELECT p.id,p.name,p.prompt_text,COALESCE(h.copy_rules,'') AS copy_rules,h.application_id
         FROM ai_prompt_presets p LEFT JOIN content_rule_heads h ON h.preset_id=p.id
-        WHERE p.id IN (SELECT DISTINCT pv.preset_id FROM ai_prompt_versions pv
+        WHERE p.is_archived=0 AND p.id IN (SELECT DISTINCT pv.preset_id FROM ai_prompt_versions pv
           JOIN ai_analysis_runs ar ON ar.prompt_version_id=pv.id
           JOIN clip_candidates c ON c.source_analysis_run_id=ar.id
           JOIN output_clip oc ON oc.clip_candidate_id=c.id
@@ -600,7 +600,7 @@ def apply_report(report_id):
             fail("本轮没有需要应用的规则改动")
         for change in changes:
             current = connection.execute(
-                "SELECT p.prompt_text,COALESCE(h.copy_rules,'') AS copy_rules,h.application_id FROM ai_prompt_presets p LEFT JOIN content_rule_heads h ON h.preset_id=p.id WHERE p.id=?",
+                "SELECT p.prompt_text,COALESCE(h.copy_rules,'') AS copy_rules,h.application_id FROM ai_prompt_presets p LEFT JOIN content_rule_heads h ON h.preset_id=p.id WHERE p.id=? AND p.is_archived=0",
                 (change["preset_id"],),
             ).fetchone()
             if (

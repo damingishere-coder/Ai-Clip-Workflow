@@ -11,8 +11,8 @@ router = APIRouter(prefix="/api/ai-prompt-presets", tags=["ai-prompt-presets"])
 
 
 @router.get("")
-async def get_ai_prompt_presets() -> list[dict]:
-    return list_ai_prompt_presets()
+async def get_ai_prompt_presets(include_archived: bool = False) -> list[dict]:
+    return list_ai_prompt_presets(include_archived=include_archived)
 
 
 @router.patch("/{preset_id}")

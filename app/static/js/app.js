@@ -462,6 +462,13 @@ function formatClipDuration(seconds) {
   return `${minutes} 分 ${String(restSeconds).padStart(2, "0")} 秒`;
 }
 
+function analysisPromptSource(data) {
+  const slot = /^preset_0*(\d+)$/.exec(data.ai_prompt_preset_id || "")?.[1];
+  const name = data.ai_prompt_preset_name || "来源未记录";
+  const revision = data.prompt_version_number ? `第 ${data.prompt_version_number} 次` : "未记录";
+  return `提示词方案：${slot ? `${slot} 号 · ` : ""}${name} · 内容修订：${revision}`;
+}
+
 function renderAiAnalysisSummary(data) {
   if (!aiAnalysisSummary) return;
   const clips = Array.isArray(data.clips) && data.clips.length ? data.clips : (data.clip_summaries || []);
@@ -476,7 +483,10 @@ function renderAiAnalysisSummary(data) {
   eyebrow.textContent = "Analysis Result";
   const title = document.createElement("h3");
   title.textContent = data.run_number ? `${data.title || `第 ${data.run_number} 次分析`} · AI 选取结果` : "本次 AI 选取结果";
-  titleWrap.append(eyebrow, title);
+  const promptSource = document.createElement("p");
+  promptSource.className = "form-hint";
+  promptSource.textContent = analysisPromptSource(data);
+  titleWrap.append(eyebrow, title, promptSource);
   const source = document.createElement("span");
   source.className = "status-pill";
   source.textContent = data.provider_label && data.model ? `${data.provider_label} · 模型 ${data.model}` : "AI 分析完成";
@@ -484,7 +494,7 @@ function renderAiAnalysisSummary(data) {
 
   const message = document.createElement("p");
   message.className = "ai-analysis-result-message";
-  message.textContent = data.fallback_notice || data.analysis_summary || data.message || "AI 分析已完成。";
+  message.textContent = data.failure_message || data.fallback_notice || data.analysis_summary || data.message || "AI 分析已完成。";
 
   const meta = document.createElement("div");
   meta.className = "ai-analysis-result-meta";
@@ -512,7 +522,7 @@ function renderAiAnalysisSummary(data) {
   const reviewLink = document.createElement("a");
   reviewLink.className = "primary-button";
   reviewLink.href = data.review_url || `/tasks/${aiAnalysisForm?.dataset.taskId || ""}/clips/review`;
-  reviewLink.textContent = "去检查并生成切片";
+  reviewLink.textContent = data.analysis_incomplete ? "查看已保留的候选（待补齐分析）" : "去检查并生成切片";
   actions.append(reviewLink);
 
   aiAnalysisSummary.append(header, message, meta, list, actions);
@@ -538,9 +548,9 @@ function renderAiAnalysisHistory(runs) {
     const title = document.createElement("strong");
     title.textContent = `${run.title || `第 ${run.run_number} 次分析`} · ${run.clip_count || 0} 条`;
     const meta = document.createElement("span");
-    meta.textContent = `${run.provider_label || "AI"} · ${run.model || "未知模型"} · ${run.ai_prompt_preset_name || "Prompt 方案"} · ${run.created_at || "未知时间"}`;
+    meta.textContent = `${run.provider_label || "AI"} · ${run.model || "未知模型"} · ${analysisPromptSource(run)} · ${run.created_at || "未知时间"}`;
     const summary = document.createElement("p");
-    summary.textContent = run.fallback_notice || run.analysis_summary || "暂无整体总结。";
+    summary.textContent = run.failure_message || run.fallback_notice || run.analysis_summary || "暂无整体总结。";
     main.append(title, meta, summary);
 
     const restoreButton = document.createElement("button");
@@ -594,7 +604,8 @@ async function saveTaskAiPromptSettings() {
     throw new Error("请选择一个 AI Prompt 方案");
   }
 
-  const cards = Array.from(aiAnalysisForm.querySelectorAll("[data-prompt-preset-card]"));
+  const cards = Array.from(aiAnalysisForm.querySelectorAll("[data-prompt-preset-card]"))
+    .filter(card => card.dataset.presetId === selected.value);
   await Promise.all(
     cards.map(async (card) => {
       const presetId = card.dataset.presetId;

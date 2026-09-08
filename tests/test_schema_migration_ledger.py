@@ -5,6 +5,29 @@ from types import SimpleNamespace
 import pytest
 
 from app.db import database as database_module
+from app.db import prompt_archive_migration
+
+
+def test_prompt_archive_upgrade_backs_up_old_schema_and_preserves_content(isolated_database):
+    database_module.init_db()
+    with _connect(isolated_database) as connection:
+        connection.execute("ALTER TABLE ai_prompt_presets DROP COLUMN is_archived")
+        connection.execute("DELETE FROM schema_migrations WHERE version=?", (prompt_archive_migration.VERSION,))
+        connection.execute("UPDATE ai_prompt_presets SET prompt_text='用户手工保留规则' WHERE id='preset_004'")
+        before = connection.execute("SELECT * FROM ai_prompt_presets ORDER BY id").fetchall()
+    database_module.init_db()
+    database_module.init_db()
+    backups = list((isolated_database.parent / "backups").glob("*prompt-archive*.sqlite3"))
+    assert len(backups) == 1
+    with _connect(backups[0]) as backup:
+        assert "is_archived" not in {r["name"] for r in backup.execute("PRAGMA table_info(ai_prompt_presets)")}
+        assert backup.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    with _connect(isolated_database) as connection:
+        after = connection.execute("SELECT id,slot,name,prompt_text,is_default,created_at,updated_at FROM ai_prompt_presets ORDER BY id").fetchall()
+        assert [tuple(r) for r in after] == [tuple(r) for r in before]
+        assert connection.execute("SELECT is_archived FROM ai_prompt_presets WHERE id='preset_004'").fetchone()[0] == 1
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 @pytest.fixture
@@ -143,7 +166,7 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
         ).fetchall()
         indexes = _index_names(connection)
 
-    assert len(migrations) == 8
+    assert len(migrations) == 9
     from app.services import weekly_review_schema
     weekly_migration = next(row for row in migrations if row["version"] == weekly_review_schema.VERSION)
     assert weekly_migration["checksum"] == weekly_review_schema.CHECKSUM

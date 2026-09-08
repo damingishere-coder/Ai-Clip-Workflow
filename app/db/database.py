@@ -12,6 +12,7 @@ from app.services.database_backup_service import create_publish_migration_backup
 
 DEFAULT_AI_PROMPT_PRESET_ID = "preset_001"
 DEFAULT_AI_PROMPT_PATH = settings.project_root / "prompts" / "default_ai_prompt_preset_001.txt"
+GENERAL_AI_PROMPT_PATH = settings.project_root / "prompts" / "clip_analysis_prompt.txt"
 VARIETY_AI_PROMPT_PATH = settings.project_root / "prompts" / "variety_interview_prompt_preset_002.txt"
 COMEDY_V2_AI_PROMPT_PATH = settings.project_root / "prompts" / "variety_comedy_v2_prompt.txt"
 
@@ -205,6 +206,9 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
+    from app.db import prompt_archive_migration
+    if prompt_archive_migration.needs_migration(settings.database_path):
+        create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "prompt-archive")
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.tasks_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1879,6 +1883,7 @@ def _verify_ai_prompt_version_fk_migration(connection: sqlite3.Connection) -> No
 
 
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
+    from app.db import prompt_archive_migration
     from app.services import weekly_review_schema
     from app.services import adaptive_schedule
     return (
@@ -1936,6 +1941,11 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             version="20260906_01_adaptive_schedule", name="按作品数据动态排期",
             checksum=adaptive_schedule.CHECKSUM,
             apply=adaptive_schedule.migrate, verify=adaptive_schedule.verify_schema,
+        ),
+        SchemaMigration(
+            version=prompt_archive_migration.VERSION, name=prompt_archive_migration.NAME,
+            checksum=prompt_archive_migration.CHECKSUM,
+            apply=prompt_archive_migration.apply, verify=prompt_archive_migration.verify,
         ),
     )
 
@@ -2919,10 +2929,11 @@ def _seed_ai_prompt_presets(connection: sqlite3.Connection) -> None:
     if COMEDY_V2_AI_PROMPT_PATH.exists():
         comedy_v2_prompt = COMEDY_V2_AI_PROMPT_PATH.read_text(encoding="utf-8")
 
+    general_prompt = GENERAL_AI_PROMPT_PATH.read_text(encoding="utf-8") if GENERAL_AI_PROMPT_PATH.exists() else ""
     presets = [
-        (DEFAULT_AI_PROMPT_PRESET_ID, 1, "默认直播切片分析专家", default_prompt, 1),
-        ("preset_002", 2, "综艺访谈完整上下文专家", variety_prompt, 0),
-        ("preset_003", 3, "3号方案", "", 0),
+        (DEFAULT_AI_PROMPT_PRESET_ID, 1, "康熙来了综艺短视频切片专家", default_prompt, 1),
+        ("preset_002", 2, "默认直播切片分析专家", general_prompt, 0),
+        ("preset_003", 3, "综艺访谈完整上下文专家", variety_prompt, 0),
         ("preset_004", 4, "康熙笑点优先 V2", comedy_v2_prompt, 0),
     ]
     for preset_id, slot, name, prompt_text, is_default in presets:

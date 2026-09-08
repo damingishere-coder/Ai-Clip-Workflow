@@ -52,12 +52,16 @@ def test_three_suggestions_preview_apply_rollback_and_compact_disclosure(
                 f"http://127.0.0.1:{port}/content-review", wait_until="networkidle"
             )
             page.locator("#content-review-account").select_option(sample["account"])
+            # 账号切换会重新加载全部模块；旧页面也可能已有同样文案，
+            # 等这次请求完成再点击，避免操作即将被替换的旧 details。
+            page.wait_for_load_state("networkidle")
             page.locator("#content-review-insight-count").filter(
                 has_text="3 条总结建议"
             ).wait_for()
             assert page.locator("#content-review-insights > article").count() == 3
             page.get_by_text("新的选片补充规则：", exact=False).wait_for()
             page.locator(".weekly-review-evidence summary").first.click()
+            page.locator(".weekly-review-evidence[open] article").nth(1).wait_for(state="visible")
             assert page.locator(".weekly-review-evidence[open] article").count() >= 2
             folded = page.locator('[data-content-review-disclosure="prompt-evidence"]')
             if folded.get_attribute("open") is not None:

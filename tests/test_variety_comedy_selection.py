@@ -388,7 +388,7 @@ def test_judge_receives_full_transcript_and_marks_partial_boundary_sentences(mon
     class Provider:
         def generate_json(self, prompt, retry_instruction=None):
             prompts.append(prompt)
-            return json.dumps({"ranked_clips": [{"source_id": candidate["source_id"]}]})
+            return json.dumps({"ranked_clips": [{**candidate, "why_selected": "完整互动", "rejection_reason": ""}]})
 
     monkeypatch.setattr("app.services.ai.variety_comedy_analyzer.execute_checkpointed_ai_unit", execute)
     for current_rows in (rows, rows, [_row(62, 65, "已纠正的逐句原文")]):
