@@ -1,4 +1,5 @@
 import json
+import re
 from uuid import uuid4
 
 import pytest
@@ -11,6 +12,100 @@ from app.services.ai_analysis_workflow_service import (
     _insert_clip_candidates_with_connection,
 )
 from tests.test_content_decisions import item, rows
+
+
+@pytest.mark.parametrize("failed_final", [False, True])
+def test_whole_analysis_resume_keeps_actual_request_fingerprints(
+    monkeypatch, task_id, tmp_path, failed_final
+):
+    from app.services.ai.variety_comedy_analyzer import ComedyAnalysisRequest
+
+    calls = []
+
+    class Provider:
+        def generate_json_with_schema(
+            self, prompt, output_schema, retry_instruction=None
+        ):
+            calls.append(prompt)
+            if output_schema == analyzer.RECALL_OUTPUT_SCHEMA:
+                return json.dumps(
+                    {
+                        "moments": [
+                            {
+                                "title": str(i),
+                                "key_time": "00:00:02",
+                                "recall_score": 80,
+                                "topic_key": str(i),
+                                "humor_reason": "原文依据",
+                            }
+                            for i in range(2)
+                        ]
+                    }
+                )
+            source = re.search(r'"source_id": "(w\d+_m\d+)"', prompt).group(1)
+            candidate = item(source)
+            if output_schema == analyzer.EXPANSION_OUTPUT_SCHEMA:
+                candidate = {
+                    k: v
+                    for k, v in candidate.items()
+                    if k in output_schema["properties"]["clips"]["items"]["properties"]
+                }
+            elif failed_final and source == "w001_m002" and len(calls) == 5:
+                candidate["hook_score"] = "seventy"
+            return json.dumps({"clips": [candidate]})
+
+    monkeypatch.setattr(analyzer, "build_provider", lambda name: Provider())
+    monkeypatch.setattr(analyzer, "_extract_transcript_rows", lambda text: rows())
+    monkeypatch.setattr(analyzer, "_read_transcript", lambda path: "same transcript")
+    request = ComedyAnalysisRequest(
+        task_id,
+        tmp_path / "transcript",
+        tmp_path / "audio",
+        12,
+        5,
+        "",
+        "codex",
+        "同一正文",
+        "content",
+    )
+    job = job_service.create_job(task_id, job_service.JOB_TYPE_AI_ANALYSIS)
+    claimed = job_service.claim_job(job["id"], "whole-resume-test")
+    with job_service.job_lease_context(
+        job["id"], "whole-resume-test", claimed["lease_token"]
+    ):
+        first = analyzer.analyze_content_decisions(request)
+        assert len(calls) == 5
+        second = analyzer.analyze_content_decisions(request)
+        assert len(calls) == 5, "从 SQLite JSON 读回后，不得因字段顺序改变重新调用 AI"
+        if failed_final:
+            assert (
+                first.analysis_meta["analysis_incomplete"]
+                and second.analysis_meta["analysis_incomplete"]
+            )
+            # 独立 API 测试验证确认入口；这里模拟确认后的唯一失败单元状态。
+            with get_connection() as connection:
+                cp = json.loads(
+                    connection.execute(
+                        "SELECT checkpoint_json FROM workflow_jobs WHERE id=?",
+                        (job["id"],),
+                    ).fetchone()[0]
+                )
+                unit = cp["_ai_analysis_units_v1"]["namespaces"][
+                    "content_global_judge"
+                ]["units"]["w001_m002"]
+                assert unit["status"] == "uncertain" and not unit.get("result_json")
+                unit["status"] = "retryable_failed"
+                connection.execute(
+                    "UPDATE workflow_jobs SET checkpoint_json=? WHERE id=?",
+                    (json.dumps(cp), job["id"]),
+                )
+                connection.commit()
+            recovered = analyzer.analyze_content_decisions(request)
+            assert not recovered.analysis_meta["analysis_incomplete"]
+            assert len(recovered.clips) == 2 and len(calls) == 6
+        else:
+            assert not first.analysis_meta["analysis_incomplete"]
+            assert first.model_dump() == second.model_dump()
 
 
 @pytest.fixture

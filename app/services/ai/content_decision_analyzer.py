@@ -428,7 +428,7 @@ def analyze_content_decisions(request):
 {preference}
 不补足时长，不围绕关键点机械截短。所有候选均须返回；是否可出片由最终评审决定。
 最多 150 秒是正文要求；没有 60 秒下限。不能确认时在 arc_structure 写明限制。
-按给定 schema 返回候选 {json.dumps(moment, ensure_ascii=False)}。
+按给定 schema 返回候选 {json.dumps(moment, ensure_ascii=False, sort_keys=True)}。
 原文：\n{chr(10).join(_format_row(r) for r in context)}"""
         result = unit(
             "expansion",
@@ -478,9 +478,9 @@ evidence 逐项引用原文的一句，role 为 opening/topic/highlight/response
 只有判定正文必要条件确实依赖缺失证据时才因此 review，不添加正文之外的内容门槛。decision_reason 解释决定，review_issues 记录影响采用的待核实项。
 同一内容的重复版本由你比较处理，reject 时 duplicate_of 引用已采用的 source_id，否则为空。不要因相邻时间就视为重复。
 全部候选只分批核验，不设置保留数量。只返回指定 source_id，其他候选仅供比较。所有必填字段按 schema 输出。
-指定候选：{json.dumps(candidate, ensure_ascii=False)}
-附近候选：{json.dumps(neighbors, ensure_ascii=False)}
-此前已评审：{json.dumps(prior, ensure_ascii=False)}
+指定候选：{json.dumps(candidate, ensure_ascii=False, sort_keys=True)}
+附近候选：{json.dumps(neighbors, ensure_ascii=False, sort_keys=True)}
+此前已评审：{json.dumps(prior, ensure_ascii=False, sort_keys=True)}
 原文：\n{chr(10).join(_format_row(r) for r in context)}"""
         result = unit(
             "global_judge",
