@@ -1409,10 +1409,8 @@ class PipelineEngine:
                 "请重试 AI 分析补齐缺失窗口，当前不会进入自动切片或发送中心。"
             )
         if validated.get("analysis_incomplete"):
-            raise ValueError(
-                f"{profile} AI 分析存在未完成单元，当前覆盖率 {coverage:.2f}%；"
-                "请重试 AI 分析补齐失败单元，当前不会进入自动切片或发送中心。"
-            )
+            from app.services.ai.analysis_status import incomplete_analysis_message
+            raise ValueError(incomplete_analysis_message(validated))
         return validated
 
     def _select_clips(self, task_id: str, context: dict) -> dict:

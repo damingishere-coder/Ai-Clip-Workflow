@@ -72,14 +72,16 @@ def ensure_ai_prompt_version_with_connection(
     }
 
 
-def list_ai_prompt_presets() -> list[dict]:
+def list_ai_prompt_presets(*, include_archived: bool = False) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, slot, name, prompt_text, is_default, created_at, updated_at
+            SELECT id, slot, name, prompt_text, is_default, is_archived, created_at, updated_at
             FROM ai_prompt_presets
+            WHERE is_archived = 0 OR ?
             ORDER BY slot ASC
-            """
+            """,
+            (int(include_archived),),
         ).fetchall()
     return [
         {
@@ -95,7 +97,7 @@ def get_ai_prompt_preset(preset_id: str) -> dict | None:
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT id, slot, name, prompt_text, is_default, created_at, updated_at
+            SELECT id, slot, name, prompt_text, is_default, is_archived, created_at, updated_at
             FROM ai_prompt_presets
             WHERE id = ?
             """,
@@ -119,13 +121,13 @@ def update_ai_prompt_preset(preset_id: str, payload: AIPromptPresetUpdate) -> di
             """
             UPDATE ai_prompt_presets
             SET name = ?, prompt_text = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND is_archived = 0
             """,
             (normalized_name, prompt_text, now, preset_id),
         )
         if cursor.rowcount == 0:
             connection.rollback()
-            raise ValueError("AI Prompt 方案不存在")
+            raise ValueError("AI Prompt 方案不存在或已归档；康熙规则请修改 1 号方案")
         ensure_ai_prompt_version_with_connection(
             connection,
             preset_id=preset_id,
@@ -145,6 +147,8 @@ def update_task_ai_prompt_preset(task_id: str, preset_id: str) -> dict:
     preset = get_ai_prompt_preset(preset_id)
     if not preset:
         raise ValueError("AI Prompt 方案不存在")
+    if preset["is_archived"]:
+        raise ValueError("此方案已归档，不能重新绑定；康熙请使用 1 号方案")
 
     now = _now_iso()
     with get_connection() as connection:

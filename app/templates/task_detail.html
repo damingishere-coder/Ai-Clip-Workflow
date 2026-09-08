@@ -166,6 +166,12 @@
         </label>
         {% endfor %}
       </div>
+      {% if current_prompt_preset and current_prompt_preset.is_archived %}
+      <details class="empty-note">
+        <summary>当前任务保留 {{ current_prompt_preset.slot }} 号历史绑定（已归档）。切换方案请选 1 号；历史分析不会改写。</summary>
+        <pre class="transcript-full-text">{{ current_prompt_preset.prompt_text }}</pre>
+      </details>
+      {% endif %}
       <div class="prompt-preset-panels">
         {% for preset in ai_prompt_presets %}
         {% set is_selected = preset.id == (task.ai_prompt_preset_id or "preset_001") %}
@@ -181,9 +187,9 @@
         </article>
         {% endfor %}
       </div>
-      <p class="empty-note">通用模式直接使用所选 Prompt；综艺笑点优先模式会把所选 Prompt 作为口味补充，再执行重叠召回、边界扩展、音频复核和全局评审。</p>
+      <p class="empty-note">康熙统一使用 1 号提示词，周复盘只更新同一方案正文；4 号旧方案已归档。内容修订是提示词修改记录，分析次数是任务运行记录，两者分别计数。综艺分析三个阶段均使用本任务冻结的规则，历史任务不会自动套用后来的修改。</p>
       <div class="button-row align-end">
-        <button class="secondary-button" id="save-ai-prompts-button" type="button">保存 Prompt 方案</button>
+        <button class="secondary-button" id="save-ai-prompts-button" type="button">保存当前提示词方案</button>
         <button class="primary-button js-ai-process-action" type="button" data-provider="codex">Codex CLI 分析</button>
         <button class="secondary-button js-ai-process-action" type="button" data-provider="remote">远程 AI 分析</button>
         <button class="secondary-button js-ai-process-action" type="button" data-provider="local">本地 AI 分析</button>

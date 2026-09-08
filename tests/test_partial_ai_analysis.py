@@ -25,6 +25,12 @@ from app.services.video_cut_workflow_service import process_task_video_cuts
     ([], True, False),
 ])
 def test_variety_validates_candidate_identity_before_checkpoint_success(monkeypatch, items, require_all, valid):
+    items = [{
+        "title": "有效标题", "topic_key": "同一话题", "summary": "有效摘要",
+        "highlight_reason": "互动", "arc_structure": "完整互动", "suggested_editing": "连续截取",
+        "start_time": "00:00:00", "end_time": "00:01:00", "key_moment_time": "00:00:30",
+        **{key: 80 for key in variety_comedy_analyzer.SCORE_FIELDS}, **item,
+    } for item in items]
     monkeypatch.setattr(variety_comedy_analyzer, "generate_json_with_safe_retry",
                         lambda *_args: json.dumps({"clips": items}))
     def generate():
@@ -430,7 +436,11 @@ def test_variety_global_judge_requires_complete_candidate_coverage():
     class Provider:
         def generate_json(self, _prompt: str, retry_instruction: str | None = None) -> str:
             del retry_instruction
-            return json.dumps({"ranked_clips": [{"source_id": "candidate-a"}]})
+            return json.dumps({"ranked_clips": [{
+                "source_id": "candidate-a", "title": "标题", "topic_key": "话题",
+                "arc_structure": "完整互动", "why_selected": "保留", "rejection_reason": "",
+                **{key: 80 for key in variety_comedy_analyzer.SCORE_FIELDS},
+            }]})
 
     judged, warning = variety_comedy_analyzer._global_judge(
         Provider(),

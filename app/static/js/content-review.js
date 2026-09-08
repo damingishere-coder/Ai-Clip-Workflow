@@ -280,7 +280,7 @@ function renderWorks(works) {
     appendCell(
       row,
       work.analysis_run_number ? `第 ${work.analysis_run_number} 次 · ${work.provider_label || "AI"}` : "AI 来源不完整",
-      work.prompt_version_number ? `${work.prompt_name || "Prompt"} v${work.prompt_version_number}` : "Prompt 来源不完整",
+      work.prompt_version_number ? `提示词方案：${work.prompt_name || "Prompt"} · 内容修订：第 ${work.prompt_version_number} 次` : "Prompt 来源不完整",
     );
     const matchCell = document.createElement("td");
     const tools = document.createElement("div");
@@ -464,7 +464,7 @@ function renderPromptComparison(data) {
     item.className = "content-review-prompt-item";
     const header = document.createElement("header");
     header.append(
-      textNode("strong", `${version.prompt_name} · v${version.version_number}`),
+      textNode("strong", `${version.prompt_name} · 内容修订：第 ${version.version_number} 次`),
       textNode("span", version.evaluable ? "可评估" : "数据不足", "status-pill"),
     );
     const metrics = document.createElement("dl");

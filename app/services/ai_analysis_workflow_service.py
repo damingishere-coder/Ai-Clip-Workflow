@@ -724,8 +724,14 @@ def _summarize_analysis_clips(clips: list[dict]) -> list[dict]:
 
 def _analysis_run_row_to_dict(row: Row, include_payload: bool = False) -> dict:
     from app.services.task_service import _format_datetime
+    from app.services.ai.analysis_status import incomplete_analysis_message
 
     run = dict(row)
+    with get_connection() as connection:
+        prompt_version = connection.execute(
+            "SELECT version_number FROM ai_prompt_versions WHERE id = ?",
+            (run.get("prompt_version_id"),),
+        ).fetchone()
     payload = {}
     if include_payload:
         try:
@@ -747,6 +753,7 @@ def _analysis_run_row_to_dict(row: Row, include_payload: bool = False) -> dict:
         "ai_prompt_preset_id": run.get("ai_prompt_preset_id") or "",
         "ai_prompt_preset_name": run.get("ai_prompt_preset_name") or "",
         "prompt_version_id": run.get("prompt_version_id") or "",
+        "prompt_version_number": prompt_version[0] if prompt_version else None,
         "prompt_text_sha256": run.get("prompt_text_sha256") or "",
         "requested_clip_count": int(run.get("requested_clip_count") or 0),
         "clip_count": int(run.get("clip_count") or 0),
@@ -759,6 +766,7 @@ def _analysis_run_row_to_dict(row: Row, include_payload: bool = False) -> dict:
         "clip_summaries": _summarize_analysis_clips(clips) if include_payload else [],
         "analysis_meta": analysis_meta if include_payload else {},
         "analysis_incomplete": bool(analysis_meta.get("analysis_incomplete")),
+        "failure_message": incomplete_analysis_message(analysis_meta) if analysis_meta.get("analysis_incomplete") else "",
         "coverage_ratio": float(analysis_meta.get("coverage_ratio") or 0),
     }
 
@@ -783,6 +791,7 @@ def _analysis_payload_to_preview(task_id: str, payload: dict, fallback: dict | N
         "ai_prompt_preset_id": fallback.get("ai_prompt_preset_id") or "",
         "ai_prompt_preset_name": fallback.get("ai_prompt_preset_name") or "",
         "prompt_version_id": meta.get("prompt_version_id") or fallback.get("prompt_version_id") or "",
+        "prompt_version_number": fallback.get("prompt_version_number"),
         "prompt_text_sha256": meta.get("prompt_sha256") or fallback.get("prompt_text_sha256") or "",
         "requested_clip_count": int(fallback.get("requested_clip_count") or len(clips)),
         "clip_count": len(clips),
@@ -1159,7 +1168,7 @@ def _analyze_with_provider(
         overlap_seconds = 45 if provider_name == "local" else 60
         append_task_log(
             task_id,
-            "综艺笑点优先 V2："
+            "综艺三阶段分析："
             f"{window_seconds // 60} 分钟重叠召回窗口，重叠 {overlap_seconds} 秒；"
             f"候选池最多 {min(12, int(task['candidate_clip_count']))} 条，"
             f"最终最多启用 {int(task.get('final_clip_target') or 5)} 条 A 级片段",
@@ -1388,13 +1397,9 @@ def _build_ai_process_result(
     meta = analysis_payload.get("analysis_meta") if isinstance(analysis_payload, dict) else {}
     meta = meta if isinstance(meta, dict) else {}
     incomplete = bool(meta.get("analysis_incomplete"))
-    coverage = float(meta.get("coverage_percent") or 0)
-    profile = str(meta.get("selection_profile") or "general")
     if incomplete:
-        message = (
-            f"{profile} 分析覆盖率为 {coverage:.2f}%，存在未完成单元。"
-            "成功结果已保存供人工检查；补齐前不会进入自动切片或发布。"
-        )
+        from app.services.ai.analysis_status import incomplete_analysis_message
+        message = incomplete_analysis_message(meta)
     else:
         message = (
             f"AI 分析完成，已生成 {len(analysis_payload.get('clips') or [])} 条可直接切片的候选片段，"
@@ -1530,11 +1535,10 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
 
     incomplete = bool(analysis_payload.get("analysis_meta", {}).get("analysis_incomplete"))
     if incomplete:
-        coverage = float(analysis_payload["analysis_meta"].get("coverage_percent") or 0)
-        profile = str(analysis_payload["analysis_meta"].get("selection_profile") or "general")
+        from app.services.ai.analysis_status import incomplete_analysis_message
         append_task_log(
             task_id,
-            f"{profile} AI 分析不完整：覆盖率 {coverage:.2f}%，已保留成功结果，自动切片已锁定。",
+            incomplete_analysis_message(analysis_payload["analysis_meta"]),
         )
     else:
         append_task_log(task_id, f"AI 分析完成，Provider：{used_provider}，生成候选片段：{len(analysis_payload['clips'])} 条")

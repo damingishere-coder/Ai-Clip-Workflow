@@ -1,5 +1,12 @@
 # 数据库结构说明
 
+## 2026-09-08 提示词归档
+
+- 账本迁移：`20260908_01_prompt_archive`。新增 `ai_prompt_presets.is_archived INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1))`；`preset_004` 设为归档、非默认，其他方案内容及历史引用不改。
+- 迁移前按现有备份接口生成 `prompt-archive` 备份，迁移与账本登记由现有事务迁移器管理。重启校验 4 号仍归档，初始化不会重新开放该入口。
+- `GET /api/ai-prompt-presets` 默认过滤归档项；`include_archived=true` 可读取历史正文。归档项不接受正文修改、新任务绑定或新的周复盘规则应用；历史分析版本、已绑定任务与冻结规则继续可读。
+- 分析结果接口新增 `prompt_version_number`，来源为已关联的不可变版本；未关联历史返回空值，不按分析次数或名称猜测。
+
 ## 2026-08-30：迁移原子性与 AI Prompt 外键一致性
 
 - 新迁移账本版本为 `20260830_01_ai_prompt_version_fk`。历史库缺少 `ai_analysis_runs.prompt_version_id → ai_prompt_versions.id` 外键时，先生成 `workflow-before-ai-prompt-version-fk-*` 在线备份，再在一个事务内重建 AI Run 表。

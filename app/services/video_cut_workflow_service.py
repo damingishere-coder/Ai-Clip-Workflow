@@ -548,10 +548,8 @@ def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> 
         append_task_log(task_id, f"视频切割已阻止：{error}")
         raise ValueError(error)
     if meta.get("analysis_incomplete"):
-        error = (
-            f"{profile} AI 分析存在未完成单元，当前覆盖率 {coverage:.2f}%；"
-            "请先重试 AI 分析补齐失败单元，当前不会生成切片或同步发送中心。"
-        )
+        from app.services.ai.analysis_status import incomplete_analysis_message
+        error = incomplete_analysis_message(meta)
         append_task_log(task_id, f"视频切割已阻止：{error}")
         raise ValueError(error)
     if meta.get("quality_degraded"):

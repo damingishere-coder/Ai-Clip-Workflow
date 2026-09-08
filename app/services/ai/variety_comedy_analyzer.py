@@ -66,6 +66,58 @@ RECALL_OUTPUT_SCHEMA = {
     "additionalProperties": False,
 }
 
+SCORE_FIELDS = (
+    "humor_score", "interaction_reaction_score", "completeness_score",
+    "hook_score", "novelty_score", "title_score",
+)
+
+
+def _clip_output_schema(key: str, text_fields: tuple[str, ...]) -> dict:
+    properties = {field: {"type": "string"} for field in text_fields}
+    properties.update({field: {"type": "number"} for field in SCORE_FIELDS})
+    return {
+        "type": "object",
+        "properties": {key: {"type": "array", "items": {
+            "type": "object", "properties": properties,
+            "required": list(properties), "additionalProperties": False,
+        }}},
+        "required": [key], "additionalProperties": False,
+    }
+
+
+EXPANSION_OUTPUT_SCHEMA = _clip_output_schema("clips", (
+    "source_id", "title", "start_time", "end_time", "key_moment_time",
+    "topic_key", "summary", "highlight_reason", "arc_structure", "suggested_editing",
+))
+JUDGE_OUTPUT_SCHEMA = _clip_output_schema("ranked_clips", (
+    "source_id", "title", "topic_key", "arc_structure", "why_selected", "rejection_reason",
+))
+
+
+def _validate_clip_output(payload: dict, key: str, schema: dict) -> None:
+    """在写入成功 checkpoint 前验证结果，禁止把错误评分转换成默认分。"""
+    properties = schema["properties"][key]["items"]["properties"]
+    for index, item in enumerate(payload[key], start=1):
+        if not isinstance(item, dict):
+            raise AIAnalysisError(f"{key} 第 {index} 条必须是对象")
+        for field, spec in properties.items():
+            value = item.get(field)
+            if spec["type"] == "number":
+                valid = type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 100
+            else:
+                valid = isinstance(value, str)
+            if not valid:
+                raise AIAnalysisError(f"{key} 第 {index} 条 {field} 格式错误：分数须为 0–100 数字，文本字段必须存在")
+        if not item["source_id"].strip():
+            raise AIAnalysisError(f"{key} 第 {index} 条 source_id 不能为空")
+        if key == "clips":
+            for field in ("start_time", "end_time", "key_moment_time"):
+                if not re.fullmatch(r"\d{2,}:[0-5]\d:[0-5]\d", item[field]):
+                    raise AIAnalysisError(f"clips 第 {index} 条 {field} 不是有效时间戳")
+            start, end, moment = (_time_to_seconds(item[f]) for f in ("start_time", "end_time", "key_moment_time"))
+            if not start <= moment < end:
+                raise AIAnalysisError(f"clips 第 {index} 条时间范围无效")
+
 
 @dataclass(frozen=True)
 class ComedyAnalysisRequest:
@@ -183,7 +235,7 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
 
     selected_count = sum(1 for clip in clips if clip["selected_by_default"])
     summary = (
-        f"综艺笑点优先 V2 已按 {len(windows)} 个重叠窗口召回，"
+        f"综艺三阶段分析 已按 {len(windows)} 个重叠窗口召回，"
         f"扩展并全局复评 {len(expanded)} 条，保留 {len(clips)} 条候选，"
         f"其中 {selected_count} 条达到 A 级并默认启用。"
     )
@@ -587,6 +639,10 @@ def _expand_moments(
             request_fingerprint=build_unit_fingerprint({"prompt": prompt}),
             operation=lambda prompt=prompt, known_ids=set(context_rows_by_id): _generate_payload(
                 provider, prompt, expected_key="clips", known_ids=known_ids,
+                output_schema=EXPANSION_OUTPUT_SCHEMA,
+            ),
+            validate_payload=lambda payload, known_ids=set(context_rows_by_id): _validate_payload(
+                payload, expected_key="clips", known_ids=known_ids,
             ),
         )
         if execution.status != "completed" or not isinstance(execution.payload, dict):
@@ -703,6 +759,11 @@ def _global_judge(
         operation=lambda: _generate_payload(
             provider, prompt, expected_key="ranked_clips",
             known_ids={str(item["source_id"]) for item in candidates}, require_all=True,
+            output_schema=JUDGE_OUTPUT_SCHEMA,
+        ),
+        validate_payload=lambda payload: _validate_payload(
+            payload, expected_key="ranked_clips",
+            known_ids={str(item["source_id"]) for item in candidates}, require_all=True,
         ),
     )
     if execution.status != "completed" or not isinstance(execution.payload, dict):
@@ -792,10 +853,20 @@ def _generate_payload(
     raw = (generate_json_with_safe_retry(provider, prompt, output_schema=output_schema)
            if output_schema is not None else generate_json_with_safe_retry(provider, prompt))
     payload = _loads_ai_json(raw)
+    _validate_payload(payload, expected_key=expected_key, known_ids=known_ids, require_all=require_all)
+    return payload
+
+
+def _validate_payload(
+    payload: dict, *, expected_key: str, known_ids: set[str] | None = None,
+    require_all: bool = False,
+) -> None:
     if not isinstance(payload, dict):
         raise AIAnalysisError("AI 输出必须是 JSON 对象")
     if not isinstance(payload.get(expected_key), list):
         raise AIAnalysisError(f"AI 输出缺少 {expected_key} 数组")
+    if expected_key in {"clips", "ranked_clips"}:
+        _validate_clip_output(payload, expected_key, EXPANSION_OUTPUT_SCHEMA if expected_key == "clips" else JUDGE_OUTPUT_SCHEMA)
     if known_ids is not None:
         returned_ids = [str(item.get("source_id") or "") if isinstance(item, dict) else ""
                         for item in payload[expected_key]]
@@ -805,7 +876,6 @@ def _generate_payload(
             raise AIAnalysisError("AI 返回了重复 source_id，结果未记为成功，请确认后重试此单元")
         if require_all and set(returned_ids) != known_ids:
             raise AIAnalysisError("AI 评审遗漏当前候选，结果未记为成功，请确认后重试此单元")
-    return payload
 
 
 def _recall_prompt(window: ComedyTranscriptWindow, preference: str) -> str:
@@ -860,7 +930,8 @@ def _preference_summary(prompt_template: str, ai_preference: str) -> str:
     for marker in ("# Output Format", "【输出格式】", "输出 JSON", "转写文本：", "# Transcript", "{{TRANSCRIPT_TEXT}}"):
         if marker in prompt:
             prompt = prompt.split(marker, 1)[0]
-    prompt = " ".join(prompt.split())[:2500]
+    # 业务规则完整注入三个阶段，尤其不能截掉正文末尾的周复盘补充。
+    prompt = " ".join(prompt.split())
     extra = " ".join((ai_preference or "").split())[:500]
     parts = []
     if prompt:
