@@ -33,6 +33,7 @@ def _cleanup() -> None:
         connection.execute("DELETE FROM ai_analysis_runs WHERE task_id LIKE ?", (f"{PREFIX}%",))
         connection.execute("DELETE FROM tasks WHERE id LIKE ?", (f"{PREFIX}%",))
         connection.execute("DELETE FROM ai_prompt_versions WHERE preset_id LIKE ?", (f"{PREFIX}%",))
+        connection.execute("DELETE FROM prompt_change_audits WHERE preset_id LIKE ?", (f"{PREFIX}%",))
         connection.execute("DELETE FROM ai_prompt_presets WHERE id LIKE ?", (f"{PREFIX}%",))
         connection.commit()
 

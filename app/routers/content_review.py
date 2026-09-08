@@ -275,6 +275,24 @@ def apply_weekly_report(report_id: str):
         _raise_content_review_http(exc)
 
 
+@router.post("/weekly-reports/{report_id}/trial")
+def create_weekly_trial(report_id: str):
+    from app.services.content_rule_trial_service import create_trial
+    try:
+        return create_trial(report_id)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.post("/rule-trials/{trial_id}/review")
+def review_weekly_trial(trial_id: str, payload: dict):
+    from app.services.content_rule_trial_service import review_trial
+    try:
+        return review_trial(trial_id, payload)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
 @router.post("/rule-applications/{application_id}/revert")
 def revert_weekly_rules(application_id: str):
     from app.services import weekly_review_service as weekly

@@ -194,6 +194,7 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
             "max_clip_duration": payload.max_clip_duration,
             "candidate_clip_count": payload.candidate_clip_count,
             "selection_profile": payload.selection_profile,
+            "selection_count_mode": payload.selection_count_mode if payload.selection_profile == "variety_comedy" else "legacy",
             "final_clip_target": payload.final_clip_target,
             "highlight_density_per_hour": payload.highlight_density_per_hour,
             "highlight_total_limit": payload.highlight_total_limit,
@@ -471,6 +472,7 @@ def update_task_selection_settings(
     final_clip_target: int,
     highlight_density_per_hour: int = 4,
     highlight_total_limit: int = 30,
+    selection_count_mode: str | None = None,
 ) -> dict:
     from app.services.task_service import _now_iso, get_task  # noqa: F811
 
@@ -479,6 +481,11 @@ def update_task_selection_settings(
         raise ValueError("任务不存在")
     if selection_profile not in {"general", "variety_comedy", "long_live_talk"}:
         raise ValueError("选片模式只能是通用内容价值、康熙笑点选片模式或长直播高光")
+    count_mode = selection_count_mode or task.get("selection_count_mode") or "legacy"
+    if count_mode not in {"content", "legacy"}:
+        raise ValueError("数量模式无效")
+    if selection_profile != "variety_comedy":
+        count_mode = "legacy"
     if final_clip_target < 1 or final_clip_target > 12:
         raise ValueError("最终启用目标必须在 1 到 12 条之间")
     if selection_profile != "long_live_talk":
@@ -494,13 +501,14 @@ def update_task_selection_settings(
         connection.execute(
             """
             UPDATE tasks
-            SET selection_profile = ?, final_clip_target = ?,
+            SET selection_profile = ?, final_clip_target = ?, selection_count_mode = ?,
                 highlight_density_per_hour = ?, highlight_total_limit = ?, updated_at = ?
             WHERE id = ?
             """,
             (
                 selection_profile,
                 final_clip_target,
+                count_mode,
                 highlight_density_per_hour,
                 highlight_total_limit,
                 now,
@@ -514,10 +522,11 @@ def update_task_selection_settings(
         "variety_comedy": "康熙笑点选片模式",
         "long_live_talk": "长直播高光（语言类）",
     }[selection_profile]
-    append_task_log(task_id, f"已更新选片模式：{profile_label}，最终启用目标：{final_clip_target} 条")
+    quantity_label = "按内容自动决定数量，历史数量值仅供追溯" if selection_profile == "variety_comedy" else f"最终启用目标：{final_clip_target} 条"
+    append_task_log(task_id, f"已更新选片模式：{profile_label}，{quantity_label}")
     return {
         "status": "ok",
-        "message": f"已保存{profile_label}，最终启用目标为 {final_clip_target} 条。",
+        "message": f"已保存{profile_label}，{quantity_label}。",
         "task": get_task(task_id, include_video_probe=False),
     }
 

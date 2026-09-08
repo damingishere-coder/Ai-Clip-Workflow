@@ -82,7 +82,8 @@
     </div>
 
     <div class="form-row">
-      <label>
+      <label><span>康熙数量模式</span><select name="selection_count_mode"><option value="content" selected>按内容自动决定数量</option></select><span class="form-hint">康熙模式忽略候选池和启用目标，不凑数，允许零条；连续片段最长 150 秒。其他选片模式不受影响。</span></label>
+      <label data-kangxi-legacy-quantity>
         <span>单条切片最长</span>
         <span class="unit-input">
           <input name="max_clip_duration" type="number" min="1" max="60" step="1" value="10" required>
@@ -90,7 +91,7 @@
         </span>
         <span class="form-hint">默认 10 分钟是单条允许上限，AI 仍会根据内容完整度选择更短的片段。</span>
       </label>
-      <label>
+      <label data-kangxi-legacy-quantity>
         <span>候选池上限</span>
         <select name="candidate_clip_count">
           {% for option in candidate_count_options %}
@@ -99,7 +100,7 @@
         </select>
         <span class="form-hint">供人工审核的最多条数，不等于最终自动切片数量。</span>
       </label>
-      <label>
+      <label data-kangxi-legacy-quantity>
         <span>最终启用目标</span>
         <span class="unit-input">
           <input name="final_clip_target" type="number" min="1" max="12" step="1" value="5" required>

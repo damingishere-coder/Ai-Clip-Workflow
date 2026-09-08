@@ -94,7 +94,7 @@ JUDGE_OUTPUT_SCHEMA = _clip_output_schema("ranked_clips", (
 ))
 
 
-def _validate_clip_output(payload: dict, key: str, schema: dict) -> None:
+def _validate_clip_output(payload: dict, key: str, schema: dict, *, validate_times: bool = True) -> None:
     """在写入成功 checkpoint 前验证结果，禁止把错误评分转换成默认分。"""
     properties = schema["properties"][key]["items"]["properties"]
     for index, item in enumerate(payload[key], start=1):
@@ -110,7 +110,7 @@ def _validate_clip_output(payload: dict, key: str, schema: dict) -> None:
                 raise AIAnalysisError(f"{key} 第 {index} 条 {field} 格式错误：分数须为 0–100 数字，文本字段必须存在")
         if not item["source_id"].strip():
             raise AIAnalysisError(f"{key} 第 {index} 条 source_id 不能为空")
-        if key == "clips":
+        if key == "clips" and validate_times:
             for field in ("start_time", "end_time", "key_moment_time"):
                 if not re.fullmatch(r"\d{2,}:[0-5]\d:[0-5]\d", item[field]):
                     raise AIAnalysisError(f"clips 第 {index} 条 {field} 不是有效时间戳")
@@ -129,6 +129,7 @@ class ComedyAnalysisRequest:
     ai_preference: str
     provider_name: str
     prompt_template: str | None = None
+    selection_count_mode: str = "legacy"
 
 
 @dataclass(frozen=True)
@@ -142,6 +143,9 @@ class ComedyTranscriptWindow:
 
 
 def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResult:
+    if request.selection_count_mode == "content":
+        from app.services.ai.content_decision_analyzer import analyze_content_decisions
+        return analyze_content_decisions(request)
     transcript_text = _read_transcript(request.transcript_path)
     rows = _extract_transcript_rows(transcript_text)
     if not rows:

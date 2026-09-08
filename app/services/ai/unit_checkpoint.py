@@ -86,6 +86,7 @@ def execute_checkpointed_ai_unit(
     if state.status != "call_provider":
         return state
 
+    payload = None
     try:
         payload = operation()
         if not isinstance(payload, dict):
@@ -108,6 +109,7 @@ def execute_checkpointed_ai_unit(
             unit_id=unit_id,
             error=error,
             retryable=retryable,
+            rejected_response=getattr(exc, "response_payload", payload),
         )
         return AIUnitExecution(
             status="retryable_failed" if retryable else "uncertain",
@@ -199,6 +201,31 @@ def _begin_unit(
             _write_checkpoint(connection, str(job["id"]), checkpoint)
             connection.commit()
             return AIUnitExecution(status="uncertain", error=str(previous["error"]), reused=True)
+        if (
+            isinstance(previous, dict) and previous.get("status") == "uncertain"
+            and request_fingerprint and previous.get("request_fingerprint") == request_fingerprint
+            and validate_payload is not None and previous.get("rejected_response_json")
+        ):
+            rejected = _verified_payload({
+                "result_json": previous["rejected_response_json"],
+                "result_checksum": previous.get("rejected_response_checksum"),
+            })
+            if rejected is not None:
+                try:
+                    validate_payload(rejected)
+                except Exception:
+                    pass
+                else:
+                    namespace_state.setdefault("validation_recoveries", []).append({"unit_id": unit_id, **previous})
+                    units[unit_id] = {
+                        "status": "completed", "request_fingerprint": request_fingerprint,
+                        "result_json": previous["rejected_response_json"],
+                        "result_checksum": previous["rejected_response_checksum"],
+                        "recovered_by_validation": True,
+                    }
+                    _write_checkpoint(connection, str(job["id"]), checkpoint)
+                    connection.commit()
+                    return AIUnitExecution(status="completed", payload=rejected, reused=True)
         if isinstance(previous, dict) and previous.get("status") in {"running", "uncertain"}:
             error = str(previous.get("error") or "上一次 AI 请求已开始但结果未确认，未自动重复请求")
             units[unit_id] = {
@@ -265,7 +292,12 @@ def _finish_unit_failure(
     unit_id: str,
     error: str,
     retryable: bool,
+    rejected_response: Any = None,
 ) -> None:
+    evidence = {}
+    if isinstance(rejected_response, dict):
+        serialized = json.dumps(rejected_response, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        evidence = {"rejected_response_json": serialized, "rejected_response_checksum": hashlib.sha256(serialized.encode("utf-8")).hexdigest()}
     _finish_unit(
         task_id=task_id,
         namespace=namespace,
@@ -274,6 +306,7 @@ def _finish_unit_failure(
         state={
             "status": "retryable_failed" if retryable else "uncertain",
             "error": error,
+            **evidence,
         },
     )
 

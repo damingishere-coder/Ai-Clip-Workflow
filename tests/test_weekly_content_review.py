@@ -58,6 +58,10 @@ def sample():
             "DELETE FROM content_rule_heads WHERE preset_id=?", (preset,)
         )
         connection.execute(
+            "DELETE FROM content_rule_trials WHERE report_id IN (SELECT id FROM weekly_content_reports WHERE account_id=?)", (account,),
+        )
+        connection.execute("DELETE FROM prompt_change_audits WHERE preset_id=?", (preset,))
+        connection.execute(
             "DELETE FROM content_rule_applications WHERE report_id IN (SELECT id FROM weekly_content_reports WHERE account_id=?)",
             (account,),
         )
@@ -91,9 +95,9 @@ def output_for(evidence, preset):
         "changes": [
             {
                 "preset_id": preset,
-                "suggestion_indexes": [0, 1, 2],
+                "suggestion_indexes": [0],
                 "analysis_rules": "优先选择直接进入核心观点且语义完整的连续片段。",
-                "copy_rules": "标题优先使用片段中明确的冲突。",
+                "copy_rules": "",
                 "explanation": "根据好坏作品共同证据调整。",
             }
         ],
@@ -111,14 +115,44 @@ class FakeCodex:
         return json.dumps(self.output, ensure_ascii=False)
 
 
-def ready_report(sample):
+def ready_report(sample, *, accepted=True, copy_only=False):
     report_id = weekly.enqueue(sample["account"])["report_id"]
     report = weekly.list_reports(sample["account"])["reports"][0]
-    provider = FakeCodex(output_for(report["evidence"], sample["preset"]))
+    output = output_for(report["evidence"], sample["preset"])
+    if copy_only:
+        output["changes"][0].update(analysis_rules="", copy_rules="标题优先使用片段中明确的冲突。")
+    provider = FakeCodex(output)
     assert weekly.generate_next(provider)
     report = weekly.list_reports(sample["account"])["reports"][0]
     assert report["status"] == "ready", report["error"]
+    if accepted:
+        from app.services.content_rule_trial_service import create_trial, review_trial
+        trial = create_trial(report_id)
+        review_trial(trial["id"], trial_review_payload(sample))
     return report_id, provider
+
+
+def trial_review_payload(sample):
+    from app.services.storage_service import get_artifact_paths
+    from app.services.ai.content_decision_analyzer import CONTRACT_VERSION
+    transcript = get_artifact_paths(sample["task"])["transcript_path"]
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text("00:00:00 - 00:00:05 对照测试原文", encoding="utf-8")
+    digest = hashlib.sha256(transcript.read_bytes()).hexdigest()
+    change = weekly.list_reports(sample["account"])["reports"][0]["result"]["changes"][0]
+    material = {"source_task_id": sample["task"], "transcript_sha256": digest,
+        "samples": [{"sample_id": "zero-usable", **{key: "已核对零条结果的原文依据" for key in ("opening", "topic", "highlight", "response", "ending", "comparison")}}]}
+    for side, prompt in (("baseline", change["before_prompt"]), ("trial", change["after_prompt"])):
+        result = {"task_id": sample["task"], "clips": [], "analysis_meta": {
+            "schema_version": 2, "selection_profile": "variety_comedy", "analysis_incomplete": False,
+            "quality_degraded": False, "expected_units": 1, "completed_units": 1, "failed_units": 0,
+            "failed_stages": [], "invalid_item_count": 0, "coverage_ratio": 1, "coverage_percent": 100,
+            "decision_contract": CONTRACT_VERSION, "selection_count_mode": "content",
+            "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(), "transcript_sha256": digest,
+        }}
+        material[side + "_result"] = result
+        material[side + "_result_sha256"] = hashlib.sha256(json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return {"human_confirmed": True, "verdict": "accepted", "materials": [material]}
 
 
 def new_task(preset):
@@ -157,7 +191,7 @@ def test_weekly_synthesis_application_and_real_rollback(sample):
         get_task_ai_prompt_snapshot(sample["task"])["prompt_version_id"]
         == before["prompt_version_id"]
     )
-    assert "标题优先使用" in _metadata_prompt({"task_id": created}, "douyin")
+    assert "标题优先使用" not in _metadata_prompt({"task_id": created}, "douyin")
     assert "标题优先使用" not in _metadata_prompt({"task_id": sample["task"]}, "douyin")
     assert "标题优先使用" not in _metadata_prompt({"task_id": created}, "bilibili")
     assert (
@@ -276,6 +310,49 @@ def test_conflicting_manual_edit_blocks_apply_and_rollback(sample):
         weekly.revert_application(application["application_id"])
 
 
+def test_trial_requires_full_verified_materials_and_manual_content_review(sample):
+    from app.services.content_rule_trial_service import create_trial, review_trial
+    report_id, _ = ready_report(sample, accepted=False)
+    with pytest.raises(review.ContentReviewError, match="试验"):
+        weekly.apply_report(report_id)
+    trial = create_trial(report_id)
+    assert create_trial(report_id)["id"] == trial["id"]
+    payload = trial_review_payload(sample)
+    payload["human_confirmed"] = False
+    with pytest.raises(review.ContentReviewError, match="人工"):
+        review_trial(trial["id"], payload)
+    payload["human_confirmed"] = True
+    payload["materials"][0]["transcript_sha256"] = "f" * 64
+    with pytest.raises(review.ContentReviewError, match="转写"):
+        review_trial(trial["id"], payload)
+    payload = trial_review_payload(sample)
+    payload["materials"][0]["samples"][0]["sample_id"] = "cherry-picked"
+    with pytest.raises(review.ContentReviewError, match="全部可出片"):
+        review_trial(trial["id"], payload)
+    assert review_trial(trial["id"], trial_review_payload(sample))["status"] == "accepted"
+    assert weekly.apply_report(report_id)["status"] == "applied"
+
+
+def test_manual_prompt_edit_ends_experiment_without_rewriting_old_tasks(sample):
+    from app.models.task import AIPromptPresetUpdate
+    from app.services.ai_prompt_preset_service import update_ai_prompt_preset
+    report_id, _ = ready_report(sample)
+    applied = weekly.apply_report(report_id)
+    old_task = new_task(sample["preset"])
+    old_snapshot = get_task_ai_prompt_snapshot(old_task)
+    update_ai_prompt_preset(sample["preset"], AIPromptPresetUpdate(name="单项调整", prompt_text="人工确认后的正文"))
+    fresh_task = new_task(sample["preset"])
+    assert get_task_ai_prompt_snapshot(old_task)["prompt_text"] == old_snapshot["prompt_text"]
+    assert get_task_ai_prompt_snapshot(fresh_task)["prompt_text"] == "人工确认后的正文"
+    with get_connection() as connection:
+        assert connection.execute("SELECT application_id FROM task_generation_rules WHERE task_id=?", (old_task,)).fetchone()[0] == applied["application_id"]
+        assert connection.execute("SELECT application_id FROM task_generation_rules WHERE task_id=?", (fresh_task,)).fetchone()[0] is None
+        audit = connection.execute("SELECT * FROM prompt_change_audits WHERE preset_id=?", (sample["preset"],)).fetchone()
+        assert audit["before_prompt"] == old_snapshot["prompt_text"]
+        assert audit["after_prompt"] == "人工确认后的正文"
+    assert weekly.list_reports(sample["account"])["reports"][0]["application"]["state"] == "superseded"
+
+
 def test_read_endpoints_do_not_generate_and_apply_is_explicit(sample):
     client = TestClient(app)
     response = client.get(
@@ -353,7 +430,7 @@ def test_effect_comparison_matches_cohorts_and_respects_primary_metric():
 def test_actual_prompt_and_copy_evidence_required_for_assignment(sample):
     from tests.test_content_review import _insert_publish_job
 
-    report_id, _ = ready_report(sample)
+    report_id, _ = ready_report(sample, copy_only=True)
     application_id = weekly.apply_report(report_id)["application_id"]
     job_id = _insert_publish_job(
         sample["account"],

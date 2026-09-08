@@ -73,6 +73,7 @@ class TaskStatus(str, Enum):
 
 
 class TaskCreate(BaseModel):
+    selection_count_mode: Literal["content", "legacy"] = "content"
     task_name: str = Field(..., min_length=1, max_length=120)
     platform: Literal["douyin", "bilibili", "general"] = "general"
     original_video_path: Optional[str] = None
@@ -142,6 +143,7 @@ class TaskCandidateClipCountUpdate(BaseModel):
 
 
 class TaskSelectionSettingsUpdate(BaseModel):
+    selection_count_mode: Optional[Literal["content", "legacy"]] = None
     selection_profile: Literal["general", "variety_comedy", "long_live_talk"]
     final_clip_target: int = Field(default=5, ge=1, le=12)
     highlight_density_per_hour: int = Field(default=4, ge=1, le=10)
@@ -401,6 +403,7 @@ class ClipCandidate(BaseModel):
 
 
 class ClipCandidateUpdate(BaseModel):
+    confirm_ai_decision: bool = False
     title: str = Field(..., min_length=1, max_length=160)
     start_time: str = Field(..., min_length=1, max_length=16)
     end_time: str = Field(..., min_length=1, max_length=16)
@@ -420,6 +423,9 @@ class ClipCandidateBatchUpdate(BaseModel):
 
 
 class AIClipItem(BaseModel):
+    decision: Optional[Literal["publish", "review", "reject"]] = None
+    decision_reason: Optional[str] = None
+    review_issues: list[str] = Field(default_factory=list)
     clip_id: str = Field(..., min_length=1, max_length=80)
     title: str = Field(..., min_length=1, max_length=160)
     start_time: str = Field(..., min_length=1, max_length=16)

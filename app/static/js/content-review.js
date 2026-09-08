@@ -588,6 +588,10 @@ function renderWeeklyReport(data) {
     history.append(emptyOption);
   }
   history.value = weeklySelectedId;
+  const openEvidence = list.dataset.reportId === weeklySelectedId
+    ? new Set(Array.from(list.children).flatMap((card, index) => card.querySelector(".weekly-review-evidence[open]") ? [index] : []))
+    : new Set();
+  list.dataset.reportId = weeklySelectedId;
   list.replaceChildren();
   changesBox.replaceChildren();
   const report = weeklyReports.find(item => item.id === weeklySelectedId);
@@ -617,7 +621,9 @@ function renderWeeklyReport(data) {
     const card = document.createElement("article"); card.className = "content-review-insight-item";
     card.append(textNode("strong", `${index+1}. ${suggestion.title}${suggestion.insufficient ? "（暂不改动）" : ""}`));
     card.append(textNode("p", suggestion.finding),textNode("p", `建议改进：${suggestion.action}`,"content-review-insight-action"),textNode("p", `预期效果：${suggestion.expected_effect}`));
-    card.append(weeklyEvidence(suggestion,evidence));
+    const evidenceDetails = weeklyEvidence(suggestion,evidence);
+    evidenceDetails.open = openEvidence.has(index);
+    card.append(evidenceDetails);
     list.append(card);
   });
   if (report.status !== "ready") return;
@@ -641,11 +647,32 @@ function renderWeeklyReport(data) {
   });
   const actions = document.createElement("div"); actions.className = "weekly-review-actions";
   if (changes.length && !application) {
-    const apply = textNode("button","确认应用这些改动","primary-button"); apply.type = "button";
+    const trials = report.trials || [];
+    const trial = trials.find(item => ["pending", "accepted"].includes(item.status));
+    if (!trial) {
+      const start = textNode("button", "建立单项对照试验", "secondary-button"); start.type = "button";
+      start.addEventListener("click", () => weeklyAction(`/api/content-review/weekly-reports/${encodeURIComponent(report.id)}/trial`, start));
+      actions.append(start);
+    } else {
+      changesBox.append(textNode("p", trial.status === "accepted" ? "同素材对照已通过人工内容审核，可以确认应用。" : "试验中：正式正文尚未改变。请在隔离对照中逐条检查开头、主题、笑点、回应与收尾。"));
+      if (trial.status === "pending") {
+        const reviewFile = document.createElement("input"); reviewFile.type = "file"; reviewFile.accept = ".json"; reviewFile.setAttribute("aria-label", "导入逐条内容审核记录");
+        reviewFile.addEventListener("change", async () => {
+          const file = reviewFile.files?.[0]; if (!file) return;
+          try {
+            const review = JSON.parse(await file.text());
+            await weeklyAction(`/api/content-review/rule-trials/${encodeURIComponent(trial.id)}/review`, reviewFile, "确认你已逐条核对原片并认可这份内容审核结论？AI 评分或候选增加不能代替审片。", review);
+          } catch (error) { window.alert(error.message); }
+        });
+        actions.append(reviewFile);
+      }
+    }
+    const apply = textNode("button","确认应用已审片的单项改动","primary-button"); apply.type = "button"; apply.disabled = trial?.status !== "accepted";
     apply.addEventListener("click",()=>weeklyAction(`/api/content-review/weekly-reports/${encodeURIComponent(report.id)}/apply`,apply,`确认应用页面列出的规则改动？方案为全局共享，会影响所有账号后续新建并使用它的任务。本次有 ${changes.reduce((sum,change)=>sum+(change.removed_rules || []).length,0)} 行旧补充规则被替换或移除，请核对后确认。`));
     actions.append(apply);
   }
   if (application) {
+    if (application.state === "superseded") changesBox.append(textNode("p", "提示词已人工调整，本轮实验归属已结束，后续任务不再归入本轮。"));
     const progress = application.progress || {};
     changesBox.append(textNode("p",`应用时间：${formatDateTime(application.created_at)}${application.reverted_at ? ` · 回退时间：${formatDateTime(application.reverted_at)}` : ""}`));
     changesBox.append(textNode("p",`实际关联 ${progress.assigned || 0} 条 · 有效改进作品 ${progress.treatments || 0}/20 · 同体裁/片长/发布年龄对照 ${progress.comparable_baseline || 0}/20（历史可用 ${progress.baseline || 0}） · 官方导出 ${progress.weeks || 0}/3 周`));

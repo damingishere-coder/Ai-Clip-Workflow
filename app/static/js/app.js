@@ -52,6 +52,7 @@ if (newTaskAutoMode) {
 if (selectionProfileInput && longLiveSettings) {
   const updateLongLiveSettings = () => {
     longLiveSettings.hidden = selectionProfileInput.value !== "long_live_talk";
+    newTaskForm.querySelectorAll("[data-kangxi-legacy-quantity]").forEach(label => { label.hidden = selectionProfileInput.value === "variety_comedy"; });
   };
   selectionProfileInput.addEventListener("change", updateLongLiveSettings);
   updateLongLiveSettings();
@@ -75,7 +76,7 @@ if (newTaskForm) {
       const uploadData = new FormData();
       for (const key of [
         "task_name", "platform", "max_clip_duration", "candidate_clip_count",
-        "selection_profile", "final_clip_target",
+        "selection_profile", "final_clip_target", "selection_count_mode",
       ]) uploadData.append(key, payload[key] || "");
       if (payload.selection_profile === "long_live_talk") {
         uploadData.append("highlight_density_per_hour", payload.highlight_density_per_hour || "4");
@@ -558,6 +559,10 @@ function renderAiAnalysisHistory(runs) {
     restoreButton.type = "button";
     restoreButton.dataset.restoreRunId = run.id;
     restoreButton.textContent = "恢复这次结果";
+    if (aiSelectionProfile === "variety_comedy" && !run.analysis_meta?.decision_contract) {
+      restoreButton.disabled = true;
+      restoreButton.textContent = "历史格式 · 只读查看";
+    }
     item.append(main, restoreButton);
     aiAnalysisHistoryList.append(item);
   });
@@ -957,6 +962,7 @@ function collectClipReviewPayload() {
       enabled,
       summary: card.querySelector("[name='summary']").value.trim(),
       feedback_reason_code: enabled ? null : (card.dataset.feedbackReason || null),
+      confirm_ai_decision: Boolean(card.querySelector("[name='confirm_ai_decision']")?.checked),
     };
   });
 }
@@ -1618,6 +1624,7 @@ async function saveTaskSelectionSettings() {
   const settingsPayload = {
     selection_profile: aiSelectionProfile,
     final_clip_target: finalTarget,
+    selection_count_mode: aiAnalysisForm.querySelector("[name='selection_count_mode']")?.value || null,
   };
   if (aiSelectionProfile === "long_live_talk") {
     settingsPayload.highlight_density_per_hour = Number(aiHighlightDensity?.value || 4);

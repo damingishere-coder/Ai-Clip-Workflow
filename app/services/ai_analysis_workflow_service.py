@@ -279,11 +279,8 @@ def get_task_ai_analysis_status(task_id: str) -> dict:
     elif has_analysis and meta.get("analysis_incomplete"):
         status = "incomplete"
         percent = int(float(meta.get("coverage_percent") or 0))
-        message = (
-            f"{task.get('selection_profile') or 'general'} 分析覆盖 "
-            f"{float(meta.get('coverage_percent') or 0):.2f}%，"
-            "仍有处理单元失败；请重试 AI 分析补齐结果。"
-        )
+        from app.services.ai.analysis_status import incomplete_analysis_message
+        message = incomplete_analysis_message(meta)
     elif task.get("status") == TaskStatus.FAILED_AI_ANALYZING.value or (
         task.get("status") == TaskStatus.failed.value
         and any("AI 分析失败" in line for line in log_lines)
@@ -356,7 +353,7 @@ def _insert_clip_candidates_with_connection(
     for index, clip in enumerate(clips, start=1):
         clip_key = str(clip["clip_id"])
         database_id = f"{task_id}_{clip_key}"[:120]
-        selected_by_default = bool(clip.get("selected_by_default", True))
+        selected_by_default = (clip["decision"] == "publish" if clip.get("decision") else bool(clip.get("selected_by_default", True)))
         connection.execute(
             """
             INSERT INTO clip_candidates (
@@ -402,6 +399,10 @@ def _insert_clip_candidates_with_connection(
                 now,
                 now,
             ),
+        )
+        connection.execute(
+            "UPDATE clip_candidates SET decision=?, decision_reason=?, review_issues_json=? WHERE id=?",
+            (clip.get("decision"), clip.get("decision_reason"), json.dumps(clip.get("review_issues") or [], ensure_ascii=False) if clip.get("decision") else None, database_id),
         )
 
 
@@ -1085,6 +1086,8 @@ def restore_ai_analysis_run(task_id: str, run_id: str) -> dict:
         payload = json.loads(row["analysis_payload_json"])
     except json.JSONDecodeError as exc:
         raise ValueError("这条历史记录已损坏，无法恢复") from exc
+    if task.get("selection_profile") == "variety_comedy" and not (payload.get("analysis_meta") or {}).get("decision_contract"):
+        raise ValueError("这条康熙历史分析未记录明确 AI 决定，仅供只读查看；请使用新分析，历史结果不会重新推断")
 
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -1164,14 +1167,15 @@ def _analyze_with_provider(
         ensure_local_ai_ready()
 
     if task.get("selection_profile") == "variety_comedy":
+        if prompt_preset.get("id") not in {None, "preset_001"}:
+            raise AIAnalysisError("康熙新分析统一使用 1 号提示词，请先选择 1 号；历史记录不会改写")
         window_seconds = 180 if provider_name == "local" else 300
         overlap_seconds = 45 if provider_name == "local" else 60
         append_task_log(
             task_id,
             "综艺三阶段分析："
             f"{window_seconds // 60} 分钟重叠召回窗口，重叠 {overlap_seconds} 秒；"
-            f"候选池最多 {min(12, int(task['candidate_clip_count']))} 条，"
-            f"最终最多启用 {int(task.get('final_clip_target') or 5)} 条 A 级片段",
+            "按内容自动决定数量，AI 明确决定可出片、待审核、淘汰；历史数量设置保留用于追溯",
         )
         return analyze_variety_comedy(
             ComedyAnalysisRequest(
@@ -1180,6 +1184,7 @@ def _analyze_with_provider(
                 audio_path=paths["audio_path"],
                 candidate_pool_limit=int(task["candidate_clip_count"]),
                 final_clip_target=int(task.get("final_clip_target") or 5),
+                selection_count_mode="content",
                 ai_preference=task.get("ai_preference") or "",
                 prompt_template=prompt_template,
                 provider_name=provider_name,
@@ -1280,6 +1285,13 @@ def _commit_ai_analysis_result(
 
     now = _now_iso()
     run_id = uuid4().hex[:12]
+    meta = analysis_payload.get("analysis_meta") or {}
+    no_usable_content = (
+        meta.get("selection_count_mode") == "content"
+        and not meta.get("analysis_incomplete")
+        and not any(c.get("decision") in {"publish", "review"} for c in analysis_payload.get("clips") or [])
+    )
+    terminal_status = TaskStatus.completed if no_usable_content else TaskStatus.pending_review
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
         try:
@@ -1327,8 +1339,8 @@ def _commit_ai_analysis_result(
                 WHERE id = ? AND status = ? AND COALESCE(is_deleted, 0) = 0
                 """,
                 (
-                    TaskStatus.pending_review.value,
-                    STATUS_PROGRESS[TaskStatus.pending_review.value],
+                    terminal_status.value,
+                    STATUS_PROGRESS[terminal_status.value],
                     now,
                     task_id,
                     TaskStatus.ai_analyzing.value,
@@ -1365,7 +1377,7 @@ def _resume_committed_ai_analysis(task_id: str) -> tuple[dict, dict] | None:
             "SELECT status FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
             (task_id,),
         ).fetchone()
-    if not row or not task or str(task["status"] or "") != TaskStatus.pending_review.value:
+    if not row or not task or str(task["status"] or "") not in {TaskStatus.pending_review.value, TaskStatus.completed.value}:
         return None
     run = _analysis_run_row_to_dict(row, include_payload=True)
     meta = run.get("analysis_meta") if isinstance(run.get("analysis_meta"), dict) else {}
@@ -1400,6 +1412,8 @@ def _build_ai_process_result(
     if incomplete:
         from app.services.ai.analysis_status import incomplete_analysis_message
         message = incomplete_analysis_message(meta)
+    elif meta.get("selection_count_mode") == "content":
+        message = analysis_payload.get("analysis_summary") or "按内容分析完成；待审核项目需明确确认采用。"
     else:
         message = (
             f"AI 分析完成，已生成 {len(analysis_payload.get('clips') or [])} 条可直接切片的候选片段，"

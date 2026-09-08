@@ -197,6 +197,12 @@ class PipelineEngine:
                                 step.value,
                                 outputs=self._checkpoint_outputs(task_id, step, context[step.value]),
                             )
+                if step == TaskStatus.CLIP_SELECTING and context[step.value].get("content_terminal"):
+                    result = context[step.value]
+                    status = TaskStatus.pending_review if result.get("review_count") else TaskStatus.completed
+                    task_service.update_task_status(task_id, status)
+                    append_task_log(task_id, result["message"])
+                    return {"status": status.value, "message": result["message"], "task": self._get_task(task_id)}
                 if step == TaskStatus.SUBTITLE_DRAFTING:
                     return self._pending_subtitle_review_result(task_id)
             except PipelineCancelledError as exc:
@@ -415,6 +421,7 @@ class PipelineEngine:
             "source_fingerprint": source_fingerprint,
             "start_step": start_step.value,
             "selection_profile": task.get("selection_profile") or "",
+            "selection_count_mode": task.get("selection_count_mode") or "legacy",
             "candidate_clip_count": int(task.get("candidate_clip_count") or 0),
             "final_clip_target": int(task.get("final_clip_target") or 0),
             "max_clip_duration": int(task.get("max_clip_duration") or 0),
@@ -850,12 +857,15 @@ class PipelineEngine:
                 raise PipelineCheckpointError("AI checkpoint 的 clips 结构无效")
             analysis_clip_ids = sorted(str(item.get("clip_id") or "") for item in clips)
             candidate_clip_ids = sorted(str(item["clip_key"] or "") for item in candidate_rows)
+            content_empty = not clips and (analysis_payload.get("analysis_meta") or {}).get("selection_count_mode") == "content"
+            if content_empty:
+                self._require_complete_ai_analysis(task_id, analysis_payload.get("analysis_meta"))
             if (
                 not row
                 or not int(row["is_active"] or 0)
-                or int(row["clip_count"] or 0) <= 0
+                or (int(row["clip_count"] or 0) <= 0 and not content_empty)
                 or run_payload != analysis_payload
-                or not analysis_clip_ids
+                or (not analysis_clip_ids and not content_empty)
                 or "" in analysis_clip_ids
                 or candidate_clip_ids != analysis_clip_ids
                 or len(candidate_clip_ids) != int(row["clip_count"] or 0)
@@ -886,7 +896,7 @@ class PipelineEngine:
                         (task_id,),
                     ).fetchall()
                 }
-            if not selected_ids or enabled_ids != selected_ids:
+            if (not selected_ids and not payload.get("content_terminal")) or enabled_ids != selected_ids:
                 raise PipelineCheckpointError("选片 checkpoint 与当前启用候选不一致")
             return {**payload, "selection_path": str(selection_path)}
         if step == TaskStatus.VIDEO_CUTTING:
@@ -1428,6 +1438,8 @@ class PipelineEngine:
             )
 
         candidates = self._list_raw_candidates(task_id)
+        if profile == "variety_comedy" and meta.get("selection_count_mode") == "content":
+            return self._select_content_decisions(task_id, candidates, meta)
         if not candidates:
             latest_run = task_service.get_latest_ai_analysis_run(task_id)
             if latest_run and latest_run.get("clips"):
@@ -1494,6 +1506,27 @@ class PipelineEngine:
         payload["selection_path"] = str(paths["analysis_path"].parent / "auto_selected_clips.json")
         append_task_log(task_id, f"全自动选片完成：选中 {len(selected)} 条，跳过 {len(skipped)} 条")
         return payload
+
+    def _select_content_decisions(self, task_id: str, candidates: list[dict], meta: dict) -> dict:
+        if any(c.get("decision") not in {"publish", "review", "reject"} for c in candidates):
+            raise ValueError("候选缺少明确 AI 决定，禁止自动出片")
+        selected = [c for c in candidates if (c["decision"] == "publish" and (not c.get("reviewed") or c.get("enabled"))) or (c.get("decision_confirmed") and c.get("enabled"))]
+        for clip in selected:
+            duration = parse_time_to_seconds(clip["end_time"]) - parse_time_to_seconds(clip["start_time"])
+            if not 0 < duration <= 150:
+                raise ValueError("可出片时间无效或超过 150 秒，需重新审核")
+        self._update_selected_clips(task_id, {c["id"] for c in selected})
+        review_count = sum(c["decision"] == "review" and not c.get("decision_confirmed") for c in candidates)
+        payload = {
+            "selection_count_mode": "content", "selected_count": len(selected),
+            "review_count": review_count, "content_terminal": not selected,
+            "message": "分析完成，等待人工审核；暂无可自动出片内容。" if review_count else "分析完成，暂无可用片段。",
+            "selected": [{"clip_id": c["id"], "title": c["title"], "start_time": c["start_time"], "end_time": c["end_time"], "recommend_reason": c.get("decision_reason") or ""} for c in selected],
+            "skipped": [],
+        }
+        path = get_artifact_paths(task_id)["analysis_path"].parent / "auto_selected_clips.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {**payload, "selection_path": str(path)}
 
     def _cut_video(self, task_id: str, context: dict) -> dict:
         append_task_log(task_id, "全自动模式：开始原视频裁切，完成后生成字幕草稿")
@@ -1692,7 +1725,8 @@ class PipelineEngine:
                        summary, reason, highlight_reason, spread_value, suggested_editing,
                        confidence_score, quality_tier, quality_score, humor_score,
                        completeness_score, audio_reaction_score,
-                       selected_by_default, enabled, reviewed, is_deleted
+                       selected_by_default, enabled, reviewed, is_deleted,
+                       decision, decision_reason, decision_confirmed
                 FROM clip_candidates
                 WHERE task_id = ? AND is_deleted = 0
                 ORDER BY start_time ASC
@@ -1714,7 +1748,7 @@ class PipelineEngine:
             connection.execute(
                 """
                 UPDATE clip_candidates
-                SET enabled = 0, selected_by_default = 0, reviewed = 1, updated_at = ?
+                SET enabled = 0, selected_by_default = 0, reviewed = CASE WHEN decision IS NULL THEN 1 ELSE reviewed END, updated_at = ?
                 WHERE task_id = ? AND is_deleted = 0
                 """,
                 (now, task_id),
@@ -1723,7 +1757,7 @@ class PipelineEngine:
                 connection.execute(
                     """
                     UPDATE clip_candidates
-                    SET enabled = 1, selected_by_default = 1, reviewed = 1, updated_at = ?
+                    SET enabled = 1, selected_by_default = 1, reviewed = CASE WHEN decision IS NULL THEN 1 ELSE reviewed END, updated_at = ?
                     WHERE task_id = ? AND id = ? AND is_deleted = 0
                     """,
                     (now, task_id, clip_id),

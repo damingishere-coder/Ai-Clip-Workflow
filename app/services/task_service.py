@@ -582,7 +582,7 @@ def list_tasks(include_deleted: bool = False) -> list[dict]:
             f"""
             SELECT
                 id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path,
-                max_clip_duration, candidate_clip_count, selection_profile, final_clip_target,
+                max_clip_duration, candidate_clip_count, selection_profile, final_clip_target, selection_count_mode,
                 highlight_density_per_hour, highlight_total_limit,
                 ai_preference, ai_prompt_preset_id, auto_mode,
                 auto_config_json, status, progress, error_message, last_error,
@@ -625,7 +625,7 @@ def get_task(
             f"""
             SELECT
                 id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path,
-                max_clip_duration, candidate_clip_count, selection_profile, final_clip_target,
+                max_clip_duration, candidate_clip_count, selection_profile, final_clip_target, selection_count_mode,
                 highlight_density_per_hour, highlight_total_limit,
                 ai_preference, ai_prompt_preset_id, auto_mode,
                 auto_config_json, status, progress, error_message, last_error,
@@ -908,6 +908,7 @@ def list_clip_candidates(task_id: str) -> list[dict]:
                    quality_tier, quality_score, text_quality_score, humor_score, completeness_score,
                    audio_reaction_score, topic_key, key_moment_time, quality_evidence_json, rejection_reason,
                    selected_by_default, enabled, reviewed, source_analysis_run_id,
+                   decision, decision_reason, review_issues_json, decision_confirmed,
                    is_deleted, deleted_at, c.created_at, c.updated_at,
                    (
                        SELECT f.reason_code FROM clip_feedback f
@@ -950,6 +951,7 @@ def list_clip_candidates(task_id: str) -> list[dict]:
                 "topic_key": clip.get("topic_key") or "",
                 "key_moment_time": clip.get("key_moment_time") or "",
                 "quality_evidence": quality_evidence,
+                "review_issues": json.loads(clip.get("review_issues_json") or "[]"),
                 "rejection_reason": clip.get("rejection_reason") or "",
                 "feedback_reason_code": (
                     clip.get("feedback_reason_code")
@@ -1016,7 +1018,7 @@ def count_clip_candidates(task_id: str) -> int:
 def count_enabled_clip_candidates(task_id: str) -> int:
     with get_connection() as connection:
         row = connection.execute(
-            "SELECT COUNT(*) AS total FROM clip_candidates WHERE task_id = ? AND enabled = 1 AND is_deleted = 0",
+            "SELECT COUNT(*) AS total FROM clip_candidates WHERE task_id = ? AND enabled = 1 AND is_deleted = 0 AND (decision IS NULL OR decision='publish' OR decision_confirmed=1)",
             (task_id,),
         ).fetchone()
     return int(row["total"]) if row else 0
@@ -1042,6 +1044,7 @@ def _validate_clip_update(task: dict, payload: ClipCandidateUpdate) -> dict:
         "duration_seconds": duration_seconds,
         "enabled": 1 if payload.enabled else 0,
         "summary": (payload.summary or "").strip(),
+        "confirm_ai_decision": payload.confirm_ai_decision,
     }
 
 
@@ -1056,7 +1059,7 @@ def update_clip_candidate(task_id: str, clip_id: str, payload: ClipCandidateUpda
         connection.execute("BEGIN IMMEDIATE")
         current = connection.execute(
             """
-            SELECT id, source_analysis_run_id
+            SELECT id, source_analysis_run_id, decision, decision_confirmed
             FROM clip_candidates
             WHERE id = ? AND task_id = ? AND is_deleted = 0
             """,
@@ -1065,6 +1068,7 @@ def update_clip_candidate(task_id: str, clip_id: str, payload: ClipCandidateUpda
         if current is None:
             connection.rollback()
             raise ValueError("候选片段不存在")
+        _confirm_content_decision(connection, task_id, clip_id, current, data)
         cursor = connection.execute(
             """
             UPDATE clip_candidates
@@ -1127,7 +1131,7 @@ def update_clip_candidates_batch(task_id: str, payloads: list[ClipCandidateBatch
                 current = connection.execute(
                     """
                     SELECT title, start_time, end_time, duration_seconds, enabled, summary,
-                           source_analysis_run_id
+                           source_analysis_run_id, decision, decision_confirmed
                     FROM clip_candidates
                     WHERE id = ? AND task_id = ? AND is_deleted = 0
                     """,
@@ -1135,6 +1139,7 @@ def update_clip_candidates_batch(task_id: str, payloads: list[ClipCandidateBatch
                 ).fetchone()
                 if current is None:
                     raise ValueError(f"候选片段不存在：{clip_id}")
+                _confirm_content_decision(connection, task_id, clip_id, current, data)
                 if any(
                     (
                         str(current["title"] or "") != data["title"],
@@ -1339,6 +1344,15 @@ def delete_clip_candidate(task_id: str, clip_id: str) -> dict:
     }
 
 
+def _confirm_content_decision(connection, task_id, clip_id, current, data):
+    if current["decision"] is not None and data["duration_seconds"] > 150:
+        raise ValueError("康熙连续片段不能超过 150 秒")
+    if current["decision"] in {"review", "reject"} and data["enabled"]:
+        if not current["decision_confirmed"] and not data.get("confirm_ai_decision"):
+            raise ValueError("此片段待审核或已淘汰，请核对 AI 限制意见并明确确认采用")
+        connection.execute("UPDATE clip_candidates SET decision_confirmed=1 WHERE task_id=? AND id=?", (task_id, clip_id))
+
+
 def list_enabled_clip_candidates(task_id: str) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
@@ -1350,6 +1364,7 @@ def list_enabled_clip_candidates(task_id: str) -> list[dict]:
                    selected_by_default, enabled, reviewed, is_deleted, deleted_at, created_at, updated_at
             FROM clip_candidates
             WHERE task_id = ? AND enabled = 1 AND is_deleted = 0
+              AND (decision IS NULL OR decision = 'publish' OR decision_confirmed = 1)
             ORDER BY start_time ASC
             """,
             (task_id,),
