@@ -474,7 +474,8 @@ def analyze_content_decisions(request):
 必须保留不确定性和全部限制意见；高分不能消除待审核问题。存在未解决问题必须 review，写入 review_issues。
 可以依据所提供原文调整最终边界，禁止为了 60 秒补长。publish 必须连续且不超过 150 秒，并对齐原文句子的起止时间。
 evidence 逐项引用原文的一句，role 为 opening/topic/highlight/response/ending。publish 五项齐全，引用必须完整处于最终边界内。
-原文没有注明的表情、笑声不可编造；无法确认则 review。decision_reason 解释决定，review_issues 记录待核实项。
+原文没有注明的表情、笑声不可编造。正文允许追问、解释、补刀等言语回应形成闭环；已有这些原文证据时，不得仅因缺少笑声或表情标记就要求待审核。
+只有判定正文必要条件确实依赖缺失证据时才因此 review，不添加正文之外的内容门槛。decision_reason 解释决定，review_issues 记录影响采用的待核实项。
 同一内容的重复版本由你比较处理，reject 时 duplicate_of 引用已采用的 source_id，否则为空。不要因相邻时间就视为重复。
 全部候选只分批核验，不设置保留数量。只返回指定 source_id，其他候选仅供比较。所有必填字段按 schema 输出。
 指定候选：{json.dumps(candidate, ensure_ascii=False)}
