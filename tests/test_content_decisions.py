@@ -224,6 +224,7 @@ def test_auto_selection_obeys_decision_even_with_99_score(
         engine, "_update_selected_clips", lambda task, ids: selected_ids.extend(ids)
     )
     candidates = [{**item(str(i)), "id": str(i)} for i in range(count)]
+    candidates.append({**item("manual-disabled"), "id": "manual-disabled", "reviewed": True, "enabled": False})
     candidates.extend(
         {**item(f"review-{i}", "review"), "id": f"review-{i}", "quality_score": 99}
         for i in range(review)

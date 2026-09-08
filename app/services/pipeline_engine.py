@@ -1510,7 +1510,7 @@ class PipelineEngine:
     def _select_content_decisions(self, task_id: str, candidates: list[dict], meta: dict) -> dict:
         if any(c.get("decision") not in {"publish", "review", "reject"} for c in candidates):
             raise ValueError("候选缺少明确 AI 决定，禁止自动出片")
-        selected = [c for c in candidates if c["decision"] == "publish" or (c.get("decision_confirmed") and c.get("enabled"))]
+        selected = [c for c in candidates if (c["decision"] == "publish" and (not c.get("reviewed") or c.get("enabled"))) or (c.get("decision_confirmed") and c.get("enabled"))]
         for clip in selected:
             duration = parse_time_to_seconds(clip["end_time"]) - parse_time_to_seconds(clip["start_time"])
             if not 0 < duration <= 150:
