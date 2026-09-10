@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-labelledby="title desc">
+  <title id="title">NiuMa Studio · 牛马片场</title>
+  <desc id="desc">From long videos to moments worth sharing. Local AI highlight workspace.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0a1428"/><stop offset="1" stop-color="#163c66"/></linearGradient>
+    <linearGradient id="clip" x2="1" y2="1"><stop stop-color="#72caff"/><stop offset="1" stop-color="#4a7bff"/></linearGradient>
+  </defs>
+  <rect width="1280" height="400" rx="24" fill="url(#bg)"/>
+  <circle cx="1130" cy="60" r="245" fill="#558bff" opacity=".07"/>
+  <g font-family="Segoe UI,Arial,sans-serif">
+    <text x="64" y="76" fill="#82bcff" font-size="14" letter-spacing="4">LOCAL AI HIGHLIGHT WORKSPACE</text>
+    <text x="60" y="157" fill="white" font-size="62" font-weight="700">NiuMa Studio</text>
+    <text x="64" y="210" fill="#c5d9ef" font-size="27" font-family="Microsoft YaHei,Segoe UI,sans-serif">牛马片场 · 让长视频里的好内容被看见</text>
+    <text x="64" y="257" fill="#9bb4d0" font-size="19">Find the moment. Shape the story. Keep control.</text>
+    <rect x="64" y="307" width="328" height="39" rx="19.5" fill="#24456b"/>
+    <text x="86" y="332" fill="#dceaff" font-size="14" letter-spacing="1">TRANSCRIBE → REVIEW → CREATE</text>
+  </g>
+  <g transform="translate(835 76)">
+    <rect width="358" height="246" rx="18" fill="#0b1c32" stroke="#385e87"/>
+    <circle cx="23" cy="22" r="4" fill="#7ba2c8"/><circle cx="39" cy="22" r="4" fill="#51718e"/><circle cx="55" cy="22" r="4" fill="#51718e"/>
+    <path d="M20 44H338" stroke="#284361"/>
+    <g fill="none" stroke="#507395" stroke-width="5" stroke-linecap="round">
+      <path d="M28 118V138 M42 103V150 M56 112V142 M70 94V160 M84 116V140 M98 108V148 M112 88V167 M126 100V155 M140 110V143 M154 88V168 M168 78V178 M182 108V148 M196 91V160 M210 103V150 M224 117V139 M238 106V150 M252 91V165 M266 105V149 M280 111V146 M294 97V159 M308 108V148 M322 118V139"/>
+    </g>
+    <rect x="132" y="63" width="96" height="127" rx="10" fill="url(#clip)" opacity=".22" stroke="#86c6ff" stroke-width="2"/>
+    <path d="M171 106L196 125L171 144Z" fill="#c6e9ff"/>
+    <path d="M26 212H332" stroke="#284361" stroke-width="5" stroke-linecap="round"/>
+    <path d="M143 212H217" stroke="#87c8ff" stroke-width="5" stroke-linecap="round"/>
+  </g>
+</svg>

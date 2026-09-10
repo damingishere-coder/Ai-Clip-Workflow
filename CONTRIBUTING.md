@@ -85,6 +85,8 @@ docker compose -f docker-compose.yml -f docker-compose.demo.yml config --quiet
 
 ## Pull Request
 
+稳定主干是 `master`。请从最新主干创建短期 `codex/*` 分支，PR 直接指向 `master`，避免以长期功能分支承接新工作。版本和清理规则见 [分支维护指南](docs/BRANCHING.md)。
+
 一个好的 PR 应当：
 
 1. 只解决一个明确问题，避免混入无关重构。

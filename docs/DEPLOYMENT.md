@@ -2,9 +2,9 @@
 
 ## 1. 当前部署模式
 
-v2.2.0 支持两种运行方式。日常使用推荐 Docker Desktop；真实抖音 / B站投稿与抖音作品指标同步无论使用哪种方式，都必须由 Windows 主机上的 Chrome Worker 执行。
+v2.3.0 支持两种运行方式。日常使用推荐 Windows 原生模式；真实抖音 / B站投稿与抖音作品指标同步无论使用哪种方式，都必须由 Windows 主机上的 Chrome Worker 执行。
 
-### 方式 A：Docker Desktop + Windows Worker（推荐日常使用）
+### 方式 A：Docker Desktop + Windows Worker（集成验收与回退）
 
 ```
 你的 Windows 电脑
@@ -18,7 +18,7 @@ v2.2.0 支持两种运行方式。日常使用推荐 Docker Desktop；真实抖�
 
 **适用场景**：日常处理、排期和真实灰度发布。平时不需要手动打开 PowerShell。
 
-### 方式 B：Windows 本地 Python 直接运行（开发 / 诊断）
+### 方式 B：Windows 本地 Python 直接运行（日常推荐）
 
 ```
 你的 Windows 电脑
@@ -29,7 +29,7 @@ v2.2.0 支持两种运行方式。日常使用推荐 Docker Desktop；真实抖�
 └── 浏览器打开 http://127.0.0.1:8001
 ```
 
-**适用场景**：代码开发、自动化测试、发布 Worker 诊断。
+**适用场景**：日常生产、代码开发、自动化测试、发布 Worker 诊断。已有 RunDock 托管服务时沿用原记录，不在相同端口重复启动。
 
 ---
 

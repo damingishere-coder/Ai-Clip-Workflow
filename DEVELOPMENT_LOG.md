@@ -1,5 +1,14 @@
 # Development Log
 
+## 2026-09-10 2.3.0 主干收拢与 GitHub 首页改版
+
+- 本次以实际运行基线 `c650128` 整合到 `master`：保留离线转写、内容复盘、周总结、动态排期与 AI 恢复修复，不引入康熙实验分支或未完成的模型设置改造。
+- 版本统一为 2.3.0，覆盖 VERSION、FastAPI、Windows Worker、备份清单、页面侧栏、README、AGENTS、路线图及发布门禁。下方旧日志仅记录历史，不代表最新运行状态。
+- 中英文 README 改为品牌横幅、功能表、折叠截图、完整原生安装步骤、明确的 Demo 前提与文档入口。参考 Immich、LosslessCut、Open WebUI 的信息组织，横幅为项目自制 SVG。
+- Git 历史在本地 Git 元数据目录保存完整 bundle 并通过校验；原工作区的 Codemap 与 PROJECT_REAUDIT 未提交内容另行保留。仅删除证明已被主干包含且无 PR / 工作目录依赖的分支。
+- 第一批已清理 30 个本地历史分支、26 个远端历史分支，均已被清理前的 `origin/master` 包含；工作目录未删除。README 共提取 81 个图片与导航引用，其中本地文件引用均存在，SVG 通过 XML 解析。
+- 本地完整回归 977 passed；追加版本一致性回归另行通过 3 项。Ruff、Python 编译、JavaScript 语法与 pip check 通过。正式 Release 仍要求最终 master 的 Windows 实机报告与现有 release_gate，不以版本号代替发布证据；合并、部署和实机结果在最终交付记录中补充。
+
 ## 2026-09-08 康熙提示词统一与 AI 输出契约修复（待部署）
 
 - 最终本机隔离全量 `pytest -q --tb=short`：977 passed，9 条既有依赖弃用警告；最后的页面调整另经 29 项契约/Chrome 回归通过。Ruff、Compileall、全部 JavaScript 语法、pip check 与 git diff --check 通过。测试与正式运行状态分开：尚未部署，未真实调用 AI 补跑第 30 条。
