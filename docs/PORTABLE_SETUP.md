@@ -1,6 +1,6 @@
 # 通用启动、环境检查与 Demo 指南
 
-这份文档说明 P0 工程化后的运行方式。所有命令都在仓库根目录的 PowerShell 中执行。
+适用版本：2.3.0。本文主要说明 Docker 启动脚本、隔离 Demo 和验收。日常 Windows 原生启动见 [新手指南](PROJECT_GUIDE.md) 与 [部署说明](DEPLOYMENT.md)。已有 RunDock 服务时沿用原服务记录；下方 Docker 命令不能与占用同一端口的原生服务同时运行。所有命令都在仓库根目录的 PowerShell 中执行。
 
 ## 1. 首次初始化
 

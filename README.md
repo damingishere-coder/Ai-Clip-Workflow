@@ -135,6 +135,7 @@ git status --short --branch
 
 | 我想做什么 | 从这里开始 |
 | --- | --- |
+| 查看当前交付与近期工作 | [项目进度](PROJECT_STATUS.md) · [下一步](NEXT_STEPS.md) |
 | 安装、配置、处理第一条视频 | [新手指南](docs/PROJECT_GUIDE.md) |
 | 了解启动方式与 Demo | [通用启动](docs/PORTABLE_SETUP.md) |
 | 备份数据或回滚升级 | [备份与恢复](docs/BACKUP_AND_RESTORE.md) |

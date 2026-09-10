@@ -17,6 +17,14 @@
 → 保存执行证据
 ```
 
+## 2.3 已交付
+
+- [x] PR #86 将既有离线转写、内容复盘、周总结、动态排期和 AI 恢复修复整合到 master。
+- [x] 2.3.0 版本统一、GitHub 首页改版、历史分支收缩。
+- [x] Windows 实机验收与发布门禁通过，v2.3.0 正式发布并部署到既有 RunDock 服务。
+
+详细证据和未合并边界见 [项目当前进度](PROJECT_STATUS.md)。近期操作只维护在 [NEXT_STEPS.md](NEXT_STEPS.md)，旧路线图保存在 [历史快照](docs/ROADMAP_HISTORY.md)。
+
 ## 已完成的基础建设
 
 - [x] 重构中英文项目主页与社区文档
@@ -28,7 +36,7 @@
 - [x] 固定经过 CI 验证的直接依赖版本
 - [x] 增加最终 Docker 镜像启动与页面冒烟测试
 - [x] 建立 Dependabot 更新入口
-- [x] 增加 SQLite、`.env`、媒体文件的备份、恢复与升级前保护（[#24](../../issues/24)）
+- [x] 增加 SQLite、`.env`、媒体文件的备份、恢复与升级前保护（[#24](https://github.com/damingishere-coder/Ai-Clip-Workflow/issues/24)）
 - [x] 增加恢复前回滚包、SHA-256 清单与损坏备份拒绝机制
 - [x] 增加 Windows 云端主机冒烟、实机验收报告和正式版本发布门禁
 - [x] 增加 `.env`、正式 SQLite 与正式任务目录的验收前后指纹保护
@@ -41,17 +49,17 @@
 
 ### P0：发布前可靠性
 
-- [Windows 实机验收与正式版本发布证据](../../issues/23)：验收工具已完成，2.3.0 仍需基于最终 `master` 重新生成报告
-- [抖音与 B站真实发布灰度验证矩阵](../../issues/25)
+- v2.3.0 最终发布提交的 Windows 实机验收与发布门禁已完成；[历史验收 Issue #23](https://github.com/damingishere-coder/Ai-Clip-Workflow/issues/23) 仍开放，不代表 2.3 尚未验收。
+- [抖音与 B站真实发布灰度验证矩阵](https://github.com/damingishere-coder/Ai-Clip-Workflow/issues/25)
 
 ### P1：展示与安装体验
 
-- [用真实截图和 60 秒演示 GIF 替换占位素材](../../issues/26)
-- [拆分可选的本地 faster-whisper 依赖](../../issues/27)
+- [补充 60 秒演示并持续更新已有真实截图](https://github.com/damingishere-coder/Ai-Clip-Workflow/issues/26)
+- [拆分可选的本地 faster-whisper 依赖](https://github.com/damingishere-coder/Ai-Clip-Workflow/issues/27)
 
 ### P1：平台诊断
 
-- [完善平台页面变化诊断与失败证据管理](../../issues/28)
+- [完善平台页面变化诊断与失败证据管理](https://github.com/damingishere-coder/Ai-Clip-Workflow/issues/28)
 
 ## 后续方向
 
@@ -64,7 +72,7 @@
 
 ### 工程质量
 
-- 增加数据库迁移策略和版本兼容说明。
+- 完善现有迁移账本的兼容说明和升级恢复演练。
 - 完善模块化 Publisher 接口和平台适配测试夹具。
 - 提供可验证的 Windows 便携启动包或安装包。
 - 继续补充英文安装、排错和发布文档。
