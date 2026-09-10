@@ -123,6 +123,9 @@ Only run `git pull --ff-only` on `master` with a clean working tree and no local
 
 ## Documentation and contribution
 
+[Current project status (Chinese)](PROJECT_STATUS.md) · [Next steps (Chinese)](NEXT_STEPS.md)
+
+
 | Goal | Guide |
 | --- | --- |
 | Install and process a first video | [Getting started](docs/PROJECT_GUIDE.md) |

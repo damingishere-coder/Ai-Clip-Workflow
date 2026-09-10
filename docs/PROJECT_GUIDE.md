@@ -6,7 +6,7 @@
 
 ## 1. 项目能做什么
 
-牛马片场运行在 Windows 本地，用来把直播录像、综艺访谈和其他长视频整理成可审核、可切片、可准备平台内容、可排期并发送到抖音或 B站的短视频。
+牛马片场运行在 Windows 本地，用来把直播录像、综艺访谈和其他长视频整理成可审核、可切片、可准备平台内容、可排期并发送的短视频。当前前台面向抖音；B站保留后端与历史兼容，前台和自动同步未启用。
 
 ```text
 导入长视频
@@ -21,113 +21,59 @@
 
 项目不会绕过二维码、短信、验证码、滑块、登录失效或平台风控。真实发送前必须人工核对内容与账号。
 
-## 2. 准备环境
+## 2. 已安装本机：直接使用
 
-推荐准备：
+如果已有 RunDock 托管的牛马片场，直接打开 [本地工作台](http://127.0.0.1:8001)，通过原有 Web / Worker 记录启停。无需重新克隆、覆盖配置或再次运行启动脚本。当前版本与交付证据见 [项目进度](../PROJECT_STATUS.md)。
 
-- Windows 10 或 Windows 11。
-- Docker Desktop。
-- 系统 Chrome。
-- 足够的视频存储空间。
-- 需要本地开发时，再安装 Python 3.12+ 和 FFmpeg。
+以下步骤用于一台尚未安装的新电脑。
 
-先把项目克隆到你自己的目录，例如：
+## 3. 首次安装与配置
+
+准备 Windows 10/11、Python 3.12+、Git、FFmpeg 和足够的素材空间；真实投稿还需要系统 Chrome。只有选择 Docker / Demo 时才需要 Docker Desktop。
+
+在 PowerShell 中执行：
 
 ```powershell
 git clone https://github.com/damingishere-coder/Ai-Clip-Workflow.git
 cd Ai-Clip-Workflow
-```
-
-后续命令都在你实际的仓库目录中执行，不要照抄其他用户电脑的绝对路径。
-
-## 3. 准备配置
-
-复制环境变量模板：
-
-```powershell
-Copy-Item .env.example .env
-```
-
-打开 `.env`，重点检查：
-
-- 视频和任务存储目录是否存在。
-- 临时上传目录是否有足够空间。
-- 需要使用的转写服务配置。
-- 受控 Codex CLI、远程 AI 或本地 Ollama 配置。
-- Windows Worker 地址和 Token。
-
-真实 API Key 只能写入本机 `.env`，不要写进代码、README、Issue、截图或提交记录。
-
-仓库中的 E 盘路径是历史默认值。你的电脑没有对应目录时，必须改为自己的路径。
-
-## 4. 推荐方式：Docker Desktop
-
-确保 Docker Desktop 已启动，然后在项目目录执行：
-
-```powershell
-docker compose up -d
-```
-
-查看容器状态：
-
-```powershell
-docker compose ps
-```
-
-浏览器打开：
-
-```text
-http://127.0.0.1:8001
-```
-
-健康检查：
-
-```text
-http://127.0.0.1:8001/health
-```
-
-停止项目：
-
-```powershell
-docker compose down
-```
-
-如果你的电脑已经安装项目配套的 Docker Watcher，它会在容器运行后准备 Windows Chrome Worker。外部用户没有安装 Watcher 时，可以使用仓库中的 Worker 启动脚本进行开发或诊断。
-
-## 5. 备用方式：本地 Python
-
-创建虚拟环境：
-
-```powershell
 python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\scripts\setup.ps1
 ```
 
-激活：
+`setup.ps1` 会保留已有 `.env`，首次运行才创建配置与 Token。不要用模板覆盖已配置的文件。随后在本机配置中检查素材、临时上传、转写、AI 和 Worker 参数；真实 Key、Cookie 与 Token 不上传仓库。
+
+离线转写需要另外准备模型；NVIDIA GPU 环境见 [部署说明](DEPLOYMENT.md)。后续命令都在自己的仓库目录执行。
+
+## 4. 日常推荐：Windows 原生运行
+
+确认 8001 / 8765 没有被已有项目服务占用后启动：
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
+.\scripts\start_native.ps1
 ```
 
-安装依赖：
+默认使用 E 盘素材存储。没有 E 盘时，指定自己的存储目录，例如：
 
 ```powershell
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+.\scripts\start_native.ps1 -StorageRoot D:\NiuMaData
 ```
 
-如果 PowerShell 不允许运行激活脚本，可以为当前用户调整脚本策略：
+选择其中一条启动命令执行即可。打开 [工作台](http://127.0.0.1:8001)，在系统页查看服务就绪状态；仅 `/health` 返回正常不能证明转写、AI 和账号已配置。
+
+手动启动的服务可使用 `.\scripts\stop_native.ps1` 停止。通过 RunDock 托管的服务继续用原记录管理。
+
+## 5. 隔离试用：Docker Demo
+
+安装并启动 Docker Desktop，确保没有原生服务占用 8001，再执行：
 
 ```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+.\scripts\start.ps1 -Demo
 ```
 
-启动 Web 服务：
+Demo 使用独立数据库、虚构任务和手动导出草稿，发布调度关闭，不需要真实账号或 AI Key。停止使用 `.\scripts\stop.ps1 -Demo`。
 
-```powershell
-uvicorn app.main:app --reload --port 8001
-```
-
-浏览器打开 `http://127.0.0.1:8001`。
+正式 Docker 方式与开发模式见 [通用启动指南](PORTABLE_SETUP.md)。Docker 不是维护者本机当前日常服务的启动方式。
 
 ## 6. 第一次测试：只测生产链路
 
@@ -142,7 +88,7 @@ uvicorn app.main:app --reload --port 8001
 7. 确认生成内容进入发送中心。
 8. 预览排期，确认时间按北京时间显示。
 
-完成以上步骤，说明本地生产链路基本可用。
+完成以上步骤，说明这条测试素材的本地生产链路可用；不代表所有素材或真实投稿都已验收。选择 Codex 或远程服务会产生真实模型请求，Demo 验收不会执行这些步骤。
 
 ## 7. AI 与转写配置
 
@@ -183,6 +129,14 @@ http://host.docker.internal:11434
 遇到验证码、登录失效、风控或结果不确定时，任务会进入 `NEED_REVIEW`。先到平台创作者中心人工核对，不要直接重复发送。
 
 ## 9. 常用测试命令
+
+先安装开发依赖：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
+
+以下命令需在已激活该虚拟环境的终端运行，也可将 `python` 换为 `.\.venv\Scripts\python.exe`，将 `pytest` 换为 `.\.venv\Scripts\python.exe -m pytest`。
 
 基础测试：
 
@@ -225,11 +179,7 @@ pytest -v
 http://127.0.0.1:8001
 ```
 
-检查：
-
-```powershell
-docker compose ps
-```
+先在 RunDock 检查原 Web / Worker 记录；若手动运行原生服务，检查启动窗口的错误信息。只有使用 Docker 模式时才运行 `docker compose ps`。
 
 ### AI 提示缺少 Key
 
@@ -237,7 +187,7 @@ docker compose ps
 
 ### Windows Worker 未连接
 
-先不要点击“立即发送”。检查 Worker 地址、Token、系统 Chrome、Docker 与本机网络桥接。开发和诊断方式见 [TECHNICAL_REFERENCE.md](TECHNICAL_REFERENCE.md)。
+先不要点击“立即发送”。检查 Worker 地址、Token 和系统 Chrome；Docker 模式还需检查容器与本机网络桥接。开发和诊断方式见 [TECHNICAL_REFERENCE.md](TECHNICAL_REFERENCE.md)。
 
 ### 本地 Ollama 无法连接
 
