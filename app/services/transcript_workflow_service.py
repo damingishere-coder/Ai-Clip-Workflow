@@ -10,6 +10,10 @@ from typing import Any
 from app.core.config import settings
 from app.models.task import TaskStatus
 from app.services import job_service
+from app.services.local_transcription_runtime import (
+    ensure_transcription_provider_allowed,
+    get_local_transcription_runtime_status,
+)
 from app.services.storage_service import get_artifact_paths, get_source_video_path, validate_source_video_path
 from app.services.task_log_service import append_task_log
 from app.services.transcript_service import (
@@ -29,9 +33,6 @@ _CANCEL_TRANSCRIPT_TASKS: set[str] = set()
 
 
 _TRANSCRIPT_STALE_AFTER = timedelta(minutes=10)
-_DEFAULT_REMOTE_TRANSCRIPTION_PROVIDER = "volcengine"
-
-
 # ---------- 转写进度辅助 ----------
 
 def _parse_progress_updated_at(progress: dict) -> datetime | None:
@@ -64,13 +65,18 @@ def _is_transcript_progress_stale(progress: dict) -> bool:
 
 
 def _resolve_transcription_provider_choice(provider: str | None = None) -> str:
-    choice = (provider or "remote").strip().lower()
-    if choice == "local":
-        return "local"
     configured_provider = (settings.transcription_provider or "").strip().lower()
-    if configured_provider and configured_provider != "local":
-        return configured_provider
-    return _DEFAULT_REMOTE_TRANSCRIPTION_PROVIDER
+    choice = (provider or configured_provider or "local").strip().lower()
+    if choice == "remote":
+        choice = configured_provider if configured_provider and configured_provider != "local" else "volcengine"
+    if choice not in {"local", "volcengine", "aliyun", "tencent", "xunfei"}:
+        raise ValueError(f"未知转写服务商：{choice or '空'}")
+    return ensure_transcription_provider_allowed(choice)
+
+
+def validate_transcription_provider_choice(provider: str | None = None) -> str:
+    """在创建持久化 Job 前验证 Provider 和完全离线边界。"""
+    return _resolve_transcription_provider_choice(provider)
 
 
 def _transcription_choice_label(provider: str) -> str:
@@ -82,6 +88,8 @@ def _transcription_choice_label(provider: str) -> str:
 
 
 def _can_retry_transcript_with_local(progress: dict, transcript_exists: bool) -> bool:
+    if settings.transcription_offline_only:
+        return False
     provider = str(progress.get("provider") or "").strip().lower()
     return not transcript_exists and progress.get("status") == "failed" and provider != "local"
 
@@ -133,6 +141,7 @@ def get_task_transcript_status(task_id: str) -> dict:
         }
 
     transcript_exists = paths["transcript_path"].exists()
+    runtime = get_local_transcription_runtime_status()
     return {
         "task_id": task_id,
         "task_status": task.get("status"),
@@ -145,6 +154,10 @@ def get_task_transcript_status(task_id: str) -> dict:
         "preview": read_transcript_preview(paths["transcript_path"]),
         "error_message": task.get("error_message") or "",
         "local_retry_available": _can_retry_transcript_with_local(progress, transcript_exists),
+        "offline_only": runtime["offline_only"],
+        "model_ready": runtime["model_ready"],
+        "gpu_ready": runtime["gpu_ready"],
+        "model_revision": runtime["model_revision"],
     }
 
 

@@ -241,6 +241,11 @@ class PublishJobScheduleUpdate(BaseModel):
 
 
 class PublishBatchScheduleUpdate(BaseModel):
+    schedule_mode: Literal["interval", "adaptive"] = "interval"
+    account_id: str = Field(default="", max_length=120)
+    daily_limit: int = Field(default=8, ge=1, le=24)
+    min_gap_minutes: int = Field(default=90, ge=90, le=1440)
+    strategy_token: str = Field(default="", max_length=64)
     job_ids: list[str] = Field(default_factory=list)
     platform: Optional[Literal["douyin", "bilibili"]] = None
     action: Literal["apply", "clear"] = "apply"
@@ -260,6 +265,11 @@ class PublishBatchScheduleUpdate(BaseModel):
 
 
 class PublishScheduleNextStartRequest(BaseModel):
+    schedule_mode: Literal["interval", "adaptive"] = "interval"
+    account_id: str = Field(default="", max_length=120)
+    daily_limit: int = Field(default=8, ge=1, le=24)
+    min_gap_minutes: int = Field(default=90, ge=90, le=1440)
+    strategy_token: str = Field(default="", max_length=64)
     job_ids: list[str] = Field(default_factory=list)
     platform: Literal["douyin", "bilibili"]
     timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=80)
@@ -396,6 +406,9 @@ class ClipCandidateUpdate(BaseModel):
     end_time: str = Field(..., min_length=1, max_length=16)
     enabled: bool = True
     summary: Optional[str] = Field(default=None, max_length=1000)
+    feedback_reason_code: Optional[
+        Literal["not_funny", "fragmented", "missing_setup", "duplicate", "dragging", "other"]
+    ] = None
 
 
 class ClipCandidateBatchItem(ClipCandidateUpdate):
@@ -445,3 +458,16 @@ class AIClipAnalysisResult(BaseModel):
     analysis_summary: str = ""
     clips: list[AIClipItem] = Field(default_factory=list)
     analysis_meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdaptivePolicyUpdate(BaseModel):
+    enabled: bool
+    daily_limit: int = Field(default=8, ge=1, le=24)
+    min_gap_minutes: int = Field(default=90, ge=90, le=1440)
+    daily_start_time: str = "07:00"
+    daily_end_time: str = "23:59"
+    include_existing: bool = False
+
+
+class AdaptiveJobUpdate(BaseModel):
+    managed: bool

@@ -4,7 +4,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
 from app.core.config import settings
-from app.services.ai_prompt_preset_service import list_ai_prompt_presets
+from app.services.ai_prompt_preset_service import list_ai_prompt_presets, get_ai_prompt_preset
+from app.services.content_review_service import list_douyin_accounts
 from app.services.publish_service import (
     get_publish_center_context,
     get_publish_link_states,
@@ -104,6 +105,7 @@ async def task_detail_page(request: Request, task_id: str):
             "transcript_lines": get_transcript_preview(task_id),
             "output_clips": list_output_clips(task_id),
             "ai_prompt_presets": list_ai_prompt_presets(),
+            "current_prompt_preset": get_ai_prompt_preset(task.get("ai_prompt_preset_id") or "preset_001"),
             "latest_ai_analysis_run": get_latest_ai_analysis_run(task_id),
             "ai_analysis_runs": list_ai_analysis_runs(task_id),
         },
@@ -287,5 +289,20 @@ async def system_status_page(request: Request):
             "active_page": "system",
             "settings": settings,
             **get_system_status_context(),
+        },
+    )
+
+
+@router.get("/content-review")
+async def content_review_page(request: Request):
+    accounts = list_douyin_accounts()
+    return templates.TemplateResponse(
+        name="content_review.html",
+        request=request,
+        context={
+            "request": request,
+            "active_page": "content_review",
+            "settings": settings,
+            "accounts": accounts,
         },
     )

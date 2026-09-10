@@ -12,7 +12,17 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.db.database import init_db
-from app.routers import ai_prompts, media, pages, publish, settings as settings_router, subtitles, tasks
+from app.routers import (
+    ai_prompts,
+    content_review,
+    media,
+    pages,
+    publish,
+    settings as settings_router,
+    subtitles,
+    system,
+    tasks,
+)
 from app.services.publish_scheduler import start_scheduler_background
 from app.services.storage_service import configure_runtime_media_storage
 from app.services.job_worker import WorkflowJobRunner
@@ -114,11 +124,16 @@ def _is_public_path(path: str) -> bool:
 async def lifespan(app: FastAPI):
     previous_temp = tempfile.tempdir
     previous_temp_env = {name: os.environ.get(name) for name in ("TEMP", "TMP")}
+    weekly_review_runner = None
     workflow_job_runner = None
     scheduler = None
     try:
         app.state.media_storage = configure_runtime_media_storage()
         init_db()
+        if os.environ.get("NIUMA_WEEKLY_REVIEW_RUNNER_ENABLED", "true").lower() == "true":
+            from app.services.weekly_review_service import WeeklyReviewRunner
+            weekly_review_runner = WeeklyReviewRunner()
+            weekly_review_runner.start()
         workflow_job_runner = WorkflowJobRunner()
         workflow_job_runner.start()
         app.state.workflow_job_runner = workflow_job_runner
@@ -127,6 +142,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         try:
+            if weekly_review_runner:
+                weekly_review_runner.stop()
             if workflow_job_runner:
                 workflow_job_runner.stop()
         finally:
@@ -145,7 +162,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     description=settings.app_description,
-    version="2.1.0",
+    version="2.2.0",
     lifespan=lifespan,
 )
 
@@ -237,7 +254,9 @@ app.include_router(tasks.router)
 app.include_router(subtitles.router)
 app.include_router(media.router)
 app.include_router(publish.router)
+app.include_router(content_review.router)
 app.include_router(settings_router.router)
+app.include_router(system.router)
 
 
 @app.get("/favicon.ico", include_in_schema=False)

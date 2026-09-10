@@ -226,6 +226,8 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
             f"INSERT INTO tasks ({', '.join(columns)}) VALUES ({placeholders})",
             tuple(insert_data[column] for column in columns),
         )
+        from app.services.weekly_review_service import freeze_task
+        freeze_task(connection, resolved_task_id)
         connection.commit()
 
     append_task_log(resolved_task_id, "任务已创建")

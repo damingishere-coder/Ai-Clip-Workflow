@@ -45,6 +45,7 @@
       data-start-seconds="{{ clip.start_seconds }}"
       data-end-seconds="{{ clip.end_seconds }}"
       data-title="{{ clip.title }}"
+      data-feedback-reason="{{ clip.feedback_reason_code or '' }}"
     >
       <div class="clip-card-header">
         <label class="toggle-line">
@@ -130,15 +131,15 @@
         </dl>
       </details>
 
-      <div class="clip-feedback" aria-label="告诉系统你的审片判断">
-        <span>这条选得怎么样？</span>
+      <div class="clip-feedback" data-reject-feedback aria-label="选择淘汰原因" {{ "hidden" if clip.enabled else "" }}>
+        <span>可选淘汰原因（保存审核选择时一并记录）</span>
         <div>
-          <button class="secondary-button compact-button feedback-positive" type="button" data-feedback-decision="keep" data-feedback-reason="worth_publishing">值得发</button>
-          <button class="secondary-button compact-button" type="button" data-feedback-decision="reject" data-feedback-reason="not_funny">不好笑</button>
-          <button class="secondary-button compact-button" type="button" data-feedback-decision="reject" data-feedback-reason="fragmented">太碎</button>
-          <button class="secondary-button compact-button" type="button" data-feedback-decision="reject" data-feedback-reason="missing_setup">铺垫不足</button>
-          <button class="secondary-button compact-button" type="button" data-feedback-decision="reject" data-feedback-reason="duplicate">重复</button>
-          <button class="secondary-button compact-button" type="button" data-feedback-decision="reject" data-feedback-reason="dragging">拖沓</button>
+          <button class="secondary-button compact-button {{ 'is-active' if clip.feedback_reason_code == 'not_funny' else '' }}" type="button" data-reject-reason="not_funny" aria-pressed="{{ 'true' if clip.feedback_reason_code == 'not_funny' else 'false' }}">不好笑</button>
+          <button class="secondary-button compact-button {{ 'is-active' if clip.feedback_reason_code == 'missing_setup' else '' }}" type="button" data-reject-reason="missing_setup" aria-pressed="{{ 'true' if clip.feedback_reason_code == 'missing_setup' else 'false' }}">铺垫缺失</button>
+          <button class="secondary-button compact-button {{ 'is-active' if clip.feedback_reason_code == 'fragmented' else '' }}" type="button" data-reject-reason="fragmented" aria-pressed="{{ 'true' if clip.feedback_reason_code == 'fragmented' else 'false' }}">片段不完整</button>
+          <button class="secondary-button compact-button {{ 'is-active' if clip.feedback_reason_code == 'duplicate' else '' }}" type="button" data-reject-reason="duplicate" aria-pressed="{{ 'true' if clip.feedback_reason_code == 'duplicate' else 'false' }}">重复</button>
+          <button class="secondary-button compact-button {{ 'is-active' if clip.feedback_reason_code == 'dragging' else '' }}" type="button" data-reject-reason="dragging" aria-pressed="{{ 'true' if clip.feedback_reason_code == 'dragging' else 'false' }}">节奏拖沓</button>
+          <button class="secondary-button compact-button {{ 'is-active' if clip.feedback_reason_code == 'other' else '' }}" type="button" data-reject-reason="other" aria-pressed="{{ 'true' if clip.feedback_reason_code == 'other' else 'false' }}">其他</button>
         </div>
       </div>
     </article>

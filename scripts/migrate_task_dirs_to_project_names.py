@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import argparse
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
 import re
 import shutil
 import sqlite3
+import sys
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -234,26 +234,17 @@ def apply_plan(connection: sqlite3.Connection, plan: list[dict]) -> Path:
     return backup_path
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="把任务文件夹从短 ID 迁移为项目名。")
-    parser.add_argument("--apply", action="store_true", help="真正执行迁移；不加时只预览。")
-    args = parser.parse_args()
+DISABLED_MESSAGE = (
+    "此旧版任务目录迁移脚本已永久停用，禁止继续执行。"
+    "请使用受支持的 scripts/backup.ps1、应用启动迁移和 scripts/restore.ps1 流程。"
+)
 
-    if not DATABASE_PATH.exists():
-        raise SystemExit(f"数据库不存在：{DATABASE_PATH}")
-    if not STORAGE_ROOT.exists():
-        raise SystemExit(f"E盘存储目录不存在：{STORAGE_ROOT}")
 
-    with sqlite3.connect(DATABASE_PATH) as connection:
-        connection.row_factory = sqlite3.Row
-        plan = build_migration_plan(connection)
-        print_plan(plan)
-        if not args.apply:
-            print("\n当前是 dry-run 预览，没有移动文件夹，也没有修改数据库。")
-            return
-        backup_path = apply_plan(connection, plan)
-        print(f"\n迁移完成。数据库备份：{backup_path}")
+def main() -> int:
+    # 保留旧实现供历史审计，但入口无条件拒绝，避免再次移动活动任务目录。
+    print(DISABLED_MESSAGE, file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

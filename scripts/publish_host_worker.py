@@ -13,8 +13,8 @@ import os
 import subprocess
 import sys
 import threading
-import time
 import weakref
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -28,6 +28,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.core.config import settings  # noqa: E402
+from app.services.content_review_service import (  # noqa: E402
+    ContentReviewError,
+    parse_douyin_item_export,
+)
 from app.services.publish_time import utc_now_iso  # noqa: E402
 from app.services.publishers.base import (  # noqa: E402
     PublishError,
@@ -85,6 +89,159 @@ class PublishRequest(BaseModel):
 class OpenCliRunRequest(BaseModel):
     command: list[str]
     timeout: int = Field(default=600, ge=1, le=1800)
+
+
+class AnalyticsExportSyncRequest(BaseModel):
+    account_id: str = Field(min_length=1, max_length=120)
+
+    @field_validator("account_id")
+    @classmethod
+    def validate_account_id(cls, value: str) -> str:
+        return validate_worker_identifier(value, "account_id", max_length=120)
+
+
+ANALYTICS_ERROR_STATUS = {
+    "LOGIN_REQUIRED": 409,
+    "VERIFICATION_REQUIRED": 409,
+    "RATE_LIMITED": 429,
+    "PAGE_CHANGED": 422,
+    "INVALID_EXPORT": 422,
+    "DOWNLOAD_FAILED": 502,
+    "WORKER_UNAVAILABLE": 503,
+}
+DOUYIN_CONTENT_MANAGE_URL = "https://creator.douyin.com/creator-micro/content/manage"
+
+
+class AnalyticsSyncError(RuntimeError):
+    def __init__(self, message: str, error_code: str) -> None:
+        super().__init__(message)
+        self.message = message
+        self.error_code = error_code
+
+
+def _analytics_http_error(error_code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=ANALYTICS_ERROR_STATUS[error_code],
+        detail={"error_code": error_code, "message": message},
+    )
+
+
+def _page_requires_login(page: Any) -> bool:
+    url = str(getattr(page, "url", "") or "").lower()
+    if any(marker in url for marker in ("passport", "/login", "login.douyin")):
+        return True
+    try:
+        text = page.locator("body").inner_text(timeout=3000)
+    except Exception:
+        text = ""
+    return any(marker in text for marker in ("登录后使用", "请先登录", "登录创作者中心", "扫码登录"))
+
+
+def _douyin_export_button(page: Any) -> Any:
+    candidates = (
+        page.get_by_role("button", name="导出数据", exact=True),
+        page.get_by_text("导出数据", exact=True),
+    )
+    for candidate in candidates:
+        try:
+            locator = candidate.first
+            locator.wait_for(state="visible", timeout=3000)
+            return locator
+        except Exception:
+            continue
+    raise AnalyticsSyncError("没有找到“导出数据”按钮，平台页面结构可能已变化", "PAGE_CHANGED")
+
+
+def _export_douyin_item_report(runtime: BrowserRuntime) -> dict[str, Any]:
+    response_state = {"rate_limited": False, "login_required": False}
+    with runtime.page(DOUYIN_CONTENT_MANAGE_URL) as page:
+        if _page_requires_login(page):
+            raise AnalyticsSyncError("抖音创作者中心登录已失效，请先重新登录", "LOGIN_REQUIRED")
+        try:
+            runtime.detect_manual_challenge(page)
+        except PublishNeedsReview as exc:
+            raise AnalyticsSyncError(exc.message, "VERIFICATION_REQUIRED") from exc
+
+        def capture_response(response: Any) -> None:
+            try:
+                if int(response.status) == 429:
+                    response_state["rate_limited"] = True
+                if int(response.status) in {401, 403}:
+                    response_state["login_required"] = True
+            except Exception:
+                return
+
+        page.on("response", capture_response)
+        try:
+            page.wait_for_timeout(1500)
+        except Exception as exc:
+            raise AnalyticsSyncError(f"抖音作品页加载失败：{exc}", "WORKER_UNAVAILABLE") from exc
+        if response_state["rate_limited"]:
+            raise AnalyticsSyncError("抖音返回 429 限流，已停止同步且不会自动重试", "RATE_LIMITED")
+        if response_state["login_required"] or _page_requires_login(page):
+            raise AnalyticsSyncError("抖音创作者中心登录已失效，请先重新登录", "LOGIN_REQUIRED")
+        try:
+            runtime.detect_manual_challenge(page)
+        except PublishNeedsReview as exc:
+            raise AnalyticsSyncError(exc.message, "VERIFICATION_REQUIRED") from exc
+        export_button = _douyin_export_button(page)
+        download_path: Path | None = None
+        try:
+            try:
+                with page.expect_download(
+                    timeout=settings.publish_browser_navigation_timeout_ms
+                ) as download_info:
+                    export_button.click()
+                download = download_info.value
+            except Exception as exc:
+                raise AnalyticsSyncError(
+                    f"等待抖音官方作品报表下载失败：{exc}",
+                    "DOWNLOAD_FAILED",
+                ) from exc
+            try:
+                raw_path = download.path()
+            except Exception as exc:
+                raise AnalyticsSyncError(
+                    f"抖音官方作品报表没有生成可读临时文件：{exc}",
+                    "DOWNLOAD_FAILED",
+                ) from exc
+            if raw_path:
+                download_path = Path(raw_path)
+            if response_state["rate_limited"]:
+                raise AnalyticsSyncError("抖音返回 429 限流，已停止同步且不会自动重试", "RATE_LIMITED")
+            if response_state["login_required"] or _page_requires_login(page):
+                raise AnalyticsSyncError("抖音创作者中心登录已失效，请先重新登录", "LOGIN_REQUIRED")
+            try:
+                runtime.detect_manual_challenge(page)
+            except PublishNeedsReview as exc:
+                raise AnalyticsSyncError(exc.message, "VERIFICATION_REQUIRED") from exc
+            failure = download.failure()
+            if failure:
+                raise AnalyticsSyncError(f"抖音官方作品报表下载失败：{failure}", "DOWNLOAD_FAILED")
+            if download_path is None:
+                raise AnalyticsSyncError("抖音官方作品报表没有生成临时文件", "DOWNLOAD_FAILED")
+            try:
+                content = download_path.read_bytes()
+            except OSError as exc:
+                raise AnalyticsSyncError(f"读取抖音官方作品报表失败：{exc}", "DOWNLOAD_FAILED") from exc
+            try:
+                items = parse_douyin_item_export(content)
+            except ContentReviewError as exc:
+                raise AnalyticsSyncError(str(exc), "INVALID_EXPORT") from exc
+            source_filename = Path(str(download.suggested_filename or "作品列表导出.xlsx")).name
+        finally:
+            if download_path is not None:
+                try:
+                    download_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return {
+            "status": "ok",
+            "captured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "source_filename": source_filename,
+            "row_count": len(items),
+            "items": items,
+        }
 
 
 class _LockLease(str):
@@ -421,7 +578,7 @@ def _resolve_media_path(raw_value: str, *, required: bool) -> str:
 
 def create_worker_app(token: str | None = None) -> FastAPI:
     worker_token = str(token if token is not None else settings.publish_worker_token)
-    worker = FastAPI(title="NiuMa Studio Publish Worker", version="2.1.0")
+    worker = FastAPI(title="NiuMa Studio Publish Worker", version="2.2.0")
 
     def require_token(authorization: str = Header(default="")) -> None:
         if not worker_token:
@@ -534,6 +691,34 @@ def create_worker_app(token: str | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail="该账号已有浏览器窗口正在运行")
         background_tasks.add_task(login_background, payload, lock)
         return {"status": "started", "message": "已打开平台创作者中心"}
+
+    @worker.post("/v1/analytics/douyin/export-sync", dependencies=[Depends(require_token)])
+    def export_sync_douyin_analytics(payload: AnalyticsExportSyncRequest) -> dict[str, Any]:
+        lock = _account_lock("douyin", payload.account_id)
+        if not lock.acquire(blocking=False):
+            raise _analytics_http_error(
+                "WORKER_UNAVAILABLE",
+                "该账号正在执行其他浏览器操作，请完成后再同步",
+            )
+        try:
+            runtime = BrowserRuntime("douyin", payload.account_id)
+            return _export_douyin_item_report(runtime)
+        except AnalyticsSyncError as exc:
+            raise _analytics_http_error(exc.error_code, exc.message) from exc
+        except PublishNeedsReview as exc:
+            raise _analytics_http_error("VERIFICATION_REQUIRED", exc.message) from exc
+        except PublishError as exc:
+            error_code = (
+                "LOGIN_REQUIRED"
+                if "login" in str(exc.error_code or "").lower()
+                else "WORKER_UNAVAILABLE"
+            )
+            raise _analytics_http_error(error_code, exc.message) from exc
+        except Exception as exc:
+            logger.exception("抖音官方作品报表同步失败：account_id=%s", payload.account_id)
+            raise _analytics_http_error("WORKER_UNAVAILABLE", f"Windows Worker 导出同步失败：{exc}") from exc
+        finally:
+            lock.release()
 
     def publish_with_job_lock(payload: PublishRequest) -> dict[str, Any]:
         journal = ExecutionJournal(payload.execution_id)

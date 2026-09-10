@@ -48,6 +48,76 @@ QUALITY_B_THRESHOLD = 65
 HUMOR_HARD_GATE = 75
 COMPLETENESS_HARD_GATE = 70
 
+RECALL_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {"moments": {"type": "array", "items": {
+        "type": "object",
+        "properties": {
+            "key_time": {"type": "string"},
+            "title": {"type": "string"},
+            "topic_key": {"type": "string"},
+            "humor_reason": {"type": "string"},
+            "recall_score": {"type": "number"},
+        },
+        "required": ["key_time", "title", "topic_key", "humor_reason", "recall_score"],
+        "additionalProperties": False,
+    }}},
+    "required": ["moments"],
+    "additionalProperties": False,
+}
+
+SCORE_FIELDS = (
+    "humor_score", "interaction_reaction_score", "completeness_score",
+    "hook_score", "novelty_score", "title_score",
+)
+
+
+def _clip_output_schema(key: str, text_fields: tuple[str, ...]) -> dict:
+    properties = {field: {"type": "string"} for field in text_fields}
+    properties.update({field: {"type": "number"} for field in SCORE_FIELDS})
+    return {
+        "type": "object",
+        "properties": {key: {"type": "array", "items": {
+            "type": "object", "properties": properties,
+            "required": list(properties), "additionalProperties": False,
+        }}},
+        "required": [key], "additionalProperties": False,
+    }
+
+
+EXPANSION_OUTPUT_SCHEMA = _clip_output_schema("clips", (
+    "source_id", "title", "start_time", "end_time", "key_moment_time",
+    "topic_key", "summary", "highlight_reason", "arc_structure", "suggested_editing",
+))
+JUDGE_OUTPUT_SCHEMA = _clip_output_schema("ranked_clips", (
+    "source_id", "title", "topic_key", "arc_structure", "why_selected", "rejection_reason",
+))
+
+
+def _validate_clip_output(payload: dict, key: str, schema: dict) -> None:
+    """在写入成功 checkpoint 前验证结果，禁止把错误评分转换成默认分。"""
+    properties = schema["properties"][key]["items"]["properties"]
+    for index, item in enumerate(payload[key], start=1):
+        if not isinstance(item, dict):
+            raise AIAnalysisError(f"{key} 第 {index} 条必须是对象")
+        for field, spec in properties.items():
+            value = item.get(field)
+            if spec["type"] == "number":
+                valid = type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 100
+            else:
+                valid = isinstance(value, str)
+            if not valid:
+                raise AIAnalysisError(f"{key} 第 {index} 条 {field} 格式错误：分数须为 0–100 数字，文本字段必须存在")
+        if not item["source_id"].strip():
+            raise AIAnalysisError(f"{key} 第 {index} 条 source_id 不能为空")
+        if key == "clips":
+            for field in ("start_time", "end_time", "key_moment_time"):
+                if not re.fullmatch(r"\d{2,}:[0-5]\d:[0-5]\d", item[field]):
+                    raise AIAnalysisError(f"clips 第 {index} 条 {field} 不是有效时间戳")
+            start, end, moment = (_time_to_seconds(item[f]) for f in ("start_time", "end_time", "key_moment_time"))
+            if not start <= moment < end:
+                raise AIAnalysisError(f"clips 第 {index} 条时间范围无效")
+
 
 @dataclass(frozen=True)
 class ComedyAnalysisRequest:
@@ -137,6 +207,7 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
         expanded,
         preference,
         feedback,
+        rows=rows,
         task_id=request.task_id,
         input_fingerprint=unit_fingerprint,
     )
@@ -164,7 +235,7 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
 
     selected_count = sum(1 for clip in clips if clip["selected_by_default"])
     summary = (
-        f"综艺笑点优先 V2 已按 {len(windows)} 个重叠窗口召回，"
+        f"综艺三阶段分析 已按 {len(windows)} 个重叠窗口召回，"
         f"扩展并全局复评 {len(expanded)} 条，保留 {len(clips)} 条候选，"
         f"其中 {selected_count} 条达到 A 级并默认启用。"
     )
@@ -463,7 +534,9 @@ def _recall_moments(
             namespace="variety_recall",
             input_fingerprint=input_fingerprint,
             unit_id=f"window_{window.index:03d}",
-            operation=lambda prompt=prompt: _generate_payload(provider, prompt, expected_key="moments"),
+            operation=lambda prompt=prompt: _generate_payload(
+                provider, prompt, expected_key="moments", output_schema=RECALL_OUTPUT_SCHEMA,
+            ),
         )
         if execution.status != "completed" or not isinstance(execution.payload, dict):
             failed_units += 1
@@ -563,7 +636,14 @@ def _expand_moments(
             namespace="variety_expansion",
             input_fingerprint=input_fingerprint,
             unit_id=f"batch_{batch_number:03d}",
-            operation=lambda prompt=prompt: _generate_payload(provider, prompt, expected_key="clips"),
+            request_fingerprint=build_unit_fingerprint({"prompt": prompt}),
+            operation=lambda prompt=prompt, known_ids=set(context_rows_by_id): _generate_payload(
+                provider, prompt, expected_key="clips", known_ids=known_ids,
+                output_schema=EXPANSION_OUTPUT_SCHEMA,
+            ),
+            validate_payload=lambda payload, known_ids=set(context_rows_by_id): _validate_payload(
+                payload, expected_key="clips", known_ids=known_ids,
+            ),
         )
         if execution.status != "completed" or not isinstance(execution.payload, dict):
             failed_units += 1
@@ -649,6 +729,7 @@ def _global_judge(
     preference: str,
     feedback: list[dict],
     *,
+    rows: list[TranscriptRow],
     task_id: str,
     input_fingerprint: str,
 ) -> tuple[dict[str, dict], str]:
@@ -665,6 +746,7 @@ def _global_judge(
                 "highlight_reason": item["highlight_reason"],
                 "arc_structure": item["arc_structure"],
                 "audio_reaction": item.get("audio_evidence") or {},
+                "transcript_evidence": _judge_transcript_evidence(item, rows),
             }
         )
     prompt = _judge_prompt(prompt_candidates, preference, feedback)
@@ -673,7 +755,16 @@ def _global_judge(
         namespace="variety_global_judge",
         input_fingerprint=input_fingerprint,
         unit_id="judge_001",
-        operation=lambda: _generate_payload(provider, prompt, expected_key="ranked_clips"),
+        request_fingerprint=build_unit_fingerprint({"prompt": prompt}),
+        operation=lambda: _generate_payload(
+            provider, prompt, expected_key="ranked_clips",
+            known_ids={str(item["source_id"]) for item in candidates}, require_all=True,
+            output_schema=JUDGE_OUTPUT_SCHEMA,
+        ),
+        validate_payload=lambda payload: _validate_payload(
+            payload, expected_key="ranked_clips",
+            known_ids={str(item["source_id"]) for item in candidates}, require_all=True,
+        ),
     )
     if execution.status != "completed" or not isinstance(execution.payload, dict):
         return {}, f"全局评审结果不确定，已锁定自动切片：{execution.error or execution.status}"
@@ -707,6 +798,22 @@ def _global_judge(
         return {}, f"全局评审调用失败，已使用扩展阶段评分降级：{exc}"
 
 
+def _judge_transcript_evidence(item: dict, rows: list[TranscriptRow]) -> list[dict]:
+    """保留片段内全部逐句原文，明确标记跨切点的句子，不伪造词级对齐。"""
+    start = _time_to_seconds(item["start_time"])
+    end = _time_to_seconds(item["end_time"])
+    return [
+        {
+            "start_time": row.start_time,
+            "end_time": row.end_time,
+            "text": row.text,
+            "crosses_clip_boundary": row.start_seconds < start or row.end_seconds > end,
+        }
+        for row in rows
+        if row.end_seconds > start and row.start_seconds < end
+    ]
+
+
 def _to_clip_payload(item: dict, index: int) -> dict:
     start_seconds = _time_to_seconds(item["start_time"])
     key_seconds = _time_to_seconds(item["key_moment_time"])
@@ -738,14 +845,37 @@ def _to_clip_payload(item: dict, index: int) -> dict:
     }
 
 
-def _generate_payload(provider: AIProvider, prompt: str, *, expected_key: str) -> dict:
-    raw = generate_json_with_safe_retry(provider, prompt)
+def _generate_payload(
+    provider: AIProvider, prompt: str, *, expected_key: str,
+    known_ids: set[str] | None = None, require_all: bool = False,
+    output_schema: dict | None = None,
+) -> dict:
+    raw = (generate_json_with_safe_retry(provider, prompt, output_schema=output_schema)
+           if output_schema is not None else generate_json_with_safe_retry(provider, prompt))
     payload = _loads_ai_json(raw)
+    _validate_payload(payload, expected_key=expected_key, known_ids=known_ids, require_all=require_all)
+    return payload
+
+
+def _validate_payload(
+    payload: dict, *, expected_key: str, known_ids: set[str] | None = None,
+    require_all: bool = False,
+) -> None:
     if not isinstance(payload, dict):
         raise AIAnalysisError("AI 输出必须是 JSON 对象")
     if not isinstance(payload.get(expected_key), list):
         raise AIAnalysisError(f"AI 输出缺少 {expected_key} 数组")
-    return payload
+    if expected_key in {"clips", "ranked_clips"}:
+        _validate_clip_output(payload, expected_key, EXPANSION_OUTPUT_SCHEMA if expected_key == "clips" else JUDGE_OUTPUT_SCHEMA)
+    if known_ids is not None:
+        returned_ids = [str(item.get("source_id") or "") if isinstance(item, dict) else ""
+                        for item in payload[expected_key]]
+        if any(source_id not in known_ids for source_id in returned_ids):
+            raise AIAnalysisError("AI 返回了不属于当前候选的 source_id，结果未记为成功，请确认后重试此单元")
+        if len(set(returned_ids)) != len(returned_ids):
+            raise AIAnalysisError("AI 返回了重复 source_id，结果未记为成功，请确认后重试此单元")
+        if require_all and set(returned_ids) != known_ids:
+            raise AIAnalysisError("AI 评审遗漏当前候选，结果未记为成功，请确认后重试此单元")
 
 
 def _recall_prompt(window: ComedyTranscriptWindow, preference: str) -> str:
@@ -784,6 +914,8 @@ def _judge_prompt(candidates: list[dict], preference: str, feedback: list[dict])
     ]
     return f"""你是《康熙来了》短视频总编。请把所有候选放在一起横向比较，重点淘汰“不够好笑但话题看似刺激”的内容。
 同一故事、相邻时间或同一笑点只能保留最完整的一条。音频信号只是辅助证据，不能弥补笑点闭环和完整度不足。
+每条候选的 transcript_evidence 是实际切片时间范围内的逐句转写原文，请据此核验开头、笑点和连续互动，不能只看 summary 或 highlight_reason。
+时间戳为原片时间。crosses_clip_boundary=true 表示句子跨越切点，文字未做词级对齐，不可假定整句都在成片内；转写未标明的笑声、表情和反应不可自行补全。若原文为空或局部信息不足，明确说明缺失位置与判断限制。
 {preference}
 参考用户近期审片反馈：{json.dumps(feedback_summary, ensure_ascii=False)}
 
@@ -798,7 +930,8 @@ def _preference_summary(prompt_template: str, ai_preference: str) -> str:
     for marker in ("# Output Format", "【输出格式】", "输出 JSON", "转写文本：", "# Transcript", "{{TRANSCRIPT_TEXT}}"):
         if marker in prompt:
             prompt = prompt.split(marker, 1)[0]
-    prompt = " ".join(prompt.split())[:2500]
+    # 业务规则完整注入三个阶段，尤其不能截掉正文末尾的周复盘补充。
+    prompt = " ".join(prompt.split())
     extra = " ".join((ai_preference or "").split())[:500]
     parts = []
     if prompt:

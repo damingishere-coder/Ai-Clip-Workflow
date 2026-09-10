@@ -24,6 +24,12 @@ def _create_wal_database(path: Path) -> dict[str, int]:
             CREATE TABLE clip_candidates (id TEXT PRIMARY KEY);
             CREATE TABLE output_clip (id TEXT PRIMARY KEY);
             CREATE TABLE publish_jobs (id TEXT PRIMARY KEY);
+            CREATE TABLE schema_migrations (
+                version TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                checksum TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );
             """
         )
         counts = {

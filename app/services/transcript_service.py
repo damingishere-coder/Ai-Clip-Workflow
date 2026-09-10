@@ -18,7 +18,18 @@ from uuid import uuid4
 
 from app.core.config import settings
 from app.services import job_service
+from app.services.chinese_text_service import (
+    SIMPLIFIED_CHINESE_NORMALIZATION_ID,
+    simplify_chinese_text,
+)
 from app.services.managed_process_service import popen_process_group, terminate_process_tree
+from app.services.local_transcription_runtime import (
+    configure_windows_cuda_dll_directories,
+    ensure_transcription_provider_allowed,
+    model_identity,
+    model_revision_for,
+    resolve_local_model_source,
+)
 from app.services.transcription_checkpoint_service import (
     RemoteTranscriptionResultUncertainError,
     TranscriptionCheckpoint,
@@ -66,6 +77,7 @@ class TranscriptChunk:
 
 _WHISPER_MODEL = None
 _WHISPER_MODEL_KEY: tuple[str, str, str] | None = None
+_EFFECTIVE_TRANSCRIPTION_MODEL_KEY: tuple[str, str, str] | None = None
 _CPU_FALLBACK_DEVICE = "cpu"
 _CPU_FALLBACK_COMPUTE_TYPE = "int8"
 _TRANSCRIPT_PROGRESS_FILE_NAME = "transcript_progress.json"
@@ -218,6 +230,17 @@ def write_transcript_markdown(
     transcript_path.parent.mkdir(parents=True, exist_ok=True)
     progress_path = get_transcript_progress_path(transcript_path)
     _set_configured_transcription_runtime(provider)
+    _emit_transcript_progress(
+        progress_path,
+        progress_callback,
+        status="running",
+        current_chunk=0,
+        total_chunks=0,
+        percent=0,
+        message="正在验证固定版本本地模型和计算设备",
+    )
+    if _ACTIVE_TRANSCRIPTION_PROVIDER == "local":
+        _prepare_local_transcription_model_for_run(audio_path)
     checkpoint = None
     task_id = str(task.get("id") or "").strip()
     if task_id:
@@ -225,7 +248,7 @@ def write_transcript_markdown(
             task_id=task_id,
             source_path=audio_path,
             provider=_ACTIVE_TRANSCRIPTION_PROVIDER,
-            model=_ACTIVE_TRANSCRIPTION_MODEL,
+            model=_transcription_checkpoint_model(),
             device=_ACTIVE_TRANSCRIPTION_DEVICE,
             compute_type=_ACTIVE_TRANSCRIPTION_COMPUTE_TYPE,
             chunk_seconds=settings.transcription_chunk_seconds,
@@ -335,17 +358,19 @@ def transcribe_audio_with_provider(
 ) -> list[TranscriptSegment]:
     provider = _normalize_provider_name(provider)
     if provider == "local":
+        model_key = _WHISPER_MODEL_KEY or _primary_model_key()
         _set_active_transcription_runtime(
             provider="local",
             provider_label="本地 faster-whisper",
-            model=(_WHISPER_MODEL_KEY or _primary_model_key())[0],
-            device=(_WHISPER_MODEL_KEY or _primary_model_key())[1],
-            compute_type=(_WHISPER_MODEL_KEY or _primary_model_key())[2],
+            model=model_identity(model_key[0]),
+            device=model_key[1],
+            compute_type=model_key[2],
         )
         return transcribe_audio_in_chunks(
             audio_path, working_dir, progress_path, progress_callback, checkpoint=checkpoint
         )
     if provider == "volcengine":
+        ensure_transcription_provider_allowed(provider)
         return transcribe_audio_with_volcengine(
             audio_path, working_dir, progress_path, progress_callback, checkpoint=checkpoint
         )
@@ -1104,10 +1129,16 @@ def _write_transcript_progress(
         "provider": _ACTIVE_TRANSCRIPTION_PROVIDER,
         "provider_label": _ACTIVE_TRANSCRIPTION_PROVIDER_LABEL,
         "model": _transcription_model_label(),
+        "model_revision": _transcription_model_revision_label(),
         "device": _transcription_device_label(),
         "compute_type": _transcription_compute_type_label(),
         "chunk_seconds": settings.transcription_chunk_seconds,
         "chunk_overlap_seconds": settings.transcription_chunk_overlap_seconds,
+        "text_normalization": (
+            SIMPLIFIED_CHINESE_NORMALIZATION_ID
+            if _ACTIVE_TRANSCRIPTION_PROVIDER == "local"
+            else ""
+        ),
         "updated_at": datetime.now().isoformat(timespec="seconds"),
     }
     temp_path = progress_path.with_name(f"{progress_path.name}.tmp")
@@ -1130,7 +1161,10 @@ def _chunk_start_percent(current_chunk: int, total_chunks: int) -> int:
 
 def transcribe_audio(audio_path: Path, allow_empty: bool = False) -> list[TranscriptSegment]:
     try:
-        segments = _transcribe_audio_with_model(_get_whisper_model(), audio_path)
+        segments = _transcribe_audio_with_model(
+            _get_whisper_model(_EFFECTIVE_TRANSCRIPTION_MODEL_KEY or _primary_model_key()),
+            audio_path,
+        )
     except Exception as exc:
         if _should_retry_with_cpu(exc):
             try:
@@ -1151,6 +1185,45 @@ def transcribe_audio(audio_path: Path, allow_empty: bool = False) -> list[Transc
     return segments
 
 
+def _prepare_local_transcription_model_for_run(audio_path: Path | None = None) -> None:
+    """在创建 checkpoint 前确定本次实际使用 GPU 主模型还是 CPU 兜底。"""
+    global _EFFECTIVE_TRANSCRIPTION_MODEL_KEY
+
+    _EFFECTIVE_TRANSCRIPTION_MODEL_KEY = None
+    model = _get_whisper_model(_primary_model_key())
+    if audio_path is not None:
+        try:
+            _probe_whisper_model_inference(model, audio_path)
+        except Exception as exc:
+            if _WHISPER_MODEL_KEY != _cpu_fallback_model_key() and _should_retry_with_cpu(exc):
+                model = _get_whisper_model(_cpu_fallback_model_key())
+                _probe_whisper_model_inference(model, audio_path)
+            else:
+                raise
+    _EFFECTIVE_TRANSCRIPTION_MODEL_KEY = _WHISPER_MODEL_KEY or _primary_model_key()
+    model, device, compute_type = _EFFECTIVE_TRANSCRIPTION_MODEL_KEY
+    _set_active_transcription_runtime(
+        provider="local",
+        provider_label="本地 faster-whisper",
+        model=model_identity(model),
+        device=device,
+        compute_type=compute_type,
+    )
+
+
+def _probe_whisper_model_inference(model, audio_path: Path) -> None:
+    """只解码开头 1 秒，确保 checkpoint 记录的是可实际推理的设备。"""
+    segments, _info = model.transcribe(
+        str(audio_path),
+        language=settings.transcription_language,
+        vad_filter=False,
+        beam_size=1,
+        word_timestamps=False,
+        clip_timestamps="0,1",
+    )
+    list(segments)
+
+
 def _transcribe_audio_with_model(model, audio_path: Path) -> list[TranscriptSegment]:
     raw_segments, _info = model.transcribe(
         str(audio_path),
@@ -1161,19 +1234,27 @@ def _transcribe_audio_with_model(model, audio_path: Path) -> list[TranscriptSegm
     )
     results: list[TranscriptSegment] = []
     for segment in raw_segments:
-        text = normalize_transcript_text(segment.text)
+        text = _normalize_local_transcript_text(segment.text)
         if not text:
             continue
-        words = tuple(
-            TranscriptWord(
-                start_ms=round(float(word.start) * 1000),
-                end_ms=round(float(word.end) * 1000),
-                text=normalize_transcript_text(word.word),
-                confidence=float(word.probability) if getattr(word, "probability", None) is not None else None,
+        normalized_words: list[TranscriptWord] = []
+        for word in (getattr(segment, "words", None) or []):
+            word_text = _normalize_local_transcript_text(getattr(word, "word", ""))
+            if not word_text:
+                continue
+            normalized_words.append(
+                TranscriptWord(
+                    start_ms=round(float(word.start) * 1000),
+                    end_ms=round(float(word.end) * 1000),
+                    text=word_text,
+                    confidence=(
+                        float(word.probability)
+                        if getattr(word, "probability", None) is not None
+                        else None
+                    ),
+                )
             )
-            for word in (getattr(segment, "words", None) or [])
-            if normalize_transcript_text(getattr(word, "word", ""))
-        )
+        words = tuple(normalized_words)
         avg_logprob = getattr(segment, "avg_logprob", None)
         confidence = max(0.0, min(1.0, 2.718281828 ** float(avg_logprob))) if avg_logprob is not None else None
         results.append(
@@ -1196,6 +1277,7 @@ def _get_whisper_model(model_key: tuple[str, str, str] | None = None):
         return _WHISPER_MODEL
 
     try:
+        configure_windows_cuda_dll_directories()
         from faster_whisper import WhisperModel
     except ImportError as exc:
         raise RuntimeError(
@@ -1203,17 +1285,21 @@ def _get_whisper_model(model_key: tuple[str, str, str] | None = None):
         ) from exc
 
     try:
+        revision = model_revision_for(model_key[0])
+        model_source = resolve_local_model_source(model_key[0], revision)
         _WHISPER_MODEL = WhisperModel(
-            model_key[0],
+            model_source,
             device=model_key[1],
             compute_type=model_key[2],
+            download_root=str(settings.transcription_model_cache_dir),
+            local_files_only=settings.transcription_local_files_only,
         )
         _WHISPER_MODEL_KEY = model_key
         if _ACTIVE_TRANSCRIPTION_PROVIDER == "local":
             _set_active_transcription_runtime(
                 provider="local",
                 provider_label="本地 faster-whisper",
-                model=model_key[0],
+                model=model_identity(model_key[0], revision),
                 device=model_key[1],
                 compute_type=model_key[2],
             )
@@ -1325,7 +1411,7 @@ def _set_configured_transcription_runtime(provider: str | None = None) -> None:
         _set_active_transcription_runtime(
             provider="local",
             provider_label="本地 faster-whisper",
-            model=model,
+            model=model_identity(model),
             device=device,
             compute_type=compute_type,
         )
@@ -1350,7 +1436,14 @@ def _transcription_model_label() -> str:
     if _ACTIVE_TRANSCRIPTION_MODEL:
         return _ACTIVE_TRANSCRIPTION_MODEL
     model, _device, _compute_type = _WHISPER_MODEL_KEY or _primary_model_key()
-    return model
+    return model_identity(model)
+
+
+def _transcription_model_revision_label() -> str:
+    if _ACTIVE_TRANSCRIPTION_PROVIDER != "local":
+        return ""
+    model, _device, _compute_type = _WHISPER_MODEL_KEY or _primary_model_key()
+    return model_revision_for(model)
 
 
 def _transcription_device_label() -> str:
@@ -1418,6 +1511,16 @@ def build_transcript_markdown(
 
 def normalize_transcript_text(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _normalize_local_transcript_text(text: str) -> str:
+    return simplify_chinese_text(normalize_transcript_text(text))
+
+
+def _transcription_checkpoint_model() -> str:
+    if _ACTIVE_TRANSCRIPTION_PROVIDER != "local":
+        return _ACTIVE_TRANSCRIPTION_MODEL
+    return f"{_ACTIVE_TRANSCRIPTION_MODEL}|text={SIMPLIFIED_CHINESE_NORMALIZATION_ID}"
 
 
 def escape_markdown_table_text(text: str) -> str:

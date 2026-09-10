@@ -9,7 +9,7 @@ A Windows-first, local AI video highlight workspace for livestream recordings, i
 [中文](README.md) · [English](README.en.md) · [Quick Start](docs/PROJECT_GUIDE.md) · [Portable Setup](docs/PORTABLE_SETUP.md) · [Backup & Restore](docs/BACKUP_AND_RESTORE.md) · [Technical Reference](docs/TECHNICAL_REFERENCE.md) · [Roadmap](ROADMAP.md)
 
 ![CI](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml/badge.svg)
-![Version](https://img.shields.io/badge/version-2.1.0-0969da)
+![Version](https://img.shields.io/badge/version-2.2.0-0969da)
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4)
 ![FastAPI](https://img.shields.io/badge/backend-FastAPI-009688)
@@ -91,6 +91,7 @@ flowchart LR
 | Transcription | Volcengine remote transcription and local faster-whisper | ✅ Available |
 | AI analysis | General-value mode, comedy-first mode, segmented long-video analysis | ✅ Available |
 | Review and clipping | Edit candidates, save selections, generate versioned clips | ✅ Available |
+| Content review | Douyin daily imports, recent-50 item sync, attribution, and prompt comparison | ✅ Available |
 | Content preparation | Titles, descriptions, tags, cover frames, accounts, visibility | ✅ Available |
 | Scheduling | Batch preview, overnight windows, calendar view, timeline continuation | ✅ Available |
 | Data protection | Verified SQLite snapshots, manifests, restore rollback, upgrade protection | ✅ Available |

@@ -30,6 +30,12 @@
 - 许可证：MIT License。
 - 本项目锁定运行时版本 `pysubs2==1.9.0`；完整许可证保存在 `third_party_licenses/pysubs2-LICENSE.txt`。
 
+## OpenCC 1.4.2
+
+- 项目：https://github.com/BYVoid/OpenCC
+- 用途：把本地 faster-whisper 的繁体字形输出转换为简体字形；本项目使用 `t2s.json`，不做词汇本地化。
+- 许可证：Apache License 2.0；本项目通过 `opencc==1.4.2` 安装包使用，安装包内包含完整许可证。
+
 ## wavesurfer.js 7.12.11
 
 - 项目：https://github.com/katspaugh/wavesurfer.js

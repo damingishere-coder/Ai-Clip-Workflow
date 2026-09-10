@@ -4,7 +4,7 @@
 
 - 项目英文名：NiuMa Studio
 - 项目中文说明：牛马片场，本地 AI 高光生产后台
-- 项目目录：`C:\Users\10578\Documents\New project 2`
+- 项目目录：`C:\Users\10578\Documents\Ai-Clip-Workflow`
 - 当前版本：2.1.0
 - 当前状态：Windows 本地 AI 高光生产闭环已完成整合，素材、转写、AI 选片、审核、切片、内容准备、排期与抖音/B站统一真实发布链路已打通；真实投稿仍遵守账号登录、平台验证、风控和人工确认边界
 
