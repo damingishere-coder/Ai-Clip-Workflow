@@ -66,6 +66,7 @@ def generate_json_with_safe_retry(
     prompt: str,
     retry_instruction: str | None = None,
     *,
+    output_schema: dict[str, Any] | None = None,
     max_attempts: int = 3,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> str:
@@ -73,6 +74,9 @@ def generate_json_with_safe_retry(
     attempts = max(1, min(int(max_attempts), 3))
     for attempt in range(1, attempts + 1):
         try:
+            schema_generator = getattr(provider, "generate_json_with_schema", None)
+            if output_schema is not None and callable(schema_generator):
+                return schema_generator(prompt, output_schema, retry_instruction=retry_instruction)
             if retry_instruction is None:
                 return provider.generate_json(prompt)
             return provider.generate_json(prompt, retry_instruction=retry_instruction)

@@ -65,7 +65,7 @@ clip subtitle_track   → immutable subtitle_revision → SRT/VTT/ASS/编辑器
 
 ### 1.1 架构形态
 
-当前 v2.1.0 保持 **FastAPI 单体应用 + SQLite + Windows 发布 Worker**。视频、AI、页面和调度器仍在同一个应用中；只有必须使用宿主系统 Chrome 的真实发布动作由 Windows Worker 执行，不引入 Redis、Celery 或微服务。
+当前 v2.3.0 保持 **FastAPI 单体应用 + SQLite + Windows 发布 Worker**。视频、AI、页面、内容复盘和调度器仍在同一个应用中；只有必须使用宿主系统 Chrome 的真实发布与作品指标同步动作由 Windows Worker 执行，不引入 Redis、Celery 或微服务。
 
 v2.1 的架构目标不是云端多租户，而是把一台 Windows 电脑上的长视频生产与发布链路做完整、可恢复、可审计。SQLite 是唯一业务事实来源，E 盘任务目录保存大文件，浏览器 Profile 和平台登录态只保留在本机且不进入 Git。
 
@@ -326,7 +326,7 @@ Worker 会把容器内 `/workspace/tasks/...` 映射到宿主 `.env` 的 `TASKS_
 
 ## 8. 架构演进路线
 
-### 8.1 当前阶段：v2.1 本地生产闭环（已完成）
+### 8.1 当前阶段：v2.3 本地生产闭环
 
 - FastAPI 单体应用
 - SQLite 单文件数据库
@@ -339,7 +339,7 @@ Worker 会把容器内 `/workspace/tasks/...` 映射到宿主 `.env` 的 `TASKS_
 - E 盘统一生产存储、外部原片保护和托管产物安全删除
 - 代码检查与 CI 流程
 
-### 8.2 v2.1 后续重点
+### 8.2 v2.3 后续重点
 
 **目标**：不扩大单用户本地范围，优先用真实素材与真实账号完成灰度验收并提高可靠性。
 

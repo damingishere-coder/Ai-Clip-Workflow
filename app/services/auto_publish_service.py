@@ -211,11 +211,14 @@ def create_auto_publish_jobs(
                 "SCHEDULED" if scheduled_at and (publish_mode != "local_browser" or account_id) else "WAITING"
             )
             job_id = uuid4().hex[:12]
+            from app.services.weekly_review_service import content_signature
             provider_response = {
                 "source": "auto_pipeline",
                 "workflow_job_id": workflow_job_id or "",
                 "target_platform": platform,
                 "metadata_source": metadata.get("source") or "",
+                "weekly_rule_application_id": metadata.get("weekly_rule_application_id"),
+                "weekly_content_signature": content_signature(metadata.get("title") or "精彩片段", metadata.get("caption") or "", ", ".join(metadata.get("hashtags") or [])),
                 "metadata_error": metadata.get("error") or "",
                 "metadata_policy_version": PUBLISH_COPY_RULE_VERSION,
                 "metadata_upgrade_status": "generated",

@@ -1,278 +1,150 @@
 <div align="center">
 
+<img src="docs/images/niuma-banner.svg" alt="NiuMa Studio 牛马片场：本地 AI 高光生产工作台" width="100%" />
+
 # 牛马片场 · NiuMa Studio
 
-**把长视频整理成可审核、可切片、可排期、可发布的短视频内容。**
+**从一段长视频，到值得分享的短片。**
 
-Windows 本地运行的 AI 视频高光生产工作台，面向直播录像、访谈、综艺和其他长视频素材。
+在自己的 Windows 电脑上，完成转写、AI 找高光、人工审片、切片、内容准备与排期。
 
-[中文](README.md) · [English](README.en.md) · [快速开始](docs/PROJECT_GUIDE.md) · [通用启动](docs/PORTABLE_SETUP.md) · [备份恢复](docs/BACKUP_AND_RESTORE.md) · [技术说明](docs/TECHNICAL_REFERENCE.md) · [路线图](ROADMAP.md)
+[English](README.en.md) · [快速开始](#快速开始) · [界面预览](#界面预览) · [使用文档](docs/README.md) · [更新日志](CHANGELOG.md)
 
-![CI](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml/badge.svg)
-![Version](https://img.shields.io/badge/version-2.1.0-0969da)
-![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB)
-![Platform](https://img.shields.io/badge/platform-Windows-0078D4)
-![FastAPI](https://img.shields.io/badge/backend-FastAPI-009688)
-![License](https://img.shields.io/badge/license-MIT-blue)
+[![CI](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-2.3.0-2563eb)](CHANGELOG.md)
+![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078d4)
+![Python](https://img.shields.io/badge/Python-3.12%2B-3776ab)
+[![MIT](https://img.shields.io/badge/License-MIT-64748b)](LICENSE)
 
 </div>
 
-> [!IMPORTANT]
-> 牛马片场是本地单用户工具，不是云端 SaaS。真实投稿依赖用户自己的平台账号和本机 Chrome 登录状态；项目不会绕过二维码、短信、验证码、滑块或平台风控。
+## 让制作流程连起来
 
-## 产品预览
+素材很长，真正花时间的往往是找片段、反复审核，以及把多个成片整理成可发布的内容。牛马片场把这些步骤放在同一个工作台中，保留每一步的任务状态、人工选择和执行记录。
 
-> [!NOTE]
-> 以下为经过脱敏处理的 Windows 本地运行截图，仅用于展示页面布局和工作流程，不包含真实任务内容、账号凭据或个人信息。
+| 找到内容 | 做成短片 | 持续改进 |
+| --- | --- | --- |
+| 上传 / 本地 / NAS 素材导入 | 查看原文并调整片段起止点 | 导入抖音作品指标、确认归因 |
+| 本地 faster-whisper 转写与简体输出 | FFmpeg 切片、字幕独立审核 | 周总结与 Prompt 版本对比 |
+| AI 高光候选与结构化评分 | 准备标题、话题、封面帧 | 确认改进建议、预览动态排期 |
 
-### 工作台
+```mermaid
+flowchart LR
+    A[导入素材] --> B[转写与 AI 选片]
+    B --> C[人工审片]
+    C --> D[生成短片]
+    D --> E[内容准备与排期]
+    E --> F[发布执行记录]
+    F --> G[内容复盘]
+    G -. 确认后改进 .-> B
+```
 
-![牛马片场工作台](docs/images/dashboard.webp)
+**本地优先，处理方式由你配置。** 视频、数据库与浏览器登录状态保存在本机；选择远程转写或 AI 服务时，相应音频或文本会发送给所选服务。转写支持本地模式；AI 支持受控 Codex CLI，并保留 OpenAI-compatible / DeepSeek、Ollama 兼容入口。各入口需要对应的本地环境或账号配置。
+
+## 界面预览
+
+下图为已公开的脱敏界面截图，展示工作流程；具体控件以当前版本为准。
+
+![工作台：统一查看任务状态与处理进度](docs/images/dashboard.webp)
+
+<details>
+<summary><strong>查看任务详情、片段审核与发送中心</strong></summary>
 
 ### 任务详情
 
-![牛马片场任务详情](docs/images/task-detail.png)
+![任务详情与处理阶段](docs/images/task-detail.png)
 
 ### 片段审核
 
-![牛马片场片段审核](docs/images/clip-review.webp)
+![人工查看候选片段并确认选择](docs/images/clip-review.webp)
 
 ### 发送中心
 
-![牛马片场发送中心](docs/images/publish-center.png)
+![内容准备、排期与执行记录](docs/images/publish-center.png)
 
-## 零配置体验 Demo
+</details>
 
-还没有视频、API Key 或平台账号时，可以先启动隔离 Demo：
+## 快速开始
+
+### Windows 原生运行
+
+准备 **Windows 10 / 11、Python 3.12+、Git、FFmpeg / FFprobe**，并确保命令能在 PowerShell 中运行。真实发布还需要本机 Google Chrome。
+
+在准备存放项目的目录打开 PowerShell：
+
+```powershell
+git clone https://github.com/damingishere-coder/Ai-Clip-Workflow.git
+cd Ai-Clip-Workflow
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\scripts\setup.ps1
+.\scripts\start_native.ps1
+```
+
+打开 **[本地工作台](http://127.0.0.1:8001)**，在设置中检查转写与 AI 配置，先用一条短视频完成“导入 → 分析 → 审片 → 生成本地成片”。
+
+- `setup.ps1` 会保留已有 `.env`；首次初始化生成本地 Token 与目录配置。
+- 原生启动默认使用 E 盘素材存储。没有 E 盘时可运行 `.\scripts\start_native.ps1 -StorageRoot D:\NiuMaData`，路径换成自己的目录。
+- 离线转写还需准备模型；NVIDIA GPU 环境见 [本地部署指南](docs/DEPLOYMENT.md)。
+- 已使用 RunDock 托管时，通过原服务记录启停，避免重复占用 `8001` / `8765`。
+- 手动启动的服务使用 `.\scripts\stop_native.ps1` 停止。
+
+完整说明：[新手指南](docs/PROJECT_GUIDE.md) · [环境与启动模式](docs/PORTABLE_SETUP.md) · [常见部署问题](docs/DEPLOYMENT.md)
+
+### 先试用隔离 Demo
+
+已安装并启动 Docker Desktop 时，可在克隆后的项目目录执行：
 
 ```powershell
 .\scripts\start.ps1 -Demo
 ```
 
-Demo 会使用独立的 `demo-data/` 和 `workspace/demo/`，生成虚构任务、AI 候选片段、切片与安全的 `manual_export` 发布草稿。它不会连接真实平台、不会使用正式数据库，也不会启动发布调度器。
+Demo 使用虚构任务、独立数据库与 `manual_export` 草稿，关闭发布调度，不需要 API Key 或真实平台账号。它只演示工作台流程。停止 Demo 使用 `.\scripts\stop.ps1 -Demo`，需要恢复样例时使用 `.\scripts\start.ps1 -Demo -ResetDemo`。
 
-恢复初始 Demo：
+## 能力与使用边界
 
-```powershell
-.\scripts\start.ps1 -Demo -ResetDemo
-```
+| 能力 | 当前状态 |
+| --- | --- |
+| 素材、转写、AI 选片、审核与切片 | 已实现；需配置所选模型与服务 |
+| AI 恢复 | 按单元保留进度和证据；不确定结果须确认后重试 |
+| 内容复盘、周总结、动态排期 | 已实现；建议应用、归因确认与排期预览保留人工入口 |
+| 抖音发布 | Windows Chrome Worker 执行；需登录与逐账号实测 |
+| B站 | 保留后端与历史兼容，当前前台和自动同步不启用 |
+| 字幕 | 独立工作台；全自动流程不自动烧录字幕 |
+| 云端多人协作 | 当前不支持，面向本地单用户 |
 
-## 为什么做这个项目
+> [!IMPORTANT]
+> 真实投稿需要你拥有素材使用权并完成平台登录、验证和内容审核。系统不绕过验证码或风控；发布结果不确定时进入人工复核。首次体验建议先生成本地短片，再验证真实发布。
 
-长视频切片通常不是“剪一刀”这么简单。真正耗时的是转写、找高光、反复审核、生成多个版本、准备平台文案、安排发布时间，以及记录每一次发布结果。
+## 版本与同步
 
-牛马片场把这些步骤收拢到一条本地工作流中：
+**2.3.0 将既有本地运行功能统一收拢到 `master`。** 根目录 `VERSION` 表示代码版本；正式安装发布以 [GitHub Releases](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases) 为准。版本号更新不代替最终发布验收。
 
-- **AI 找高光**：优先支持本机受控 Codex CLI，并兼容远程 OpenAI-compatible / DeepSeek 和本地 Ollama。
-- **人工可控**：候选片段可以启用、禁用，并修改标题、摘要和出入点。
-- **统一生产**：转写、切片、文案、封面帧、排期和执行记录集中管理。
-- **本地优先**：视频、数据库、API Key 和浏览器登录状态保留在用户电脑。
-- **保守发布**：只有获得明确平台成功证据才标记为已发布；结果不确定时进入人工复核。
+后续只维护一个稳定主干：短期 `codex/*` 分支 → PR → 检查通过 → 合并 `master` → 更新既有运行服务。历史实验不视为正式版本，详见 [分支与版本维护](docs/BRANCHING.md)。
 
-## 工作流程
-
-```mermaid
-flowchart LR
-    A[导入长视频] --> B[提取音频与转写]
-    B --> C[AI 分析高光]
-    C --> D[人工审核片段]
-    D --> E[生成短视频]
-    E --> F[准备标题 / 简介 / 话题 / 封面]
-    F --> G[立即发送或排期]
-    G --> H[抖音发送中心]
-    H --> I[成功 / 失败 / 人工复核记录]
-```
-
-## 当前能力
-
-| 模块 | 能力 | 状态 |
-| --- | --- | --- |
-| 素材管理 | 浏览器上传、本地路径、NAS 路径、独立任务目录 | ✅ 可用 |
-| 语音转写 | 火山引擎远程转写、faster-whisper 本地转写 | ✅ 可用 |
-| AI 选片 | 通用内容价值、综艺笑点优先、长内容分段分析 | ✅ 可用 |
-| 审核切片 | 编辑候选、保存选择、按需生成新切片版本 | ✅ 可用 |
-| 内容准备 | 标题、简介、话题、封面帧、账号和可见范围 | ✅ 可用 |
-| 排期计划 | 批量预览、跨午夜窗口、月历、续接最晚排期 | ✅ 可用 |
-| 数据保护 | SQLite 一致性备份、清单校验、恢复前回滚与升级保护 | ✅ 可用 |
-| 抖音发布 | 发送中心 + Windows Chrome Worker + 独立浏览器账号目录 | 🟡 需逐账号灰度 |
-| B站发布后端 | API、Publisher 与既有历史保留，当前前台和自动同步不启用 | ⚪ 兼容保留 |
-| 字幕工作台 | ASS / FFmpeg 字幕成片 | 🟡 独立使用，未强绑全自动流程 |
-| 多用户与云端部署 | 权限系统、多人协作、公网服务 | ❌ 暂不支持 |
-
-## 快速开始
-
-### Windows 原生模式（日常推荐）
-
-```powershell
-git clone https://github.com/damingishere-coder/Ai-Clip-Workflow.git
-cd Ai-Clip-Workflow
-.\scripts\setup.ps1
-.\scripts\start_native.ps1
-```
-
-首次安装完成后，原生启动脚本会：
-
-- 使用项目 `.venv` 直接启动 FastAPI，不要求 Docker Desktop 常驻
-- 继续读取本机 `.env`，不会把 Token 写进启动参数
-- 将 SQLite、任务目录、上传临时目录和发布包映射到 Windows 路径
-- 检测到 Google Chrome 时启动或复用 Windows 发布 Worker
-- 等待 `/health` 通过后再报告启动成功
-
-浏览器地址：
-
-```text
-http://127.0.0.1:8001
-```
-
-停止服务：
-
-```powershell
-.\scripts\stop_native.ps1
-```
-
-它只会停止经过 PID、项目目录、端口、启动时间和命令行共同校验的本项目进程。若工作台已交给 Alter 托管，请在 Alter 中停止 `Niuma-Studio`；`stop_native.ps1` 仍可单独停止本项目发布 Worker。
-
-### Docker 完整模式（集成、验收与回退）
-
-Docker 配置仍完整保留。需要 Compose 验收、镜像测试或原生模式回滚时运行：
-
-```powershell
-.\scripts\doctor.ps1
-.\scripts\start.ps1
-```
-
-停止 Docker 完整模式仍使用 `scripts\stop.ps1`。不要添加 `--volumes`，宿主 SQLite 与 E 盘任务目录也不要删除。
-
-### 备份、恢复与升级保护
-
-创建经过 SQLite 完整性和 SHA-256 校验的备份：
-
-```powershell
-.\scripts\backup.ps1
-```
-
-升级代码前先创建回滚点：
+已有安装升级前先备份，且确认实际运行目录：
 
 ```powershell
 .\scripts\pre_upgrade.ps1
-git pull --ff-only
-.\scripts\acceptance.ps1
+git status --short --branch
 ```
 
-安全恢复备份：
+工作区干净、位于 `master` 且没有本地独有提交时，执行 `git pull --ff-only`，再按 [部署说明](docs/DEPLOYMENT.md) 重启已有服务。含未提交修改或正在使用功能分支的目录，先按 [分支维护指南](docs/BRANCHING.md) 核对，不直接覆盖。
 
-```powershell
-.\scripts\restore.ps1 `
-  -BackupPath .\backups\niuma-studio-manual-YYYYMMDD-HHMMSS.zip `
-  -ConfirmRestore `
-  -StopServices
-```
+## 文档导航
 
-备份默认包含数据库和 `.env`，不包含原视频；包含 `.env` 的 ZIP 可能含 API Key 与 Token，不能上传到公开位置。完整说明见 [备份恢复指南](docs/BACKUP_AND_RESTORE.md)。
-
-### 开发热重载
-
-```powershell
-.\scripts\start.ps1 -Development
-```
-
-正式 `docker-compose.yml` 不再启用热重载；开发模式通过 `docker-compose.dev.yml` 单独挂载代码目录。
-开发模式会自动跳过 Windows 发布 Worker；如果只需要工作台，也可以在正式模式使用 `-SkipWorker`。
-
-### 真实抖音 / B站发布
-
-```powershell
-.\scripts\start_native.ps1
-```
-
-原生模式默认启动或复用 Windows 发布 Worker；只查看工作台时可加 `-SkipWorker`。Docker 完整模式仍可使用 `scripts\start.ps1`，其中 `-WithPublisher` 仅为兼容旧命令。真实发布需要 Windows、Google Chrome、平台账号人工登录，以及二维码、短信、验证码和风控处理。第一次真实发布必须使用一条低风险测试视频。
-
-### 本地 Python
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-.\scripts\setup.ps1
-uvicorn app.main:app --reload --port 8001
-```
-
-完整启动模式、自定义存储路径和 Demo 说明见 [通用启动指南](docs/PORTABLE_SETUP.md)。
-
-## 首次成功标准
-
-完成安装后，建议先验证生产链路，不要直接测试真实投稿：
-
-1. 首页和 `/health` 可以正常打开。
-2. 上传一条 1～3 分钟测试视频并创建任务。
-3. 转写与 AI 分析完成后出现至少一条候选片段。
-4. 在审核页选择片段并生成一个本地短视频。
-5. 生成的内容可以进入发送中心。
-
-排期和真实投稿属于第二阶段验证，不应成为第一次安装的阻塞条件。
-
-## 运行边界
-
-- 目前面向 **Windows 本地单用户**，使用 FastAPI、SQLite 和本地文件系统。
-- 正式模式默认发布方式为 `local_browser`；`manual_export` 只生成本地发布包。
-- Demo 模式固定关闭调度器并使用 `manual_export`，不连接真实账号。
-- 登录失效、验证码、风控或结果不确定时，任务进入 `NEED_REVIEW`，不会自动重复上传。
-- 平台页面可能变化，抖音和B站真实投稿能力需要逐账号、逐版本验证。
-- 项目不会保存平台账号密码，也不会尝试绕过平台安全机制。
-
-详细状态、Scheduler、Worker、API 和发布终态说明见 [技术参考](docs/TECHNICAL_REFERENCE.md)。
-
-## 文档
-
-| 文档 | 内容 |
+| 我想做什么 | 从这里开始 |
 | --- | --- |
-| [通用启动指南](docs/PORTABLE_SETUP.md) | setup、doctor、正式模式、Demo、开发模式和真实发布 |
-| [新手启动指南](docs/PROJECT_GUIDE.md) | 环境准备、配置、首次测试和常见问题 |
-| [备份恢复指南](docs/BACKUP_AND_RESTORE.md) | 数据库、`.env`、媒体文件、恢复回滚和升级保护 |
-| [技术参考](docs/TECHNICAL_REFERENCE.md) | 架构、存储、排期、发布状态和测试命令 |
-| [依赖维护策略](docs/DEPENDENCY_POLICY.md) | 固定版本、升级流程与 CI 验证 |
-| [Release 检查清单](docs/RELEASE_CHECKLIST.md) | 自动化、Windows 实机、隐私与正式发布检查 |
-| [路线图](ROADMAP.md) | 后续版本计划和暂不支持范围 |
-| [贡献指南](CONTRIBUTING.md) | Issue、开发环境、测试和 Pull Request 规则 |
-| [安全策略](SECURITY.md) | API Key、Cookie、本地数据与漏洞报告方式 |
-| [更新日志](CHANGELOG.md) | 公开版本变化 |
-
-## 开发与测试
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-pytest -v
-```
-
-CI 目前检查：
-
-- Python 编译与 Ruff
-- pytest
-- JavaScript 语法
-- PowerShell 语法
-- 正式、开发和 Demo Compose 配置
-- 敏感运行时文件与备份 ZIP
-- 隔离 Demo 建库与数据数量
-- 备份、恢复和回滚往返测试
-- 最终 Docker 镜像构建、健康检查与主要页面
-
-自动化测试使用独立数据，不应连接真实平台账号或触发真实投稿。完整开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+| 安装、配置、处理第一条视频 | [新手指南](docs/PROJECT_GUIDE.md) |
+| 了解启动方式与 Demo | [通用启动](docs/PORTABLE_SETUP.md) |
+| 备份数据或回滚升级 | [备份与恢复](docs/BACKUP_AND_RESTORE.md) |
+| 查看技术实现与系统边界 | [技术参考](docs/TECHNICAL_REFERENCE.md) · [架构](docs/ARCHITECTURE.md) |
+| 了解版本变化与后续计划 | [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md) |
+| 维护主干或准备发布 | [分支维护](docs/BRANCHING.md) · [发布检查](docs/RELEASE_CHECKLIST.md) |
+| 报告问题或参与开发 | [Issues](https://github.com/damingishere-coder/Ai-Clip-Workflow/issues) · [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) |
 
 ## 参与贡献
 
-欢迎提交 Bug、功能建议、文档改进和平台适配修复。开始之前请阅读 [贡献指南](CONTRIBUTING.md)。
+欢迎提交可复现的问题、安装体验反馈、文档改进与测试。提交前请阅读 [贡献指南](CONTRIBUTING.md)，不要上传真实视频、数据库、API Key、Cookie 或运行日志中的私人信息。
 
-涉及平台发布自动化的变更必须保留人工验证与风控边界，不接受绕过验证码、登录验证或平台限制的实现。
-
-## License
-
-本项目使用 [MIT License](LICENSE)。第三方依赖和外部服务仍分别受其自身许可证、服务条款及平台规则约束。
-
----
-
-<div align="center">
-
-如果这个项目对你有帮助，欢迎 Star、提交 Issue，或分享你的使用反馈。
-
-</div>
+采用 [MIT License](LICENSE)。第三方组件见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

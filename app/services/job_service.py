@@ -559,10 +559,9 @@ def update_job_checkpoint(
                 connection.rollback()
                 raise ValueError("Workflow Job checkpoint_json 已损坏，拒绝覆盖 AI 恢复证据") from exc
             if isinstance(current_checkpoint, dict) and "_ai_analysis_units_v1" in current_checkpoint:
-                merged_checkpoint.setdefault(
-                    "_ai_analysis_units_v1",
-                    current_checkpoint["_ai_analysis_units_v1"],
-                )
+                # PipelineCheckpoint may still hold the ledger from before this
+                # attempt. Only the unit executor owns updates to the live ledger.
+                merged_checkpoint["_ai_analysis_units_v1"] = current_checkpoint["_ai_analysis_units_v1"]
         cursor = connection.execute(
             f"UPDATE workflow_jobs SET checkpoint_json = ?, checkpoint_updated_at = ?, updated_at = ? WHERE {condition}",
             (json.dumps(merged_checkpoint, ensure_ascii=False), now, now, job_id, *lease_params),
@@ -1146,26 +1145,28 @@ def _sync_auto_pipeline_task_failed(
     if not row:
         return
     failed_by_running = {
-        "CREATED": "FAILED_PREPARING_SOURCE",
-        "PREPARING_SOURCE": "FAILED_PREPARING_SOURCE",
-        "TRANSCRIBING": "FAILED_TRANSCRIBING",
-        "AI_ANALYZING": "FAILED_AI_ANALYZING",
-        "CLIP_SELECTING": "FAILED_CLIP_SELECTING",
-        "VIDEO_CUTTING": "FAILED_VIDEO_CUTTING",
-        "SUBTITLE_DRAFTING": "FAILED_SUBTITLE_DRAFTING",
-        "METADATA_GENERATING": "FAILED_METADATA_GENERATING",
-        "SCHEDULE_CREATING": "FAILED_SCHEDULE_CREATING",
-        "PUBLISH_JOB_CREATING": "FAILED_PUBLISH_JOB_CREATING",
+        "CREATED": ("FAILED_PREPARING_SOURCE", 8),
+        "PREPARING_SOURCE": ("FAILED_PREPARING_SOURCE", 8),
+        "TRANSCRIBING": ("FAILED_TRANSCRIBING", 25),
+        "AI_ANALYZING": ("FAILED_AI_ANALYZING", 45),
+        "ai_analyzing": ("FAILED_AI_ANALYZING", 45),
+        "CLIP_SELECTING": ("FAILED_CLIP_SELECTING", 58),
+        "VIDEO_CUTTING": ("FAILED_VIDEO_CUTTING", 70),
+        "SUBTITLE_DRAFTING": ("FAILED_SUBTITLE_DRAFTING", 75),
+        "METADATA_GENERATING": ("FAILED_METADATA_GENERATING", 84),
+        "SCHEDULE_CREATING": ("FAILED_SCHEDULE_CREATING", 90),
+        "PUBLISH_JOB_CREATING": ("FAILED_PUBLISH_JOB_CREATING", 95),
     }
-    failed_status = failed_by_running.get(str(row["status"] or ""))
-    if not failed_status:
+    failed_state = failed_by_running.get(str(row["status"] or ""))
+    if not failed_state:
         return
+    failed_status, failed_progress = failed_state
     error = " ".join(str(message or "自动流水线子进程异常退出").split())[:1000]
     connection.execute(
         """
         UPDATE tasks
-        SET status = ?, error_message = ?, last_error = ?, updated_at = ?
+        SET status = ?, progress = ?, error_message = ?, last_error = ?, updated_at = ?
         WHERE id = ? AND status = ? AND COALESCE(is_deleted, 0) = 0
         """,
-        (failed_status, error, error, now, task_id, str(row["status"])),
+        (failed_status, failed_progress, error, error, now, task_id, str(row["status"])),
     )

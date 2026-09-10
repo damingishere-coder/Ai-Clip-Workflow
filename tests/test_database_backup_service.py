@@ -18,6 +18,7 @@ from app.services.database_backup_service import (
     create_media_cleanup_backup,
     create_publish_migration_backup,
     create_schema_migration_backup,
+    sqlite_diagnostic_report,
     sqlite_quick_check,
 )
 
@@ -143,6 +144,68 @@ def test_media_cleanup_backup_is_always_created_and_valid(tmp_path):
     assert backup.name.startswith("workflow-before-media-cleanup-")
     assert sqlite_quick_check(backup) == "ok"
     _assert_portable_backup(backup)
+
+
+def _create_current_database(monkeypatch, tmp_path: Path) -> Path:
+    database_path = tmp_path / "data" / "workflow.sqlite3"
+    test_settings = SimpleNamespace(
+        database_path=database_path,
+        data_dir=database_path.parent,
+        tasks_dir=tmp_path / "tasks",
+        publish_default_mode="local_browser",
+    )
+    monkeypatch.setattr(database_module, "settings", test_settings)
+    database_module.init_db()
+    return database_path
+
+
+def test_diagnostic_rejects_migration_checksum_drift(monkeypatch, tmp_path):
+    database_path = _create_current_database(monkeypatch, tmp_path)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE schema_migrations SET checksum = 'tampered' WHERE version = ?",
+            (database_module.CONTENT_REVIEW_MIGRATION_VERSION,),
+        )
+        connection.commit()
+
+    report = sqlite_diagnostic_report(database_path)
+
+    assert report["status"] == "error"
+    assert any("checksum" in item for item in report["migration_errors"])
+
+
+def test_diagnostic_rejects_missing_required_index(monkeypatch, tmp_path):
+    database_path = _create_current_database(monkeypatch, tmp_path)
+    missing_index = database_module.CONTENT_REVIEW_REQUIRED_INDEXES[0]
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(f"DROP INDEX {missing_index}")
+        connection.commit()
+
+    report = sqlite_diagnostic_report(database_path)
+
+    assert report["status"] == "error"
+    assert any(missing_index in item for item in report["migration_errors"])
+
+
+def test_deep_diagnostic_rejects_foreign_key_violation(monkeypatch, tmp_path):
+    database_path = _create_current_database(monkeypatch, tmp_path)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute(
+            """
+            INSERT INTO clip_candidates (
+                id, task_id, title, start_time, end_time, duration_seconds,
+                created_at, updated_at
+            ) VALUES ('orphan', 'missing-task', '孤儿片段', '00:00:00', '00:00:01', 1, 'now', 'now')
+            """
+        )
+        connection.commit()
+
+    report = sqlite_diagnostic_report(database_path, deep=True)
+
+    assert report["status"] == "error"
+    assert report["integrity_check"] == "ok"
+    assert report["foreign_key_violation_count"] == 1
 
 
 def test_concurrent_publish_migration_creates_one_valid_backup(monkeypatch, tmp_path):

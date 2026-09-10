@@ -1,5 +1,61 @@
 # 数据库结构说明
 
+## 2026-09-08 提示词归档
+
+- 账本迁移：`20260908_01_prompt_archive`。新增 `ai_prompt_presets.is_archived INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1))`；`preset_004` 设为归档、非默认，其他方案内容及历史引用不改。
+- 迁移前按现有备份接口生成 `prompt-archive` 备份，迁移与账本登记由现有事务迁移器管理。重启校验 4 号仍归档，初始化不会重新开放该入口。
+- `GET /api/ai-prompt-presets` 默认过滤归档项；`include_archived=true` 可读取历史正文。归档项不接受正文修改、新任务绑定或新的周复盘规则应用；历史分析版本、已绑定任务与冻结规则继续可读。
+- 分析结果接口新增 `prompt_version_number`，来源为已关联的不可变版本；未关联历史返回空值，不按分析次数或名称猜测。
+
+## 2026-08-30：迁移原子性与 AI Prompt 外键一致性
+
+- 新迁移账本版本为 `20260830_01_ai_prompt_version_fk`。历史库缺少 `ai_analysis_runs.prompt_version_id → ai_prompt_versions.id` 外键时，先生成 `workflow-before-ai-prompt-version-fk-*` 在线备份，再在一个事务内重建 AI Run 表。
+- 重建保留全部规范字段、AI Run 数据、显式索引和触发器；`clip_feedback.analysis_run_id` 等下游引用保持不变。发现未知字段、残留临时表或不存在的 Prompt 版本引用时直接拒绝迁移，不猜测、不清空历史数据。
+- Prompt 外键与新建数据库统一使用 `ON UPDATE NO ACTION / ON DELETE NO ACTION`。结构复制、索引恢复、`PRAGMA foreign_key_check` 与账本写入全部成功后才提交；提交或回滚后恢复当前连接原有的外键检查状态。
+- `20260829_02_content_feedback_loop` 的建表和建索引改为逐条执行，避免 `sqlite3.executescript()` 在账本事务内隐式提交；故障时不会残留半套实验结构或错误账本。
+
+## 2026-08-29：内容诊断与实验闭环
+
+迁移账本版本为 `20260829_02_content_feedback_loop`。迁移只新增表和索引，不删除或改写现有作品快照、发布记录、排期或 Prompt 版本；应用前继续通过 SQLite Online Backup 生成 `workflow-before-content-feedback-loop-*` 备份。
+
+### `content_improvement_experiments`
+
+- 以 `account_id + recommendation_id` 唯一标识一次基于固定证据批次的实验，保存诊断类型、假设、唯一动作、主指标方向、护栏指标、基线批次及冻结的中位数/四分位数 JSON。
+- 固定门槛为实验 20 条、对照 20 条、3 个不同官方导出周；状态为 `active / completed / cancelled`，人工结论为 `keep / revert / inconclusive`。
+- `baseline_batch_id` 外键指向官方导入批次；创建后不会随着后续数据重算或改写冻结基线。
+
+### `content_improvement_experiment_items`
+
+- 关联实验与 `publish_jobs`，`publish_job_id` 全局唯一，保证一个作品同一时刻只有一个实验归属。
+- 只允许在 `DRAFT / WAITING / SCHEDULED` 且没有 `claimed_at / started_at / attempt_count` 执行证据时关联、切换或解除；执行开始后永久冻结该作品的实验归属。
+- 发送中心使用原子设置接口完成新增、切换和解除，不会留下“旧关联已删、新关联未写”的中间状态。
+
+诊断本身为只读查询：只读取当前账号最新的 `douyin_item_export` 快照，未匹配、多个候选或核心指标缺失的作品标记为证据不足。官方导出周按 `captured_at` 的北京时间 ISO 自然周去重；账号趋势表不参与周数。Prompt 统计同样按账号和官方作品来源隔离。
+
+## 2026-08-29：抖音官方作品报表完整指标
+
+- 新迁移账本版本：`20260829_01_douyin_official_item_export`。它只追加字段，不修改已应用的 `20260828_01_content_review_v1` 名称、定义或 checksum。
+- `douyin_item_metric_snapshots` 新增 `completion_rate REAL`、`home_visit_count INTEGER`、`follower_gain_count INTEGER`、`content_genre TEXT`、`audit_status TEXT`。
+- 既有 `play_count / like_count / comment_count / share_count / collect_count / five_second_completion_rate / cover_click_rate / two_second_bounce_rate / average_watch_seconds` 继续复用；`completion_rate` 与 `five_second_completion_rate` 是两个独立字段。
+- 官方作品报表没有平台作品 ID。`aweme_id` 对这类快照保存 `export:<SHA-256>` 稳定内部键，哈希输入为规范化标题和北京时间发布时间；它只用于批次内唯一性，不在页面伪装成抖音作品 ID。
+- `content_metric_import_batches.source_kind` 对自动下载和人工作品上传统一为 `douyin_item_export`；`source_sha256` 是规范化白名单 JSON 的 SHA-256，因此两个入口可以交叉幂等。账号趋势表仍为 `account_daily_file`，继续使用原文件哈希。
+- 批次只保存安全文件名、规范化白名单 JSON、行数、周期和匹配统计；不保存原始 Excel、Cookie、Token、本机临时路径或页面响应。
+- 最新作品查询优先以 `publish_job_id` 作为归并键；未关联记录才使用内部作品键，避免平台标题修改后把同一发布记录重复展示。
+
+## 2026-08-28：内容复盘、Prompt 版本与指标快照
+
+- `clip_candidates.source_analysis_run_id`：候选片段来源 AI Run；历史候选只在任务能唯一确定 Run 时回填。
+- `ai_analysis_runs.prompt_version_id / prompt_text_sha256`：固定本次分析使用的不可变 Prompt 版本和文本哈希。
+- `clip_feedback.decision_source`：区分审片开关自动事件 `review_toggle` 与旧接口 `explicit_feedback`。
+- `ai_prompt_versions`：按预设保存版本号、名称快照、Prompt 全文、SHA-256 和创建时间；同预设内容未变时不新增版本。
+- `content_metric_import_batches`：保存账号、来源类型、文件名、文件哈希、规范化预览 JSON、状态、周期和统计；不保存原文件，预览 24 小时失效。
+- `douyin_account_daily_metric_snapshots`：账号级日汇总，只用于趋势基线，不关联作品、候选或 Prompt。
+- `douyin_item_metric_snapshots`：作品级指标快照，保存平台作品 ID、指标白名单、匹配状态/方法和可空发布记录 ID；仅精确或人工确认数据进入主结论。
+
+完整归因链为：`douyin_item_metric_snapshots → publish_jobs → output_clip → clip_candidates → ai_analysis_runs → ai_prompt_versions`。迁移账本版本为 `20260828_01_content_review_v1`，同时验证内容复盘关键索引与 Prompt SHA-256。
+
+恢复工具对待恢复临时库和替换后的正式库都执行 `PRAGMA integrity_check`、`PRAGMA foreign_key_check`、迁移账本/checksum 和已应用迁移关键索引校验；活动服务或独占锁失败时拒绝恢复。
+
 ## 2026-08-24：字幕自动流水线字段
 
 `subtitle_jobs` 在原有不可变 revision 引用上增加：

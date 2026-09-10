@@ -154,7 +154,8 @@ def test_worker_marks_job_failed_when_subprocess_cannot_start(monkeypatch) -> No
         _cleanup(task_id)
 
 
-def test_parent_worker_failure_settles_auto_pipeline_task_state() -> None:
+@pytest.mark.parametrize("running_status", ["AI_ANALYZING", "ai_analyzing"])
+def test_parent_worker_failure_settles_auto_pipeline_task_state(running_status: str) -> None:
     task_id, created = _create_task_and_job()
     try:
         with get_connection() as connection:
@@ -163,8 +164,8 @@ def test_parent_worker_failure_settles_auto_pipeline_task_state() -> None:
                 (job_service.JOB_TYPE_AUTO_PIPELINE, created["id"]),
             )
             connection.execute(
-                "UPDATE tasks SET status = ? WHERE id = ?",
-                ("AI_ANALYZING", task_id),
+                "UPDATE tasks SET status = ?, progress = 65 WHERE id = ?",
+                (running_status, task_id),
             )
             connection.commit()
         claimed = job_service.claim_job(created["id"], "auto-parent-owner")
@@ -175,13 +176,39 @@ def test_parent_worker_failure_settles_auto_pipeline_task_state() -> None:
             lease_token=claimed["lease_token"],
         )
         with get_connection() as connection:
-            status = connection.execute(
-                "SELECT status FROM tasks WHERE id = ?",
+            task = connection.execute(
+                "SELECT status, progress, error_message FROM tasks WHERE id = ?",
                 (task_id,),
-            ).fetchone()["status"]
-        assert status == "FAILED_AI_ANALYZING"
+            ).fetchone()
+        assert task["status"] == "FAILED_AI_ANALYZING"
+        assert task["progress"] == 45
+        assert task["error_message"] == "子进程异常退出"
     finally:
         _cleanup(task_id)
+
+
+def test_ai_checkpoint_update_counts_as_worker_progress() -> None:
+    before = {
+        "progress": 25,
+        "message": "正在执行：AI_ANALYZING",
+        "checkpoint_updated_at": "2026-08-28 15:40:00",
+        "heartbeat_at": "2026-08-28T15:40:20+00:00",
+    }
+    after_checkpoint = {
+        **before,
+        "checkpoint_updated_at": "2026-08-28 15:45:00",
+    }
+    after_heartbeat = {
+        **before,
+        "heartbeat_at": "2026-08-28T15:40:40+00:00",
+    }
+
+    assert job_worker._job_progress_state(after_checkpoint) != job_worker._job_progress_state(before)
+    assert job_worker._job_progress_state(after_heartbeat) == job_worker._job_progress_state(before)
+
+
+def test_regular_workflow_no_progress_timeout_defaults_to_thirty_minutes() -> None:
+    assert job_worker._job_no_progress_timeout({"job_type": job_service.JOB_TYPE_AUTO_PIPELINE}) == 1800
 
 
 def test_process_termination_error_is_contained_and_job_remains_recoverable(monkeypatch) -> None:

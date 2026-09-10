@@ -17,6 +17,33 @@ from app.services.pipeline_engine import PipelineEngine
 from app.services.video_cut_workflow_service import process_task_video_cuts
 
 
+@pytest.mark.parametrize("items,require_all,valid", [
+    ([], False, True),
+    ([{"source_id": "current"}], True, True),
+    ([{"source_id": "stale"}], False, False),
+    ([{"source_id": "current"}, {"source_id": "current"}], False, False),
+    ([], True, False),
+])
+def test_variety_validates_candidate_identity_before_checkpoint_success(monkeypatch, items, require_all, valid):
+    items = [{
+        "title": "有效标题", "topic_key": "同一话题", "summary": "有效摘要",
+        "highlight_reason": "互动", "arc_structure": "完整互动", "suggested_editing": "连续截取",
+        "start_time": "00:00:00", "end_time": "00:01:00", "key_moment_time": "00:00:30",
+        **{key: 80 for key in variety_comedy_analyzer.SCORE_FIELDS}, **item,
+    } for item in items]
+    monkeypatch.setattr(variety_comedy_analyzer, "generate_json_with_safe_retry",
+                        lambda *_args: json.dumps({"clips": items}))
+    def generate():
+        return variety_comedy_analyzer._generate_payload(
+            object(), "prompt", expected_key="clips", known_ids={"current"}, require_all=require_all,
+        )
+    if valid:
+        assert generate() == {"clips": items}
+    else:
+        with pytest.raises(variety_comedy_analyzer.AIAnalysisError):
+            generate()
+
+
 def _valid_general_payload(task_id: str) -> str:
     return json.dumps(
         {
@@ -236,6 +263,24 @@ def test_quality_degraded_analysis_is_manual_review_only(monkeypatch):
         process_task_video_cuts("test-quality-cut")
 
 
+def test_complete_long_live_analysis_meta_passes_cut_validation():
+    meta = {
+        "schema_version": 2,
+        "selection_profile": "long_live_talk",
+        "analysis_incomplete": False,
+        "quality_degraded": False,
+        "coverage_ratio": 1.0,
+        "coverage_percent": 100.0,
+        "invalid_item_count": 0,
+        "window_count": 2,
+        "completed_window_count": 2,
+        "failed_window_count": 0,
+        "failed_windows": [],
+    }
+
+    assert validate_ai_analysis_meta_for_cut(meta, "long_live_talk") == meta
+
+
 def test_missing_analysis_meta_blocks_manual_and_auto_cut(monkeypatch):
     engine = PipelineEngine()
     monkeypatch.setattr(engine, "_get_task", lambda _task_id: {"selection_profile": "general"})
@@ -391,16 +436,23 @@ def test_variety_global_judge_requires_complete_candidate_coverage():
     class Provider:
         def generate_json(self, _prompt: str, retry_instruction: str | None = None) -> str:
             del retry_instruction
-            return json.dumps({"ranked_clips": [{"source_id": "candidate-a"}]})
+            return json.dumps({"ranked_clips": [{
+                "source_id": "candidate-a", "title": "标题", "topic_key": "话题",
+                "arc_structure": "完整互动", "why_selected": "保留", "rejection_reason": "",
+                **{key: 80 for key in variety_comedy_analyzer.SCORE_FIELDS},
+            }]})
 
     judged, warning = variety_comedy_analyzer._global_judge(
         Provider(),
         candidates,
         "",
         [],
+        rows=[TranscriptRow("00:00:00", "00:01:00", 0, 60, "实际连续原文")],
         task_id="test-partial-judge",
         input_fingerprint="stable-input",
     )
 
-    assert set(judged) == {"candidate-a"}
-    assert "缺少 1 个候选" in warning
+    # Incomplete judging must not be checkpointed as a successful unit: a
+    # confirmed retry needs to call the provider instead of replaying it forever.
+    assert judged == {}
+    assert "遗漏当前候选" in warning

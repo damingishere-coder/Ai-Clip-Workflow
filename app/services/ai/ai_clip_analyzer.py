@@ -230,6 +230,7 @@ def build_provider(provider_name: str | None = None, purpose: str = "analysis") 
                 model=settings.ai_codex_model,
                 timeout_seconds=settings.ai_codex_timeout_seconds,
                 codex_home=settings.ai_codex_home,
+                diagnostics_dir=str(settings.data_dir / "diagnostics" / "codex"),
             )
         )
     if resolved == "remote":

@@ -7,6 +7,7 @@ import pytest
 
 from scripts.backup_restore import (
     BackupRestoreError,
+    _assert_exclusive_database_access,
     create_backup_bundle,
     restore_backup_bundle,
     verify_backup_bundle,
@@ -31,6 +32,12 @@ def _create_database(path: Path, *, multiplier: int = 1) -> dict[str, int]:
             CREATE TABLE clip_candidates (id TEXT PRIMARY KEY);
             CREATE TABLE output_clip (id TEXT PRIMARY KEY);
             CREATE TABLE publish_jobs (id TEXT PRIMARY KEY);
+            CREATE TABLE schema_migrations (
+                version TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                checksum TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );
             """
         )
         counts = {
@@ -210,3 +217,16 @@ def test_invalid_archive_never_replaces_current_database(tmp_path: Path) -> None
 
     assert _read_counts(database) == current_counts
     assert env_file.read_text(encoding="utf-8") == "VALUE=current\n"
+
+
+def test_restore_refuses_database_with_active_write_lock(tmp_path: Path) -> None:
+    database = tmp_path / "workflow.sqlite3"
+    _create_database(database)
+    connection = sqlite3.connect(database, isolation_level=None)
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(BackupRestoreError, match="独占锁"):
+            _assert_exclusive_database_access(database)
+    finally:
+        connection.execute("ROLLBACK")
+        connection.close()

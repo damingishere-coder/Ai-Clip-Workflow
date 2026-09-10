@@ -62,17 +62,26 @@ def execute_checkpointed_ai_unit(
     input_fingerprint: str,
     unit_id: str,
     operation: Callable[[], dict[str, Any]],
+    request_fingerprint: str = "",
+    validate_payload: Callable[[dict[str, Any]], None] | None = None,
 ) -> AIUnitExecution:
     """执行一个可恢复 AI 单元；无 Job context 时保持旧的库内调用兼容。"""
     active = job_service.current_job_lease()
     if active is None:
-        return _execute_untracked(operation)
+        def checked_operation():
+            payload = operation()
+            if validate_payload is not None:
+                validate_payload(payload)
+            return payload
+        return _execute_untracked(checked_operation)
 
     state = _begin_unit(
         task_id=task_id,
         namespace=namespace,
         input_fingerprint=input_fingerprint,
         unit_id=unit_id,
+        request_fingerprint=request_fingerprint,
+        validate_payload=validate_payload,
     )
     if state.status != "call_provider":
         return state
@@ -81,6 +90,8 @@ def execute_checkpointed_ai_unit(
         payload = operation()
         if not isinstance(payload, dict):
             raise ValueError("AI 单元结果不是 JSON 对象")
+        if validate_payload is not None:
+            validate_payload(payload)
     except job_service.JobLeaseLostError:
         raise
     except Exception as exc:
@@ -137,6 +148,8 @@ def _begin_unit(
     namespace: str,
     input_fingerprint: str,
     unit_id: str,
+    request_fingerprint: str = "",
+    validate_payload: Callable[[dict[str, Any]], None] | None = None,
 ) -> AIUnitExecution:
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -149,9 +162,33 @@ def _begin_unit(
         namespace_state = _namespace_state(checkpoint, namespace, input_fingerprint)
         units = namespace_state.setdefault("units", {})
         previous = units.get(unit_id)
+        if request_fingerprint and isinstance(previous, dict):
+            previous_request = str(previous.get("request_fingerprint") or "")
+            if previous.get("status") == "completed" and previous_request != request_fingerprint:
+                if not previous_request:
+                    error = "旧 AI 批次未记录实际候选输入，无法安全复用；请确认重试后补齐此批次"
+                    units[unit_id] = {**previous, "status": "uncertain", "error": error}
+                    _write_checkpoint(connection, str(job["id"]), checkpoint)
+                    connection.commit()
+                    return AIUnitExecution(status="uncertain", error=error, reused=True)
+                # Keep the old confirmed result as evidence; changed candidates
+                # constitute a different request, even when the batch number is unchanged.
+                namespace_state.setdefault("superseded_units", []).append({
+                    "unit_id": unit_id, **previous,
+                })
+                previous = None
         if isinstance(previous, dict) and previous.get("status") == "completed":
             payload = _verified_payload(previous)
             if payload is not None:
+                if validate_payload is not None:
+                    try:
+                        validate_payload(payload)
+                    except Exception as exc:
+                        error = f"已缓存结果未通过当前校验：{_safe_error(exc)}；请确认后重试此单元"
+                        units[unit_id] = {**previous, "status": "uncertain", "error": error}
+                        _write_checkpoint(connection, str(job["id"]), checkpoint)
+                        connection.commit()
+                        return AIUnitExecution(status="uncertain", error=error, reused=True)
                 connection.commit()
                 return AIUnitExecution(status="completed", payload=payload, reused=True)
             previous = {
@@ -188,6 +225,7 @@ def _begin_unit(
             raise job_service.JobLeaseLostError("AI 单元缺少 Workflow Job 租约")
         units[unit_id] = {
             "status": "running",
+            "request_fingerprint": request_fingerprint,
             "workflow_job_id": str(job["id"]),
             "lease_generation": hashlib.sha256(active[2].encode("utf-8")).hexdigest(),
         }
@@ -267,7 +305,7 @@ def _finish_unit(
         if str(previous.get("lease_generation") or "") != generation:
             connection.rollback()
             raise job_service.JobLeaseLostError(f"AI 单元 lease 代际已改变：{unit_id}")
-        units[unit_id] = state
+        units[unit_id] = {**state, "request_fingerprint": previous.get("request_fingerprint", "")}
         _write_checkpoint(connection, str(job["id"]), checkpoint)
         connection.commit()
 

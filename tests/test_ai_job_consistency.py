@@ -227,6 +227,78 @@ def test_confirmed_ai_unit_is_reused_after_lease_takeover():
     assert calls == 1
 
 
+def test_pipeline_progress_cannot_overwrite_new_unit_results():
+    task_id = _create_task("stale-ledger")
+    claimed, owner = _claim_ai_job(task_id)
+    with job_service.job_lease_context(claimed["id"], owner, claimed["lease_token"]):
+        unit_checkpoint.execute_checkpointed_ai_unit(
+            task_id=task_id, namespace="test_units", input_fingerprint="stable",
+            unit_id="old", operation=lambda: {"value": "original"},
+        )
+        stale = job_service.get_job(claimed["id"])["checkpoint_json"]
+        unit_checkpoint.execute_checkpointed_ai_unit(
+            task_id=task_id, namespace="test_units", input_fingerprint="stable",
+            unit_id="new", operation=lambda: {"value": "repaired"},
+        )
+        stale["current_step"] = "AI_ANALYZING"
+        updated = job_service.update_job_checkpoint(claimed["id"], stale)
+    units = updated["checkpoint_json"]["_ai_analysis_units_v1"]["namespaces"]["test_units"]["units"]
+    assert set(units) == {"old", "new"}
+    assert json.loads(units["new"]["result_json"]) == {"value": "repaired"}
+    assert updated["checkpoint_json"]["current_step"] == "AI_ANALYZING"
+
+
+def test_changed_batch_input_is_recomputed_but_unchanged_input_is_reused():
+    task_id = _create_task("batch-input")
+    claimed, owner = _claim_ai_job(task_id)
+    calls = []
+
+    def execute(source):
+        def operation():
+            calls.append(source)
+            return {"clips": [{"source_id": source}]}
+        return unit_checkpoint.execute_checkpointed_ai_unit(
+            task_id=task_id, namespace="variety_expansion", input_fingerprint="task-input",
+            unit_id="batch_004", request_fingerprint=source, operation=operation,
+        )
+
+    with job_service.job_lease_context(claimed["id"], owner, claimed["lease_token"]):
+        assert execute("old").reused is False
+        assert execute("old").reused is True
+        changed = execute("new")
+        assert changed.payload == {"clips": [{"source_id": "new"}]}
+        assert execute("new").reused is True
+    assert calls == ["old", "new"]
+    namespace = job_service.get_job(claimed["id"])["checkpoint_json"]["_ai_analysis_units_v1"]["namespaces"]["variety_expansion"]
+    assert len(namespace["superseded_units"]) == 1
+    assert namespace["superseded_units"][0]["request_fingerprint"] == "old"
+
+
+@pytest.mark.parametrize("legacy_status", ["completed", "uncertain"])
+def test_unbound_or_uncertain_batch_is_not_silently_rebilled(legacy_status):
+    task_id = _create_task(f"batch-legacy-{legacy_status}")
+    claimed, owner = _claim_ai_job(task_id)
+    calls = []
+    with job_service.job_lease_context(claimed["id"], owner, claimed["lease_token"]):
+        unit_checkpoint.execute_checkpointed_ai_unit(
+            task_id=task_id, namespace="variety_expansion", input_fingerprint="task-input",
+            unit_id="batch_004", operation=lambda: {"clips": []},
+        )
+        if legacy_status == "uncertain":
+            with get_connection() as connection:
+                cp = job_service.get_job(claimed["id"])["checkpoint_json"]
+                cp["_ai_analysis_units_v1"]["namespaces"]["variety_expansion"]["units"]["batch_004"]["status"] = "uncertain"
+                connection.execute("UPDATE workflow_jobs SET checkpoint_json=? WHERE id=?", (json.dumps(cp), claimed["id"]))
+                connection.commit()
+        result = unit_checkpoint.execute_checkpointed_ai_unit(
+            task_id=task_id, namespace="variety_expansion", input_fingerprint="task-input",
+            unit_id="batch_004", request_fingerprint="actual-input",
+            operation=lambda: calls.append("unexpected") or {"clips": []},
+        )
+    assert result.status == "uncertain"
+    assert calls == []
+
+
 def test_started_ai_unit_without_local_result_is_not_rebilled_after_takeover(monkeypatch):
     task_id = _create_task("unit-uncertain")
     claimed, owner = _claim_ai_job(task_id, owner="uncertain-owner-a")
