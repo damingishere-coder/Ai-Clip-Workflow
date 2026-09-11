@@ -52,6 +52,9 @@ def sample():
     }
     with get_connection() as connection:
         connection.execute(
+            "DELETE FROM adaptive_schedule_policies WHERE account_id=?", (account,)
+        )
+        connection.execute(
             "DELETE FROM task_generation_rules WHERE preset_id=?", (preset,)
         )
         connection.execute(
@@ -81,21 +84,14 @@ def output_for(evidence, preset):
                 "insufficient": False,
                 "evidence_ids": ids,
                 "primary_metric": metric,
+                "hypothesis": "片段开头可能影响留存，尚需原文核验。",
+                "validation_needed": "核对原文、输出契约与缓存，不直接应用规则。",
             }
             for title, metric in [
                 ("开头更直接", "two_second_bounce_rate"),
                 ("保留优秀表达", "five_second_completion_rate"),
                 ("选择完整紧凑片段", "completion_rate"),
             ]
-        ],
-        "changes": [
-            {
-                "preset_id": preset,
-                "suggestion_indexes": [0, 1, 2],
-                "analysis_rules": "优先选择直接进入核心观点且语义完整的连续片段。",
-                "copy_rules": "标题优先使用片段中明确的冲突。",
-                "explanation": "根据好坏作品共同证据调整。",
-            }
         ],
     }
 
@@ -105,7 +101,8 @@ class FakeCodex:
         self.output = output
         self.calls = 0
 
-    def generate_json(self, prompt):
+    def generate_json_with_schema(self, prompt, schema):
+        assert schema == weekly.REPORT_SCHEMA
         self.calls += 1
         assert "context" in prompt and "suggestions" in prompt
         return json.dumps(self.output, ensure_ascii=False)
@@ -133,47 +130,96 @@ def new_task(preset):
     return task_id
 
 
-def test_weekly_synthesis_application_and_real_rollback(sample):
-    before = get_task_ai_prompt_snapshot(sample["task"])
+def test_manual_report_never_changes_rules(sample):
+    before = protected_state()
     report_id, provider = ready_report(sample)
     report = weekly.list_reports(sample["account"])["reports"][0]
+    assert report["result"]["format"] == weekly.REPORT_FORMAT
     assert len(report["result"]["suggestions"]) == 3
+    assert "changes" not in report["result"]
     assert report["evidence"]["scope"] == "all"
-    assert report["evidence"]["counts"]["good"] and report["evidence"]["counts"]["weak"]
-    assert (
-        get_task_ai_prompt_snapshot(sample["task"])["prompt_text"]
-        == before["prompt_text"]
-    )
     assert weekly.enqueue(sample["account"])["report_id"] == report_id
     assert weekly.enqueue(sample["account"], refresh=True)["report_id"] == report_id
     assert provider.calls == 1
-    result = weekly.apply_report(report_id)
-    assert weekly.apply_report(report_id) == result
-    created = new_task(sample["preset"])
-    after = get_task_ai_prompt_snapshot(created)
-    assert "优先选择直接进入" in after["prompt_text"]
-    assert after["prompt_version_id"] != before["prompt_version_id"]
-    assert (
-        get_task_ai_prompt_snapshot(sample["task"])["prompt_version_id"]
-        == before["prompt_version_id"]
+    assert protected_state() == before
+
+
+def protected_state():
+    with get_connection() as connection:
+        return {
+            table: [
+                tuple(row)
+                for row in connection.execute(f"SELECT * FROM {table} ORDER BY rowid")
+            ]
+            for table in (
+                "ai_prompt_presets",
+                "ai_prompt_versions",
+                "content_rule_heads",
+                "task_generation_rules",
+                "publish_jobs",
+                "content_rule_applications",
+            )
+        }
+
+
+def legacy_application(sample, report_id):
+    # Seed a pre-upgrade database record; production no longer has an apply path.
+    from app.services.ai_prompt_preset_service import (
+        ensure_ai_prompt_version_with_connection,
     )
-    assert "标题优先使用" in _metadata_prompt({"task_id": created}, "douyin")
-    assert "标题优先使用" not in _metadata_prompt({"task_id": sample["task"]}, "douyin")
-    assert "标题优先使用" not in _metadata_prompt({"task_id": created}, "bilibili")
-    assert (
-        weekly.list_reports(sample["account"])["reports"][0]["application"]["progress"][
-            "treatments"
-        ]
-        == 0
-    )
-    weekly.revert_application(result["application_id"])
-    reverted = get_task_ai_prompt_snapshot(new_task(sample["preset"]))
-    assert reverted["prompt_version_id"] == before["prompt_version_id"]
-    assert (
-        get_task_ai_prompt_snapshot(created)["prompt_version_id"]
-        == after["prompt_version_id"]
-    )
-    assert weekly.revert_application(result["application_id"])["status"] == "reverted"
+
+    with get_connection() as connection:
+        before = connection.execute(
+            "SELECT * FROM ai_prompt_presets WHERE id=?", (sample["preset"],)
+        ).fetchone()
+        prompt = before["prompt_text"] + weekly.RULE_MARKER + "历史选片规则"
+        version = ensure_ai_prompt_version_with_connection(
+            connection,
+            preset_id=sample["preset"],
+            preset_name=before["name"],
+            prompt_text=prompt,
+        )
+        change = {
+            "preset_id": sample["preset"],
+            "name": before["name"],
+            "suggestion_indexes": [0],
+            "before_prompt": before["prompt_text"],
+            "after_prompt": prompt,
+            "before_copy": "",
+            "copy_rules": "历史文案要求",
+            "analysis_rules": "历史选片规则",
+            "explanation": "历史已确认",
+            "after_version_id": version["id"],
+            "primary_metrics": ["play_count"],
+            "diff": "历史差异",
+        }
+        result = json.loads(
+            connection.execute(
+                "SELECT result_json FROM weekly_content_reports WHERE id=?",
+                (report_id,),
+            ).fetchone()[0]
+        )
+        result.pop("format", None)
+        result["changes"] = [change]
+        application_id = "historical-" + uuid4().hex[:12]
+        connection.execute(
+            "UPDATE weekly_content_reports SET result_json=? WHERE id=?",
+            (weekly.dump(result), report_id),
+        )
+        connection.execute(
+            "INSERT INTO content_rule_applications(id,report_id,state,changes_json,created_at) VALUES(?,?,'applied',?,'2026-08-01')",
+            (application_id, report_id, weekly.dump([change])),
+        )
+        connection.execute(
+            "UPDATE ai_prompt_presets SET prompt_text=? WHERE id=?",
+            (prompt, sample["preset"]),
+        )
+        connection.execute(
+            "INSERT INTO content_rule_heads(preset_id,copy_rules,application_id) VALUES(?,?,?)",
+            (sample["preset"], change["copy_rules"], application_id),
+        )
+        connection.commit()
+    return application_id
 
 
 def test_first_full_next_week_seven_days_and_history_frozen(sample):
@@ -226,7 +272,7 @@ def test_failed_output_never_changes_rules_and_manual_retry(sample):
 
 
 @pytest.mark.parametrize(
-    "mutate", ["foreign_evidence", "missing_good", "duplicate", "unsupported_target"]
+    "mutate", ["foreign_evidence", "missing_good", "duplicate", "rule_patch"]
 )
 def test_rejects_unverifiable_suggestions(sample, mutate):
     weekly.enqueue(sample["account"])
@@ -241,39 +287,31 @@ def test_rejects_unverifiable_suggestions(sample, mutate):
     elif mutate == "duplicate":
         result["suggestions"][1]["title"] = result["suggestions"][0]["title"]
     else:
-        result["changes"][0]["preset_id"] = "not-used-by-this-account"
+        result["changes"] = [{"preset_id": sample["preset"], "analysis_rules": "patch"}]
     with pytest.raises(review.ContentReviewError):
         weekly._validated_result(result, evidence)
 
 
-def test_conflicting_manual_edit_blocks_apply_and_rollback(sample):
+def test_legacy_rules_are_readable_but_all_write_paths_are_disabled(sample):
     report_id, _ = ready_report(sample)
-    with get_connection() as connection:
-        original = connection.execute(
-            "SELECT prompt_text FROM ai_prompt_presets WHERE id=?", (sample["preset"],)
-        ).fetchone()[0]
-        connection.execute(
-            "UPDATE ai_prompt_presets SET prompt_text=? WHERE id=?",
-            ("人工修改", sample["preset"]),
-        )
-        connection.commit()
-    with pytest.raises(review.ContentReviewError, match="已经改变"):
-        weekly.apply_report(report_id)
-    with get_connection() as connection:
-        connection.execute(
-            "UPDATE ai_prompt_presets SET prompt_text=? WHERE id=?",
-            (original, sample["preset"]),
-        )
-        connection.commit()
-    application = weekly.apply_report(report_id)
-    with get_connection() as connection:
-        connection.execute(
-            "UPDATE ai_prompt_presets SET prompt_text=? WHERE id=?",
-            ("后续人工修改", sample["preset"]),
-        )
-        connection.commit()
-    with pytest.raises(review.ContentReviewError, match="再次改变"):
-        weekly.revert_application(application["application_id"])
+    application_id = legacy_application(sample, report_id)
+    before = protected_state()
+    client = TestClient(app)
+    for path in (
+        f"weekly-reports/{report_id}/apply",
+        f"rule-applications/{application_id}/revert",
+        f"rule-applications/{application_id}/keep",
+    ):
+        response = client.post("/api/content-review/" + path)
+        assert response.status_code == 410
+        assert "停用" in response.json()["detail"]
+    report = weekly.list_reports(sample["account"])["reports"][0]
+    assert report["application"]["id"] == application_id
+    assert report["result"]["changes"]
+    assert protected_state() == before
+    task_id = new_task(sample["preset"])
+    assert "历史选片规则" in get_task_ai_prompt_snapshot(task_id)["prompt_text"]
+    assert "历史文案要求" in _metadata_prompt({"task_id": task_id}, "douyin")
 
 
 def test_read_endpoints_do_not_generate_and_apply_is_explicit(sample):
@@ -288,7 +326,7 @@ def test_read_endpoints_do_not_generate_and_apply_is_explicit(sample):
     report_id = response.json()["report_id"]
     assert (
         client.post(f"/api/content-review/weekly-reports/{report_id}/apply").status_code
-        == 409
+        == 410
     )
     assert (
         client.get(
@@ -354,7 +392,7 @@ def test_actual_prompt_and_copy_evidence_required_for_assignment(sample):
     from tests.test_content_review import _insert_publish_job
 
     report_id, _ = ready_report(sample)
-    application_id = weekly.apply_report(report_id)["application_id"]
+    application_id = legacy_application(sample, report_id)
     job_id = _insert_publish_job(
         sample["account"],
         title="采用新规则的视频",
@@ -457,37 +495,208 @@ def test_existing_metadata_cache_contract_is_preserved(monkeypatch):
     )
 
 
-def test_draft_requires_evidence_from_target_preset(sample):
-    with get_connection() as connection:
-        evidence = weekly._evidence(connection, sample["account"])
-    sourced = [w for w in evidence["works"] if w["source"]]
-    assert sourced
-    assert {w["source"]["preset_id"] for w in sourced} == {sample["preset"]}
-    assert all(w["source"]["prompt_version_id"] for w in sourced)
-    raw = output_for(evidence, sample["preset"])
-    result = weekly._validated_result(raw, evidence)
-    assert result["changes"][0]["target_evidence_ids"] == sorted(
-        w["id"] for w in sourced
+def test_report_freezes_actual_prompt_version_and_request(sample):
+    _, _ = ready_report(sample)
+    report = weekly.list_reports(sample["account"])["reports"][0]
+    sources = [w["source"] for w in report["evidence"]["works"] if w["source"]]
+    assert sources and all(s["prompt_version_id"] and s["prompt_text"] for s in sources)
+    assert (
+        report["result"]["evidence_sha256"]
+        == hashlib.sha256(weekly.dump(report["evidence"]).encode()).hexdigest()
     )
-    evidence["presets"].append({**evidence["presets"][0], "id": "another-used-preset"})
-    raw["changes"][0]["preset_id"] = "another-used-preset"
-    with pytest.raises(review.ContentReviewError, match="实际使用目标方案"):
-        weekly._validated_result(raw, evidence)
+    prompt = weekly._report_prompt(report["evidence"])
+    assert (
+        report["result"]["request_sha256"]
+        == hashlib.sha256(weekly._build_prompt(prompt, None).encode()).hexdigest()
+    )
+    assert report["result"]["schema_sha256"]
 
 
-def test_replaced_rules_are_explicit_in_draft(sample):
-    with get_connection() as connection:
-        evidence = weekly._evidence(connection, sample["account"])
-    preset = evidence["presets"][0]
-    base = preset["prompt_text"].split(weekly.RULE_MARKER)[0]
-    preset["prompt_text"] = base + weekly.RULE_MARKER + "旧选片要求。"
-    preset["copy_rules"] = "旧文案要求。"
-    result = weekly._validated_result(output_for(evidence, sample["preset"]), evidence)
-    change = result["changes"][0]
-    assert change["removed_rules"] == [
-        {"kind": "选片", "text": "旧选片要求。"},
-        {"kind": "文案", "text": "旧文案要求。"},
+def test_legacy_queued_report_is_cancelled_without_ai(sample):
+    report_id = weekly.enqueue(sample["account"])["report_id"]
+    with get_connection() as c:
+        evidence = json.loads(
+            c.execute(
+                "SELECT evidence_json FROM weekly_content_reports WHERE id=?",
+                (report_id,),
+            ).fetchone()[0]
+        )
+        evidence.pop("report_format")
+        c.execute(
+            "UPDATE weekly_content_reports SET evidence_json=? WHERE id=?",
+            (weekly.dump(evidence), report_id),
+        )
+        c.commit()
+    provider = FakeCodex({})
+    before = protected_state()
+    assert not weekly.generate_next(provider)
+    assert provider.calls == 0 and protected_state() == before
+    assert weekly.list_reports(sample["account"])["reports"][0]["status"] == "cancelled"
+    assert weekly.enqueue(sample["account"], refresh=True)["report_id"] != report_id
+
+
+@pytest.mark.parametrize("failure", ["timeout", "invalid_json", "invalid_schema"])
+def test_failure_diagnostics_and_no_automatic_replay(sample, failure):
+    from app.services.ai.base import AIProviderError
+
+    report_id = weekly.enqueue(sample["account"])["report_id"]
+
+    class BrokenCodex:
+        calls = 0
+
+        def generate_json_with_schema(self, prompt, schema):
+            self.calls += 1
+            if failure == "timeout":
+                raise AIProviderError(
+                    "timeout", category="timeout", billing_uncertain=True
+                )
+            return "not json" if failure == "invalid_json" else '{"summary":"bad"}'
+
+    provider = BrokenCodex()
+    before = protected_state()
+    weekly.generate_next(provider)
+    assert not weekly.generate_next(provider)
+    assert provider.calls == 1 and protected_state() == before
+    report = weekly.list_reports(sample["account"])["reports"][0]
+    assert report["id"] == report_id and report["status"] == "failed"
+    assert report["result"]["billing_uncertain"] and report["result"]["request_sha256"]
+    assert "计费" in report["error"] and "未自动重试" in report["error"]
+    if failure != "timeout":
+        assert (
+            report["result"]["invalid_output"] and report["result"]["response_sha256"]
+        )
+
+
+def test_transcript_boundaries_and_truncation_are_explicit(sample, monkeypatch):
+    from app.services import transcript_service
+
+    rows = [{"start_time": "00:00:09", "end_time": "00:00:11", "text": "跨切点"}] + [
+        {"start_time": "00:00:12", "end_time": "00:00:13", "text": "区间内"}
+        for _ in range(80)
     ]
-    assert change["after_prompt"].startswith(base)
-    assert "旧选片要求。" in change["before_prompt"]
-    assert "旧选片要求。" not in change["after_prompt"]
+    monkeypatch.setattr(
+        transcript_service,
+        "read_transcript_range",
+        lambda *a, **kw: rows[: kw["max_rows"]],
+    )
+    evidence = {
+        "works": [
+            {
+                "context": {
+                    "task_id": sample["task"],
+                    "start_time": "00:00:10",
+                    "end_time": "00:01:00",
+                }
+            }
+        ]
+    }
+    weekly._add_transcripts(evidence)
+    context = evidence["works"][0]["context"]
+    assert context["transcript_truncated"] and len(context["transcript"]) == 80
+    assert context["transcript"][0]["crosses_clip_boundary"]
+    assert not context["transcript"][1]["crosses_clip_boundary"]
+    monkeypatch.setattr(
+        transcript_service, "read_transcript_range", lambda *a, **kw: []
+    )
+    weekly._add_transcripts(evidence)
+    assert context["transcript_status"] == "missing"
+
+
+def test_no_valid_evidence_does_not_invoke_ai(sample, monkeypatch):
+    weekly.enqueue(sample["account"])
+    with get_connection() as c:
+        row = c.execute(
+            "SELECT id,evidence_json FROM weekly_content_reports WHERE account_id=?",
+            (sample["account"],),
+        ).fetchone()
+        evidence = json.loads(row["evidence_json"])
+        evidence["works"] = []
+        c.execute(
+            "UPDATE weekly_content_reports SET evidence_json=? WHERE id=?",
+            (weekly.dump(evidence), row["id"]),
+        )
+        c.commit()
+    provider = FakeCodex({})
+    weekly.generate_next(provider)
+    report = weekly.list_reports(sample["account"])["reports"][0]
+    assert report["status"] == "ready" and not report["result"]["ai_called"]
+    assert provider.calls == 0
+
+
+@pytest.mark.parametrize("mode", ["sync", "manual_import"])
+def test_import_apis_only_update_data_even_after_background_ticks(
+    sample, monkeypatch, mode
+):
+    from app.services.publishers.worker_client import PublishWorkerClient
+    from app.services import adaptive_schedule
+    from tests.test_content_review import _work_export_xlsx, _work_export_row
+
+    with get_connection() as c:
+        c.execute(
+            "INSERT INTO adaptive_schedule_policies(account_id,enabled,daily_limit,min_gap_minutes,daily_start_time,daily_end_time,version,updated_at) VALUES(?,1,8,90,'07:00','23:59',1,'now')",
+            (sample["account"],),
+        )
+        c.commit()
+    monkeypatch.setattr(
+        weekly, "enqueue", lambda *a, **kw: pytest.fail("import must not queue AI")
+    )
+    monkeypatch.setattr(
+        adaptive_schedule,
+        "enqueue",
+        lambda *a, **kw: pytest.fail("import must not queue replan"),
+    )
+    before = protected_state()
+    client = TestClient(app)
+    if mode == "sync":
+        monkeypatch.setattr(
+            PublishWorkerClient,
+            "analytics_export_sync",
+            lambda *a, **kw: {
+                "items": [
+                    {
+                        "title": "new metric only",
+                        "published_at": "2026-08-28T10:00:00+08:00",
+                        "play_count": 42,
+                        "content_genre": "视频",
+                    }
+                ],
+                "row_count": 1,
+                "captured_at": "2026-09-11T10:00:00+08:00",
+                "source_filename": "test.xlsx",
+            },
+        )
+        response = client.post(
+            "/api/content-review/douyin/export-sync",
+            json={"account_id": sample["account"]},
+        )
+    else:
+        preview = review.preview_metric_import(
+            account_id=sample["account"],
+            filename="test.xlsx",
+            content=_work_export_xlsx(rows=[_work_export_row(88)]),
+        )
+        response = client.post(
+            f"/api/content-review/imports/{preview['batch_id']}/commit",
+            json={"confirm": True},
+        )
+    assert response.status_code == 200, response.text
+    provider = FakeCodex({})
+    for _ in range(3):
+        assert not weekly.generate_next(provider)
+        assert adaptive_schedule.process_pending() == []
+    assert provider.calls == 0
+    assert not weekly.list_reports(sample["account"])["reports"]
+    assert protected_state() == before
+
+
+def test_concurrent_manual_clicks_share_one_request(sample):
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(2) as pool:
+        results = list(
+            pool.map(
+                lambda _: weekly.enqueue(sample["account"], refresh=True), range(2)
+            )
+        )
+    assert len({r["report_id"] for r in results}) == 1
+    assert {r["status"] for r in results} == {"queued", "already_queued"}

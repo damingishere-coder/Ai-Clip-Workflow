@@ -10,18 +10,18 @@ import uvicorn
 
 from app.main import app
 from tests.test_content_review_browser import _free_port
-from tests.test_weekly_content_review import sample, ready_report  # noqa: F401
+from tests.test_weekly_content_review import sample, ready_report, legacy_application  # noqa: F401
 
 playwright = pytest.importorskip("playwright.sync_api")
 
 
 @pytest.mark.parametrize("width", [1440, 390])
-def test_three_suggestions_preview_apply_rollback_and_compact_disclosure(
+def test_report_copy_legacy_readonly_and_compact_disclosure(
     sample,
     width,
     tmp_path,
 ):
-    ready_report(sample)
+    report_id, _ = ready_report(sample)
     port = _free_port()
     server = uvicorn.Server(
         uvicorn.Config(
@@ -59,9 +59,23 @@ def test_three_suggestions_preview_apply_rollback_and_compact_disclosure(
                 has_text="3 条总结建议"
             ).wait_for()
             assert page.locator("#content-review-insights > article").count() == 3
-            page.get_by_text("新的选片补充规则：", exact=False).wait_for()
+            page.get_by_text("落实前需验证：", exact=False).first.wait_for()
+            assert (
+                page.get_by_role("button", name="确认应用这些改动", exact=True).count()
+                == 0
+            )
+            browser_context = page.context
+            browser_context.grant_permissions(["clipboard-read", "clipboard-write"])
+            page.get_by_role("button", name="复制报告与修改建议", exact=True).click()
+            page.get_by_role(
+                "button", name="已复制报告与修改建议", exact=True
+            ).wait_for()
+            copied = page.evaluate("navigator.clipboard.readText()")
+            assert report_id in copied and "待验证" in copied and "冻结证据" in copied
             page.locator(".weekly-review-evidence summary").first.click()
-            page.locator(".weekly-review-evidence[open] article").nth(1).wait_for(state="visible")
+            page.locator(".weekly-review-evidence[open] article").nth(1).wait_for(
+                state="visible"
+            )
             assert page.locator(".weekly-review-evidence[open] article").count() >= 2
             folded = page.locator('[data-content-review-disclosure="prompt-evidence"]')
             if folded.get_attribute("open") is not None:
@@ -71,11 +85,25 @@ def test_three_suggestions_preview_apply_rollback_and_compact_disclosure(
             page.get_by_text("查看当时使用的完整生成规则（Prompt）").first.click()
             assert page.locator(".content-review-prompt-item pre").first.is_visible()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-            page.on("dialog", lambda dialog: dialog.accept())
-            page.get_by_role("button", name="确认应用这些改动", exact=True).click()
-            page.get_by_role("heading", name="已应用的改动", exact=True).wait_for()
-            page.get_by_role("button", name="回退到应用前规则", exact=True).click()
-            page.get_by_role("heading", name="已回退的改动", exact=True).wait_for()
+            legacy_application(sample, report_id)
+            page.reload(wait_until="networkidle")
+            page.get_by_role("heading", name="历史已应用的改动", exact=True).wait_for()
+            assert (
+                page.get_by_role("button", name="回退到应用前规则", exact=True).count()
+                == 0
+            )
+            assert (
+                page.get_by_role("button", name="确认保留改动", exact=True).count() == 0
+            )
+            # Clipboard denial has an accessible manual copy fallback.
+            page.evaluate(
+                "Object.defineProperty(navigator, 'clipboard', {value: {writeText: async () => {throw new Error('denied')}}})"
+            )
+            page.get_by_role("button", name="复制报告与修改建议", exact=True).click()
+            assert (
+                report_id
+                in page.get_by_role("textbox", name="报告与修改建议文本").input_value()
+            )
             page.route(
                 "**/api/content-review/prompt-comparison?*",
                 lambda route: route.fulfill(

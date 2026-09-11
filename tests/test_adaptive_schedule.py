@@ -197,12 +197,12 @@ def test_today_fixed_other_account_and_idempotent_request(db, monkeypatch):
     monkeypatch.setattr(service, "score_times", lambda *a, **kw: scores())
     service.save_policy("target", {"enabled": True})
     with get_connection() as c:
-        service.enqueue(c, "target", "import:1")
-        service.enqueue(c, "target", "import:1")
+        service.enqueue(c, "target", "manual:1")
+        service.enqueue(c, "target", "manual:1")
         c.commit()
         assert (
             c.execute(
-                "SELECT COUNT(*) FROM adaptive_schedule_requests WHERE source_key='import:1'"
+                "SELECT COUNT(*) FROM adaptive_schedule_requests WHERE source_key='manual:1'"
             ).fetchone()[0]
             == 1
         )
@@ -347,66 +347,36 @@ def test_reenable_respects_manual_fixed_and_no_data_preserves_future(db):
     assert result["schedule"][0]["reason"] == "数据不足，保留已有排期"
 
 
-def test_official_import_enqueues_transactionally_and_deduplicates(db, monkeypatch):
+def test_official_import_never_enqueues_or_replans(db, monkeypatch):
     from app.services import content_review_service as review
-
     service.save_policy("target", {"enabled": True})
+    service.process_pending()
+    seed_job(job("tomorrow", "2026-09-07T07:00:00+08:00"))
     monkeypatch.setattr(review, "_now", lambda: NOW)
-    items = [
-        dict(
-            title="导入测试",
-            published_at="2026-09-01T10:00:00+08:00",
-            play_count=1000,
-            content_genre="视频",
-        )
-    ]
-    result = review.commit_douyin_item_export(
-        account_id="target",
-        items=items,
-        captured_at=NOW.isoformat(),
-        source_filename="test.xlsx",
-    )
-    review.commit_douyin_item_export(
-        account_id="target",
-        items=items,
-        captured_at=NOW.isoformat(),
-        source_filename="test.xlsx",
-    )
+    monkeypatch.setattr(service, "enqueue", lambda *a: pytest.fail("import must not enqueue"))
+    items = [dict(title="导入测试", published_at="2026-09-01T10:00:00+08:00", play_count=1000, content_genre="视频")]
+    for _ in range(2):
+        review.commit_douyin_item_export(account_id="target", items=items, captured_at=NOW.isoformat(), source_filename="test.xlsx")
+    assert service.process_pending() == []
     with get_connection() as c:
-        assert (
-            c.execute(
-                "SELECT COUNT(*) FROM adaptive_schedule_requests WHERE source_key=?",
-                (f"import:{result['batch_id']}",),
-            ).fetchone()[0]
-            == 1
-        )
-    original = service.enqueue
+        assert c.execute("SELECT COUNT(*) FROM adaptive_schedule_requests WHERE source_key LIKE 'import:%'").fetchone()[0] == 0
+        assert c.execute("SELECT scheduled_at FROM publish_jobs WHERE id='tomorrow'").fetchone()[0] == "2026-09-07T07:00:00+08:00"
 
-    def fail(c, account_id, source_key):
-        original(c, account_id, source_key)
-        raise RuntimeError("after enqueue before commit")
 
-    monkeypatch.setattr(service, "enqueue", fail)
-    with pytest.raises(RuntimeError):
-        review.commit_douyin_item_export(
-            account_id="target",
-            items=[{**items[0], "title": "回滚测试"}],
-            captured_at=NOW.isoformat(),
-            source_filename="second.xlsx",
-        )
+def test_legacy_import_request_is_skipped_without_replan(db, monkeypatch):
+    service.save_policy("target", {"enabled": True})
+    service.process_pending()
+    seed_job(job("tomorrow", "2026-09-07T07:00:00+08:00"))
     with get_connection() as c:
-        assert (
-            c.execute(
-                "SELECT COUNT(*) FROM douyin_item_metric_snapshots WHERE title='回滚测试'"
-            ).fetchone()[0]
-            == 0
-        )
-        assert (
-            c.execute(
-                "SELECT COUNT(*) FROM adaptive_schedule_requests WHERE source_key LIKE 'import:%'"
-            ).fetchone()[0]
-            == 1
-        )
+        service.enqueue(c, "target", "import:new")
+        assert not c.execute("SELECT 1 FROM adaptive_schedule_requests WHERE source_key='import:new'").fetchone()
+        c.execute("INSERT INTO adaptive_schedule_requests(account_id,source_key,created_at) VALUES('target','import:old',?)", (NOW.isoformat(),))
+        c.commit()
+    monkeypatch.setattr(service, "score_times", lambda *a: pytest.fail("legacy import must not replan"))
+    assert service.process_pending()[0]["status"] == "skipped"
+    assert service.process_pending() == []
+    with get_connection() as c:
+        assert c.execute("SELECT scheduled_at FROM publish_jobs WHERE id='tomorrow'").fetchone()[0] == "2026-09-07T07:00:00+08:00"
 
 
 def test_renamed_account_request_fails_without_blocking_the_queue(db):

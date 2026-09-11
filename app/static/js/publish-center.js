@@ -2523,8 +2523,8 @@ if (publishCenterRoot) {
       document.querySelector('[data-adaptive-panel]').hidden = !data.available;
       if (!data.available) return;
       const p = data.policy;
-      document.querySelector('[data-adaptive-summary]').textContent = `${p.enabled ? '自动调整已开启' : '自动调整未启用'} · 每天最多 ${p.daily_limit} 条 · 最小间隔 ${p.min_gap_minutes} 分钟 · ${data.strategy.captured_at ? '数据更新：'+formatBeijingTimestamp(data.strategy.captured_at) : '尚无数据'} · ${data.strategy.reason}`;
-      document.querySelector('[data-toggle-adaptive]').textContent = p.enabled ? '关闭自动调整（保留当前时间）' : '启用并纳入现有排期';
+      document.querySelector('[data-adaptive-summary]').textContent = `${p.enabled ? '动态策略已启用（同步不改期）' : '动态策略未启用'} · 每天最多 ${p.daily_limit} 条 · 最小间隔 ${p.min_gap_minutes} 分钟 · ${data.strategy.captured_at ? '数据更新：'+formatBeijingTimestamp(data.strategy.captured_at) : '尚无数据'} · ${data.strategy.reason}`;
+      document.querySelector('[data-toggle-adaptive]').textContent = p.enabled ? '停用动态策略（保留当前时间）' : '启用并纳入现有排期';
       document.querySelector('[data-adaptive-data-note]').textContent = `${data.strategy.sample_count} 条可比较作品 · ${data.strategy.reason}`;
       const scores = document.querySelector('[data-adaptive-scores]'); scores.replaceChildren();
       (data.strategy.bins || []).forEach(b => {

@@ -869,12 +869,7 @@ def test_export_sync_offloads_worker_validation_and_commit(monkeypatch):
 
     from app.services import weekly_review_service
 
-    def queue_review(batch_id):
-        assert batch_id == "thread-test-batch"
-        observed_thread_ids.append(threading.get_ident())
-        return {"status": "queued"}
-
-    monkeypatch.setattr(weekly_review_service, "after_import", queue_review)
+    monkeypatch.setattr(weekly_review_service, "enqueue", lambda *a, **kw: pytest.fail("sync must not queue AI"))
 
     result = asyncio.run(
         content_review_router.export_sync_douyin_items(
@@ -883,8 +878,8 @@ def test_export_sync_offloads_worker_validation_and_commit(monkeypatch):
     )
 
     assert result["row_count"] == 0
-    assert result["weekly_review"]["status"] == "queued"
-    assert len(observed_thread_ids) == 4
+    assert "weekly_review" not in result
+    assert len(observed_thread_ids) == 3
     assert len(set(observed_thread_ids)) == 1
     assert observed_thread_ids[0] != caller_thread_id
 

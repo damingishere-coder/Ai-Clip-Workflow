@@ -24,7 +24,7 @@ Transcribe, find highlights with AI, review clips, prepare content and schedule 
 | --- | --- | --- |
 | Upload, local files and NAS sources | Review transcripts and adjust cut points | Import Douyin metrics and confirm attribution |
 | Local faster-whisper transcription | FFmpeg clips and a separate subtitle workspace | Weekly reviews and Prompt version comparisons |
-| AI candidates and structured scoring | Titles, topics, cover frames and scheduling | Confirm improvements and preview adaptive schedules |
+| AI candidates and structured scoring | Titles, topics, cover frames and scheduling | Read review suggestions and preview adaptive schedules |
 
 ```mermaid
 flowchart LR
@@ -34,7 +34,7 @@ flowchart LR
     D --> E[Prepare and schedule]
     E --> F[Publishing records]
     F --> G[Content review]
-    G -. Confirm improvements .-> B
+    G -. Separate review and validation .-> B
 ```
 
 **Local-first, with configurable processing.** Media, SQLite data and browser sessions stay on your PC. Remote transcription or AI services receive the audio or text required for that operation. AI supports a controlled Codex CLI process, with OpenAI-compatible / DeepSeek and Ollama compatibility options. Each requires its own runtime or account configuration; a local CLI does not imply local model inference.
@@ -97,7 +97,7 @@ The demo uses fictional tasks, a separate database and `manual_export` drafts. S
 | --- | --- |
 | Import, transcription, AI selection, review and clipping | Implemented; selected models and services require configuration |
 | AI recovery | Per-unit progress and evidence; uncertain calls require confirmation before retry |
-| Content reviews, weekly summaries and adaptive scheduling | Implemented, with confirmation and preview steps |
+| Content reviews, weekly summaries and adaptive scheduling | Manual report generation; suggestions are read-only and scheduling has a separate preview |
 | Douyin publishing | Windows Chrome Worker; login and per-account validation required |
 | Bilibili | Backend and historical compatibility retained; current UI and automatic synchronization disabled |
 | Subtitles | Separate workspace; automatic workflows do not burn subtitles in |

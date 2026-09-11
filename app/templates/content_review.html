@@ -3,7 +3,7 @@
 {% block title %}内容复盘 · {{ settings.app_name }}{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', path='css/content-review.css') }}?v=20260907-weekly-review-v2">
+<link rel="stylesheet" href="{{ url_for('static', path='css/content-review.css') }}?v=20260911-manual-review-v1">
 {% endblock %}
 
 {% block content %}
@@ -140,7 +140,7 @@
     <div><p class="eyebrow">Diagnose → Act → Verify</p><h2>本周总结与三条建议</h2></div>
     <span class="status-pill" id="content-review-insight-count">等待诊断</span>
   </div>
-  <p class="content-review-note" id="content-review-insight-note">同步成功后由 Codex 综合分析好坏作品，汇总三条建议；具体规则改动由你确认后生效。</p>
+  <p class="content-review-note" id="content-review-insight-note">同步只更新数据。手动调用 Codex 生成报告与三条建议，修改需另行核对与验证。</p>
   <div class="weekly-review-toolbar">
     <label for="weekly-review-history" class="weekly-review-label">复盘记录</label>
     <div class="weekly-review-controls">
@@ -180,5 +180,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-{% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260907-weekly-review-v2"></script>{% endif %}
+{% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260911-manual-review-v1"></script>{% endif %}
 {% endblock %}
