@@ -1,7 +1,7 @@
 """Account-scoped, deterministic scheduling. No model or publisher calls here.
 
-All writes are performed under BEGIN IMMEDIATE. Import requests share the import
-transaction, so an interrupted process cannot lose the replan notification.
+All writes are performed under BEGIN IMMEDIATE.
+Official data imports never enqueue or execute replans.
 """
 
 from __future__ import annotations
@@ -157,6 +157,8 @@ def validate_options(options):
 
 
 def enqueue(connection, account_id, source_key):
+    if source_key.startswith("import:"):
+        return  # Compatibility guard for old callers: imports only update metrics.
     row = connection.execute(
         "SELECT enabled FROM adaptive_schedule_policies WHERE account_id=?",
         (account_id,),
@@ -655,6 +657,15 @@ def process_pending(limit=2):
             if not request:
                 break
             now = _now()
+            if request["source_key"].startswith("import:"):
+                message = "导入联动已停用，保留当前排期；请到发送中心预览并确认调整"
+                connection.execute(
+                    "UPDATE adaptive_schedule_requests SET status='skipped',message=?,finished_at=? WHERE id=?",
+                    (message, to_utc_iso(now), request["id"]),
+                )
+                connection.commit()
+                results.append({"id": request["id"], "status": "skipped", "message": message})
+                continue
             account_id = request["account_id"]
             try:
                 options = policy(connection, account_id)

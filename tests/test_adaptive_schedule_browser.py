@@ -93,7 +93,7 @@ def test_adaptive_drawer_confirm_and_disable(db, monkeypatch, tmp_path):  # noqa
             assert "涨粉中位数" in page.locator("[data-adaptive-panel]").inner_text()
             page.locator("[data-refresh-adaptive]").click()
             page.wait_for_function(
-                "document.querySelector('[data-toggle-adaptive]').textContent.includes('关闭')"
+                "document.querySelector('[data-toggle-adaptive]').textContent.includes('停用')"
             )
             page.locator("[data-toggle-adaptive]").click()
             page.wait_for_function(

@@ -37,8 +37,7 @@ def _sync_douyin_export(account_id_input: str) -> dict:
         source_filename=str(worker_result.get("source_filename") or "作品列表导出.xlsx"),
     )
 
-    from app.services.weekly_review_service import after_import
-    result["weekly_review"] = after_import(result["batch_id"])
+    result["message"] = "作品数据已更新；可手动生成复盘。现有规则和排期保持不变。"
     return result
 
 
@@ -74,8 +73,7 @@ def commit_import(
         raise HTTPException(status_code=400, detail="请确认后再导入")
     try:
         result = content_review_service.commit_metric_import(batch_id)
-        from app.services.weekly_review_service import after_import
-        result["weekly_review"] = after_import(batch_id)
+        result["message"] = "数据已导入；可手动生成复盘。现有规则和排期保持不变。"
         return result
     except content_review_service.ContentReviewError as exc:
         _raise_content_review_http(exc)
