@@ -641,8 +641,8 @@ def _expand_moments(
                 provider, prompt, expected_key="clips", known_ids=known_ids,
                 output_schema=EXPANSION_OUTPUT_SCHEMA,
             ),
-            validate_payload=lambda payload, known_ids=set(context_rows_by_id): _validate_payload(
-                payload, expected_key="clips", known_ids=known_ids,
+            validate_payload=lambda payload, contexts=context_rows_by_id: _validate_expansion_payload(
+                payload, contexts,
             ),
         )
         if execution.status != "completed" or not isinstance(execution.payload, dict):
@@ -721,6 +721,25 @@ def _expand_moments(
         "empty_unit_count": empty_units,
         "invalid_item_count": invalid_item_count,
     }
+
+
+def _validate_expansion_payload(
+    payload: dict, context_rows_by_id: dict[str, list[TranscriptRow]],
+) -> None:
+    """新响应和缓存复用都必须通过实际转写边界校验，才能算成功单元。"""
+    _validate_payload(payload, expected_key="clips", known_ids=set(context_rows_by_id))
+    for index, item in enumerate(payload["clips"], start=1):
+        rows = context_rows_by_id[item["source_id"]]
+        bounds = normalize_clip_bounds(
+            *(_time_to_seconds(item[field]) for field in ("start_time", "end_time", "key_moment_time")),
+            rows,
+        )
+        if bounds is None:
+            raise AIAnalysisError(
+                f"clips 第 {index} 条 {item['source_id']} 时间范围无法按转写边界生成"
+                f" {MIN_ACCEPTED_CLIP_SECONDS}–{MAX_COMEDY_CLIP_SECONDS} 秒片段"
+                f"（{item['start_time']}–{item['end_time']}）；未记为成功，请确认后重试此单元"
+            )
 
 
 def _global_judge(
@@ -897,6 +916,9 @@ def _expansion_prompt(contexts: list[dict], preference: str) -> str:
 {preference}
 只输出严格 JSON：{{"clips":[{{"source_id":"原值","title":"标题","start_time":"HH:MM:SS","end_time":"HH:MM:SS","key_moment_time":"HH:MM:SS","topic_key":"话题标识","summary":"情境与看点","highlight_reason":"具体笑点","arc_structure":"铺垫→笑点→反应→收尾","suggested_editing":"剪辑建议","humor_score":0,"interaction_reaction_score":0,"completeness_score":0,"hook_score":0,"novelty_score":0,"title_score":0}}]}}
 所有分数为 0-100，不要虚高；时间必须来自对应转写。
+硬性时长边界为 {MIN_ACCEPTED_CLIP_SECONDS}–{MAX_COMEDY_CLIP_SECONDS} 秒，不能自行声明更短或更长的例外。
+若现有转写无法支持符合时长的完整片段，跳过该 source_id；全部不合适时返回 clips 空数组。
+不要跨越缺失转写或拼入无关话题来凑时长。
 
 待扩展内容：
 {json.dumps(contexts, ensure_ascii=False)}"""

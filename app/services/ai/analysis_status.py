@@ -12,6 +12,8 @@ def incomplete_analysis_message(meta: dict) -> str:
         error = str(failure.get("message") or "")
         if any(word in error for word in ("invalid_response_json", "invalid_response_schema", "格式错误", "合法 JSON")):
             label += "格式错误"
+        elif "时间范围" in error or "起止时间" in error:
+            label += "时间范围校验失败"
         elif "source_id" in error or "候选" in error:
             label += "候选编号校验失败"
         else:
