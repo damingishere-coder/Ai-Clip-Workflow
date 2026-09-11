@@ -274,6 +274,35 @@ def test_changed_batch_input_is_recomputed_but_unchanged_input_is_reused():
     assert namespace["superseded_units"][0]["request_fingerprint"] == "old"
 
 
+@pytest.mark.parametrize("legacy_cached", [False, True])
+def test_invalid_expansion_bounds_never_become_reusable_success(legacy_cached):
+    from app.services.ai.ai_clip_analyzer import TranscriptRow
+    from app.services.ai.variety_comedy_analyzer import EXPANSION_OUTPUT_SCHEMA, _validate_expansion_payload
+
+    task_id = _create_task(f"bad-bounds-{legacy_cached}")
+    claimed, owner = _claim_ai_job(task_id)
+    fields = EXPANSION_OUTPUT_SCHEMA["properties"]["clips"]["items"]["properties"]
+    item = {key: 80 if spec["type"] == "number" else "test" for key, spec in fields.items()}
+    item.update(source_id="short", start_time="00:00:00", end_time="00:00:38", key_moment_time="00:00:20")
+    rows = [TranscriptRow("00:00:00", "00:00:38", 0, 38, "test")]
+    calls = []
+    args = dict(task_id=task_id, namespace="variety_expansion", input_fingerprint="bounds",
+                unit_id="batch_001", request_fingerprint="unchanged",
+                operation=lambda: calls.append(1) or {"clips": [item]})
+    with job_service.job_lease_context(claimed["id"], owner, claimed["lease_token"]):
+        if legacy_cached:
+            assert unit_checkpoint.execute_checkpointed_ai_unit(**args).status == "completed"
+        result = unit_checkpoint.execute_checkpointed_ai_unit(
+            **args, validate_payload=lambda payload: _validate_expansion_payload(payload, {"short": rows}),
+        )
+        assert result.status == "uncertain"
+        assert result.reused == legacy_cached
+        assert unit_checkpoint.execute_checkpointed_ai_unit(**args).status == "uncertain"
+    assert calls == [1]
+    units = job_service.get_job(claimed["id"])["checkpoint_json"]["_ai_analysis_units_v1"]["namespaces"]["variety_expansion"]["units"]
+    assert units["batch_001"]["status"] == "uncertain"
+
+
 @pytest.mark.parametrize("legacy_status", ["completed", "uncertain"])
 def test_unbound_or_uncertain_batch_is_not_silently_rebilled(legacy_status):
     task_id = _create_task(f"batch-legacy-{legacy_status}")

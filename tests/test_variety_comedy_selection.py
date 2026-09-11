@@ -24,6 +24,8 @@ from app.services.ai.variety_comedy_analyzer import (
     score_comedy_candidate,
     _global_judge,
     _judge_transcript_evidence,
+    _expand_moments,
+    _validate_expansion_payload,
 )
 from app.services.audio_reaction_service import analyze_audio_reaction
 from app.services.clip_feedback_service import list_recent_feedback_context, save_clip_feedback
@@ -217,6 +219,37 @@ def test_global_dedupe_keeps_highest_quality_complete_version():
     result = dedupe_scored_candidates([short, best])
 
     assert [item["source_id"] for item in result] == ["best"]
+
+
+def test_expansion_rejects_bounds_that_snap_across_a_transcript_gap(monkeypatch):
+    from app.services.ai import variety_comedy_analyzer as analyzer
+    from app.services.ai.ai_clip_analyzer import AIAnalysisError
+
+    rows = [_row(second, second + 2) for second in range(1738, 1884, 2)]
+    rows += [_row(1983, 1985), _row(1985, 2010)]
+    item = _base_candidate(start_time="00:30:46", end_time="00:31:24", key_moment_time="00:30:59")
+    payload = {"clips": [item]}
+    # The JSON is structurally valid, but snapping its short range spans the gap
+    # and exceeds the existing maximum. It must not be counted as completed.
+    with pytest.raises(AIAnalysisError, match="时间范围无法按转写边界"):
+        _validate_expansion_payload(payload, {item["source_id"]: rows})
+    monkeypatch.setattr(analyzer, "_generate_payload", lambda *_args, **_kwargs: payload)
+    moment = dict(source_id=item["source_id"], key_time="00:30:59", key_seconds=1859,
+                  title="测试", humor_reason="测试", topic_key="测试")
+    clips, failures, stats = _expand_moments(
+        object(), rows, [moment], "", provider_name="codex", task_id="unused", input_fingerprint="test",
+    )
+    assert clips == []
+    assert stats["completed_units"] == 0
+    assert stats["failed_units"] == 1
+    assert "时间范围" in failures[0]
+
+
+def test_expansion_accepts_valid_bounds_and_intentional_empty_result():
+    rows = [_row(second, second + 10) for second in range(0, 300, 10)]
+    item = _base_candidate()
+    _validate_expansion_payload({"clips": [item]}, {item["source_id"]: rows})
+    _validate_expansion_payload({"clips": []}, {item["source_id"]: rows})
 
 
 def test_program_score_applies_weights_and_a_grade_gates():
