@@ -4,7 +4,15 @@
 
 ## 当前修复：手动只读复盘
 
-代码已调整为同步只更新数据、复盘手动调用 Codex CLI、报告仅供查看与复制；网页规则写接口停用，历史规则与任务快照保留。独立分支 `codex/manual-review-reports` 本地完整回归 987 passed，Ruff 与 JavaScript 语法检查通过；桌面 1440px / 手机 390px 复制、历史只读与排期预览验证通过。PR / CI 与正式部署结果完成后更新；当前运行版尚未切换。
+PR [#88](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/88) 已 squash 合并为 `657aabe`，并于 9 月 11 日部署到原 RunDock Web 8001 / Worker 8765，运行目录仍为 `Ai-Clip-Workflow-offline-runtime`。产品版本继续为 2.3.0，此修复没有新建 Release 或移动旧 Tag。
+
+- 本地完整回归 **987 passed**；Ruff、JS 语法和 diff 检查通过；[CI](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/runs/34587021299) 的 Linux、Windows、Docker 三项通过。
+- 正式深度检查 ready，数据库 integrity=ok、外键异常 0。任务、Workflow Job、发布任务、提示词方案与版本、规则头、任务快照、历史应用记录共 8 张表逐项哈希不变；配置及 507 个音视频文件清单不变。
+- 手动调用一次真实 Codex CLI / gpt-6-astra：报告 `weekly-ace9b439619d43968ee6` 于 18:05:58 开始、18:07:37 完成，状态 ready、三条建议、无规则补丁。正式页面可查看只读报告并反馈复制成功；Chrome 隔离测试验证复制内容及失败回退，正式 390px 页面无横向溢出和脚本错误。
+- **同步实机限制**：本次只尝试一次官方同步，下载阶段返回 `DOWNLOAD_FAILED` / `Download.path: Target page, context or browser has been closed`；未导入新数据、未自动触发复盘、未重排，未自动重试。真实手动复盘使用此前 16:58 保存的官方数据。成功导入不联动由隔离 API 与后台轮询测试证明，不能将本次官方下载描述为成功。
+- 回滚资料：本机 `data/backups/manual-review-20260911-180132/`，含数据库、配置、前后哈希与 `acceptance.json`。代码回滚可在停服后回到原 `28e0ae4`；无结构迁移，不覆盖运行中的数据库。没有补跑历史视频分析或触发投稿。
+
+历史已应用规则保持现状；后续具体建议交给 Codex 单独核对、修改并验证。
 
 ## 已完成的交付
 
@@ -12,7 +20,7 @@
 | --- | --- |
 | 稳定主干 | `master`；2.3 整合 PR [#86](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/86) 已 squash 合并 |
 | 正式版本 | [v2.3.0 Release](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.3.0) 已发布；发布提交 `28e0ae4b742bca6c0a7a983eac0d85970e73853b` |
-| 本机服务 | Windows 原生运行，沿用 RunDock 的 Web 8001 与 Worker 8765；运行副本固定在上述发布提交 |
+| 本机服务 | Windows 原生运行，沿用 RunDock 的 Web 8001 与 Worker 8765；原发布基线为上述提交；当前修复运行在 `657aabe`，见本页上方 |
 | 实际核验 | 9 月 10 日 16:58（北京时间），Web / Worker 均返回 2.3.0；深度就绪 `ready`，数据库完整性正常、外键异常 0、9 条迁移正常，Scheduler 与 Worker 正常 |
 | GitHub 首页 | 中英文 README、品牌横幅、截图、流程图、功能边界和文档导航已更新 |
 | 分支整理 | 2.3 交付时本地 74 → 37，GitHub 69 → 41，开放 PR 26 → 18；这是整理完成时的快照，新任务会改变数量 |
