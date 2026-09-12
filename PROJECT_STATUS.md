@@ -4,7 +4,7 @@
 
 运行任务 `49229f4828f5` 的扩展批次 6 返回 38 秒片段，实际转写边界归一化失败，旧实现却提前记录批次成功。现已将边界校验前移到 checkpoint 写入/复用之前，并明确提示词时长硬边界与时间范围错误分类。正式版本保持 2.3.0。
 
-失败任务、原片和数据库已保存至本机 `data/backups/task32-rebuild-20260912/`。当前处于验证交付阶段；本次用户已明确授权删除该失败任务并重新运行，合并、部署与重跑结果以本节后续验收记录为准。
+失败任务、原片和数据库已保存至本机 `data/backups/task32-rebuild-20260912/`。PR [#90](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/90) 已 squash 合并为 `594bc60`，991 项完整回归及 Linux / Windows / Docker CI 全部通过。7:51 已部署至原 RunDock Web 8001（运行目录 `Ai-Clip-Workflow-offline-runtime`），Worker 8765 无需重启。深度就绪 ready、数据库 integrity=ok、外键异常 0。旧任务通过产品删除入口隐藏并清理媒体，新任务 `1ccad93c1e77` 按原参数重新上传启动；新旧原片 SHA-256 一致，其余 49 条任务记录逐字段不变。**重跑验收完成**：7:51:25 创建新任务，7:56:03 完成 23 段转写，8:10:06 AI 通过 18/18 单元、coverage=100%、invalid_item_count=0、failed_units=0、analysis_incomplete=false；生成 12 条候选，8:10:28 产出 5 条切片，8:10:29 正常暂停于 `PENDING_SUBTITLE_REVIEW`。五条视频时长为 81/69/60/91/84 秒，FFprobe 音视频流、时长对照与完整 FFmpeg 解码均通过。网页自动刷新、字幕审核入口及 5 条切片统计正常；未创建发布任务、未投稿。用户可打开 [新任务字幕审核](http://127.0.0.1:8001/subtitles/1ccad93c1e77) 检查内容。备份目录中的 `acceptance.json`、`progress.jsonl` 和 `expansion-results.json` 保存完整证据。
 
 更新日期：2026-09-11。适用版本：**2.3.0**。本页汇总当前交付状态；操作待办见 [NEXT_STEPS.md](NEXT_STEPS.md)，历史过程见 [DEVELOPMENT_LOG.md](DEVELOPMENT_LOG.md)。旧记录里的“待合并、待部署”只代表记录当时的状态。
 
