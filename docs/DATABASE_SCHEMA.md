@@ -1,5 +1,14 @@
 # 数据库结构说明
 
+## 2026-09-14：Content Profile PR2
+
+- 新账本 `20260914_01_content_profiles`，迁移总数 10。新增 `content_profiles` 正式引用与 `content_profile_versions` 不可变版本；配置 JSON/哈希/规则版本/创建时间可追溯。数据库触发器禁止修改/删除版本，正式指针不能指向其他 Profile 的版本。
+- `task_generation_rules` 新增可空 `content_profile_version_id`（外键）、`content_profile_sha256`、`content_profile_json`；`ai_analysis_runs` 新增可空版本外键与哈希，并建查询索引。只对新任务或显式换 Profile 绑定，不回填任何旧任务/Run。
+- 新 `ai_analysis` / `auto_pipeline` Job 的既有 `payload_json` 增 `generation_snapshot_v1`：Profile、Prompt 不可变引用/正文、选片参数、Provider 名与整体哈希。新执行可归因，旧任务绑定仍保持历史未知；旧 Job 重试不加新字段、不改 checkpoint。实际模型配置的完整冻结与选择 UI 在后续 PR 接入。
+- 沿用既有事务迁移器与迁移前 SQLite Online Backup。v1 种子固定于 `app/db/content_profiles_seed_v1.json`，后续新增模板另加迁移，不从变化中的 Registry 重算旧 checksum。不使用 executescript，不修改已发布迁移。
+- 在正式库的只读快照上演练升级、再次初始化、旧运行代码初始化：34 张既有业务表原字段逐项哈希不变，integrity=ok、外键异常 0、旧 Profile 引用仍为空。完整本机证据：`data/backups/profile-registry-preflight-20260914-160933/acceptance.json`。这是副本验证，不代表正式库已升级。
+- 本 PR 尚只支持原三个 ID，旧程序在升级副本上的初始化兼容已验证；回退优先保留新表/字段并退代码。不要删除证据或覆盖在线库。后续新增内容类型后，必须重新验证旧程序对新任务的兼容，不能沿用本次结论。
+
 ## 2026-09-14：Content Profile PR1
 
 本 PR 只有纯代码模型/基线，无表、列、索引或迁移变化，不写正式库。后续 Profile 版本、任务/Run 关联通过新增账本迁移接入，不改已发布 checksum；历史缺失版本保持为空。[实施与回滚计划](CONTENT_PROFILE_ROLLOUT.md)。

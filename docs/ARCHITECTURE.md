@@ -1,5 +1,13 @@
 # 系统架构
 
+## 2026-09-14：Content Profile Registry 与执行证据
+
+`content_profile_service` 通过代码 Registry 校验已支持策略，读取 SQLite 不可变版本。三个旧 Analyzer 继续执行原流程；康熙的窗口、评分、门槛、数量、扩展和去重参数改从冻结基线读取，旧常量名称、Prompt 字节、评分顺序与 checkpoint 指纹继续兼容。
+
+创建任务后在同一事务冻结 Prompt 与 Profile；显式更换 Profile 不改 Prompt，Prompt 重绑不改 Profile。新 Job 在入队事务冻结选片参数、Prompt、Profile 和 Provider 名，执行时使用该快照，Run 在原子候选提交中保存引用及有效参数。旧任务的新 Job 记录当次版本，旧 Job/历史 Run 不被追认。快照损坏、引用错配或未匹配算法的新规则均明确拒绝，不静默使用旧算法。
+
+目前没有 Profile 编辑或正式版本切换 API；三类旧适配仅接受已审计的规则版本。访谈/知识共享算法、五 Profile 创建 UI、实际模型配置冻结属于后续 PR，尚未交付。
+
 ## 2026-09-14：Content Profile 基础
 
 新增 `app/models/content_profile.py` 与 `app/services/content_profile_baselines.py`，尚未被任务、Analyzer 或数据库初始化引用，原三类执行链和 checkpoint 不变。后续使用代码策略契约 + SQLite 不可变版本 + 任务/Run 快照，沿用 FastAPI、本地文件、Workflow Job、Windows Worker。

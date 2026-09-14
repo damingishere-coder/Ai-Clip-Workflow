@@ -198,52 +198,59 @@ def get_task_ai_prompt_preset(task_id: str) -> dict:
 
 def get_task_ai_prompt_snapshot(task_id: str) -> dict:
     """一次读取任务 Prompt 并绑定不可变版本，供整次 AI 分析复用。"""
-    now = _now_iso()
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        preset = get_task_ai_prompt_snapshot_with_connection(connection, task_id)
+        connection.commit()
+    return preset
+
+
+def get_task_ai_prompt_snapshot_with_connection(connection, task_id: str) -> dict:
+    """在调用方事务内冻结 Prompt；供 Job 原子入队复用，不自行提交。"""
+    now = _now_iso()
+    row = connection.execute(
+        """
+        SELECT p.id, p.slot, p.name, p.prompt_text, p.is_default,
+               p.created_at, p.updated_at
+        FROM tasks t
+        LEFT JOIN ai_prompt_presets p ON p.id = t.ai_prompt_preset_id
+        WHERE t.id = ?
+        """,
+        (task_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("任务不存在")
+    if not row["id"]:
         row = connection.execute(
             """
-            SELECT p.id, p.slot, p.name, p.prompt_text, p.is_default,
-                   p.created_at, p.updated_at
-            FROM tasks t
-            LEFT JOIN ai_prompt_presets p ON p.id = t.ai_prompt_preset_id
-            WHERE t.id = ?
+            SELECT id, slot, name, prompt_text, is_default, created_at, updated_at
+            FROM ai_prompt_presets WHERE id = ?
             """,
-            (task_id,),
+            (DEFAULT_AI_PROMPT_PRESET_ID,),
         ).fetchone()
-        if row is None:
-            connection.rollback()
-            raise ValueError("任务不存在")
-        if not row["id"]:
-            row = connection.execute(
-                """
-                SELECT id, slot, name, prompt_text, is_default, created_at, updated_at
-                FROM ai_prompt_presets WHERE id = ?
-                """,
-                (DEFAULT_AI_PROMPT_PRESET_ID,),
-            ).fetchone()
-        if row is None:
-            connection.rollback()
-            raise ValueError("默认 AI Prompt 方案不存在")
+    if row is None:
+        raise ValueError("默认 AI Prompt 方案不存在")
 
-        preset = dict(row)
-        from app.services.weekly_review_service import freeze_task
-        frozen = freeze_task(connection, task_id)
-        if frozen and frozen["preset_id"] == preset["id"]:
-            preset["prompt_text"] = frozen["prompt_text"]
-        version = ensure_ai_prompt_version_with_connection(
-            connection,
-            preset_id=str(preset["id"]),
-            preset_name=str(preset["name"] or ""),
-            prompt_text=str(preset["prompt_text"] or ""),
-            now=now,
-        )
-        connection.commit()
+    preset = dict(row)
+    from app.services.weekly_review_service import freeze_task
+    frozen = freeze_task(connection, task_id)
+    if frozen and frozen["preset_id"] == preset["id"]:
+        preset["prompt_text"] = frozen["prompt_text"]
+    version = ensure_ai_prompt_version_with_connection(
+        connection,
+        preset_id=str(preset["id"]),
+        preset_name=str(preset["name"] or ""),
+        prompt_text=str(preset["prompt_text"] or ""),
+        now=now,
+    )
+    from app.services.content_profile_service import read_task_profile
+    profile_snapshot = read_task_profile(connection, task_id)
     preset["is_default"] = bool(preset["is_default"])
     preset["prompt_preview"] = _prompt_preview(preset["prompt_text"])
     preset["prompt_version_id"] = version["id"]
     preset["prompt_version_number"] = version["version_number"]
     preset["prompt_sha256"] = version["prompt_sha256"]
+    preset.update(profile_snapshot)
     return preset
 
 

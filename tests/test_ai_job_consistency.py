@@ -81,6 +81,34 @@ def _claim_ai_job(task_id: str, owner: str = "ai-test-owner") -> tuple[dict, str
     return claimed, owner
 
 
+def test_analysis_executes_queued_profile_prompt_and_selection_snapshot(monkeypatch):
+    from app.services.ai_prompt_preset_service import update_task_ai_prompt_preset
+    from app.services.content_profile_service import read_job_snapshot
+    task_id = _create_task("frozen-execution")
+    claimed, owner = _claim_ai_job(task_id)
+    snapshot = read_job_snapshot(claimed)
+    update_task_ai_prompt_preset(task_id, "preset_002")
+    with get_connection() as connection:
+        connection.execute("UPDATE tasks SET candidate_clip_count=1,ai_preference='排队后修改' WHERE id=?", (task_id,))
+        connection.commit()
+
+    def analyze(actual_task_id, task, paths, provider, prompt):
+        assert actual_task_id == task_id
+        assert task["candidate_clip_count"] == snapshot["selection"]["candidate_clip_count"] == 12
+        assert task["ai_preference"] == snapshot["selection"]["ai_preference"]
+        assert prompt["id"] == snapshot["prompt"]["id"] == "preset_001"
+        assert provider == "remote"
+        return _analysis(task_id)
+
+    monkeypatch.setattr(workflow, "_analyze_with_provider", analyze)
+    with job_service.job_lease_context(claimed["id"], owner, claimed["lease_token"]):
+        workflow.process_task_ai_analysis(task_id, provider="remote")
+    with get_connection() as connection:
+        row = connection.execute("SELECT content_profile_version_id,analysis_payload_json FROM ai_analysis_runs WHERE task_id=?", (task_id,)).fetchone()
+    assert row["content_profile_version_id"] == snapshot["prompt"]["content_profile_version_id"]
+    assert json.loads(row["analysis_payload_json"])["analysis_meta"]["effective_selection"]["candidate_clip_count"] == 12
+
+
 def test_manual_api_creates_and_reuses_persistent_ai_job(monkeypatch):
     task_id = _create_task("queue")
     monkeypatch.setattr(workflow, "_analyze_with_provider", lambda *_args, **_kwargs: pytest.fail("API 不应直接调用 Provider"))

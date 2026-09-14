@@ -1,5 +1,13 @@
 # Development Log
 
+## 2026-09-14 Content Profile PR2：Registry、迁移与冻结证据
+
+- PR1 #93 三项 CI 通过并 squash 为 `4264e31`，无需部署；从新主干创建 `codex/v2.4-profile-registry-snapshots`。
+- 新增版本表/可空任务与 Run 引用，保留原子提交；迁移种子独立固定，不随 Registry 变化。康熙关键参数配置化，三阶段/Prompt/checkpoint 兼容测试继续通过。
+- 新 Job 原子冻结 Profile、Prompt、选片参数和 Provider 名；旧任务新执行可追溯，旧 Job/Run 不追认。旧 Job 无快照仍按旧协议，损坏的新快照拒绝回退。
+- 修正迁移种子动态依赖、旧任务新执行缺乏版本证据、字幕续接 payload 比较问题，补充哈希/引用损坏测试。完整回归 1033 passed / 0 failed / 0 skipped（166.29 秒，含浏览器）；随后新增“真正执行入队快照”用例单独通过，Ruff/compileall 通过。新旧 followup 参数不一致仍拒绝，未放宽租约或人工边界。
+- 正式库只读副本升级、幂等和旧运行代码回退演练通过：34 张既有表原字段一致、10 条迁移、完整性正常/外键 0、历史 Profile 引用 0。证据 `data/backups/profile-registry-preflight-20260914-160933/acceptance.json`；正式库未迁移，未真实调用 AI/投稿。
+
 ## 2026-09-14 Content Profile PR1：契约与兼容基线
 
 - 用户批准后从 master `ffdb77f` 建立 `codex/v2.4-profile-domain-baseline`，保护四份已有审计修改。

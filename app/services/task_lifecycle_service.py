@@ -228,6 +228,8 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
         )
         from app.services.weekly_review_service import freeze_task
         freeze_task(connection, resolved_task_id)
+        from app.services.content_profile_service import freeze_task_profile
+        freeze_task_profile(connection, resolved_task_id)
         connection.commit()
 
     append_task_log(resolved_task_id, "任务已创建")
@@ -491,6 +493,12 @@ def update_task_selection_settings(
 
     now = _now_iso()
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        active = connection.execute(
+            "SELECT 1 FROM workflow_jobs WHERE task_id=? AND status IN ('queued','running') LIMIT 1", (task_id,),
+        ).fetchone()
+        if active:
+            raise ValueError("任务仍有后台作业，完成或取消后再更换 Content Profile")
         connection.execute(
             """
             UPDATE tasks
@@ -507,6 +515,10 @@ def update_task_selection_settings(
                 task_id,
             ),
         )
+        from app.services.weekly_review_service import freeze_task
+        from app.services.content_profile_service import freeze_task_profile
+        freeze_task(connection, task_id)
+        freeze_task_profile(connection, task_id)
         connection.commit()
 
     profile_label = {

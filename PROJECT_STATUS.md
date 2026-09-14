@@ -1,5 +1,11 @@
 # 项目当前进度
 
+## 当前开发：v2.4 Profile Registry 与快照（2026-09-14）
+
+PR [#93](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/93) 已通过 Linux、Windows、Docker 三项 CI，合并为 `4264e31`；纯领域基础无需部署。随后从最新 master 创建 `codex/v2.4-profile-registry-snapshots`。
+
+PR2 已接入三个旧模式 Registry、新任务/Job/Run 版本证据及康熙参数配置化。完整回归 **1033 passed / 0 failed / 0 skipped**（含浏览器），随后新增的执行快照用例单独通过；Ruff/compileall 通过。新迁移在隔离测试与正式库副本上验证，34 张既有表原字段不变、历史版本不回填；正式库目前仍为 9 条迁移、运行代码 `594bc60`，尚未部署。CI、合并及运行验收在交付后更新。访谈/知识尚未接入，正式产品版本继续 2.3.0。
+
 ## 当前开发：v2.4 Content Profile 基础（2026-09-14）
 
 已批准按 v2.4 → v2.5 → v2.5.5 → v2.6 分版本实施。首分支 `codex/v2.4-profile-domain-baseline` 基于 `ffdb77f`，新增纯不可变模型、三个旧模式描述与合成兼容测试；尚未接入生产路由，正式版本 2.3.0。

@@ -186,9 +186,10 @@ def create_job(
     """创建一个新的 workflow job 记录，初始状态 queued"""
     resolved_job_id = job_id or uuid4().hex[:12]
     now = _now_iso()
-    payload_json = json.dumps(payload or {}, ensure_ascii=False)
-
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        from app.services.content_profile_service import freeze_new_job_payload
+        payload_json = json.dumps(freeze_new_job_payload(connection, task_id, job_type, payload), ensure_ascii=False)
         connection.execute(
             """
             INSERT INTO workflow_jobs (
@@ -266,6 +267,8 @@ def create_or_get_active_job_with_connection(
 
     resolved_job_id = uuid4().hex[:12]
     now = _now_iso()
+    from app.services.content_profile_service import freeze_new_job_payload
+    frozen_payload = freeze_new_job_payload(connection, task_id, job_type, payload)
     connection.execute(
         """
         INSERT INTO workflow_jobs (
@@ -281,7 +284,7 @@ def create_or_get_active_job_with_connection(
             job_type,
             JOB_STATUS_QUEUED,
             f"{JOB_TYPE_LABELS.get(job_type, job_type)}任务已加入队列",
-            json.dumps(payload or {}, ensure_ascii=False),
+            json.dumps(frozen_payload, ensure_ascii=False),
             now,
             now,
         ),
@@ -969,7 +972,13 @@ def mark_job_completed_with_followup(
         except (TypeError, json.JSONDecodeError) as exc:
             connection.rollback()
             raise ValueError("后续 Workflow Job payload 已损坏，拒绝复用") from exc
-        if existing_followup_payload != (followup_payload or {}):
+        from app.services.content_profile_service import JOB_SNAPSHOT_KEY, freeze_new_job_payload
+        expected_followup_payload = followup_payload or {}
+        if JOB_SNAPSHOT_KEY in existing_followup_payload:
+            expected_followup_payload = freeze_new_job_payload(
+                connection, followup_task_id, followup_job_type, followup_payload,
+            )
+        if existing_followup_payload != expected_followup_payload:
             connection.rollback()
             raise ValueError("已有后续 Workflow Job 的执行参数不同，拒绝错误复用")
         result_payload = {**(result or {}), result_followup_key: followup_job_id}
