@@ -1,5 +1,11 @@
 # 数据库结构说明
 
+## 2026-09-14：Content Profile PR5
+
+无新表、列或迁移，账本仍为 12 条。新综艺 Job 既有 payload 快照增加 `feedback_context`，Run 的既有 analysis payload 保存同一集合；历史 Job/Run 不追认、不重写。上下文保留 `decision_source` 等查询来源，默认 keep 的统计含义没有变化。
+
+后续 Job 复用必须校验并沿用原 payload；不能在新版本中给旧快照补字段后作全量比较。回退时暂停新任务并保留快照读取适配：不能将带冻结反馈、仍待恢复的 Job 交给会忽略该字段的旧执行代码。保留证据和数据库增量结构，不覆盖在线数据库。
+
 ## 2026-09-14：Content Profile PR4
 
 - 新账本 `20260914_03_knowledge_provider`，共 12 条迁移。新增 `task_generation_rules.provider_snapshot_json TEXT`（可空），冻结 Provider 名、模型/协议/超时/存储选项与地址/认证路径哈希及整体哈希。历史 NULL 保持未知，不回填。

@@ -972,12 +972,18 @@ def mark_job_completed_with_followup(
         except (TypeError, json.JSONDecodeError) as exc:
             connection.rollback()
             raise ValueError("后续 Workflow Job payload 已损坏，拒绝复用") from exc
-        from app.services.content_profile_service import JOB_SNAPSHOT_KEY, freeze_new_job_payload
+        if not isinstance(existing_followup_payload, dict):
+            connection.rollback()
+            raise ValueError("后续 Workflow Job payload 已损坏，拒绝复用")
+        from app.services.content_profile_service import JOB_SNAPSHOT_KEY, read_job_snapshot
         expected_followup_payload = followup_payload or {}
         if JOB_SNAPSHOT_KEY in existing_followup_payload:
-            expected_followup_payload = freeze_new_job_payload(
-                connection, followup_task_id, followup_job_type, followup_payload,
-            )
+            read_job_snapshot({"payload_json": existing_followup_payload}, connection=connection)
+            # This Job already owns its frozen strategy. Recovery must compare
+            # caller parameters, not recapture newer feedback/models or add new
+            # snapshot fields to an existing execution.
+            if JOB_SNAPSHOT_KEY not in expected_followup_payload:
+                existing_followup_payload = {key: value for key, value in existing_followup_payload.items() if key != JOB_SNAPSHOT_KEY}
         if existing_followup_payload != expected_followup_payload:
             connection.rollback()
             raise ValueError("已有后续 Workflow Job 的执行参数不同，拒绝错误复用")

@@ -1206,6 +1206,7 @@ def _analyze_with_provider(
                 ai_preference=task.get("ai_preference") or "",
                 prompt_template=prompt_template,
                 provider_name=provider_name,
+                feedback_context=task.get("_analysis_feedback_context"),
             )
         )
 
@@ -1484,6 +1485,8 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
         frozen_job = read_job_snapshot(job)
         if frozen_job is not None:
             task = {**task, **frozen_job["selection"]}
+            if "feedback_context" in frozen_job:
+                task["_analysis_feedback_context"] = frozen_job["feedback_context"]["items"]
             prompt_preset = frozen_job["prompt"]
             provider_name = frozen_job["provider"]
             used_provider = provider_name
@@ -1539,6 +1542,7 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             **long_live_meta,
             **analysis_profile_evidence(task, prompt_preset),
             **({"provider_identity": frozen_job["provider_identity"]} if frozen_job and "provider_identity" in frozen_job else {}),
+            **({"feedback_context": frozen_job["feedback_context"]} if frozen_job and "feedback_context" in frozen_job else {}),
         }
         provider_label = _ai_provider_label(used_provider)
         model_name = _ai_model_name(used_provider)

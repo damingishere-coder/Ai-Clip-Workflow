@@ -6,6 +6,7 @@ their audited policy; unknown revisions fail closed instead of ignoring rules.
 
 import json
 import hashlib
+from contextlib import nullcontext
 
 from app.models.content_profile import ContentProfile
 from app.services.content_profile_definitions import builtin_profiles
@@ -185,11 +186,17 @@ def freeze_new_job_payload(connection, task_id: str, job_type: str, payload: dic
         "provider": identity["name"],
         "provider_identity": identity,
     }
+    if task["selection_profile"] == "variety_comedy":
+        from app.services.clip_feedback_service import list_recent_feedback_context_with_connection
+        snapshot["feedback_context"] = {
+            "source": "clip_feedback", "query_version": "recent-final-decisions-v1",
+            "items": list_recent_feedback_context_with_connection(connection, "variety_comedy", 20),
+        }
     result[JOB_SNAPSHOT_KEY] = {"sha256": _snapshot_hash(snapshot), "snapshot": snapshot}
     return result
 
 
-def read_job_snapshot(job: dict) -> dict | None:
+def read_job_snapshot(job: dict, *, connection=None) -> dict | None:
     payload = job.get("payload_json") or {}
     if JOB_SNAPSHOT_KEY not in payload:
         return None
@@ -201,9 +208,17 @@ def read_job_snapshot(job: dict) -> dict | None:
         raise ValueError("Job 策略快照哈希不一致")
     if not isinstance(snapshot.get("selection"), dict) or not isinstance(snapshot.get("prompt"), dict) or not snapshot.get("provider"):
         raise ValueError("Job 策略快照字段不完整")
+    if "feedback_context" in snapshot:
+        feedback = snapshot["feedback_context"]
+        if (snapshot["selection"].get("selection_profile") != "variety_comedy"
+                or not isinstance(feedback, dict) or feedback.get("source") != "clip_feedback"
+                or feedback.get("query_version") != "recent-final-decisions-v1"
+                or not isinstance(feedback.get("items"), list) or len(feedback["items"]) > 20
+                or any(not isinstance(item, dict) for item in feedback["items"])):
+            raise ValueError("Job 审片反馈快照损坏，不能替换为当前反馈")
     analyzer_key(snapshot["selection"], snapshot["prompt"])
     from app.db.database import get_connection
-    with get_connection() as connection:
+    with (nullcontext(connection) if connection is not None else get_connection()) as connection:
         prompt = snapshot["prompt"]
         version, profile = _version(connection, prompt.get("content_profile_version_id"))
         if profile.canonical_json() != prompt.get("content_profile_json") or version["config_sha256"] != prompt.get("content_profile_sha256"):

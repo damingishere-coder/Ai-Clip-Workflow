@@ -434,7 +434,8 @@ def test_judge_receives_full_transcript_and_marks_partial_boundary_sentences(mon
     assert _judge_transcript_evidence(candidate, []) == []
 
 
-def test_three_stage_flow_allows_weak_episode_to_select_less_than_target(monkeypatch, tmp_path: Path):
+@pytest.mark.parametrize("frozen_feedback", [None, []])
+def test_three_stage_flow_allows_weak_episode_to_select_less_than_target(monkeypatch, tmp_path: Path, frozen_feedback):
     transcript_path = tmp_path / "transcript.md"
     lines = ["## 逐句时间戳原文", "", "| 开始 | 结束 | 原文 |", "|---|---|---|"]
     lines.extend(
@@ -447,7 +448,11 @@ def test_three_stage_flow_allows_weak_episode_to_select_less_than_target(monkeyp
         "app.services.ai.variety_comedy_analyzer.analyze_audio_reaction",
         lambda *args, **kwargs: {"available": True, "score": 95, "labels": ["模拟笑声反应"]},
     )
-    monkeypatch.setattr("app.services.ai.variety_comedy_analyzer.list_recent_feedback_context", lambda *args, **kwargs: [])
+    def live_feedback(*args, **kwargs):
+        if frozen_feedback is not None:
+            pytest.fail("冻结的空反馈不能被新反馈替换")
+        return []
+    monkeypatch.setattr("app.services.ai.variety_comedy_analyzer.list_recent_feedback_context", live_feedback)
 
     result = analyze_variety_comedy(
         ComedyAnalysisRequest(
@@ -459,6 +464,7 @@ def test_three_stage_flow_allows_weak_episode_to_select_less_than_target(monkeyp
             ai_preference="更喜欢主持人补刀",
             provider_name="remote",
             prompt_template="保留完整笑点，不要凑数。",
+            feedback_context=frozen_feedback,
         )
     )
 
