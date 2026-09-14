@@ -131,6 +131,20 @@ def test_story_task_restart_and_real_run_round_trip(story_task, request_and_prov
     run = task_service.get_latest_ai_analysis_run(story_task)
     assert run["content_profile_version_id"] == prompt["content_profile_version_id"]
     assert run["clips"][0]["quality_evidence"]["rules_version"] == "interview-v1"
+    from fastapi.testclient import TestClient
+    from app.main import app
+    response = TestClient(app).get(f"/tasks/{story_task}/clips/review")
+    assert response.status_code == 200
+    assert "故事价值" in response.text and "标题适配" in response.text
+    # Historical comedy also has score_breakdown but no dimension-name map.
+    # Keep its existing three labels instead of displaying internal English keys.
+    with get_connection() as c:
+        c.execute("UPDATE clip_candidates SET quality_evidence_json=? WHERE task_id=?",
+                  (json.dumps({"score_breakdown": {"humor": 90, "text_quality": 85}}), story_task))
+        c.commit()
+    response = TestClient(app).get(f"/tasks/{story_task}/clips/review")
+    assert "笑点闭环" in response.text and "音频反应" in response.text
+    assert "</strong>humor</span>" not in response.text
 
 
 def test_checkpoint_reuses_success_and_never_reissues_uncertain(story_task, request_and_provider):
