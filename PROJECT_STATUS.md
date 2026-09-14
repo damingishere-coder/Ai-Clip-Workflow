@@ -1,5 +1,17 @@
 # 项目当前进度
 
+## 当前交付：v2.4.0 已发布与部署（2026-09-14 20:04）
+
+PR [#98](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/98) 已合并为 `15f38387b11c477f94d288dc9d4da4736d0226fe`，最终 PR 与合并后主干的 Linux、Windows、Docker CI 均通过。[v2.4.0 Release](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.4.0) 指向同一提交。1078 项本地回归、pip check、三套 Compose 配置及 21 个 PowerShell 脚本语法检查通过。
+
+Windows 11 / PowerShell 7.6.5 / Docker Desktop 4.40.0 实机验收 17 项全部通过，Demo 为 3 任务、6 候选、6 手动导出草稿；发布门禁通过。使用独立干净 master checkout，未暂存或改写四份用户原审计修改。Demo 配置由示例生成，不含生产凭据；正式配置另存哈希，实际正式数据库及 1322 个托管文件的元数据指纹前后相同。存储检查包含现有 doctor 的临时写入探针，并非媒体内容全量哈希。
+
+20:04 更新原 RunDock 管理的运行副本：Web 8001 与 Windows Worker 8765 的 OpenAPI 均报告 2.4.0，进程链、实际代码目录和 served app.js 哈希已核对。深度 readiness=ready、12 条迁移、integrity=ok、外键异常 0；37 表原行原字段保留，0 新增业务记录。Chrome 1440/390 五模板与试用提示、旧任务、审片、复盘页面验证通过，所有非只读请求被拦截，没有通过验收创建任务或投稿。
+
+本地证据：`data/acceptance/v24-release-tests/windows-ps7/`；备份包位于 `data/backups/v24-release/`，已校验并在隔离目录恢复成功。首次 PowerShell 5.1 未加载 Get-FileHash 的失败报告保留，失败后自动恢复原服务，再使用已验证的 PowerShell 7 重跑通过。回滚使用原代码 `4eaff62`，保留新增数据库结构；不将旧备份覆盖已经发生的发布事实。
+
+工程验收已完成，允许按批准顺序进入 v2.5。三集康熙实际分析与确定性回放证据有效；人物访谈、知识观点继续标试用，真实内容质量与人工盲审保持待验，未补填人工通过。下方按时间保留历史阶段描述，以本节为当前状态。
+
 ## 当前开发：v2.4 工程验收政策更新（2026-09-14）
 
 用户明确同意：工程测试、兼容性及运行验收通过即可继续下一版本，真实质量在日常使用中补验，不再要求专门素材或逐条盲审。人物访谈、知识观点在创建页和任务页标“试用”；显示标记不改变冻结 Profile、Prompt、评分或历史哈希。人工审片、字幕、排期/发布边界保留。
