@@ -67,7 +67,9 @@ if (selectionProfileInput && longLiveSettings) {
     poolInput.value = String(profile.selection.candidate_pool_default);
     if (!poolInput.value) poolInput.value = "12";
     targetInput.value = String(Math.min(12, profile.selection.final_target_default));
-    document.querySelector("#selection-profile-hint").textContent = `${profile.description} 推荐场景：${profile.recommended_scenes.join("、")}。`;
+    const trialNotice = ["interview_story", "knowledge_opinion"].includes(profile.id)
+      ? "试用模板：真实内容质量待日常使用验证，请审核后再使用成片。" : "";
+    document.querySelector("#selection-profile-hint").textContent = `${trialNotice}${profile.description} 推荐场景：${profile.recommended_scenes.join("、")}。`;
     const lo = profile.duration.recommended_min_seconds;
     const hi = profile.duration.recommended_max_seconds;
     document.querySelector("#profile-duration-hint").textContent = lo

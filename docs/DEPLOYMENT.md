@@ -2,7 +2,7 @@
 
 ## 1. 当前部署模式
 
-v2.3.0 支持两种运行方式。日常使用推荐 Windows 原生模式；真实抖音 / B站投稿与抖音作品指标同步无论使用哪种方式，都必须由 Windows 主机上的 Chrome Worker 执行。
+v2.4.0 支持两种运行方式。日常使用推荐 Windows 原生模式；真实抖音 / B站投稿与抖音作品指标同步无论使用哪种方式，都必须由 Windows 主机上的 Chrome Worker 执行。
 
 ### 方式 A：Docker Desktop + Windows Worker（集成验收与回退）
 

@@ -36,13 +36,19 @@ def test_profile_prompt_provider_creation_flow(width, tmp_path):
             assert page.locator('#selection-profile option:not([value=""])').count() == 5
             page.select_option("#selection-profile", "variety_comedy")
             assert page.input_value("#new-task-prompt") == "preset_001"
+            assert "试用" not in page.inner_text("#selection-profile-hint")
             page.select_option("#selection-profile", "interview_story")
+            assert "试用" in page.inner_text('#selection-profile option:checked')
+            assert "真实内容质量待日常使用验证" in page.inner_text("#selection-profile-hint")
             assert page.input_value("#new-task-prompt") == "profile_interview_v1"
             assert page.input_value('[name="max_clip_duration"]') == "4"
             page.select_option("#selection-profile", "long_live_talk")
+            assert "试用" not in page.inner_text("#selection-profile-hint")
             assert page.locator("#long-live-settings").is_visible()
             assert page.input_value('[name="candidate_clip_count"]') == "30"
             page.select_option("#selection-profile", "knowledge_opinion")
+            assert "试用" in page.inner_text('#selection-profile option:checked')
+            assert "真实内容质量待日常使用验证" in page.inner_text("#selection-profile-hint")
             assert page.locator("#long-live-settings").is_hidden()
             assert page.input_value("#new-task-prompt") == "profile_knowledge_v1"
             assert page.input_value('[name="max_clip_duration"]') == "3"

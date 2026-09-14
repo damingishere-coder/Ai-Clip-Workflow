@@ -58,7 +58,7 @@
       <select id="selection-profile" name="selection_profile" required>
         <option value="" selected disabled>请选择内容类型</option>
         {% for profile in content_profiles %}
-        <option value="{{ profile.id }}">{{ "棚内综艺 · 笑点互动（康熙等）" if profile.id == "variety_comedy" else profile.name }}</option>
+        <option value="{{ profile.id }}">{{ "棚内综艺 · 笑点互动（康熙等）" if profile.id == "variety_comedy" else profile.name }}{{ " · 试用" if profile.id in ["interview_story", "knowledge_opinion"] else "" }}</option>
         {% endfor %}
       </select>
       <span class="form-hint" id="selection-profile-hint">按素材选择内容类型，查看推荐片长与选片规则。</span>
