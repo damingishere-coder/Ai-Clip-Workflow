@@ -106,6 +106,15 @@ def _seed_analysis_run(connection, *, prompt_version_id: str) -> None:
 
 
 def _rebuild_ai_runs_without_prompt_fk(connection) -> None:
+    # Reconstruct the actual pre-Profile schema, not an impossible hybrid with
+    # the new ledger/index but missing columns. This is an isolated test DB.
+    from app.db import content_profile_migration
+    connection.execute("DROP INDEX idx_ai_runs_content_profile")
+    for column in ("content_profile_version_id", "content_profile_sha256", "content_profile_json"):
+        connection.execute(f"ALTER TABLE task_generation_rules DROP COLUMN {column}")
+    connection.execute("DROP TABLE content_profile_versions")
+    connection.execute("DROP TABLE content_profiles")
+    connection.execute("DELETE FROM schema_migrations WHERE version=?", (content_profile_migration.VERSION,))
     schema_objects = connection.execute(
         """
         SELECT sql FROM sqlite_master
@@ -166,7 +175,7 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
         ).fetchall()
         indexes = _index_names(connection)
 
-    assert len(migrations) == 9
+    assert len(migrations) == 10
     from app.services import weekly_review_schema
     weekly_migration = next(row for row in migrations if row["version"] == weekly_review_schema.VERSION)
     assert weekly_migration["checksum"] == weekly_review_schema.CHECKSUM

@@ -686,10 +686,9 @@ def test_incompatible_existing_resume_job_rolls_back_subtitle_completion(tmp_pat
     current = job_service.get_job(queued["job_id"])
     assert current["status"] == job_service.JOB_STATUS_RUNNING
     assert current["result_json"] == {}
-    assert job_service.get_job(existing_resume["id"])["payload_json"] == {
-        "retry": True,
-        "start_step": TaskStatus.AI_ANALYZING.value,
-    }
+    assert job_service.get_job(existing_resume["id"])["payload_json"] == existing_resume["payload_json"]
+    assert existing_resume["payload_json"]["start_step"] == TaskStatus.AI_ANALYZING.value
+    assert existing_resume["payload_json"]["retry"] is True
 
 
 def test_restart_recovers_completed_active_result_before_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 from app.models.task import AIClipAnalysisResult
+from app.services.content_profile_baselines import legacy_profile_baselines
 from app.services.ai.base import AIProvider, generate_json_with_safe_retry
 from app.services.ai.ai_clip_analyzer import (
     AIAnalysisError,
@@ -31,22 +32,24 @@ from app.services.ai.unit_checkpoint import (
 )
 
 
-REMOTE_WINDOW_SECONDS = 300
-REMOTE_WINDOW_OVERLAP_SECONDS = 60
-REMOTE_TRANSCRIPT_CHAR_BUDGET = 8_000
-LOCAL_WINDOW_SECONDS = 180
-LOCAL_WINDOW_OVERLAP_SECONDS = 45
-LOCAL_TRANSCRIPT_CHAR_BUDGET = 4_000
-RECALL_LIMIT_PER_WINDOW = 3
-EXPANSION_BATCH_SIZE_REMOTE = 3
-MAX_PRELIMINARY_MOMENTS = 18
-PREFERRED_MIN_CLIP_SECONDS = 60
-MIN_ACCEPTED_CLIP_SECONDS = 45
-MAX_COMEDY_CLIP_SECONDS = 150
-QUALITY_A_THRESHOLD = 78
-QUALITY_B_THRESHOLD = 65
-HUMOR_HARD_GATE = 75
-COMPLETENESS_HARD_GATE = 70
+# Compatibility names stay public; the values now have one policy owner.
+COMEDY_POLICY = next(p for p in legacy_profile_baselines() if p.id == "variety_comedy")
+_REMOTE_WINDOW, _LOCAL_WINDOW = COMEDY_POLICY.recall.windows
+REMOTE_WINDOW_SECONDS = _REMOTE_WINDOW.seconds
+REMOTE_WINDOW_OVERLAP_SECONDS = _REMOTE_WINDOW.overlap_seconds
+REMOTE_TRANSCRIPT_CHAR_BUDGET = _REMOTE_WINDOW.char_budget
+LOCAL_WINDOW_SECONDS = _LOCAL_WINDOW.seconds
+LOCAL_WINDOW_OVERLAP_SECONDS = _LOCAL_WINDOW.overlap_seconds
+LOCAL_TRANSCRIPT_CHAR_BUDGET = _LOCAL_WINDOW.char_budget
+RECALL_LIMIT_PER_WINDOW = _REMOTE_WINDOW.recall_limit
+EXPANSION_BATCH_SIZE_REMOTE = COMEDY_POLICY.expansion.remote_batch_size
+MAX_PRELIMINARY_MOMENTS = COMEDY_POLICY.recall.preliminary_limit
+PREFERRED_MIN_CLIP_SECONDS = COMEDY_POLICY.duration.recommended_min_seconds
+MIN_ACCEPTED_CLIP_SECONDS = COMEDY_POLICY.duration.min_seconds
+MAX_COMEDY_CLIP_SECONDS = COMEDY_POLICY.duration.max_seconds
+QUALITY_A_THRESHOLD = COMEDY_POLICY.scoring.a_threshold
+QUALITY_B_THRESHOLD = COMEDY_POLICY.scoring.b_threshold
+HUMOR_HARD_GATE, COMPLETENESS_HARD_GATE = (g.minimum for g in COMEDY_POLICY.scoring.hard_gates)
 
 RECALL_OUTPUT_SCHEMA = {
     "type": "object",
@@ -216,14 +219,14 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
         for candidate in expanded
     ]
     scored = dedupe_scored_candidates(scored)
-    candidate_pool_limit = max(1, min(12, int(request.candidate_pool_limit or 12)))
+    candidate_pool_limit = max(1, min(COMEDY_POLICY.selection.candidate_pool_max, int(request.candidate_pool_limit or COMEDY_POLICY.selection.candidate_pool_default)))
     kept = [item for item in scored if item["quality_tier"] in {"A", "B"}]
     kept = sorted(kept, key=lambda item: item["quality_score"], reverse=True)[:candidate_pool_limit]
 
     a_ranked = [item for item in kept if item["quality_tier"] == "A"]
     selected_ids = {
         item["source_id"]
-        for item in a_ranked[: max(1, min(12, int(request.final_clip_target or 5)))]
+        for item in a_ranked[: max(1, min(COMEDY_POLICY.selection.final_target_max, int(request.final_clip_target or COMEDY_POLICY.selection.final_target_default)))]
     }
     for item in kept:
         item["selected_by_default"] = item["source_id"] in selected_ids
@@ -355,10 +358,10 @@ def dedupe_recall_moments(moments: list[dict]) -> list[dict]:
         duplicate = False
         for existing in selected:
             existing_topic = _normalize_topic(existing.get("topic_key") or existing.get("title") or "")
-            if abs(key_seconds - int(existing["key_seconds"])) <= 30:
+            if abs(key_seconds - int(existing["key_seconds"])) <= COMEDY_POLICY.dedupe.recall_distance_seconds:
                 duplicate = True
                 break
-            if topic and topic == existing_topic and abs(key_seconds - int(existing["key_seconds"])) <= 120:
+            if topic and topic == existing_topic and abs(key_seconds - int(existing["key_seconds"])) <= COMEDY_POLICY.dedupe.topic_distance_seconds:
                 duplicate = True
                 break
         if not duplicate:
@@ -420,7 +423,7 @@ def dedupe_expanded_candidates(candidates: list[dict]) -> list[dict]:
     )
     selected: list[dict] = []
     for candidate in ranked:
-        if any(_is_duplicate_candidate(candidate, existing, overlap_threshold=0.4) for existing in selected):
+        if any(_is_duplicate_candidate(candidate, existing, overlap_threshold=COMEDY_POLICY.dedupe.expansion_overlap) for existing in selected):
             continue
         selected.append(candidate)
     return sorted(selected, key=lambda item: _time_to_seconds(item["start_time"]))
@@ -441,19 +444,13 @@ def score_comedy_candidate(candidate: dict, judge: dict) -> dict:
     hook = _score_value(judge.get("hook_score"), candidate.get("hook_score"), default=50)
     novelty = _score_value(judge.get("novelty_score"), candidate.get("novelty_score"), default=50)
     title = _score_value(judge.get("title_score"), candidate.get("title_score"), default=50)
-    text_score = round(
-        humor * 0.30
-        + interaction * 0.20
-        + completeness * 0.20
-        + hook * 0.10
-        + novelty * 0.10
-        + title * 0.10,
-        1,
-    )
+    text_score = round(sum(value * dimension.weight for value, dimension in zip(
+        (humor, interaction, completeness, hook, novelty, title), COMEDY_POLICY.scoring.dimensions, strict=True,
+    )), 1)
     audio = candidate.get("audio_evidence") or {}
     audio_available = bool(audio.get("available"))
     audio_score = _score_value(audio.get("score"), default=0)
-    weighted_score = text_score * 0.75 + audio_score * 0.25
+    weighted_score = text_score * (1 - COMEDY_POLICY.scoring.audio_weight) + audio_score * COMEDY_POLICY.scoring.audio_weight
     # 音频是辅助加分项：反应信号弱或缺失时，不反向扣减已经成立的文字质量分。
     quality_score = round(max(text_score, weighted_score), 1) if audio_available else text_score
 
@@ -507,7 +504,7 @@ def score_comedy_candidate(candidate: dict, judge: dict) -> dict:
 def dedupe_scored_candidates(candidates: list[dict]) -> list[dict]:
     selected: list[dict] = []
     for candidate in sorted(candidates, key=lambda item: item["quality_score"], reverse=True):
-        if any(_is_duplicate_candidate(candidate, existing, overlap_threshold=0.3) for existing in selected):
+        if any(_is_duplicate_candidate(candidate, existing, overlap_threshold=COMEDY_POLICY.dedupe.final_overlap) for existing in selected):
             continue
         selected.append(candidate)
     return selected
@@ -603,7 +600,7 @@ def _expand_moments(
 ) -> tuple[list[dict], list[str], dict[str, int]]:
     expanded = []
     failures = []
-    batch_size = 1 if provider_name == "local" else EXPANSION_BATCH_SIZE_REMOTE
+    batch_size = COMEDY_POLICY.expansion.local_batch_size if provider_name == "local" else EXPANSION_BATCH_SIZE_REMOTE
     expected_units = math.ceil(len(moments) / batch_size) if moments else 0
     completed_units = 0
     failed_units = 0
@@ -616,8 +613,8 @@ def _expand_moments(
         for moment in batch:
             context_rows = _rows_in_range(
                 rows,
-                max(rows[0].start_seconds, int(moment["key_seconds"]) - 120),
-                min(rows[-1].end_seconds, int(moment["key_seconds"]) + 150),
+                max(rows[0].start_seconds, int(moment["key_seconds"]) - COMEDY_POLICY.expansion.before_seconds),
+                min(rows[-1].end_seconds, int(moment["key_seconds"]) + COMEDY_POLICY.expansion.after_seconds),
             )
             context_rows_by_id[moment["source_id"]] = context_rows
             contexts.append(
@@ -1042,7 +1039,7 @@ def _is_duplicate_candidate(first: dict, second: dict, *, overlap_threshold: flo
     first_topic = _normalize_topic(first.get("topic_key") or first.get("title") or "")
     second_topic = _normalize_topic(second.get("topic_key") or second.get("title") or "")
     gap = max(0, max(first_start, second_start) - min(first_end, second_end))
-    return bool(first_topic and first_topic == second_topic and gap <= 90)
+    return bool(first_topic and first_topic == second_topic and gap <= COMEDY_POLICY.dedupe.topic_gap_seconds)
 
 
 __all__ = [

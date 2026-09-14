@@ -755,6 +755,8 @@ def _analysis_run_row_to_dict(row: Row, include_payload: bool = False) -> dict:
         "prompt_version_id": run.get("prompt_version_id") or "",
         "prompt_version_number": prompt_version[0] if prompt_version else None,
         "prompt_text_sha256": run.get("prompt_text_sha256") or "",
+        "content_profile_version_id": run.get("content_profile_version_id"),
+        "content_profile_sha256": run.get("content_profile_sha256"),
         "requested_clip_count": int(run.get("requested_clip_count") or 0),
         "clip_count": int(run.get("clip_count") or 0),
         "analysis_summary": run.get("analysis_summary") or "",
@@ -912,9 +914,9 @@ def _insert_ai_analysis_run_with_connection(
             ai_prompt_preset_id, ai_prompt_preset_name,
             prompt_version_id, prompt_text_sha256, requested_clip_count,
             clip_count, analysis_summary, fallback_notice, analysis_payload_json,
-            is_active, created_at
+            is_active, created_at, content_profile_version_id, content_profile_sha256
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
@@ -934,6 +936,8 @@ def _insert_ai_analysis_run_with_connection(
             json.dumps(analysis_payload, ensure_ascii=False),
             1,
             now,
+            prompt_preset.get("content_profile_version_id"),
+            prompt_preset.get("content_profile_sha256"),
         ),
     )
     return run_id
@@ -1155,6 +1159,8 @@ def _analyze_with_provider(
     provider_name: str,
     prompt_preset: dict,
 ):
+    from app.services.content_profile_service import analyzer_key
+    route = analyzer_key(task, prompt_preset)
     prompt_template = (prompt_preset.get("prompt_text") or "").strip()
     if not prompt_template:
         raise AIAnalysisError(f"当前选择的 AI Prompt 方案\"{prompt_preset.get('name')}\"还没有填写 Prompt 内容")
@@ -1163,7 +1169,7 @@ def _analyze_with_provider(
     if provider_name == "local":
         ensure_local_ai_ready()
 
-    if task.get("selection_profile") == "variety_comedy":
+    if route == "variety_comedy":
         window_seconds = 180 if provider_name == "local" else 300
         overlap_seconds = 45 if provider_name == "local" else 60
         append_task_log(
@@ -1186,7 +1192,7 @@ def _analyze_with_provider(
             )
         )
 
-    if task.get("selection_profile") == "long_live_talk":
+    if route == "long_live_talk":
         density = max(1, min(10, int(task.get("highlight_density_per_hour") or 4)))
         total_limit = max(1, min(50, int(task.get("highlight_total_limit") or 30)))
         append_task_log(
@@ -1457,7 +1463,18 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
     try:
         if not paths["transcript_path"].exists():
             raise AIAnalysisError("请先生成带时间戳的转写 Markdown，再开始 AI 分析")
-        prompt_preset = get_task_ai_prompt_snapshot(task_id)
+        from app.services.content_profile_service import read_job_snapshot
+        frozen_job = read_job_snapshot(job)
+        if frozen_job is not None:
+            task = {**task, **frozen_job["selection"]}
+            prompt_preset = frozen_job["prompt"]
+            provider_name = frozen_job["provider"]
+            used_provider = provider_name
+        else:
+            prompt_preset = get_task_ai_prompt_snapshot(task_id)
+            # A pre-upgrade Job may contain old successful units. Never claim
+            # the entire mixed-age analysis used a newly inferred version.
+            prompt_preset = {key: value for key, value in prompt_preset.items() if not key.startswith("content_profile_")}
         try:
             analysis = _analyze_with_provider(
                 task_id,
@@ -1485,6 +1502,7 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
         analysis_payload = result_to_jsonable(analysis)
         analyzer_meta = analysis_payload.get("analysis_meta")
         analyzer_meta = analyzer_meta if isinstance(analyzer_meta, dict) else {}
+        from app.services.content_profile_service import analysis_profile_evidence
         analysis_payload["analysis_meta"] = {
             **analyzer_meta,
             "schema_version": int(analyzer_meta.get("schema_version") or 2),
@@ -1498,6 +1516,7 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             "prompt_version_id": prompt_preset.get("prompt_version_id"),
             "prompt_sha256": prompt_preset.get("prompt_sha256"),
             **long_live_meta,
+            **analysis_profile_evidence(task, prompt_preset),
         }
         provider_label = _ai_provider_label(used_provider)
         model_name = _ai_model_name(used_provider)

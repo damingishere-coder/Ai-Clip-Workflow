@@ -8,6 +8,8 @@
 
 ### Internal
 
+- 接入三个旧内容模式 Registry、不可变 Profile 版本和任务/新 Job/分析 Run 快照；康熙参数从冻结基线读取。旧 Prompt、旧分析及旧 Job 恢复协议保留；不支持的新策略或损坏快照明确拒绝。
+
 - 建立 Content Profile 不可变契约与三个旧模式基线，增加康熙 Prompt/评分兼容测试和分阶段验收规范；尚未改变生产路由、Prompt 或数据库。
 
 ### Planned
