@@ -3,6 +3,7 @@ from uuid import uuid4
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, UploadFile
 from starlette.concurrency import run_in_threadpool
 from fastapi.responses import Response
+from app.models.human_review import ObservationDecision
 
 from app.models.task import (
     ClipCandidateBatchUpdate,
@@ -340,6 +341,30 @@ async def restore_ai_analysis_run(task_id: str, run_id: str) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{task_id}/ai-analysis-runs/{run_id}/review-observations")
+def review_observations(task_id: str, run_id: str) -> dict:
+    from app.services.human_review_service import get_review_observations
+    try:
+        return get_review_observations(task_id, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{task_id}/review-observations")
+def review_observation_runs(task_id: str) -> dict:
+    from app.services.human_review_service import list_review_runs
+    return list_review_runs(task_id)
+
+
+@router.post("/{task_id}/ai-analysis-runs/{run_id}/review-observations")
+def record_observation_decision(task_id: str, run_id: str, payload: ObservationDecision) -> dict:
+    from app.services.human_review_service import save_observation_decision
+    try:
+        return save_observation_decision(task_id, run_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/{task_id}/clips/{clip_id}/update")

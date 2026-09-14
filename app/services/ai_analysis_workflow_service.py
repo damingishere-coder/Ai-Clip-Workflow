@@ -1582,6 +1582,10 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             **({"provider_identity": frozen_job["provider_identity"]} if frozen_job and "provider_identity" in frozen_job else {}),
             **({"feedback_context": frozen_job["feedback_context"]} if frozen_job and "feedback_context" in frozen_job else {}),
         }
+        from app.services.review_observation_service import build_observations, existing_source_identity
+        analysis_payload["analysis_meta"].setdefault("review_observations", build_observations(
+            analysis_payload.get("clips") or [], profile_id=task.get("selection_profile")))
+        analysis_payload["analysis_meta"]["review_source_identity"] = existing_source_identity(analysis_payload["analysis_meta"])
         provider_label = _ai_provider_label(used_provider)
         model_name = _ai_model_name(used_provider)
         analysis_run = _commit_ai_analysis_result(

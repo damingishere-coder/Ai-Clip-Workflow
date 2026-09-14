@@ -46,6 +46,12 @@ async def list_accounts() -> dict:
     return {"accounts": content_review_service.list_douyin_accounts()}
 
 
+@router.get("/human-review")
+def human_review(days: int = Query(default=30, ge=1, le=180)) -> dict:
+    from app.services.human_review_service import get_human_review_summary
+    return get_human_review_summary(days)
+
+
 @router.post("/imports/preview")
 async def preview_import(
     file: UploadFile = File(...),

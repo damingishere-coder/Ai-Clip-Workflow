@@ -26,6 +26,19 @@
 
 <div class="page-alert" id="clip-review-message" hidden></div>
 
+<section class="panel" id="human-observation-review" data-task-id="{{ task.id }}">
+  <details id="human-observation-disclosure">
+    <summary><strong>评价 AI 初始候选 · 帮助积累选片经验</strong></summary>
+    <p>这里按具体分析批次记录明确的接受或拒绝。评价的是当时的 AI 原始建议；当前编辑、启用和生成切片继续使用下方审核操作。评价不会自动修改生产策略。</p>
+    <label>分析批次（最近 100 次）<select id="human-review-run" aria-label="评价的分析批次"></select></label>
+    <p id="human-review-evidence-note"></p>
+    <div id="human-review-observations"></div>
+    <details id="human-review-diagnostics"><summary>展开未进入候选池的诊断片段（含 C 级，仅作评价）</summary><div id="human-review-diagnostic-items"></div></details>
+    <p id="human-review-decision-status" role="status"></p>
+    <a href="/content-review#human-review-report">查看人工审片统计</a>
+  </details>
+</section>
+
 <section class="review-layout">
   <form class="clip-list" id="clip-review-form" data-task-id="{{ task.id }}" data-max-clip-seconds="{{ task.max_clip_duration * 60 }}">
     {% if clips %}
@@ -352,4 +365,5 @@
 {% endblock %}
 {% block extra_scripts %}
 <script src="{{ url_for('static', path='vendor/nouislider/nouislider.min.js') }}?v=15.8.1"></script>
+<script src="{{ url_for('static', path='js/human-review.js') }}?v=20260915-1"></script>
 {% endblock %}

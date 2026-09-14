@@ -1,5 +1,9 @@
 # 数据库结构说明
 
+## 开发中：v2.5.5 PR1 增量
+
+第 15 项 `20260915_01_human_review` 为 `clip_feedback` 增加可空 `analysis_candidate_key`、`observation_sha256` 与 Run/候选/时间索引；不回填旧反馈，不复制候选或官方数据。新 AI 初始观察放入已有 Run JSON。当前正式库仍是下面记录的 14 项迁移。详细归因与回退见 [Content Intelligence](CONTENT_INTELLIGENCE.md)。
+
 ## 当前：v2.5.0 / 14 项迁移
 
 正式库已应用第 13 项视觉证据和第 14 项可选视觉策略。迁移 14 为 tasks 增加默认关闭的 visual_enabled、task_generation_rules 增加可空 visual_policy_json、视觉证据增加 cache_cleanup_error 及任务查询索引。37 张原表的旧行旧字段已实测保留，旧任务策略保持未知/关闭。以下阶段记录不代表当前迁移数量。

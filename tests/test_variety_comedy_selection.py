@@ -472,6 +472,20 @@ def test_three_stage_flow_allows_weak_episode_to_select_less_than_target(monkeyp
     assert result.clips[0].selected_by_default is True
     assert result.clips[0].quality_tier == "A"
     assert 60 <= result.clips[0].duration_seconds <= 150
+    observation = result.analysis_meta["review_observations"]["items"][0]
+    assert observation["quality_score"] == result.clips[0].quality_score
+    assert observation["initial_recommended"] is True and observation["clip_key"] == "clip_001"
+
+    from app.services.ai import variety_comedy_analyzer as analyzer
+    original_score = analyzer.score_comedy_candidate
+    monkeypatch.setattr(analyzer, "score_comedy_candidate", lambda candidate, judge:
+        {**original_score(candidate, judge), "quality_tier": "C", "quality_score": 50})
+    diagnostic = analyze_variety_comedy(ComedyAnalysisRequest(task_id=f"{PREFIX}c-only", transcript_path=transcript_path,
+        audio_path=tmp_path/"not-needed.wav", provider_name="remote", feedback_context=frozen_feedback,
+        candidate_pool_limit=12, final_clip_target=5, ai_preference=""))
+    assert not diagnostic.clips
+    rows = diagnostic.analysis_meta["review_observations"]["items"]
+    assert len(rows) == 1 and rows[0]["quality_tier"] == "C" and rows[0]["initial_recommended"] is False
 
 
 def test_auto_pipeline_only_enables_selected_a_grade_clips(monkeypatch):

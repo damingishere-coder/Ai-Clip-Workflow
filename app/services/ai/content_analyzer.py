@@ -229,6 +229,10 @@ def analyze_content(request: ContentAnalysisRequest) -> AIClipAnalysisResult:
                 "score_breakdown": c["scores"], "score_dimensions": {d.id: d.name for d in profile.scoring.dimensions},
                 "hook_type": c["hook_type"], "profile_sha256": profile.content_hash(), "rules_version": profile.rules_version}})
     completed = sum(status == "completed" for status in units)
+    from app.services.review_observation_service import build_observations
+    review_observations = build_observations(clips, scored=scored,
+        source_to_clip={c["source_id"]: clip["clip_id"] for c, clip in zip(sorted(kept, key=lambda c: c["start_seconds"]), clips, strict=True)},
+        profile_id=profile.id)
     ratio = completed / len(units)
     return AIClipAnalysisResult(task_id=request.task_id, clips=clips,
         analysis_summary=f"{profile.name}：{len(windows)} 个召回窗口，{len(expanded)} 个完整候选，保留 {len(clips)} 条；失败单元 {len(failures)} 个。",
@@ -237,6 +241,7 @@ def analyze_content(request: ContentAnalysisRequest) -> AIClipAnalysisResult:
             "coverage_ratio": round(ratio, 6), "coverage_percent": round(ratio * 100, 2), "invalid_item_count": 0,
             "analysis_incomplete": bool(failures), "quality_degraded": any(f["stage"] == "global_judge" for f in failures),
             "observations": observations, "rules_version": profile.rules_version,
+            "review_observations": review_observations,
             "effective_limits": {"candidate_pool": min(profile.selection.candidate_pool_max, request.candidate_pool_limit),
                                  "final_target": min(profile.selection.final_target_max, request.final_clip_target),
                                  "max_duration_seconds": max_seconds}})

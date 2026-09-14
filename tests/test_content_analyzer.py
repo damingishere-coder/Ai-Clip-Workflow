@@ -76,7 +76,21 @@ def test_shared_story_pipeline_has_profile_evidence_and_valid_cut_metadata(reque
     assert clip.humor_score == 0
     assert clip.topic_key == "成长" and clip.key_moment_time == "00:00:40"
     assert clip.quality_evidence["score_breakdown"]["story_value"] == 90
+    observation = result.analysis_meta["review_observations"]["items"][0]
+    assert observation["key"] == "clip:clip_001" and observation["initial_recommended"] is True
+    assert observation["score_dimensions"]["story_value"] == 90
     assert workflow.validate_ai_analysis_meta_for_cut(result.analysis_meta, "interview_story")["coverage_percent"] == 100
+
+
+def test_content_c_diagnostic_is_kept_without_becoming_production_candidate(request_and_provider, monkeypatch):
+    request, provider = request_and_provider
+    monkeypatch.setattr(content, "score_candidate", lambda *_: (50, "C"))
+    result = content.analyze_content(request)
+    assert not result.clips
+    row = result.analysis_meta["review_observations"]["items"][0]
+    assert row["quality_tier"] == "C" and row["in_review_pool"] is False
+    assert row["initial_recommended"] is False
+    assert provider.calls == ["recall", "expansion", "global_judge"]
 
 
 @pytest.mark.parametrize("fault", ["recall", "expansion", "boundary", "global_judge", "scores"])

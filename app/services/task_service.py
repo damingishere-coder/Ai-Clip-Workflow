@@ -914,6 +914,7 @@ def list_clip_candidates(task_id: str) -> list[dict]:
                    (
                        SELECT f.reason_code FROM clip_feedback f
                        WHERE f.task_id = c.task_id AND f.clip_candidate_id = c.id
+                         AND f.decision_source != 'observation_review'
                        ORDER BY f.created_at DESC, f.rowid DESC LIMIT 1
                    ) AS feedback_reason_code
             FROM clip_candidates c
