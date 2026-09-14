@@ -18,11 +18,17 @@ Transcribe, find highlights with AI, review clips, prepare content and schedule 
 
 </div>
 
+## Development status
+
+The released version remains **2.3.0**. Current master includes five Content Profiles: studio variety comedy, interviews, knowledge/opinion, long live talk, and general. Task creation supports Profile, Prompt, and AI Provider selection. Interview and knowledge profiles use separate prompts and scoring dimensions; general and long live talk retain their legacy default prompt, which users can override.
+
+v2.4 still requires real-material and human quality acceptance. Work proceeds in order: v2.4 profiles, v2.5 optional visual evidence, v2.5.5 content intelligence, then v2.6 batch production, with acceptance between versions. See the [status](PROJECT_STATUS.md), [implementation ledger](docs/CONTENT_PROFILE_ROLLOUT.md), and [acceptance requirements](docs/CONTENT_PROFILE_ACCEPTANCE.md).
+
 ## One workspace for the whole process
 
 | Find the content | Produce the clip | Learn from results |
 | --- | --- | --- |
-| Upload, local files and NAS sources | Review transcripts and adjust cut points | Import Douyin metrics and confirm attribution |
+| Upload one local video at a time | Review transcripts and adjust cut points | Import Douyin metrics and confirm attribution |
 | Local faster-whisper transcription | FFmpeg clips and a separate subtitle workspace | Weekly reviews and Prompt version comparisons |
 | AI candidates and structured scoring | Titles, topics, cover frames and scheduling | Read review suggestions and preview adaptive schedules |
 
