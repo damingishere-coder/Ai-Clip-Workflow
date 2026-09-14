@@ -495,3 +495,7 @@ docs/design/live_streaming_slicing_workflow_ui_16x9.png
 ### v2.5 视觉流程接入（待部署）
 
 `visual_policy_service` 冻结任务及 Job 的显式视觉策略。`VisualAnalysisSession` 在候选内核验图片，保留原文字/音频 Judge，再以可选综合评审附加最多 10%/10 分，不提升文字等级。旧 Job/关闭分支保持原调用；可选失败与必需 coverage 分离。既有 `_commit_ai_analysis_result` 一次事务关联证据 Run；`visual_cache_service` 复用 Worker 闲置周期维护托管图片。具体预算、恢复、UI、保留期和运行故障边界见 [Visual Signal](VISUAL_SIGNAL.md)。
+
+## 2026-09-14 v2.5 运行验收
+
+v2.5.0 已部署验证：视觉独立可选阶段使用原 Job/Run，关闭时保留旧分析路径；无法确认本地进程停止属于运行故障，持久门槛覆盖关闭视觉后的文字重试。回退优先保留新二进制并关闭视觉，旧程序的未知迁移 readiness 检查不能绕过。

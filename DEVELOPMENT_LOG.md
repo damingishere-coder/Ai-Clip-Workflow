@@ -1,5 +1,13 @@
 # Development Log
 
+## 2026-09-14 v2.5 正式运行交付
+
+- PR #103 最终 head 0b62ac2 三项 CI 通过，合并 384db79；主干 CI 34856830103 亦通过。干净副本与镜像构建 tree 同为 fe542945b29c9b8d955c0db36935d2309567275a。
+- 本机首个默认源构建因 Debian 下载停滞终止自有进程；从既有 v2.4 镜像历史核对并复用清华镜像源构建参数，缓存构建通过，镜像 d123d944c3284cc33e1afdd2ead8d790cc4b582b71e99d0d7cda115d743cfeb0。未修改配置、删除缓存或影响服务。
+- 三套合并 Compose 配置及隔离挂载核验通过；Windows 实机门禁通过后在原 RunDock 记录切换发布提交。Web/Worker 实际 2.5.0、迁移 14、旧 37 表数据保留，原任务视觉全部关闭，真实浏览器与服务进程/资源校验通过。Release v2.5.0 于 22:47 发布为 Latest。
+- 回滚兼容副本实测修正“旧程序可初始化即回滚通过”的判断：旧 2.4 的 readiness 会拒绝新增迁移，功能关闭回退优先；没有删除账本或覆盖生产库。证据与完整验收说明见 PROJECT_STATUS 和 docs/VISUAL_SIGNAL.md。
+
+
 ## 2026-09-14 v2.5 发布验收准备
 
 PR #102 最终 head c15bd50 的本地 1187 项回归及三项 CI 通过（Linux 1174 passed、13 skipped），合并 04b3fef。新建 codex/v2.5-release-acceptance，统一应用/Worker/页面/备份/文档版本为 2.5.0；尚未更新正式运行副本。WAL-safe 备份已验证并恢复到隔离目录，52 任务/403 候选/577 成片/746 发布记录一致。首次误用旧备份 CLI 的包校验失败，保留为拒绝证据；正式恢复包只使用 backup_restore_runtime 生成的 v25-wal-safe-pre-upgrade-20260914-222740.zip。

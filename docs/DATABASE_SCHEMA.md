@@ -585,3 +585,7 @@ data/workflow.sqlite3
 ### v2.5 可选视觉策略迁移（第 14 项，待部署）
 
 `20260914_05_visual_policy` 增加 `tasks.visual_enabled INTEGER NOT NULL DEFAULT 0`、`task_generation_rules.visual_policy_json TEXT NULL`、`candidate_visual_evidence.cache_cleanup_error` 和任务查询索引。旧行原字段不变、旧版本 JSON 不回填，迁移前 `visual-policy-v1` 备份，DDL 和迁移账本同事务。任务/新 Job 冻结有效视觉策略及哈希，Run payload 留证；普通重试不重新冻结。功能回滚保留所有增量结构，关闭视觉后原文字链路继续；不可覆盖旧备份丢掉新 Run/发布事实。
+
+## 2026-09-14 v2.5 运行验收
+
+v2.5.0 实际库已应用迁移 13/14，迁移账本 14 项，integrity=ok/FK=0；37 张原表旧字段旧行保留，旧任务 visual_enabled=0、visual_policy_json=NULL。旧 2.4 虽可读库，但 readiness 拒绝未知迁移，不能删除账本伪造回滚；保留增量结构做功能回退优先。
