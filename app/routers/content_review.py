@@ -5,6 +5,7 @@ from app.models.content_review import (
     ContentExperimentAssignmentRequest,
     ContentExperimentCreateRequest,
     ContentExperimentDecisionRequest,
+    ContentIntelligenceReportRequest,
     ContentItemMatchUpdate,
     ContentMetricImportCommitRequest,
     DouyinAnalyticsExportSyncRequest,
@@ -50,6 +51,31 @@ async def list_accounts() -> dict:
 def human_review(days: int = Query(default=30, ge=1, le=180)) -> dict:
     from app.services.human_review_service import get_human_review_summary
     return get_human_review_summary(days)
+
+
+@router.post("/intelligence/reports")
+def create_intelligence_report(payload: ContentIntelligenceReportRequest) -> dict:
+    from app.services.content_intelligence_service import create_report
+    try:
+        return create_report(payload.account_id, payload.days, str(payload.request_key))
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.get("/intelligence/reports")
+def list_intelligence_reports(account_id: str = Query(default="", max_length=120),
+                              limit: int = Query(default=30, ge=1, le=100)) -> dict:
+    from app.services.content_intelligence_service import list_reports
+    return {"reports": list_reports(account_id, limit)}
+
+
+@router.get("/intelligence/reports/{report_id}")
+def read_intelligence_report(report_id: str) -> dict:
+    from app.services.content_intelligence_service import get_report
+    try:
+        return get_report(report_id)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
 
 
 @router.post("/imports/preview")

@@ -181,7 +181,12 @@ def _evidence(connection, account_id):
             )
             item["comparison_count"] = len(cohort)
             item["comparison_label"] = label.get("label", "")
-            if len(cohort) >= 5:
+            comparable = (len(cohort) >= 5 and label.get("label") == "同体裁、同片长、同发布年龄"
+                and row.get("profile_bucket") not in {None, "unknown"}
+                and all(w.get("profile_bucket") == row["profile_bucket"] for w in cohort))
+            item["comparison_fallback"] = not comparable
+            item["profile"] = row.get("profile_bucket", "unknown")
+            if comparable:
                 benchmarks = review._cohort_benchmarks(cohort)
                 item["comparison"] = benchmarks
                 signals = [
@@ -203,8 +208,6 @@ def _evidence(connection, account_id):
                     if sum(signals) <= 1
                     else "ordinary"
                 )
-            else:
-                item["group"] = "ordinary"
         works.append(item)
     presets = [
         dict(r)

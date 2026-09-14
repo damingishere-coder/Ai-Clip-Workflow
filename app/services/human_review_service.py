@@ -1,6 +1,7 @@
 """Run-cohort human review statistics. No AI, production rule, or queue writes."""
 
 from collections import Counter, defaultdict
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 import json
 import re
@@ -90,6 +91,7 @@ def _decisions(run, feedback, cutoff):
                                       ("start_time", "start_time"), ("end_time", "end_time")))
         row.update(human_decision=event["decision"] if matches else None,
                    decision_reason=event["reason_code"] if matches else None,
+                   decision_id=event["id"],
                    ambiguous=not matches, decision_at=event["created_at"], decision_source=source)
     return list(rows.values()), unmatched
 
@@ -176,13 +178,14 @@ def _summary(rows, *, truncated=False):
             "rejection_reasons": dict(Counter(r["decision_reason"] for r in reviewed if r["human_decision"] == "reject"))}
 
 
-def get_human_review_summary(days=30, *, cutoff=None):
+def get_human_review_summary(days=30, *, cutoff=None, connection=None, include_evidence=False):
     cutoff = _date(cutoff) if cutoff else datetime.now(timezone.utc)
     if cutoff is None or not 1 <= days <= 180:
         raise ValueError("审片统计时间范围无效")
     start = cutoff - timedelta(days=days)
-    with get_connection() as connection:
-        connection.execute("BEGIN")
+    with (get_connection() if connection is None else nullcontext(connection)) as connection:
+        if not connection.in_transaction:
+            connection.execute("BEGIN")
         # Cohort = analyses generated in this interval, decisions as of cutoff.
         # Explicitly bounded, with truncation reported instead of a false total.
         runs = [dict(r) for r in connection.execute("""SELECT r.*,v.profile_id FROM ai_analysis_runs r
@@ -228,10 +231,15 @@ def get_human_review_summary(days=30, *, cutoff=None):
             key = ("unknown" if score is None else "0–64" if score < 65 else "65–77" if score < 78 else "78–89" if score < 90 else "90–100") if dimension == "score_band" else row.get(dimension) or "unknown"
             grouped[str(key)].append(row)
         groups[dimension] = [{"key": key, **_summary(values, truncated=truncated)} for key, values in sorted(grouped.items())]
-    return {"schema_version": "human-review-v1", "time_basis": "analysis_created_at", "start": start.isoformat(),
+    result = {"schema_version": "human-review-v1", "time_basis": "analysis_created_at", "start": start.isoformat(),
             "cutoff": cutoff.isoformat(), "days": days, "truncated": truncated,
             "unmatched_feedback": unmatched, "recent_unattributed_feedback": unattributed, "invalid_runs": invalid_runs,
             "profile_version_unknown": sum(not r["profile_version_id"] for r in all_rows),
             "prompt_version_unknown": sum(not r["prompt_version_id"] for r in all_rows),
             "summary": _summary(all_rows, truncated=truncated), "groups": groups,
             "note": "统计这段时间内生成的 AI 批次，截至统计时间的最后明确评价；默认启用、自动选片和普通保存均不算人工认可。重复分析按不同推荐尝试计数。原视频身份未知时不推算独立样本数。仅描述关联，不作因果结论。"}
+    if include_evidence:
+        fields = ("task_id", "run_id", "key", "sha256", "human_decision", "decision_id", "decision_at",
+                  "decision_source", "ambiguous", "profile", "profile_version_id", "prompt_version_id", "source_sha256")
+        result["evidence_refs"] = [{key: row.get(key) for key in fields} for row in all_rows]
+    return result

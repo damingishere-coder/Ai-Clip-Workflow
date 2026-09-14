@@ -38,6 +38,16 @@
   <div id="human-review-groups"></div>
 </section>
 
+<section class="panel" id="intelligence-report">
+  <h2>选片经验报告</h2>
+  <p>保存此刻的审片统计与作品表现。人工审片覆盖所有任务；作品表现仅使用上方所选账号的官方数据。</p>
+  <label>报告范围 <select id="intelligence-days"><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="180">最近 180 天</option></select></label>
+  <button type="button" class="secondary-button" id="intelligence-create">生成并保存报告</button>
+  <p id="intelligence-status" role="status">报告不会修改策略，也不会同步数据、创建实验或排期。</p>
+  <div id="intelligence-result"></div>
+  <details><summary>已保存的报告</summary><div id="intelligence-history"></div></details>
+</section>
+
 {% if not accounts %}
 <section class="panel empty-state content-review-empty">
   <p class="eyebrow">Account Required</p>
@@ -190,5 +200,6 @@
 
 {% block extra_scripts %}
 <script src="{{ url_for('static', path='js/human-review.js') }}?v=20260915-1"></script>
+<script src="{{ url_for('static', path='js/content-intelligence.js') }}?v=20260915-1"></script>
 {% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260911-manual-review-v1"></script>{% endif %}
 {% endblock %}

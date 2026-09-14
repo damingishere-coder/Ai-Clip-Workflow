@@ -1,10 +1,17 @@
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 
 class ContentMetricImportCommitRequest(BaseModel):
     confirm: bool = True
+
+
+class ContentIntelligenceReportRequest(BaseModel):
+    account_id: str = Field(default="", max_length=120)
+    days: int = Field(default=30, ge=1, le=180)
+    request_key: UUID
 
 
 class DouyinAnalyticsExportSyncRequest(BaseModel):
