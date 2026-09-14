@@ -2,6 +2,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, UploadFile
 from starlette.concurrency import run_in_threadpool
+from fastapi.responses import Response
 
 from app.models.task import (
     ClipCandidateBatchUpdate,
@@ -13,6 +14,8 @@ from app.models.task import (
     TaskCandidateClipCountUpdate,
     TaskCreate,
     TaskSelectionSettingsUpdate,
+    TaskVisualSettingsUpdate,
+    VisualEvidencePinUpdate,
     TaskStatus,
     TaskStatusUpdate,
 )
@@ -51,6 +54,7 @@ async def create_upload_task(
     selection_profile: str | None = Form(None),
     ai_prompt_preset_id: str | None = Form(None),
     ai_provider: str | None = Form(None),
+    visual_enabled: bool = Form(False),
     final_clip_target: int = Form(5),
     highlight_density_per_hour: int = Form(4),
     highlight_total_limit: int = Form(30),
@@ -89,6 +93,7 @@ async def create_upload_task(
             selection_profile=selection_profile,
             ai_prompt_preset_id=ai_prompt_preset_id,
             ai_provider=ai_provider,
+            visual_enabled=visual_enabled,
             final_clip_target=final_clip_target,
             highlight_density_per_hour=(highlight_density_per_hour if selection_profile == "long_live_talk" else 4),
             highlight_total_limit=(highlight_total_limit if selection_profile == "long_live_talk" else 30),
@@ -566,3 +571,51 @@ async def list_task_jobs(task_id: str, status: str | None = Query(default=None))
         "jobs": jobs,
         "count": len(jobs),
     }
+
+
+@router.patch("/{task_id}/visual-settings")
+def update_visual_settings(task_id: str, payload: TaskVisualSettingsUpdate):
+    from app.services.visual_policy_service import update_task_visual
+    try:
+        return update_task_visual(task_id, payload.visual_enabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/{task_id}/visual-evidence")
+def visual_evidence_list(task_id: str, run_id: str | None = None, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100)):
+    from app.services.visual_cache_service import list_visual_evidence
+    try:
+        return list_visual_evidence(task_id, run_id=run_id, offset=offset, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{task_id}/visual-evidence/{evidence_id}")
+def get_visual_evidence_record(task_id: str, evidence_id: str):
+    from app.services.visual_cache_service import list_visual_evidence
+    try:
+        items = list_visual_evidence(task_id, evidence_id=evidence_id, limit=1)["items"]
+        if not items:
+            raise ValueError("视觉证据不存在")
+        return items[0]
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{task_id}/visual-evidence/{evidence_id}/frames/{index}")
+def visual_frame(task_id: str, evidence_id: str, index: int):
+    from app.services.visual_cache_service import read_visual_frame
+    try:
+        return Response(content=read_visual_frame(task_id, evidence_id, index), media_type="image/jpeg", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+    except (ValueError, OSError, KeyError) as exc:
+        raise HTTPException(status_code=404, detail="视觉帧不可用或已清理；不会自动重发分析") from exc
+
+
+@router.patch("/{task_id}/visual-evidence/{evidence_id}/pin")
+def visual_pin(task_id: str, evidence_id: str, payload: VisualEvidencePinUpdate):
+    from app.services.visual_cache_service import pin_visual
+    try:
+        return pin_visual(task_id, evidence_id, payload.pinned)
+    except (ValueError, OSError, KeyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

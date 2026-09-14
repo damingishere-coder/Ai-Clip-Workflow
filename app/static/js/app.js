@@ -106,6 +106,7 @@ if (newTaskForm) {
       }
       uploadData.append("ai_preference", "");
       uploadData.append("auto_mode", payload.auto_mode === "true" ? "true" : "false");
+      uploadData.append("visual_enabled", payload.visual_enabled === "true" ? "true" : "false");
       uploadData.append("auto_metadata_use_ai", "false");
       uploadData.append("video_file", videoFileInput.files[0]);
       const data = await apiFetch("/api/tasks/upload", { method: "POST", body: uploadData });
@@ -575,6 +576,14 @@ function renderAiAnalysisHistory(runs) {
     const summary = document.createElement("p");
     summary.textContent = run.failure_message || run.fallback_notice || run.analysis_summary || "暂无整体总结。";
     main.append(title, meta, summary);
+    const visual = run.visual_signal || run.analysis_meta?.visual_signal;
+    if (visual) {
+      const link = document.createElement("a");
+      link.href = `/tasks/${encodeURIComponent(aiAnalysisForm.dataset.taskId)}/visual-evidence?run_id=${encodeURIComponent(run.id)}`;
+      const labels = { disabled: "关闭", completed: "完成", partial: "部分可用", unavailable: "不可用" };
+      link.textContent = `视觉 ${labels[visual.status] || visual.status} · ${visual.verified_count || 0}/${visual.candidate_count || 0} 候选 · 查看证据`;
+      main.append(link);
+    }
 
     const restoreButton = document.createElement("button");
     restoreButton.className = "secondary-button compact-button";
@@ -1656,6 +1665,15 @@ async function saveTaskSelectionSettings() {
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.detail || "选片设置保存失败");
+  const visual = document.querySelector("#task-visual-enabled");
+  if (visual) {
+    const visualResponse = await fetch(`/api/tasks/${aiAnalysisForm.dataset.taskId}/visual-settings`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visual_enabled: visual.checked }),
+    });
+    const visualData = await visualResponse.json();
+    if (!visualResponse.ok) throw new Error(visualData.detail || "视觉设置保存失败");
+  }
   return data;
 }
 

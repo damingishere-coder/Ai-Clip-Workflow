@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}视觉证据 · {{ task.title }}{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', path='css/visual-evidence.css') }}?v=1">{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">Visual Evidence</p><h1>候选画面证据 · 试用</h1><p>{{ task.title }} · 画面仅作辅助判断，文字完整性与人工审核仍然有效。</p></div>
+  <a class="secondary-button" href="/tasks/{{ task.id }}/clips/review">返回审片</a>
+</section>
+<section class="panel" id="visual-evidence-page" data-task-id="{{ task.id }}" data-run-id="{{ run_id }}">
+  <p id="visual-summary">正在读取证据…</p>
+  <p class="form-hint">成功图片保留七天，失败图片保留一天；处理中的任务、调用结果不确定或已固定的图片暂不清理。固定仅阻止自动清理，永久删除任务仍会删除其托管图片。</p>
+  <p><a href="/tasks/{{ task.id }}/visual-evidence">查看全部历史及未完成 Job 的证据</a></p>
+  <div id="visual-unavailable"></div>
+  <p id="visual-message" role="status"></p>
+</section>
+<div id="visual-evidence-list" class="visual-evidence-list"></div>
+<div class="button-row"><button type="button" class="secondary-button" id="visual-more" hidden>加载更多证据</button></div>
+<script type="application/json" id="visual-summary-data">{{ visual_summary|tojson }}</script>
+{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/visual-evidence.js') }}?v=1"></script>{% endblock %}

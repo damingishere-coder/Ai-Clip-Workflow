@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 import re
+import time
 from uuid import uuid4
 
 from app.db.database import get_connection
@@ -156,7 +157,7 @@ def _update_result(task_id, row, *, status, call_status, failure="", payload=Non
         return result
 
 
-def analyze_candidate_visual(*, task_id: str, evidence_id: str, provider, timeout_seconds: float = 90, retry_unbilled: bool = False) -> dict:
+def analyze_candidate_visual(*, task_id: str, evidence_id: str, provider, timeout_seconds: float = 90, retry_unbilled: bool = False, deadline_epoch: float | None = None) -> dict:
     """只允许有租约的 Job 调用；可选失败留证，不修改 Task 或文字 coverage。"""
     row, root, job = _read_active(task_id, evidence_id)
     if row["status"] in {"unavailable", "disabled"} and not (retry_unbilled and row["call_status"] == "retryable_failed"):
@@ -210,7 +211,11 @@ def analyze_candidate_visual(*, task_id: str, evidence_id: str, provider, timeou
             raise AIProviderError("视觉附件未通过调用前校验，尚未请求模型", category="visual_attachment_unavailable", safe_to_retry=True) from exc
         # 即便等待本地校验耗时，发请求前也必须仍持有有效 Job。
         job_service.require_active_job_lease()
-        raw = provider.generate_visual_json(request["prompt"], request["schema"], tuple(images), timeout_seconds=timeout_seconds)
+        if deadline_epoch is not None and time.time() >= deadline_epoch:
+            raise AIProviderError("视觉整轮预算已耗尽，尚未调用", category="visual_round_budget_exhausted", safe_to_retry=True)
+        from app.services.ai.visual_provider import visual_call_deadline
+        with visual_call_deadline(deadline_epoch):
+            raw = provider.generate_visual_json(request["prompt"], request["schema"], tuple(images), timeout_seconds=timeout_seconds)
         diagnostic["raw_response_sha256"] = _sha(raw)
         if len(raw.encode("utf-8")) > 128 * 1024:
             raise ValueError("视觉响应超过证据预算")

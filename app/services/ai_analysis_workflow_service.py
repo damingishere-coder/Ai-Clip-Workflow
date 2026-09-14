@@ -771,6 +771,7 @@ def _analysis_run_row_to_dict(row: Row, include_payload: bool = False) -> dict:
         "clips": clips if include_payload else [],
         "clip_summaries": _summarize_analysis_clips(clips) if include_payload else [],
         "analysis_meta": analysis_meta if include_payload else {},
+        "visual_signal": ({key: analysis_meta["visual_signal"].get(key) for key in ("status", "candidate_count", "verified_count")} if isinstance(analysis_meta.get("visual_signal"), dict) else None),
         "analysis_incomplete": bool(analysis_meta.get("analysis_incomplete")),
         "failure_message": incomplete_analysis_message(analysis_meta) if analysis_meta.get("analysis_incomplete") else "",
         "coverage_ratio": float(analysis_meta.get("coverage_ratio") or 0),
@@ -1156,12 +1157,41 @@ def restore_ai_analysis_run(task_id: str, run_id: str) -> dict:
 
 # ---------- AI 分析核心流程 ----------
 
-def _analyze_with_provider(
+def _analyze_with_provider(task_id, task, paths, provider_name, prompt_preset):
+    from app.services.visual_analysis_service import assert_visual_process_safe
+    assert_visual_process_safe()
+    policy = task.get("_visual_policy") or {}
+    if not policy.get("enabled"):
+        return _analyze_with_profile(task_id, task, paths, provider_name, prompt_preset)
+    from app.services.visual_analysis_service import VisualAnalysisSession
+    from app.services.content_profile_service import SELECTION_FIELDS, analyzer_key
+    from app.services.ai.ai_clip_analyzer import build_provider
+    session = VisualAnalysisSession(task, policy, {
+        "profile_version_id": prompt_preset.get("content_profile_version_id"),
+        "profile_sha256": prompt_preset.get("content_profile_sha256"),
+        "prompt_version_id": prompt_preset.get("prompt_version_id"), "prompt_sha256": prompt_preset.get("prompt_sha256"),
+        "selection": {key: task.get(key) for key in SELECTION_FIELDS},
+    })
+    result = _analyze_with_profile(task_id, task, paths, provider_name, prompt_preset, visual_session=session)
+    analysis = result.result if isinstance(result, LongLiveAnalysisOutcome) else result
+    if analyzer_key(task, prompt_preset) in {"general", "long_live_talk"}:
+        provider = build_provider(provider_name)
+        clips = [clip.model_dump() for clip in analysis.clips]
+        session.verify(clips, provider)
+        meta = result.meta if isinstance(result, LongLiveAnalysisOutcome) else analysis.analysis_meta
+        session.judge(clips, provider, text_complete=not (meta.get("analysis_incomplete") or meta.get("quality_degraded")))
+        analysis.clips = [type(original).model_validate(clip) for original, clip in zip(analysis.clips, clips, strict=True)]
+    analysis.analysis_meta["visual_signal"] = session.metadata()
+    return result
+
+
+def _analyze_with_profile(
     task_id: str,
     task: dict,
     paths: dict[str, Path],
     provider_name: str,
     prompt_preset: dict,
+    *, visual_session=None,
 ):
     from app.services.content_profile_service import analyzer_key
     route = analyzer_key(task, prompt_preset)
@@ -1184,6 +1214,7 @@ def _analyze_with_provider(
             provider_name=provider_name, prompt_template=prompt_template,
             candidate_pool_limit=int(task["candidate_clip_count"]), final_clip_target=int(task.get("final_clip_target") or 5),
             max_duration_seconds=int(task["max_clip_duration"]) * 60, ai_preference=task.get("ai_preference") or "",
+            visual_session=visual_session,
         ))
 
     if route == "variety_comedy":
@@ -1207,6 +1238,7 @@ def _analyze_with_provider(
                 prompt_template=prompt_template,
                 provider_name=provider_name,
                 feedback_context=task.get("_analysis_feedback_context"),
+                visual_session=visual_session,
             )
         )
 
@@ -1344,6 +1376,9 @@ def _commit_ai_analysis_result(
                 now=now,
                 run_id=run_id,
             )
+            if (analysis_payload.get("analysis_meta") or {}).get("visual_signal"):
+                from app.services.visual_evidence_service import attach_visual_evidence_with_connection
+                attach_visual_evidence_with_connection(connection, task_id=task_id, job_id=str(job["id"]), run_id=run_id)
             cursor = connection.execute(
                 """
                 UPDATE tasks
@@ -1485,6 +1520,7 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
         frozen_job = read_job_snapshot(job)
         if frozen_job is not None:
             task = {**task, **frozen_job["selection"]}
+            task["_visual_policy"] = frozen_job.get("visual_policy") or {"enabled": False}
             if "feedback_context" in frozen_job:
                 task["_analysis_feedback_context"] = frozen_job["feedback_context"]["items"]
             prompt_preset = frozen_job["prompt"]
@@ -1526,6 +1562,8 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
         analysis_payload = result_to_jsonable(analysis)
         analyzer_meta = analysis_payload.get("analysis_meta")
         analyzer_meta = analyzer_meta if isinstance(analyzer_meta, dict) else {}
+        if frozen_job and "visual_policy" in frozen_job and not frozen_job["visual_policy"]["enabled"]:
+            analyzer_meta["visual_signal"] = {"status": "disabled", "optional": True, "policy": frozen_job["visual_policy"], "candidate_count": 0, "verified_count": 0}
         from app.services.content_profile_service import analysis_profile_evidence
         analysis_payload["analysis_meta"] = {
             **analyzer_meta,

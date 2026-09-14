@@ -94,6 +94,7 @@ class Settings:
     ai_request_timeout_seconds: int = int(_env("AI_REQUEST_TIMEOUT_SECONDS", "120"))
 
     # Codex CLI 复用当前 Windows 用户的 ChatGPT/Codex 登录态，不读取 API Key。
+    ai_visual_enabled: bool = _env("AI_VISUAL_ENABLED", "true").lower() == "true"
     ai_codex_path: str = _env("AI_CODEX_PATH", "codex")
     ai_codex_home: str = _env("AI_CODEX_HOME", "")
     ai_codex_model: str = _env("AI_CODEX_MODEL", "gpt-6-astra")

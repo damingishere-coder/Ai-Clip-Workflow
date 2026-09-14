@@ -1,5 +1,7 @@
 """可选视觉能力契约；不改变现有文本 AIProvider 接口。"""
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -56,3 +58,19 @@ def validate_visual_response(payload: dict, image_count: int) -> None:
             raise ValueError("视觉观察引用了不存在或重复的附件")
         if not observation.description.strip():
             raise ValueError("视觉观察缺少有效描述")
+
+
+_deadline = ContextVar("visual_round_deadline", default=None)
+
+
+def current_visual_deadline():
+    return _deadline.get()
+
+
+@contextmanager
+def visual_call_deadline(epoch):
+    token = _deadline.set(epoch)
+    try:
+        yield
+    finally:
+        _deadline.reset(token)

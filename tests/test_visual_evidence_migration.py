@@ -16,6 +16,8 @@ def old_database(monkeypatch, tmp_path):
     with monkeypatch.context() as scope:
         scope.setattr(db, "_registered_schema_migrations", lambda: tuple(m for m in registered() if m.version < migration.VERSION))
         db.init_db()
+    # 本文件独立验证第 13 项迁移；后续新增字段由其自己的兼容测试验证。
+    monkeypatch.setattr(db, "_registered_schema_migrations", lambda: tuple(m for m in registered() if m.version <= migration.VERSION))
     with db.get_connection() as connection:
         connection.execute("INSERT INTO tasks(id,task_name,task_dir_name,selection_profile,created_at,updated_at) VALUES('old','历史','old','variety_comedy','before','before')")
         connection.execute("INSERT INTO ai_analysis_runs(id,task_id,run_number,provider,provider_label,model,analysis_payload_json,created_at) VALUES('old-run','old',1,'codex','Codex','old-model','{}','before')")

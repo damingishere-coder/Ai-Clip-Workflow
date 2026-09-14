@@ -62,6 +62,17 @@ def test_visual_uses_explicit_copied_images_same_model_login_and_schema(monkeypa
     assert not Path(command[command.index("--image")+1]).exists()
 
 
+def test_visual_global_judge_uses_bounded_restricted_evidence_only_call(monkeypatch):
+    captured, _ = fake_process(monkeypatch)
+    preflight = []
+    monkeypatch.setattr(cli, "restricted_tool_args", lambda *args: preflight.append(args) or [])
+    provider = cli.CodexCliProvider(cli.CodexCliConfig(model="existing-model"))
+    provider.generate_visual_judgment_json("结构证据与文本", {}, timeout_seconds=11)
+    assert preflight and "--json" in captured["command"] and "--image" not in captured["command"]
+    assert "没有附加原始图片" in captured["prompt"] and "不可信素材" in captured["prompt"]
+    assert 0 < captured["timeout"] <= 11
+
+
 def test_changed_image_rejected_before_process(monkeypatch, attachment):
     monkeypatch.setattr(cli.shutil, "which", lambda _: "codex")
     monkeypatch.setattr(cli, "popen_process_group", lambda *a, **kw: pytest.fail("must not call"))
@@ -152,3 +163,23 @@ def test_visual_response_requires_real_image_references(indices):
     payload = {"observations":[{"image_indices":indices,"kind":"ocr","description":"字幕","confidence":"low"}], "limitations":["仅一帧"]}
     with pytest.raises(ValueError):
         validate_visual_response(payload, 1)
+
+
+def test_attachment_preparation_consumes_round_deadline(monkeypatch, attachment):
+    from app.services.ai.visual_provider import visual_call_deadline
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "codex.cmd")
+    clock = [100.0]
+    monkeypatch.setattr(cli.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(cli.time, "time", lambda: clock[0])
+    original = Path.read_bytes
+    def slow_read(path):
+        data = original(path)
+        if path == attachment.path:
+            clock[0] += 3
+        return data
+    monkeypatch.setattr(Path, "read_bytes", slow_read)
+    monkeypatch.setattr(cli, "_run_visual_command", lambda *a: pytest.fail("expired request must not start"))
+    with visual_call_deadline(102), pytest.raises(AIProviderError) as error:
+        cli.CodexCliProvider(cli.CodexCliConfig()).generate_visual_json("test", {}, (attachment,))
+    assert error.value.safe_to_retry and not error.value.billing_uncertain
+    assert error.value.category == "visual_round_budget_exhausted"

@@ -196,6 +196,7 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
             "max_clip_duration": payload.max_clip_duration,
             "candidate_clip_count": payload.candidate_clip_count,
             "selection_profile": payload.selection_profile,
+            "visual_enabled": int(payload.visual_enabled),
             "final_clip_target": payload.final_clip_target,
             "highlight_density_per_hour": payload.highlight_density_per_hour,
             "highlight_total_limit": payload.highlight_total_limit,
@@ -237,6 +238,8 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
         from app.services.content_profile_service import freeze_task_profile, freeze_task_provider
         freeze_task_profile(connection, resolved_task_id)
         freeze_task_provider(connection, resolved_task_id, payload.ai_provider)
+        from app.services.visual_policy_service import freeze_task_visual
+        freeze_task_visual(connection, resolved_task_id, payload.visual_enabled)
         connection.commit()
 
     append_task_log(resolved_task_id, "任务已创建")

@@ -68,6 +68,7 @@ class ContentAnalysisRequest:
     final_clip_target: int = 5
     max_duration_seconds: int = 240
     ai_preference: str = ""
+    visual_session: object | None = None
 
 
 def _text(rows):
@@ -181,6 +182,8 @@ def analyze_content(request: ContentAnalysisRequest) -> AIClipAnalysisResult:
                              "transcript": _text([r for r in context if r.start_seconds >= c.start_seconds and r.end_seconds <= c.end_seconds])})
         elif result:
             observations.append({"source_id": f"moment-{i}", "key_seconds": moment.key_seconds, "rejection_reason": result.reason})
+    if request.visual_session is not None:
+        request.visual_session.verify(expanded, provider)
     scored = []
     if expanded:
         def validate_judge(result):
@@ -197,6 +200,10 @@ def analyze_content(request: ContentAnalysisRequest) -> AIClipAnalysisResult:
                 verdict = by_id[c["source_id"]]
                 score, tier = score_candidate(profile, verdict.scores)
                 scored.append({**c, "score": score, "tier": tier, "scores": verdict.scores, "reason": verdict.reason})
+    if request.visual_session is not None:
+        for c in scored:
+            c["baseline_text_score"] = c["score"]
+        request.visual_session.judge(scored, provider, score_key="score", tier_key="tier", text_complete=not failures)
     kept = []
     for c in sorted(scored, key=lambda c: c["score"], reverse=True):
         observations.append({k: v for k, v in c.items() if k != "transcript"})
@@ -216,9 +223,9 @@ def analyze_content(request: ContentAnalysisRequest) -> AIClipAnalysisResult:
             "end_time": _seconds_to_time(c["end_seconds"]), "duration_seconds": duration, "cover_time_seconds": duration / 2,
             "summary": c["summary"], "highlight_reason": c["reason"], "spread_value": "高" if c["tier"] == "A" else "中",
             "suggested_editing": "保留原文完整上下文", "confidence_score": c["score"] / 100,
-            "quality_score": c["score"], "text_quality_score": c["score"], "quality_tier": c["tier"],
+            "quality_score": c["score"], "text_quality_score": c.get("baseline_text_score", c["score"]), "quality_tier": c["tier"],
             "selected_by_default": c["source_id"] in selected, "topic_key": c["topic"], "key_moment_time": _seconds_to_time(c["key_seconds"]),
-            "completeness_score": c["scores"].get("completeness", 0), "quality_evidence": {"source_id": c["source_id"],
+            "completeness_score": c["scores"].get("completeness", 0), "quality_evidence": {**c.get("quality_evidence", {}), "source_id": c["source_id"],
                 "score_breakdown": c["scores"], "score_dimensions": {d.id: d.name for d in profile.scoring.dimensions},
                 "hook_type": c["hook_type"], "profile_sha256": profile.content_hash(), "rules_version": profile.rules_version}})
     completed = sum(status == "completed" for status in units)

@@ -310,3 +310,20 @@ async def content_review_page(request: Request):
             "accounts": accounts,
         },
     )
+
+
+@router.get("/tasks/{task_id}/visual-evidence")
+async def visual_evidence_page(request: Request, task_id: str, run_id: str | None = None):
+    task = get_task(task_id, include_video_probe=False)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    from app.services.ai_analysis_workflow_service import get_ai_analysis_run
+    run = get_ai_analysis_run(task_id, run_id) if run_id else get_latest_ai_analysis_run(task_id)
+    meta = ((run or {}).get("analysis_meta") or {}).get("visual_signal") or {}
+    summary = {key: meta.get(key) for key in ("status", "candidate_count", "verified_count", "policy")}
+    summary["run_id"] = (run or {}).get("id")
+    summary["global_status"] = (meta.get("global_judge") or {}).get("status")
+    summary["global_reason"] = (meta.get("global_judge") or {}).get("reason")
+    summary["unavailable"] = [{"source_id": key, "reason": value.get("failure_reason")} for key, value in (meta.get("candidates") or {}).items() if value.get("status") == "unavailable"]
+    return templates.TemplateResponse(name="visual_evidence.html", request=request,
+        context={"request": request, "active_page": "tasks", "settings": settings, "task": task, "run_id": run_id or "", "visual_summary": summary})
