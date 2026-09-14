@@ -1,11 +1,24 @@
 # 项目当前进度
 
-## v2.5.0 版本发布准备
+## v2.5.0 已发布与部署（2026-09-14 22:45）
+
+PR [#102](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/102) 合并视觉集成，PR [#103](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/103) 发布提交为 `384db79e0718ec9e4417016df0ea1fc1d9430330`。[v2.5.0 Release](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.5.0) 已发布为 Latest，指向同一提交；PR 与合并后主干三项 CI 全通过。
+
+- 最终本地回归 1187 passed、0 failed/0 skipped；Ruff、编译、6 JS 及实际桌面/手机浏览器通过。Linux CI 1174 passed、13 skipped，平台跳过与实机验证分别记录。
+- Windows 11、PowerShell 7.6.5、Docker Desktop/Engine/Compose 实机门禁通过。22:45:08–22:45:47 沿用现有 RunDock Web/Worker 记录完成短暂维护，两个实际服务版本均为 2.5.0；监听器父进程链对应原管理记录及 `Ai-Clip-Workflow-offline-runtime`。
+- 数据库迁移由 12 升至 14，integrity=ok、外键异常=0；37 张原表的旧字段旧行保留。原有 52 任务全部视觉关闭、没有新增生产视觉证据、旧任务策略未知值保持 NULL。原片与配置保护通过，没有触发生产 AI、同步或发布。
+- 1440/390 宽度创建页五 Profile/默认 Prompt/视觉默认关闭正常；旧任务、审片、Content Review、视觉证据页可读、无 JS 错误或横向溢出。实际 app.js、视觉 JS/CSS 与发布副本哈希一致。
+- 本机忽略证据：`data/acceptance/v25-pipeline-regression-reviewed/`、`v25-pipeline-probe/`、`v25-release-tests/windows-ps7/`、`v25-backup-restore/`。WAL-safe 升级前备份通过隔离恢复；没有提交数据库、配置秘密、视频或截图。
+- 回退优先保留 2.5 二进制及增量结构，关闭视觉入口/运维开关并暂停相关新 Job。实际隔离检查表明旧 2.4 能初始化并读取旧任务，但 readiness 会因未知迁移 13/14 报错，不能直接认定旧二进制可完整回滚；不得删除迁移账本来隐藏错误。整库恢复须停服务、保存当前快照并核对新增数据及外部发布事实。
+
+视觉、访谈和知识模板仍为试用，真实节目质量在日常人工审片中补验。工程与运行验收通过后，下一版进入 v2.5.5；不提前引入 v2.6 队列业务。
+
+## 历史：v2.5.0 版本发布准备
 
 功能 PR #102 已合并 04b3fef，1187 项最终本地测试、Linux/Windows/Docker CI 全部通过。当前仅统一 2.5.0 版本与交付文档，正式服务仍是 2.4.0 / 15f3838、迁移 12；等待版本 CI、Windows 实机门禁和现有 RunDock 服务更新。
 
 
-## v2.5 可选视觉集成验收中（2026-09-14）
+## 历史：v2.5 可选视觉集成验收（2026-09-14）
 
 PR #101 已通过最终 Linux/Windows/Docker CI 并合并 `52f1909`，正式 Web/Worker 暂未更新，仍为 v2.4.0 / `15f3838`。当前 `codex/v2.5-visual-pipeline` 已接默认关闭的视觉策略、候选验证、可选综合评审、Run 原子关联、证据页与 TTL 清理。1184 项全量回归（含桌面/手机页面）、Ruff、编译、6 JS 检查通过；补充缓存轮转及康熙不完整文本测试通过。隔离真实视觉＋综合评审两次调用 68.125 秒通过并可复用，审查收尾；尚未运行正式第 13/14 项迁移。实际节目质量没有宣称通过，后续以日常人工审片验证。
 
