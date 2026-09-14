@@ -200,7 +200,7 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
             "highlight_density_per_hour": payload.highlight_density_per_hour,
             "highlight_total_limit": payload.highlight_total_limit,
             "ai_preference": payload.ai_preference,
-            "ai_prompt_preset_id": registered_profile(payload.selection_profile).prompt_preset_id,
+            "ai_prompt_preset_id": payload.ai_prompt_preset_id or registered_profile(payload.selection_profile).prompt_preset_id,
             "auto_mode": 1 if payload.auto_mode else 0,
             "auto_config_json": json.dumps(auto_config, ensure_ascii=False),
             "status": initial_status,
@@ -212,6 +212,10 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
             "created_at": now,
             "updated_at": now,
         }
+
+        selected_prompt = connection.execute("SELECT is_archived FROM ai_prompt_presets WHERE id=?", (insert_data["ai_prompt_preset_id"],)).fetchone()
+        if not selected_prompt or selected_prompt[0]:
+            raise ValueError("所选 Prompt 不存在或已归档，请选择有效方案")
 
         if "title" in existing_columns:
             insert_data["title"] = payload.task_name
@@ -230,8 +234,9 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
         )
         from app.services.weekly_review_service import freeze_task
         freeze_task(connection, resolved_task_id)
-        from app.services.content_profile_service import freeze_task_profile
+        from app.services.content_profile_service import freeze_task_profile, freeze_task_provider
         freeze_task_profile(connection, resolved_task_id)
+        freeze_task_provider(connection, resolved_task_id, payload.ai_provider)
         connection.commit()
 
     append_task_log(resolved_task_id, "任务已创建")
@@ -530,6 +535,7 @@ def update_task_selection_settings(
         "variety_comedy": "康熙笑点选片模式",
         "long_live_talk": "长直播高光（语言类）",
         "interview_story": "人物访谈与故事",
+        "knowledge_opinion": "知识与观点",
     }[selection_profile]
     append_task_log(task_id, f"已更新选片模式：{profile_label}，最终启用目标：{final_clip_target} 条")
     return {

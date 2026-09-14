@@ -5,8 +5,8 @@
 - 按 [实施账本](docs/CONTENT_PROFILE_ROLLOUT.md) 推进 v2.4 → v2.5 → v2.5.5 → v2.6，前版验收前不进入后版。
 - PR1（#93）已合并，1019 项完整回归和三项 CI 通过。
 - PR2（#94）三项 CI 通过并合并、部署，34 张原业务表逐字段一致，迁移 10 条，历史版本未知保持未知。
-- PR3 共享内容流程与 interview_story 已实现，完成最后验证后交付；再从最新 master 开始 PR4：knowledge_opinion、五模板创建 UI、Prompt/Provider 配置冻结。不进入视觉或生产队列开发。
-- v2.4 交付前按 [样本规范](docs/CONTENT_PROFILE_ACCEPTANCE.md) 完成三集康熙回放/人工盲审和访谈、知识各两条检查；真实质量验收尚未执行。
+- PR3（#95）三项 CI 通过并合并、部署；迁移 11 条，所有旧行保持原样。PR4 已实现 knowledge_opinion、五模板创建 UI、Prompt/Provider 冻结，完成最终回归后交付。
+- v2.4 交付前按 [样本规范](docs/CONTENT_PROFILE_ACCEPTANCE.md) 完成三集康熙人工盲审和访谈、知识各两条检查。三集历史响应确定性回放结果/请求指纹一致，但不代替真实模型及人工质量验收；尚需两类新素材和人工结论。不进入视觉或生产队列开发。
 
 ## 当前任务：第 32 条失败任务修复与重建（2026-09-12）
 

@@ -1,5 +1,12 @@
 # 数据库结构说明
 
+## 2026-09-14：Content Profile PR4
+
+- 新账本 `20260914_03_knowledge_provider`，共 12 条迁移。新增 `task_generation_rules.provider_snapshot_json TEXT`（可空），冻结 Provider 名、模型/协议/超时/存储选项与地址/认证路径哈希及整体哈希。历史 NULL 保持未知，不回填。
+- 固定 `knowledge_profile_seed_v1.json` 追加知识 Profile v1 和 `profile_knowledge_v1` Prompt v1，slot 为当前最大 +1；旧版本/预设原文不变。列、种子和账本同事务，ID 冲突全部回滚；新迁移独立 checksum，不能修改此前迁移。
+- 新 Job 沿用 `generation_snapshot_v1` 增加 `provider_identity`，实际 Run meta 保存同一证据；已有快照缺此字段继续可读。默认分析继承任务 Provider；显式选择仅覆盖本轮。密钥不持久化，带认证 URL 及本地路径只保存身份哈希。
+- 副本升级/幂等/冲突失败/并发初始化与历史兼容测试覆盖。回退必须保留 knowledge_opinion 的读取兼容：不能直接将旧程序连接含新类型任务的库，也不能以旧备份覆盖新生产记录。
+
 ## 2026-09-14：Content Profile PR3
 
 - 新增账本 `20260914_02_interview_profile`，共 11 条迁移；不增加事实表或字段。

@@ -15,7 +15,7 @@ def prior_database(monkeypatch, tmp_path):
                        tasks_dir=tmp_path / "tasks", publish_default_mode="local_browser"))
     registered = db._registered_schema_migrations
     with monkeypatch.context() as scoped:
-        scoped.setattr(db, "_registered_schema_migrations", lambda: tuple(m for m in registered() if m.version != migration.VERSION))
+        scoped.setattr(db, "_registered_schema_migrations", lambda: tuple(m for m in registered() if m.version < migration.VERSION))
         db.init_db()
     with db.get_connection() as c:
         c.execute("INSERT INTO ai_prompt_presets(id,slot,name,prompt_text,created_at,updated_at) VALUES('custom',5,'私人方案','不覆盖','before','before')")
@@ -30,7 +30,7 @@ def test_additive_seed_preserves_custom_slot_and_old_versions(prior_database):
     db.init_db()
     db.init_db()
     with db.get_connection() as c:
-        assert before == [tuple(r) for r in c.execute("SELECT * FROM content_profile_versions WHERE profile_id!='interview_story' ORDER BY id")]
+        assert before == [tuple(r) for r in c.execute("SELECT * FROM content_profile_versions WHERE profile_id IN ('general','variety_comedy','long_live_talk') ORDER BY id")]
         assert preset == tuple(c.execute("SELECT * FROM ai_prompt_presets WHERE id='custom'").fetchone())
         assert c.execute("SELECT slot FROM ai_prompt_presets WHERE id='profile_interview_v1'").fetchone()[0] == 6
         assert c.execute("SELECT config_sha256 FROM content_profile_versions WHERE profile_id='interview_story'").fetchone()[0] == interview_profile().content_hash()

@@ -1,5 +1,13 @@
 # 项目当前进度
 
+## 当前开发：v2.4 五模板创建入口（2026-09-14）
+
+PR [#95](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/95) 三项 CI 通过，合并为 `06d4d12`，16:46 已部署至原 RunDock Web 8001。Worker 8765 就绪，迁移 11 条、integrity=ok、外键异常 0；所有旧行原字段不变，仅追加访谈 Profile/Prompt/版本/账本。证据：`data/backups/interview-profile-deploy-20260914-164633/acceptance.json`。
+
+当前独立分支 `codex/v2.4-knowledge-profile-ui` 新增知识观点模板，创建页提供五种内容类型、Prompt、Provider 及对应数量/时长提示。任务和新 Job 冻结实际 Provider 配置身份；默认分析使用任务选择，显式按钮可覆盖本轮，配置漂移在调用前阻断，旧 Job 保持原恢复方式。含认证信息的地址和本地认证路径只保存哈希，不写入新快照。
+
+PR4 完整回归 **1070 passed / 0 failed / 0 skipped**（含两种宽度的 Chrome 创建页与既有浏览器测试）；CI、合并和实际部署在交付后留证，正式版本仍为 **2.3.0**。正式库副本连续初始化至 12 条迁移，37 张现有表的所有原行原字段保持不变，历史 Provider 未回填，证据 `data/backups/knowledge-profile-preflight-20260914-170537/acceptance.json`。三集不同康熙原片完成哈希、历史响应校验及升级前后确定性回放：每集 18 单元、结果与请求指纹一致、0 次模型调用。此回放固定空反馈和已读任务参数，不代表重现了全部历史调用环境；真实人工盲审以及访谈、知识各两条素材检查仍待完成，不进入 v2.5。
+
 ## 当前开发：v2.4 人物访谈共享流程（2026-09-14）
 
 PR [#94](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/94) 三项 CI 通过，合并为 `cc8ae63`。16:23 已部署到既有 RunDock Web 8001，Worker 8765 保持就绪；深度检查 ready，迁移 10 条，integrity=ok、外键异常 0。正式库升级前后 **34 张旧业务表所有原字段逐行哈希一致**，旧任务/审片页/分析历史正常返回。历史任务和 Run 的 Profile 关联均未回填。备份与验收：本机 `data/backups/profile-registry-deploy-20260914-162259/`。未触发真实 AI 或投稿。

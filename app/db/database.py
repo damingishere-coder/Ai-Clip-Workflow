@@ -206,6 +206,9 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
+    from app.db import knowledge_profile_migration
+    if knowledge_profile_migration.needs_migration(settings.database_path):
+        create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "knowledge-provider-v1")
     from app.db import interview_profile_migration
     if interview_profile_migration.needs_migration(settings.database_path):
         create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "interview-profile-v1")
@@ -1889,6 +1892,7 @@ def _verify_ai_prompt_version_fk_migration(connection: sqlite3.Connection) -> No
 
 
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
+    from app.db import knowledge_profile_migration
     from app.db import interview_profile_migration
     from app.db import content_profile_migration
     from app.db import prompt_archive_migration
@@ -1964,6 +1968,11 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             version=interview_profile_migration.VERSION, name=interview_profile_migration.NAME,
             checksum=interview_profile_migration.CHECKSUM,
             apply=interview_profile_migration.apply, verify=interview_profile_migration.verify,
+        ),
+        SchemaMigration(
+            version=knowledge_profile_migration.VERSION, name=knowledge_profile_migration.NAME,
+            checksum=knowledge_profile_migration.CHECKSUM,
+            apply=knowledge_profile_migration.apply, verify=knowledge_profile_migration.verify,
         ),
     )
 
@@ -2115,7 +2124,7 @@ def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
         UPDATE tasks SET task_dir_name = id WHERE task_dir_name IS NULL OR task_dir_name = '';
         UPDATE tasks SET is_deleted = 0 WHERE is_deleted IS NULL;
         UPDATE tasks SET ai_prompt_preset_id = 'preset_001' WHERE ai_prompt_preset_id IS NULL OR ai_prompt_preset_id = '';
-        UPDATE tasks SET selection_profile = 'general' WHERE selection_profile NOT IN ('general', 'variety_comedy', 'long_live_talk', 'interview_story') OR selection_profile IS NULL OR selection_profile = '';
+        UPDATE tasks SET selection_profile = 'general' WHERE selection_profile NOT IN ('general', 'variety_comedy', 'long_live_talk', 'interview_story', 'knowledge_opinion') OR selection_profile IS NULL OR selection_profile = '';
         UPDATE tasks SET final_clip_target = 5 WHERE final_clip_target IS NULL OR final_clip_target < 1 OR final_clip_target > 12;
         UPDATE tasks SET highlight_density_per_hour = 4 WHERE highlight_density_per_hour IS NULL OR highlight_density_per_hour < 1 OR highlight_density_per_hour > 10;
         UPDATE tasks SET highlight_total_limit = 30 WHERE highlight_total_limit IS NULL OR highlight_total_limit < 1 OR highlight_total_limit > 50;

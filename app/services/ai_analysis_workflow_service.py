@@ -553,15 +553,19 @@ def queue_task_ai_analysis(task_id: str, provider: str | None = None) -> tuple[d
             except json.JSONDecodeError as exc:
                 connection.rollback()
                 raise AIAnalysisConflictError("旧 AI Job 的 Provider 账本已损坏，拒绝自动重试。") from exc
-            retry_provider = str(
-                retry_payload.get("provider") if isinstance(retry_payload, dict) else ""
-            ).lower()
-            requested_provider = (provider or settings.ai_default_provider).lower()
+            from app.services.content_profile_service import JOB_SNAPSHOT_KEY
+            envelope = retry_payload.get(JOB_SNAPSHOT_KEY, {}) if isinstance(retry_payload, dict) else None
+            retry_snapshot = envelope.get("snapshot", {}) if isinstance(envelope, dict) else None
+            if not isinstance(retry_snapshot, dict):
+                connection.rollback()
+                raise AIAnalysisConflictError("旧 AI Job 的 Provider 账本已损坏，拒绝自动重试。")
+            retry_provider = str(retry_payload.get("provider") or retry_snapshot.get("provider") or settings.ai_default_provider).lower()
+            requested_provider = (provider or retry_provider).lower()
             if retry_provider and retry_provider != requested_provider:
                 connection.rollback()
                 raise AIAnalysisConflictError(
                     f"旧 AI Job 的恢复账本属于 {retry_provider}，不能在同一账本中切换为 "
-                    f"{requested_provider}；请先保留不确定证据并新建独立分析批次。"
+                    f"{requested_provider}；请使用原 Provider 恢复，或另建任务使用新 Provider。"
                 )
             now = _now_iso()
             cursor = connection.execute(
@@ -592,7 +596,7 @@ def queue_task_ai_analysis(task_id: str, provider: str | None = None) -> tuple[d
             connection,
             task_id=task_id,
             job_type=job_service.JOB_TYPE_AI_ANALYSIS,
-            payload={"provider": (provider or settings.ai_default_provider).lower()},
+            payload={"provider": provider.lower()} if provider else {},
         )
         connection.commit()
     return job_service.get_job(job_id), created
@@ -1489,14 +1493,18 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             # the entire mixed-age analysis used a newly inferred version.
             prompt_preset = {key: value for key, value in prompt_preset.items() if not key.startswith("content_profile_")}
         try:
-            analysis = _analyze_with_provider(
-                task_id,
-                task,
-                paths,
-                provider_name,
-                prompt_preset,
-            )
+            from app.services.ai.provider_snapshot import enforce, ProviderConfigurationChangedError
+            with enforce(frozen_job.get("provider_identity") if frozen_job else None):
+                analysis = _analyze_with_provider(
+                    task_id,
+                    task,
+                    paths,
+                    provider_name,
+                    prompt_preset,
+                )
         except Exception as provider_exc:
+            if isinstance(provider_exc, ProviderConfigurationChangedError):
+                raise
             provider_error = (
                 provider_exc.checkpoint_message()
                 if isinstance(provider_exc, AIProviderError)
@@ -1530,6 +1538,7 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             "prompt_sha256": prompt_preset.get("prompt_sha256"),
             **long_live_meta,
             **analysis_profile_evidence(task, prompt_preset),
+            **({"provider_identity": frozen_job["provider_identity"]} if frozen_job and "provider_identity" in frozen_job else {}),
         }
         provider_label = _ai_provider_label(used_provider)
         model_name = _ai_model_name(used_provider)

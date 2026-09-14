@@ -54,15 +54,37 @@
     </label>
 
     <label>
-      <span>选片模式</span>
+      <span>内容类型 / Content Profile</span>
       <select id="selection-profile" name="selection_profile" required>
-        <option value="" selected disabled>请选择选片模式</option>
-        <option value="general">通用内容价值</option>
-        <option value="variety_comedy">康熙笑点选片模式</option>
-        <option value="long_live_talk">长直播高光（语言类）</option>
+        <option value="" selected disabled>请选择内容类型</option>
+        {% for profile in content_profiles %}
+        <option value="{{ profile.id }}">{{ "棚内综艺 · 笑点互动（康熙等）" if profile.id == "variety_comedy" else profile.name }}</option>
+        {% endfor %}
       </select>
-      <span class="form-hint" id="selection-profile-hint">必须明确选择。长直播模式第一版面向最长 6 小时的语言内容。</span>
+      <span class="form-hint" id="selection-profile-hint">按素材选择内容类型，查看推荐片长与选片规则。</span>
     </label>
+    <script type="application/json" id="content-profile-options">{{ content_profiles|tojson }}</script>
+
+    <div class="form-row">
+      <label>
+        <span>Prompt 方案</span>
+        <select id="new-task-prompt" name="ai_prompt_preset_id" required>
+          {% for preset in prompt_presets %}
+          <option value="{{ preset.id }}">{{ preset.slot }} · {{ preset.name }}</option>
+          {% endfor %}
+        </select>
+        <span class="form-hint">选择内容类型时带入模板默认方案，可再选择自己的方案。</span>
+      </label>
+      <label>
+        <span>AI Provider</span>
+        <select id="new-task-provider" name="ai_provider">
+          <option value="codex" {% if settings.ai_default_provider == 'codex' %}selected{% endif %}>Codex CLI · {{ settings.ai_codex_model }}</option>
+          <option value="remote" {% if settings.ai_default_provider == 'remote' %}selected{% endif %}>远程 AI · {{ settings.ai_analysis_remote_model }}</option>
+          <option value="local" {% if settings.ai_default_provider == 'local' %}selected{% endif %}>本地 AI · {{ settings.ai_local_model }}</option>
+        </select>
+        <span class="form-hint">使用当前已配置的模型与登录方式。</span>
+      </label>
+    </div>
 
     <div class="form-row" id="long-live-settings" hidden>
       <label>
@@ -88,7 +110,7 @@
           <input name="max_clip_duration" type="number" min="1" max="60" step="1" value="10" required>
           <small>分钟</small>
         </span>
-        <span class="form-hint">默认 10 分钟是单条允许上限，AI 仍会根据内容完整度选择更短的片段。</span>
+        <span class="form-hint" id="profile-duration-hint">AI 根据内容完整度选择片长，且不能超出模板硬边界。</span>
       </label>
       <label>
         <span>候选池上限</span>
@@ -115,7 +137,7 @@
         <input name="auto_mode" type="checkbox" value="true">
         <span>新建后自动跑完整流水线</span>
       </label>
-      <p class="form-hint">开启后会按所选模式执行；长直播高光的分层选片将在下一阶段接入。</p>
+      <p class="form-hint">按所选内容类型自动转写、分析和切片，随后进入现有人工审核流程。</p>
     </fieldset>
 
     <div class="button-row align-end">

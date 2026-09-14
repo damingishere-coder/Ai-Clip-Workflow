@@ -20,18 +20,19 @@ def _headers() -> dict[str, str]:
 def test_task_create_requires_selection_profile():
     with pytest.raises(ValidationError):
         TaskCreate(task_name="缺少模式")
-    for profile in ("general", "variety_comedy", "long_live_talk"):
+    for profile in ("general", "variety_comedy", "long_live_talk", "interview_story", "knowledge_opinion"):
         assert TaskCreate(task_name=profile, selection_profile=profile).selection_profile == profile
 
 
-def test_new_task_page_has_required_three_option_select():
+def test_new_task_page_has_required_five_profile_select():
     response = TestClient(app).get("/tasks/new", headers=_headers())
     assert response.status_code == 200
     assert '<select id="selection-profile" name="selection_profile" required>' in response.text
     assert 'name="selection_profile" value="variety_comedy"' not in response.text
     assert "通用内容价值" in response.text
-    assert "康熙笑点选片模式" in response.text
+    assert "棚内综艺 · 笑点互动（康熙等）" in response.text
     assert "长直播高光（语言类）" in response.text
+    assert "人物访谈与故事" in response.text and "知识与观点" in response.text
 
 
 def test_upload_form_rejects_missing_selection_profile():
@@ -50,7 +51,7 @@ def test_json_task_creation_api_is_removed():
     assert response.status_code == 405
 
 
-@pytest.mark.parametrize("profile", ["general", "variety_comedy", "long_live_talk"])
+@pytest.mark.parametrize("profile", ["general", "variety_comedy", "long_live_talk", "interview_story", "knowledge_opinion"])
 def test_upload_accepts_each_explicit_profile(monkeypatch, tmp_path, profile):
     captured: dict[str, TaskCreate] = {}
     saved_video = tmp_path / "source.mp4"

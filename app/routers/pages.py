@@ -72,6 +72,8 @@ async def tasks_page(request: Request):
 
 @router.get("/tasks/new")
 async def new_task_page(request: Request):
+    from app.services.content_profile_service import list_content_profiles
+    from app.services.ai_prompt_preset_service import list_ai_prompt_presets
     return templates.TemplateResponse(
         name="new_task.html",
         request=request,
@@ -79,9 +81,11 @@ async def new_task_page(request: Request):
             "request": request,
             "active_page": "new_task",
             "settings": settings,
-            "candidate_count_options": [5, 8, 12, 20],
+            "candidate_count_options": [1, 3, 5, 8, 12, 20, 30, 50],
             "workflow_steps": get_workflow_steps(),
             "task_name_history": list_task_name_history(),
+            "content_profiles": list_content_profiles(),
+            "prompt_presets": list_ai_prompt_presets(),
         },
     )
 

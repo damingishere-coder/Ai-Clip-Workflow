@@ -58,6 +58,13 @@ def active_profile(connection, profile_id: str) -> tuple[dict, ContentProfile]:
     return version, profile
 
 
+def list_content_profiles() -> list[dict]:
+    from app.db.database import get_connection
+    with get_connection() as connection:
+        ids = [row[0] for row in connection.execute("SELECT id FROM content_profiles WHERE is_enabled=1 ORDER BY id")]
+        return [active_profile(connection, profile_id)[1].model_dump(mode="json") for profile_id in ids]
+
+
 def _assert_supported(profile: ContentProfile):
     if profile.content_hash() != registered_profile(profile.id).content_hash():
         raise ValueError("此 Profile 规则版本尚无匹配的 Analyzer，已阻止以旧算法执行新规则")
@@ -128,6 +135,26 @@ def _snapshot_hash(snapshot: dict) -> str:
     return hashlib.sha256(json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
 
 
+def freeze_task_provider(connection, task_id: str, provider_name: str | None) -> None:
+    from app.core.config import settings
+    from app.services.ai.provider_snapshot import capture
+    snapshot = capture((provider_name or settings.ai_default_provider).lower())
+    evidence = {"snapshot": snapshot, "sha256": _snapshot_hash(snapshot)}
+    connection.execute("UPDATE task_generation_rules SET provider_snapshot_json=? WHERE task_id=?",
+                       (json.dumps(evidence, ensure_ascii=False), task_id))
+
+
+def _task_provider(connection, task_id: str) -> dict | None:
+    row = connection.execute("SELECT provider_snapshot_json FROM task_generation_rules WHERE task_id=?", (task_id,)).fetchone()
+    if not row or row[0] is None:
+        return None
+    evidence = json.loads(row[0])
+    snapshot = evidence.get("snapshot")
+    if not isinstance(snapshot, dict) or evidence.get("sha256") != _snapshot_hash(snapshot):
+        raise ValueError("任务 Provider 快照损坏，不能自动替换为当前设置")
+    return snapshot
+
+
 def freeze_new_job_payload(connection, task_id: str, job_type: str, payload: dict | None) -> dict:
     """New jobs get evidence; retries never call this and retain old ledgers."""
     result = dict(payload or {})
@@ -145,10 +172,18 @@ def freeze_new_job_payload(connection, task_id: str, job_type: str, payload: dic
         version, profile = active_profile(connection, task["selection_profile"] or "general")
         prompt.update(content_profile_version_id=version["id"], content_profile_sha256=profile.content_hash(),
                       content_profile_json=profile.canonical_json())
+    from app.services.ai.provider_snapshot import capture
+    # An explicit analysis button chooses its displayed current Provider. Auto
+    # jobs inherit the task's creation-time provider without changing settings.
+    provider = str(result.get("provider") or "").lower()
+    identity = capture(provider) if provider else _task_provider(connection, task_id)
+    if identity is None:
+        identity = capture(settings.ai_default_provider.lower())
     snapshot = {
         "prompt": prompt,
         "selection": {key: task[key] for key in SELECTION_FIELDS},
-        "provider": (str(result.get("provider") or settings.ai_default_provider)).lower(),
+        "provider": identity["name"],
+        "provider_identity": identity,
     }
     result[JOB_SNAPSHOT_KEY] = {"sha256": _snapshot_hash(snapshot), "snapshot": snapshot}
     return result
