@@ -102,9 +102,9 @@ def test_window_budget_covers_every_row(request_and_provider):
 
 
 @pytest.fixture
-def story_task():
+def story_task(request):
     task_id = "story-" + uuid4().hex[:12]
-    create_task_record(TaskCreate(task_name="访谈隔离", selection_profile="interview_story"), task_id=task_id)
+    create_task_record(TaskCreate(task_name="内容隔离", selection_profile=getattr(request, "param", "interview_story")), task_id=task_id)
     yield task_id
     with get_connection() as c:
         for table in ("workflow_jobs", "clip_candidates", "ai_analysis_runs", "task_generation_rules"):
@@ -113,12 +113,16 @@ def story_task():
         c.commit()
 
 
-def test_story_task_restart_and_real_run_round_trip(story_task, request_and_provider):
+@pytest.mark.parametrize("story_task,profile_id,preset,dimension,label,rules", [
+    ("interview_story", "interview_story", "profile_interview_v1", "story_value", "故事价值", "interview-v1"),
+    ("knowledge_opinion", "knowledge_opinion", "profile_knowledge_v1", "knowledge_value", "知识与观点价值", "knowledge-v1"),
+], indirect=["story_task"])
+def test_story_task_restart_and_real_run_round_trip(story_task, request_and_provider, profile_id, preset, dimension, label, rules):
     request, provider = request_and_provider
     init_db()
-    assert task_service.get_task(story_task, include_video_probe=False)["selection_profile"] == "interview_story"
+    assert task_service.get_task(story_task, include_video_probe=False)["selection_profile"] == profile_id
     prompt = get_task_ai_prompt_snapshot(story_task)
-    assert prompt["id"] == "profile_interview_v1" and prompt["prompt_version_id"]
+    assert prompt["id"] == preset and prompt["prompt_version_id"]
     paths = get_artifact_paths(story_task)
     paths["transcript_path"].write_text(request.transcript_path.read_text(encoding="utf-8"), encoding="utf-8")
     update_task_status(story_task, TaskStatus.pending_ai)
@@ -127,15 +131,15 @@ def test_story_task_restart_and_real_run_round_trip(story_task, request_and_prov
     with job_service.job_lease_context(job["id"], "story-worker", claimed["lease_token"]):
         workflow.process_task_ai_analysis(story_task, provider="remote")
     clips = task_service.list_clip_candidates(story_task)
-    assert clips[0]["quality_evidence"]["score_breakdown"]["story_value"] == 90
+    assert clips[0]["quality_evidence"]["score_breakdown"][dimension] == 90
     run = task_service.get_latest_ai_analysis_run(story_task)
     assert run["content_profile_version_id"] == prompt["content_profile_version_id"]
-    assert run["clips"][0]["quality_evidence"]["rules_version"] == "interview-v1"
+    assert run["clips"][0]["quality_evidence"]["rules_version"] == rules
     from fastapi.testclient import TestClient
     from app.main import app
     response = TestClient(app).get(f"/tasks/{story_task}/clips/review")
     assert response.status_code == 200
-    assert "故事价值" in response.text and "标题适配" in response.text
+    assert label in response.text and "标题适配" in response.text
     # Historical comedy also has score_breakdown but no dimension-name map.
     # Keep its existing three labels instead of displaying internal English keys.
     with get_connection() as c:
@@ -184,3 +188,16 @@ def test_explicit_profile_change_preserves_users_prompt(story_task):
     update_task_selection_settings(story_task, "general", 5)
     update_task_selection_settings(story_task, "interview_story", 5)
     assert get_task_ai_prompt_snapshot(story_task)["id"] == "preset_002"
+
+
+def test_knowledge_uses_same_pipeline_with_own_dimensions(request_and_provider):
+    from app.services.content_profile_definitions import knowledge_profile
+    request, provider = request_and_provider
+    result = content.analyze_content(replace(request, profile=knowledge_profile()))
+    assert provider.calls == ["recall", "expansion", "global_judge"]
+    scores = result.clips[0].quality_evidence["score_breakdown"]
+    assert set(scores) == {"knowledge_value", "completeness", "evidence", "hook", "contrast", "title_fit"}
+    assert result.clips[0].selected_by_default
+    assert result.clips[0].humor_score == 0
+    assert result.analysis_meta["effective_limits"]["max_duration_seconds"] == 180
+    assert workflow.validate_ai_analysis_meta_for_cut(result.analysis_meta, "knowledge_opinion")["coverage_percent"] == 100

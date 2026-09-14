@@ -50,8 +50,29 @@ if (newTaskAutoMode) {
 }
 
 if (selectionProfileInput && longLiveSettings) {
+  const profiles = JSON.parse(document.querySelector("#content-profile-options")?.textContent || "[]");
   const updateLongLiveSettings = () => {
     longLiveSettings.hidden = selectionProfileInput.value !== "long_live_talk";
+    const profile = profiles.find(item => item.id === selectionProfileInput.value);
+    if (!profile) return;
+    const promptInput = document.querySelector("#new-task-prompt");
+    if (promptInput) promptInput.value = profile.prompt_preset_id;
+    const durationInput = newTaskForm.querySelector('[name="max_clip_duration"]');
+    const poolInput = newTaskForm.querySelector('[name="candidate_clip_count"]');
+    const targetInput = newTaskForm.querySelector('[name="final_clip_target"]');
+    const isContent = profile.analyzer_key === "content";
+    durationInput.max = isContent ? String(Math.floor(profile.duration.max_seconds / 60)) : "60";
+    durationInput.value = isContent ? durationInput.max : "10";
+    for (const option of poolInput.options) option.disabled = Number(option.value) > profile.selection.candidate_pool_max;
+    poolInput.value = String(profile.selection.candidate_pool_default);
+    if (!poolInput.value) poolInput.value = "12";
+    targetInput.value = String(Math.min(12, profile.selection.final_target_default));
+    document.querySelector("#selection-profile-hint").textContent = `${profile.description} 推荐场景：${profile.recommended_scenes.join("、")}。`;
+    const lo = profile.duration.recommended_min_seconds;
+    const hi = profile.duration.recommended_max_seconds;
+    document.querySelector("#profile-duration-hint").textContent = lo
+      ? `推荐 ${lo}–${hi} 秒；模板硬边界 ${profile.duration.min_seconds}–${profile.duration.max_seconds} 秒。`
+      : "通用模式按任务时长上限选片，保留完整表达。";
   };
   selectionProfileInput.addEventListener("change", updateLongLiveSettings);
   updateLongLiveSettings();
@@ -75,7 +96,7 @@ if (newTaskForm) {
       const uploadData = new FormData();
       for (const key of [
         "task_name", "platform", "max_clip_duration", "candidate_clip_count",
-        "selection_profile", "final_clip_target",
+        "selection_profile", "final_clip_target", "ai_prompt_preset_id", "ai_provider",
       ]) uploadData.append(key, payload[key] || "");
       if (payload.selection_profile === "long_live_talk") {
         uploadData.append("highlight_density_per_hour", payload.highlight_density_per_hour || "4");
@@ -680,7 +701,7 @@ aiProcessButtons.forEach((button) => {
     if (!aiAnalysisForm || isAiAnalysisBusy) return;
     const originalText = button.textContent;
     const taskId = aiAnalysisForm.dataset.taskId;
-    const provider = button.dataset.provider || "codex";
+    const provider = button.dataset.provider || "";
     const selectedCard = getSelectedPromptPresetCard();
     const selectedPrompt = selectedCard?.querySelector("textarea")?.value.trim() || "";
     const selectedName = selectedCard?.querySelector("input[type='text']")?.value.trim() || "当前方案";
@@ -688,7 +709,10 @@ aiProcessButtons.forEach((button) => {
       if (aiProcessResult) aiProcessResult.textContent = "请先填写当前选中的 AI Prompt 方案。";
       return;
     }
-    if (provider === "codex") {
+    if (!provider) {
+      const confirmed = window.confirm(`确认使用“${selectedName}”和任务默认 Provider 分析吗？\n\n未记录 Provider 的历史任务使用当前默认；失败任务恢复仍沿用原账本。将消耗对应模型额度，并重新生成候选片段。`);
+      if (!confirmed) return;
+    } else if (provider === "codex") {
       const confirmed = window.confirm(`确认使用“${selectedName}”发起 Codex CLI 分析吗？\n\n这会消耗当前 Codex 套餐额度，并覆盖现有 AI 候选结果。`);
       if (!confirmed) return;
     } else if (provider === "remote") {
@@ -711,7 +735,7 @@ aiProcessButtons.forEach((button) => {
       await saveTaskCandidateClipCount();
       await saveTaskSelectionSettings();
       pollAiAnalysisStatus(true).catch(() => {});
-      const response = await fetch(`/api/tasks/${taskId}/process/ai?provider=${provider}`, {
+      const response = await fetch(`/api/tasks/${taskId}/process/ai${provider ? `?provider=${provider}` : ""}`, {
         method: "POST",
       });
       const data = await response.json();

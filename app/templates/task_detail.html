@@ -146,6 +146,8 @@
           <p class="form-hint"><strong>长直播高光（语言类）</strong>（每小时 {{ task.highlight_density_per_hour }} 条，总上限 {{ task.highlight_total_limit }} 条）</p>
           {% elif task.selection_profile == "interview_story" %}
           <p class="form-hint"><strong>人物访谈与故事</strong>（完整经历、冲突与情绪转折）</p>
+          {% elif task.selection_profile == "knowledge_opinion" %}
+          <p class="form-hint"><strong>知识与观点</strong>（保留论据、适用条件与结论）</p>
           {% else %}
           <p class="form-hint"><strong>通用内容价值</strong></p>
           {% endif %}
@@ -189,12 +191,18 @@
         </article>
         {% endfor %}
       </div>
-      <p class="empty-note">康熙统一使用 1 号提示词，周复盘只更新同一方案正文；4 号旧方案已归档。内容修订是提示词修改记录，分析次数是任务运行记录，两者分别计数。综艺分析三个阶段均使用本任务冻结的规则，历史任务不会自动套用后来的修改。</p>
+      {% if task.selection_profile == "variety_comedy" %}
+      <p class="empty-note">康熙统一使用 1 号提示词；4 号旧方案已归档。内容修订是提示词修改记录，分析次数是任务运行记录，两者分别计数。综艺分析三个阶段均使用本任务冻结的规则，历史任务不会自动套用后来的修改。</p>
+      {% else %}
+      <p class="empty-note">按内容类型选择合适的 Prompt；保存方案不会改变已排队的分析。内容修订与分析次数分别记录，历史结果保留原版本。</p>
+      {% endif %}
+      <p class="form-hint">默认按钮沿用任务选择，未记录 Provider 的历史任务使用当前默认。其他按钮显式选择本轮 Provider；排队后冻结配置，模型变化时暂停。</p>
       <div class="button-row align-end">
         <button class="secondary-button" id="save-ai-prompts-button" type="button">保存当前提示词方案</button>
-        <button class="primary-button js-ai-process-action" type="button" data-provider="codex">Codex CLI 分析</button>
-        <button class="secondary-button js-ai-process-action" type="button" data-provider="remote">远程 AI 分析</button>
-        <button class="secondary-button js-ai-process-action" type="button" data-provider="local">本地 AI 分析</button>
+        <button class="primary-button js-ai-process-action" type="button" data-provider="">按任务默认 Provider 分析</button>
+        <button class="primary-button js-ai-process-action" type="button" data-provider="codex">Codex CLI 分析 · {{ settings.ai_codex_model }}</button>
+        <button class="secondary-button js-ai-process-action" type="button" data-provider="remote">远程 AI 分析 · {{ settings.ai_analysis_remote_model }}</button>
+        <button class="secondary-button js-ai-process-action" type="button" data-provider="local">本地 AI 分析 · {{ settings.ai_local_model }}</button>
       </div>
       <div class="ai-analysis-progress" id="ai-analysis-progress" hidden>
         <div class="transcript-progress-heading">

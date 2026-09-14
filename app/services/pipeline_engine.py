@@ -1456,7 +1456,7 @@ class PipelineEngine:
             valid_candidates.append({**clip, "start_seconds": start, "end_seconds": end, "duration": duration})
 
         eligible = [item for item in valid_candidates if bool(item.get("selected_by_default"))]
-        if task.get("selection_profile") in {"variety_comedy", "interview_story"}:
+        if task.get("selection_profile") in {"variety_comedy", "interview_story", "knowledge_opinion"}:
             eligible = [item for item in eligible if item.get("quality_tier") == "A"]
         selected = sorted(
             eligible,

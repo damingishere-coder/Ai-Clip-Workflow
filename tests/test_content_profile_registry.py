@@ -82,8 +82,8 @@ def test_parallel_upgrade_uses_one_ledger_and_one_set_of_seeds(old_database):
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(lambda _: db.init_db(), range(2)))
     with db.get_connection() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM content_profiles").fetchone()[0] == 4
-        assert connection.execute("SELECT COUNT(*) FROM content_profile_versions").fetchone()[0] == 4
+        assert connection.execute("SELECT COUNT(*) FROM content_profiles").fetchone()[0] == 5
+        assert connection.execute("SELECT COUNT(*) FROM content_profile_versions").fetchone()[0] == 5
         assert connection.execute("SELECT COUNT(*) FROM schema_migrations WHERE version=?", (migration.VERSION,)).fetchone()[0] == 1
 
 

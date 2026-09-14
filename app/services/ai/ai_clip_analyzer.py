@@ -221,6 +221,14 @@ def _analyze_task_transcript_in_chunks(
 
 
 def build_provider(provider_name: str | None = None, purpose: str = "analysis") -> AIProvider:
+    provider = _build_provider(provider_name, purpose)
+    from app.services.ai.provider_snapshot import verify_built_provider
+    default_provider = settings.ai_publish_provider if purpose == "publish" else settings.ai_default_provider
+    verify_built_provider(provider, (provider_name or default_provider).lower(), purpose)
+    return provider
+
+
+def _build_provider(provider_name: str | None = None, purpose: str = "analysis") -> AIProvider:
     default_provider = settings.ai_publish_provider if purpose == "publish" else settings.ai_default_provider
     resolved = (provider_name or default_provider).lower()
     if resolved == "codex":

@@ -1,5 +1,13 @@
 # 系统架构
 
+## 2026-09-14：五 Profile 与 Provider 执行边界
+
+`builtin_profiles()` 正式注册五种模板；访谈和知识均进入 `content_analyzer`，分别使用 story_value / knowledge_value 等通用维度，不复制 Analyzer、不复用 humor_score 承载新含义。创建页从 Registry 读取模板及约束，先选择 Profile、有效 Prompt、Provider，再在任务插入事务冻结策略。
+
+`provider_snapshot` 冻结实际模型、协议、配置身份和相关非密钥选项。任务默认 Job 使用创建时快照；显式 Provider 选择捕获当轮配置，不更改任务默认。执行入口与 Provider factory 在作用域内检查一致性，漂移明确失败，不静默切模型；恢复原配置后可沿用原账本。旧 Job 缺少身份快照时保持旧路径，旧 checkpoint 算法不变。
+
+默认分析按钮不传 Provider，从任务快照解析；旧失败 Job 的恢复同样读取原 Provider。Provider 地址可能包含认证信息，因此新快照对地址/响应路径/认证目录/可执行路径只存哈希，展示仅用模型和无凭据域名。没有改变全局设置、登录方式或服务架构。
+
 ## 2026-09-14：共享内容分析流程
 
 `content_profile_definitions.builtin_profiles()` 组合冻结的三个旧基线及新 `interview_profile()`。Registry 的 `content` 路由进入 `content_analyzer.analyze_content`，按 Profile 进行重叠文字窗口召回、候选局部上下文扩展及全局评分。当前新规则只接受文字证据；后续知识模板使用同一实现。

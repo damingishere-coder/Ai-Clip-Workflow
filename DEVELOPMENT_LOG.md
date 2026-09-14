@@ -1,5 +1,16 @@
 # Development Log
 
+## 2026-09-14 Content Profile PR4：知识模板、创建页与 Provider 冻结
+
+- PR3 #95 合并 `06d4d12`，16:46 部署原服务；11 条迁移，所有旧行原字段一致，仅追加访谈种子。Worker 和数据库就绪，未触发真实 AI 或投稿。
+- 新分支 `codex/v2.4-knowledge-profile-ui` 增加 knowledge_opinion，沿用共享召回/扩展/Judge，仅策略和评分维度不同。新迁移追加 Profile/Prompt v1 及可空 Provider 快照字段，旧种子和 checksum 不变。
+- 创建页显示五 Profile、独立默认 Prompt、Provider 模型和时长/数量约束；保留原模板行为。任务默认按钮继承创建时选择，显式 Provider 按钮仅覆盖当轮。快照记录实际配置身份并校验漂移；URL/认证路径哈希化，不保存密钥。
+- 只读审查发现默认手动分析曾使用全局 Provider、配置漂移后错误文案建议不存在的恢复入口、URL 可能带认证信息；已修正并增加实际 API/Job/漂移/泄漏回归。损坏恢复 payload 明确拒绝，旧 Job 不补写新指纹或重新发送不确定请求。
+- 正式库副本升级两次通过：12 条迁移，37 表全部原行原字段一致，只追加 5 条种子/账本记录，历史 Provider 全为空；证据 `data/backups/knowledge-profile-preflight-20260914-170537/acceptance.json`。
+- 三集原片/转写 SHA-256 与历史成功响应校验后，本地隔离回放旧/新康熙 Analyzer，结果及请求指纹完全一致、0 次模型调用。固定空反馈和当前读取的任务参数，历史缺失执行快照不追认；真实盲审仍待完成。私人清单、转写、响应、原片和数据库不提交。
+- 最终测试、CI、合并和实际部署结果以 PROJECT_STATUS.md 及本次 PR 为准，VERSION 保持 2.3.0；v2.5 尚未开始。
+- 全量测试初轮出现四项新增用例缺少转写目录前置，修正后连同远程漂移/真正失败恢复分支再次完整运行：1070 passed、0 failed、0 skipped，166.75 秒。没有以定向通过替代最终完整回归。
+
 ## 2026-09-14 Content Profile PR3：访谈共享分析流程
 
 - PR2 #94 合并 `cc8ae63`，16:23 更新原 RunDock Web 8001；Worker 8765 就绪，迁移 10、integrity ok、外键 0；34 张旧表逐行原字段一致，历史任务与分析页可读。备份及哈希证据在 `data/backups/profile-registry-deploy-20260914-162259/`。

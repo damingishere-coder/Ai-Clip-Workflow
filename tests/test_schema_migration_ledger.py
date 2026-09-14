@@ -110,6 +110,11 @@ def _rebuild_ai_runs_without_prompt_fk(connection) -> None:
     # the new ledger/index but missing columns. This is an isolated test DB.
     from app.db import content_profile_migration
     from app.db import interview_profile_migration
+    from app.db import knowledge_profile_migration
+    connection.execute("DELETE FROM ai_prompt_versions WHERE preset_id=?", (knowledge_profile_migration.SEED["prompt_id"],))
+    connection.execute("DELETE FROM ai_prompt_presets WHERE id=?", (knowledge_profile_migration.SEED["prompt_id"],))
+    connection.execute("DELETE FROM schema_migrations WHERE version=?", (knowledge_profile_migration.VERSION,))
+    connection.execute("ALTER TABLE task_generation_rules DROP COLUMN provider_snapshot_json")
     connection.execute("DELETE FROM ai_prompt_versions WHERE preset_id=?", (interview_profile_migration.SEED["prompt_id"],))
     connection.execute("DELETE FROM ai_prompt_presets WHERE id=?", (interview_profile_migration.SEED["prompt_id"],))
     connection.execute("DELETE FROM schema_migrations WHERE version=?", (interview_profile_migration.VERSION,))
@@ -179,7 +184,7 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
         ).fetchall()
         indexes = _index_names(connection)
 
-    assert len(migrations) == 11
+    assert len(migrations) == 12
     from app.services import weekly_review_schema
     weekly_migration = next(row for row in migrations if row["version"] == weekly_review_schema.VERSION)
     assert weekly_migration["checksum"] == weekly_review_schema.CHECKSUM
