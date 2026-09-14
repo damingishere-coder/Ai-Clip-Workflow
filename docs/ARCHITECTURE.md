@@ -1,5 +1,10 @@
 # 系统架构
 
+## 2026-09-14：Content Profile 基础
+
+新增 `app/models/content_profile.py` 与 `app/services/content_profile_baselines.py`，尚未被任务、Analyzer 或数据库初始化引用，原三类执行链和 checkpoint 不变。后续使用代码策略契约 + SQLite 不可变版本 + 任务/Run 快照，沿用 FastAPI、本地文件、Workflow Job、Windows Worker。
+具体架构、逐版本门禁见 [实施账本](CONTENT_PROFILE_ROLLOUT.md)。旧章节的远期基础设施设想不是本轮依赖，不引入 Redis、Celery 或微服务。
+
 ## 2026-08-24：字幕审核与交付证据链
 
 ```text

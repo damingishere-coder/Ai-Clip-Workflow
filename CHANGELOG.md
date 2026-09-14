@@ -6,6 +6,10 @@
 
 ## Unreleased
 
+### Internal
+
+- 建立 Content Profile 不可变契约与三个旧模式基线，增加康熙 Prompt/评分兼容测试和分阶段验收规范；尚未改变生产路由、Prompt 或数据库。
+
 ### Planned
 
 - 在 Windows 10/11 + Docker Desktop 实机生成当前 `master` 的脱敏验收报告。
