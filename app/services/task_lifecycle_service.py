@@ -138,6 +138,8 @@ ACTIVE_TASK_STATUSES = {
 
 def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir_name: str | None = None) -> dict:
     from app.services.task_service import _now_iso, get_status_label, STATUS_PROGRESS  # noqa: F811
+    from app.services.content_profile_service import registered_profile, validate_content_candidate_limit
+    validate_content_candidate_limit(payload.selection_profile, payload.candidate_clip_count)
 
     resolved_task_id = task_id or uuid4().hex[:12]
     resolved_task_dir_name = task_dir_name
@@ -198,7 +200,7 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
             "highlight_density_per_hour": payload.highlight_density_per_hour,
             "highlight_total_limit": payload.highlight_total_limit,
             "ai_preference": payload.ai_preference,
-            "ai_prompt_preset_id": "preset_001",
+            "ai_prompt_preset_id": registered_profile(payload.selection_profile).prompt_preset_id,
             "auto_mode": 1 if payload.auto_mode else 0,
             "auto_config_json": json.dumps(auto_config, ensure_ascii=False),
             "status": initial_status,
@@ -446,6 +448,8 @@ def update_task_candidate_clip_count(task_id: str, candidate_clip_count: int) ->
         raise ValueError("任务不存在")
     if candidate_clip_count < 1 or candidate_clip_count > 50:
         raise ValueError("候选片段数量必须在 1 到 50 条之间")
+    from app.services.content_profile_service import validate_content_candidate_limit
+    validate_content_candidate_limit(task.get("selection_profile") or "general", candidate_clip_count)
 
     now = _now_iso()
     with get_connection() as connection:
@@ -479,8 +483,8 @@ def update_task_selection_settings(
     task = get_task(task_id, include_video_probe=False)
     if not task:
         raise ValueError("任务不存在")
-    if selection_profile not in {"general", "variety_comedy", "long_live_talk"}:
-        raise ValueError("选片模式只能是通用内容价值、康熙笑点选片模式或长直播高光")
+    from app.services.content_profile_service import validate_content_candidate_limit
+    validate_content_candidate_limit(selection_profile, int(task.get("candidate_clip_count") or 12))
     if final_clip_target < 1 or final_clip_target > 12:
         raise ValueError("最终启用目标必须在 1 到 12 条之间")
     if selection_profile != "long_live_talk":
@@ -525,6 +529,7 @@ def update_task_selection_settings(
         "general": "通用内容价值",
         "variety_comedy": "康熙笑点选片模式",
         "long_live_talk": "长直播高光（语言类）",
+        "interview_story": "人物访谈与故事",
     }[selection_profile]
     append_task_log(task_id, f"已更新选片模式：{profile_label}，最终启用目标：{final_clip_target} 条")
     return {

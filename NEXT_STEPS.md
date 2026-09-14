@@ -4,8 +4,8 @@
 
 - 按 [实施账本](docs/CONTENT_PROFILE_ROLLOUT.md) 推进 v2.4 → v2.5 → v2.5.5 → v2.6，前版验收前不进入后版。
 - PR1（#93）已合并，1019 项完整回归和三项 CI 通过。
-- PR2 已接入 Registry、不可变版本迁移及任务/Job/Run 快照；等待最终回归、CI、合并与正式运行验收。历史未知保持未知，旧 Job 指纹不变，正式版本 2.3.0。
-- PR2 验收后从最新 master 开始 PR3：共享内容流程与 interview_story；不进入视觉或生产队列开发。
+- PR2（#94）三项 CI 通过并合并、部署，34 张原业务表逐字段一致，迁移 10 条，历史版本未知保持未知。
+- PR3 共享内容流程与 interview_story 已实现，完成最后验证后交付；再从最新 master 开始 PR4：knowledge_opinion、五模板创建 UI、Prompt/Provider 配置冻结。不进入视觉或生产队列开发。
 - v2.4 交付前按 [样本规范](docs/CONTENT_PROFILE_ACCEPTANCE.md) 完成三集康熙回放/人工盲审和访谈、知识各两条检查；真实质量验收尚未执行。
 
 ## 当前任务：第 32 条失败任务修复与重建（2026-09-12）

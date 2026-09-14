@@ -23,7 +23,7 @@ def old_database(monkeypatch, tmp_path):
     ))
     registered = db._registered_schema_migrations
     with monkeypatch.context() as scoped:
-        scoped.setattr(db, "_registered_schema_migrations", lambda: tuple(m for m in registered() if m.version != migration.VERSION))
+        scoped.setattr(db, "_registered_schema_migrations", lambda: tuple(m for m in registered() if m.version < migration.VERSION))
         db.init_db()
     with db.get_connection() as connection:
         connection.execute("INSERT INTO tasks(id,task_name,task_dir_name,selection_profile,ai_prompt_preset_id,created_at,updated_at) VALUES('old','历史','old','variety_comedy','preset_001','before','before')")
@@ -48,7 +48,9 @@ def test_upgrade_preserves_all_old_facts_and_backs_up_once(old_database):
     with db.get_connection() as connection:
         after = legacy_facts(connection)
         for table, rows in before.items():
-            projected = [{key: row[key] for key in rows[0]} for row in after[table]] if rows else after[table]
+            old_ids = {row["id"] for row in rows} if rows and "id" in rows[0] else None
+            current_rows = [row for row in after[table] if old_ids is None or row["id"] in old_ids]
+            projected = [{key: row[key] for key in rows[0]} for row in current_rows] if rows else current_rows
             assert projected == rows, (table, projected, rows)
         assert profiles.read_task_profile(connection, "old") == {}
         assert connection.execute("SELECT content_profile_version_id FROM ai_analysis_runs WHERE id='old-run'").fetchone()[0] is None
@@ -80,8 +82,8 @@ def test_parallel_upgrade_uses_one_ledger_and_one_set_of_seeds(old_database):
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(lambda _: db.init_db(), range(2)))
     with db.get_connection() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM content_profiles").fetchone()[0] == 3
-        assert connection.execute("SELECT COUNT(*) FROM content_profile_versions").fetchone()[0] == 3
+        assert connection.execute("SELECT COUNT(*) FROM content_profiles").fetchone()[0] == 4
+        assert connection.execute("SELECT COUNT(*) FROM content_profile_versions").fetchone()[0] == 4
         assert connection.execute("SELECT COUNT(*) FROM schema_migrations WHERE version=?", (migration.VERSION,)).fetchone()[0] == 1
 
 

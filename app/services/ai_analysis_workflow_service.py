@@ -1169,6 +1169,19 @@ def _analyze_with_provider(
     if provider_name == "local":
         ensure_local_ai_ready()
 
+    if route == "content":
+        from app.models.content_profile import ContentProfile
+        from app.services.ai.content_analyzer import ContentAnalysisRequest, analyze_content
+        from app.services.content_profile_service import registered_profile
+        profile = (ContentProfile.model_validate_json(prompt_preset["content_profile_json"])
+                   if prompt_preset.get("content_profile_json") else registered_profile(task["selection_profile"]))
+        return analyze_content(ContentAnalysisRequest(
+            task_id=task_id, transcript_path=paths["transcript_path"], profile=profile,
+            provider_name=provider_name, prompt_template=prompt_template,
+            candidate_pool_limit=int(task["candidate_clip_count"]), final_clip_target=int(task.get("final_clip_target") or 5),
+            max_duration_seconds=int(task["max_clip_duration"]) * 60, ai_preference=task.get("ai_preference") or "",
+        ))
+
     if route == "variety_comedy":
         window_seconds = 180 if provider_name == "local" else 300
         overlap_seconds = 45 if provider_name == "local" else 60

@@ -1456,7 +1456,7 @@ class PipelineEngine:
             valid_candidates.append({**clip, "start_seconds": start, "end_seconds": end, "duration": duration})
 
         eligible = [item for item in valid_candidates if bool(item.get("selected_by_default"))]
-        if task.get("selection_profile") == "variety_comedy":
+        if task.get("selection_profile") in {"variety_comedy", "interview_story"}:
             eligible = [item for item in eligible if item.get("quality_tier") == "A"]
         selected = sorted(
             eligible,
@@ -1702,6 +1702,10 @@ class PipelineEngine:
         return [dict(row) for row in rows]
 
     def _resolve_target_count(self, task: dict, config: dict) -> int:
+        from app.services.content_profile_service import registered_profile
+        profile = registered_profile(task.get("selection_profile") or "general")
+        if profile.analyzer_key == "content":
+            return max(1, min(profile.selection.final_target_max, int(task.get("final_clip_target") or profile.selection.final_target_default)))
         if task.get("selection_profile") == "variety_comedy":
             return max(1, min(12, int(task.get("final_clip_target") or 5)))
         if task.get("selection_profile") == "long_live_talk":

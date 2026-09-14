@@ -1,5 +1,11 @@
 # 项目当前进度
 
+## 当前开发：v2.4 人物访谈共享流程（2026-09-14）
+
+PR [#94](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/94) 三项 CI 通过，合并为 `cc8ae63`。16:23 已部署到既有 RunDock Web 8001，Worker 8765 保持就绪；深度检查 ready，迁移 10 条，integrity=ok、外键异常 0。正式库升级前后 **34 张旧业务表所有原字段逐行哈希一致**，旧任务/审片页/分析历史正常返回。历史任务和 Run 的 Profile 关联均未回填。备份与验收：本机 `data/backups/profile-registry-deploy-20260914-162259/`。未触发真实 AI 或投稿。
+
+随后从最新 master 建立 `codex/v2.4-interview-shared-analyzer`：新增访谈独立模板/Prompt、共享召回/扩展/全局评审及通用评分证据。新模板先接 API，五模板创建页统一在 PR4 接入。完整回归 **1047 passed / 0 failed / 0 skipped**，随后两项补充与末尾修改由 **35 项定向测试**覆盖；Ruff/compileall 通过。正式库副本增量迁移至 11 条，所有旧行保持原样，仅追加新版本/预设/账本；证据 `data/backups/interview-profile-preflight-20260914-163632/acceptance.json`。PR3 尚待 CI、合并和运行验收；真实访谈质量仍待两条适合素材及人工检查，产品版本仍为 2.3.0。
+
 ## 当前开发：v2.4 Profile Registry 与快照（2026-09-14）
 
 PR [#93](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/93) 已通过 Linux、Windows、Docker 三项 CI，合并为 `4264e31`；纯领域基础无需部署。随后从最新 master 创建 `codex/v2.4-profile-registry-snapshots`。

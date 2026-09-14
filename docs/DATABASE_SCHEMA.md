@@ -1,5 +1,13 @@
 # 数据库结构说明
 
+## 2026-09-14：Content Profile PR3
+
+- 新增账本 `20260914_02_interview_profile`，共 11 条迁移；不增加事实表或字段。
+- 静态 `interview_profile_seed_v1.json` 新增一个 Profile v1 和独立 `profile_interview_v1` Prompt v1。Prompt slot 为当前最大值 +1，不重用归档槽位、不覆盖自定义方案。旧三模板与旧 Prompt 正文/哈希不变。
+- 迁移在原账本事务内追加记录、校验不可变证据；ID 冲突回滚整个新迁移。升级前备份、幂等、自定义 slot、失败回滚测试覆盖。
+- 新访谈候选分数维度与 hook/source/rules 证据使用 `clip_candidates.quality_evidence_json`，Run payload 保留 observations；不往旧历史反填推测归因。
+- 回退应先关闭新模板入口并保留已存结果可读。含 interview_story 的库不能直接使用旧二进制：旧程序的启动归一化会把未知 Profile 改成 general，必须用兼容回退补丁或经过核对的独立恢复副本，不能覆盖运行中新数据。
+
 ## 2026-09-14：Content Profile PR2
 
 - 新账本 `20260914_01_content_profiles`，迁移总数 10。新增 `content_profiles` 正式引用与 `content_profile_versions` 不可变版本；配置 JSON/哈希/规则版本/创建时间可追溯。数据库触发器禁止修改/删除版本，正式指针不能指向其他 Profile 的版本。

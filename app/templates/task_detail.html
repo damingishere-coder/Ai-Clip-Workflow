@@ -144,6 +144,8 @@
           <p class="form-hint"><strong>康熙笑点选片模式</strong>（固定）</p>
           {% elif task.selection_profile == "long_live_talk" %}
           <p class="form-hint"><strong>长直播高光（语言类）</strong>（每小时 {{ task.highlight_density_per_hour }} 条，总上限 {{ task.highlight_total_limit }} 条）</p>
+          {% elif task.selection_profile == "interview_story" %}
+          <p class="form-hint"><strong>人物访谈与故事</strong>（完整经历、冲突与情绪转折）</p>
           {% else %}
           <p class="form-hint"><strong>通用内容价值</strong></p>
           {% endif %}

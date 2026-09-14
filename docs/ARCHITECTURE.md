@@ -1,5 +1,13 @@
 # 系统架构
 
+## 2026-09-14：共享内容分析流程
+
+`content_profile_definitions.builtin_profiles()` 组合冻结的三个旧基线及新 `interview_profile()`。Registry 的 `content` 路由进入 `content_analyzer.analyze_content`，按 Profile 进行重叠文字窗口召回、候选局部上下文扩展及全局评分。当前新规则只接受文字证据；后续知识模板使用同一实现。
+
+所有单元复用 `execute_checkpointed_ai_unit`，指纹包含 Profile 全配置、Prompt、实际 Provider 身份、转写及任务数量/时长。JSON、候选边界、逐句起止点、关键时刻归属、Judge 来源集合和评分维度都在成功缓存前及复用时校验。部分失败留下不完整元数据，自动切片沿用旧门禁拒绝继续；不确定单元不会自动重发。
+
+候选专属维度存既有 `quality_evidence`；`humor_score` 不承载故事分。Run 的轻量 observations 保留被拒绝/C 级证据，尚不产生学习建议。五模板创建 UI/完整 Provider 设置冻结属于 PR4，正式 v2.4 仍需真实样本与人工门禁。
+
 ## 2026-09-14：Content Profile Registry 与执行证据
 
 `content_profile_service` 通过代码 Registry 校验已支持策略，读取 SQLite 不可变版本。三个旧 Analyzer 继续执行原流程；康熙的窗口、评分、门槛、数量、扩展和去重参数改从冻结基线读取，旧常量名称、Prompt 字节、评分顺序与 checkpoint 指纹继续兼容。
