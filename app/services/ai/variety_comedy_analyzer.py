@@ -133,6 +133,7 @@ class ComedyAnalysisRequest:
     provider_name: str
     prompt_template: str | None = None
     feedback_context: list[dict] | None = None
+    visual_session: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -205,6 +206,9 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
             candidate_rows,
         )
 
+    if request.visual_session is not None:
+        request.visual_session.verify(expanded, provider)
+
     feedback = request.feedback_context if request.feedback_context is not None else list_recent_feedback_context("variety_comedy", limit=20)
     judge_payload, judge_warning = _global_judge(
         provider,
@@ -219,6 +223,8 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
         score_comedy_candidate(candidate, judge_payload.get(candidate["source_id"]) or {})
         for candidate in expanded
     ]
+    if request.visual_session is not None:
+        request.visual_session.judge(scored, provider, text_complete=not (recall_failures or expansion_failures or judge_warning or recall_stats["invalid_item_count"] or expansion_stats["invalid_item_count"]))
     scored = dedupe_scored_candidates(scored)
     candidate_pool_limit = max(1, min(COMEDY_POLICY.selection.candidate_pool_max, int(request.candidate_pool_limit or COMEDY_POLICY.selection.candidate_pool_default)))
     kept = [item for item in scored if item["quality_tier"] in {"A", "B"}]

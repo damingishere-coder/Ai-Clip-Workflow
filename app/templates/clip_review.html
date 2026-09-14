@@ -97,6 +97,19 @@
       </section>
       {% endif %}
 
+      {% set visual = clip.quality_evidence.get('visual') %}
+      {% if visual %}
+      <section class="clip-quality-card" aria-label="视觉辅助证据">
+        <p><strong>视觉验证：</strong>{{ {'completed':'完成','partial':'部分可用','unavailable':'不可用'}.get(visual.status, visual.status) }}
+          {% if visual.get('bonus') %} · 辅助 +{{ visual.bonus }} 分（文字等级不变）{% endif %}</p>
+        {% if visual.get('failure_reason') %}<p>{{ visual.failure_reason }}</p>{% endif %}
+        {% if visual.get('response') %}
+          {% for observation in visual.response.observations[:3] %}<p>{{ observation.description }}</p>{% endfor %}
+        {% endif %}
+        <a href="/tasks/{{ task.id }}/visual-evidence{% if clip.source_analysis_run_id %}?run_id={{ clip.source_analysis_run_id }}{% endif %}">查看采样时间、图片和完整证据</a>
+      </section>
+      {% endif %}
+
       <div class="clip-card-tools">
         <div class="clip-tool-buttons">
           <button class="secondary-button compact-button" type="button" data-preview-trigger>播放预览</button>

@@ -81,6 +81,7 @@ class TaskCreate(BaseModel):
     selection_profile: Literal["general", "variety_comedy", "long_live_talk", "interview_story", "knowledge_opinion"]
     ai_prompt_preset_id: Optional[str] = Field(default=None, min_length=1, max_length=80)
     ai_provider: Optional[Literal["codex", "remote", "local"]] = None
+    visual_enabled: bool = False
     final_clip_target: int = Field(default=5, ge=1, le=12)
     highlight_density_per_hour: int = Field(default=4, ge=1, le=10)
     highlight_total_limit: int = Field(default=30, ge=1, le=50)
@@ -473,3 +474,11 @@ class AdaptivePolicyUpdate(BaseModel):
 
 class AdaptiveJobUpdate(BaseModel):
     managed: bool
+
+
+class TaskVisualSettingsUpdate(BaseModel):
+    visual_enabled: bool
+
+
+class VisualEvidencePinUpdate(BaseModel):
+    pinned: bool

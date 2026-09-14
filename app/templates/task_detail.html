@@ -130,6 +130,11 @@
       <input id="ai-highlight-density" type="hidden" value="{{ task.highlight_density_per_hour or 4 }}">
       <input id="ai-highlight-total-limit" type="hidden" value="{{ task.highlight_total_limit or 30 }}">
       {% endif %}
+      <label class="checkbox-row">
+        <input id="task-visual-enabled" type="checkbox" {{ "checked" if task.visual_enabled else "" }}>
+        <span>候选画面辅助验证 · 试用</span>
+      </label>
+      <p class="form-hint">随分析设置保存，仅作用于下一次新分析；当前 Codex 模型可用，最多增加 10 分钟。<a href="/tasks/{{ task.id }}/visual-evidence">查看视觉证据与失败原因</a></p>
       <div class="ai-analysis-controls">
         <label>
           <span>候选池上限</span>

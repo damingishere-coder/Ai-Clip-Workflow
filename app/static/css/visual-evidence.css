@@ -1,0 +1,9 @@
+.visual-evidence-list { display: grid; gap: 18px; margin: 20px 0; }
+.visual-evidence-list .panel { min-width: 0; overflow-wrap: anywhere; }
+.visual-frames { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; margin: 16px 0; }
+.visual-frames figure { margin: 0; min-width: 0; }
+.visual-frames img { display: block; width: 100%; max-height: 240px; object-fit: contain; border-radius: 10px; background: #edf1f7; }
+.visual-frames figcaption, .visual-evidence-meta { font-size: 12px; color: var(--text-secondary, #64748b); line-height: 1.6; }
+.visual-evidence-list details { margin-top: 12px; }
+.visual-evidence-list code { overflow-wrap: anywhere; white-space: normal; }
+#visual-unavailable { overflow-wrap: anywhere; }

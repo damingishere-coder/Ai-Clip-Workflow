@@ -490,3 +490,8 @@ docs/design/live_streaming_slicing_workflow_ui_16x9.png
 ```
 
 视觉方向：Apple 风格、简洁、高级、留白充足、轻量玻璃拟态、卡片式布局、蓝色作为主强调色，适合作为个人本地 AI 高光生产后台。
+
+
+### v2.5 视觉流程接入（待部署）
+
+`visual_policy_service` 冻结任务及 Job 的显式视觉策略。`VisualAnalysisSession` 在候选内核验图片，保留原文字/音频 Judge，再以可选综合评审附加最多 10%/10 分，不提升文字等级。旧 Job/关闭分支保持原调用；可选失败与必需 coverage 分离。既有 `_commit_ai_analysis_result` 一次事务关联证据 Run；`visual_cache_service` 复用 Worker 闲置周期维护托管图片。具体预算、恢复、UI、保留期和运行故障边界见 [Visual Signal](VISUAL_SIGNAL.md)。

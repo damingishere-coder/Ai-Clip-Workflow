@@ -206,7 +206,9 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
-    from app.db import visual_evidence_migration
+    from app.db import visual_evidence_migration, visual_policy_migration
+    if visual_policy_migration.needs_migration(settings.database_path):
+        create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "visual-policy-v1")
     if visual_evidence_migration.needs_migration(settings.database_path):
         create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "visual-evidence-v1")
     from app.db import knowledge_profile_migration
@@ -1895,7 +1897,7 @@ def _verify_ai_prompt_version_fk_migration(connection: sqlite3.Connection) -> No
 
 
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
-    from app.db import visual_evidence_migration
+    from app.db import visual_evidence_migration, visual_policy_migration
     from app.db import knowledge_profile_migration
     from app.db import interview_profile_migration
     from app.db import content_profile_migration
@@ -1982,6 +1984,11 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             version=visual_evidence_migration.VERSION, name=visual_evidence_migration.NAME,
             checksum=visual_evidence_migration.CHECKSUM,
             apply=visual_evidence_migration.apply, verify=visual_evidence_migration.verify,
+        ),
+        SchemaMigration(
+            version=visual_policy_migration.VERSION, name=visual_policy_migration.NAME,
+            checksum=visual_policy_migration.CHECKSUM,
+            apply=visual_policy_migration.apply, verify=visual_policy_migration.verify,
         ),
     )
 

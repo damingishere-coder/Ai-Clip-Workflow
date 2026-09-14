@@ -245,6 +245,8 @@ class WorkflowJobRunner:
         self.owner = f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._next_visual_cleanup = 0.0
+        self._visual_cleanup_cursor = ""
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -261,6 +263,15 @@ class WorkflowJobRunner:
         while not self._stop_event.is_set():
             job = job_service.claim_next_job(self.owner)
             if not job:
+                if time.monotonic() >= self._next_visual_cleanup:
+                    self._next_visual_cleanup = time.monotonic() + 3600
+                    try:
+                        from app.services.visual_cache_service import cleanup_visual_cache
+                        maintenance = cleanup_visual_cache(task_cursor=self._visual_cleanup_cursor)
+                        self._visual_cleanup_cursor = maintenance["next_task_cursor"]
+                    except Exception:
+                        import logging
+                        logging.getLogger(__name__).exception("视觉缓存维护失败，队列继续工作")
                 self._stop_event.wait(self.poll_seconds)
                 continue
             try:

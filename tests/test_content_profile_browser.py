@@ -56,6 +56,8 @@ def test_profile_prompt_provider_creation_flow(width, tmp_path):
             assert page.locator('[name="candidate_clip_count"] option[value="20"]').evaluate("el => el.disabled"), page.locator('[name="candidate_clip_count"]').evaluate("el => el.outerHTML")
             page.select_option("#new-task-prompt", "preset_002")
             page.select_option("#new-task-provider", "remote")
+            assert not page.is_checked('[name="visual_enabled"]')
+            page.check('[name="visual_enabled"]')
             page.fill('[name="task_name"]', "浏览器知识素材")
             page.set_input_files("#video-file-input", {"name": "test.mp4", "mimeType": "video/mp4", "buffer": b"isolated-fake-video"})
 
@@ -67,7 +69,7 @@ def test_profile_prompt_provider_creation_flow(width, tmp_path):
             page.wait_for_url(f"http://127.0.0.1:{port}/tasks/new")
             page.wait_for_function("document.querySelector('#selection-profile').value === ''")
             assert len(posts) == 1
-            for name, value in (("selection_profile", "knowledge_opinion"), ("ai_prompt_preset_id", "preset_002"), ("ai_provider", "remote")):
+            for name, value in (("selection_profile", "knowledge_opinion"), ("ai_prompt_preset_id", "preset_002"), ("ai_provider", "remote"), ("visual_enabled", "true")):
                 assert f'name="{name}"\r\n\r\n{value}\r\n' in posts[0]
             assert not errors
             browser.close()

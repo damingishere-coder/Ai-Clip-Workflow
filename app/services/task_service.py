@@ -583,7 +583,7 @@ def list_tasks(include_deleted: bool = False) -> list[dict]:
         rows = connection.execute(
             f"""
             SELECT
-                id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path,
+                id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path, visual_enabled,
                 max_clip_duration, candidate_clip_count, selection_profile, final_clip_target,
                 highlight_density_per_hour, highlight_total_limit,
                 ai_preference, ai_prompt_preset_id, auto_mode,
@@ -626,7 +626,7 @@ def get_task(
         row = connection.execute(
             f"""
             SELECT
-                id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path,
+                id, task_name, task_dir_name, source_type, platform, original_video_path, nas_file_path, visual_enabled,
                 max_clip_duration, candidate_clip_count, selection_profile, final_clip_target,
                 highlight_density_per_hour, highlight_total_limit,
                 ai_preference, ai_prompt_preset_id, auto_mode,

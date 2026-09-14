@@ -186,6 +186,8 @@ def freeze_new_job_payload(connection, task_id: str, job_type: str, payload: dic
         "provider": identity["name"],
         "provider_identity": identity,
     }
+    from app.services.visual_policy_service import task_visual_policy
+    snapshot["visual_policy"] = task_visual_policy(connection, task_id)
     if task["selection_profile"] == "variety_comedy":
         from app.services.clip_feedback_service import list_recent_feedback_context_with_connection
         snapshot["feedback_context"] = {
@@ -208,6 +210,9 @@ def read_job_snapshot(job: dict, *, connection=None) -> dict | None:
         raise ValueError("Job 策略快照哈希不一致")
     if not isinstance(snapshot.get("selection"), dict) or not isinstance(snapshot.get("prompt"), dict) or not snapshot.get("provider"):
         raise ValueError("Job 策略快照字段不完整")
+    if "visual_policy" in snapshot:
+        from app.services.visual_policy_service import validate_policy
+        validate_policy(snapshot["visual_policy"])
     if "feedback_context" in snapshot:
         feedback = snapshot["feedback_context"]
         if (snapshot["selection"].get("selection_profile") != "variety_comedy"
