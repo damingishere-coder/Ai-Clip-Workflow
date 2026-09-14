@@ -173,7 +173,13 @@ def test_real_black_frames_and_byte_budget_leave_no_jpegs(sample_storage):
     sampler = make_sampler(sample_storage)
     result = sampler.sample(sampling.plan_candidate_frames(0, 4, 4), candidate_source_id="black")
     assert result["status"] == "unavailable"
-    assert {x["reason"] for x in result["skipped"]} <= {"black_frame", "frame_decode_failed", "frame_io_error"}
+    # 最后一帧是 3.5 秒；其后 seek 在不同 FFmpeg 版本可能报解码失败，
+    # 或正常退出但没有 showinfo/图片。非末尾位置仍必须识别为黑帧。
+    for item in result["skipped"]:
+        if item["timestamp_seconds"] <= 3.5:
+            assert item["reason"] == "black_frame"
+        else:
+            assert item["reason"] in {"frame_decode_failed", "frame_io_error", "frame_timestamp_unavailable"}
     assert any(x["reason"] == "black_frame" for x in result["skipped"])
     assert not list(sampler.directory.glob("*.jpg"))
     limited = make_sampler(sample_storage, max_bytes=1)
