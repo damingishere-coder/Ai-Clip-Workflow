@@ -1,5 +1,11 @@
 # 系统架构
 
+## v2.5 基础模块（尚未接入生产）
+
+`frame_sampling_service.plan_candidate_frames` 负责原片绝对时间计划；`CandidateFrameSampler` 在任务 `analysis/visual` 内执行有限抽帧，复用现有路径白名单、FFmpeg 与进程树终止能力。实际帧 PTS、原片/图片 SHA、采样来源与失败原因进入本地 manifest。一轮共享候选/字节/时间预算；不调用发布封面服务、不改变任务或 Job 状态机，也不新增数据库迁移。
+
+后续通过可选视觉证据服务接入各 Analyzer 的扩展后、Judge 前位置，仍以 `ai_analysis_runs`、checkpoint 和既有候选为事实基础。VisualProvider、生命周期清理及 UI 尚未交付，生产入口保持关闭；实现、实际接口验证和边界见 [Visual Signal](VISUAL_SIGNAL.md)。
+
 ## 2026-09-14：2.4.0 工程交付与试用范围
 
 五种 Profile 和任务/Job/Run 冻结证据已经接入；访谈、知识共用内容分析器，三个旧 Analyzer 保留。试用状态仅在创建页、说明和任务详情显示，不属于执行策略，不更改不可变 Profile/Prompt 版本或数据库种子。工程检查通过后继续后续版本；真实质量按用户批准在日常使用中补验，历史章节中的人工质量前置门槛已被替代，不能据此回填人工通过。

@@ -1,5 +1,14 @@
 # Development Log
 
+## 2026-09-14 v2.5 PR1：候选内抽帧与图像技术验证
+
+- v2.4 交付文档 PR #99 的三项 CI 通过后合并 `d3f8054`，从 master 新建 `codex/v2.5-frame-sampling-baseline`。正式服务继续运行 v2.4.0 / `15f3838`；原四份审计修改排除。
+- 新增 `frame_sampling_service.py`，复用存储根目录、FFmpeg 和受控进程树；候选内绝对时间、实际 PTS 二次校验、整轮候选/图片/时间预算、完整原片哈希及采样 manifest。无 Analyzer/API/数据库接入，不修改发布封面。
+- 一次受控 Codex / gpt-6-astra 双图调用通过顺序、可见代码、几何形状/颜色、时间映射与 JSON 验证，30.88 秒、0 工具调用；模型列表刷新 warning 留档，无自动重试或配置变更。官方文档与本机 CLI 参数均核对，不能把该测试当节目理解质量验收。
+- 26 项采样测试通过，包括真实 FFmpeg、低帧率/非零起始时间/VFR 的实际 PTS、黑帧/重复、小预算优先级、超时终止、采样中变更原片清理和路径逃逸。另对康熙现有候选本地抽帧，6 帧成功且原片 SHA 与旧清单一致；产物隔离、0 AI 调用。基础测试发现低帧率末尾可能没有可取帧，保留 decode failure，不伪装成功。
+- 完整回归 1104 passed，0 failed/0 skipped，194.98 秒；包括浏览器和全部采样用例。CI 范围 Ruff、Python compileall 通过。9 条既有弃用提示保留；完整输出位于忽略目录 `data/acceptance/v25-frame-regression/`。本 PR 无生产调用入口，无需重启正式服务。
+- PR #100 首次 Linux CI 发现低帧率末尾的 FFmpeg 版本差异：无输出帧时可能正常退出且无 showinfo，分类为 `frame_timestamp_unavailable`。测试改为末帧前必须识别黑帧、末帧后允许明确无帧原因，仍要求 unavailable 且无残留 JPG；生产逻辑不变。
+
 ## 2026-09-14 v2.4.0 发布与本机交付
 
 - PR #98 合并 `15f3838`，最终 PR 与 master 三项 CI 全部通过。1078 项完整回归、pip check、三套 Compose 配置和 21 个 PowerShell Parser 检查通过；没有为文档交付重复运行整套测试。

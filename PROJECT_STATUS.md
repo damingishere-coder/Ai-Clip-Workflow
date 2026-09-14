@@ -1,5 +1,9 @@
 # 项目当前进度
 
+## 当前开发：v2.5 PR1 基础验证（2026-09-14）
+
+v2.4 交付账本 PR #99 已合并为 `d3f8054`。独立 `codex/v2.5-frame-sampling-baseline` 开发候选内抽帧，26 项定向测试通过；现有 Codex / gpt-6-astra 一次双图能力测试通过，另有 6 帧康熙候选本地采样通过。没有 Analyzer/API/数据库接入，正式 Web/Worker 仍是已验收的 v2.4.0 / `15f3838`。详细行为、限制和剩余 PR 见 [Visual Signal](docs/VISUAL_SIGNAL.md)，不能将基础模块视为视觉分析已经上线。
+
 ## 当前交付：v2.4.0 已发布与部署（2026-09-14 20:04）
 
 PR [#98](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/98) 已合并为 `15f38387b11c477f94d288dc9d4da4736d0226fe`，最终 PR 与合并后主干的 Linux、Windows、Docker CI 均通过。[v2.4.0 Release](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.4.0) 指向同一提交。1078 项本地回归、pip check、三套 Compose 配置及 21 个 PowerShell 脚本语法检查通过。
