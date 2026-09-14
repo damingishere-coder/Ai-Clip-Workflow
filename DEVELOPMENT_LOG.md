@@ -1,5 +1,12 @@
 # Development Log
 
+## 2026-09-14 Content Profile PR1：契约与兼容基线
+
+- 用户批准后从 master `ffdb77f` 建立 `codex/v2.4-profile-domain-baseline`，保护四份已有审计修改。
+- 新增纯不可变 ContentProfile、配置哈希、旧康熙/通用/长直播描述，不接入路由或持久化。
+- 新增 28 项合成契约测试定向通过：规则校验、旧常量、评分/hard gate、音频只加分、三阶段 Prompt 与 checkpoint 指纹。完整 `python -m pytest tests -q`：1019 passed / 0 failed / 0 skipped，146.07 秒，含浏览器用例；Ruff 既有 CI 范围与 compileall app scripts 通过。9 条既有弃用警告未在本轮无关重构。
+- 记录 16 个 PR 的顺序和门禁、真实素材清单/哈希/人工盲审规范。未迁移正式库、改 Prompt、真实调用 AI、重跑或投稿，本 PR 无部署需求。
+
 ## 2026-09-12 最新任务失败：扩展边界校验提前到 checkpoint
 
 - 第 32 条素材在扩展批次 6 返回 38 秒候选，转写缺口导致边界归一化失败。旧实现先记成功再校验，造成 18/18、100% 但 `invalid_item_count=1`；普通重试还可能重复复用无效缓存。

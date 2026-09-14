@@ -1,5 +1,9 @@
 # 数据库结构说明
 
+## 2026-09-14：Content Profile PR1
+
+本 PR 只有纯代码模型/基线，无表、列、索引或迁移变化，不写正式库。后续 Profile 版本、任务/Run 关联通过新增账本迁移接入，不改已发布 checksum；历史缺失版本保持为空。[实施与回滚计划](CONTENT_PROFILE_ROLLOUT.md)。
+
 ## 2026-09-08 提示词归档
 
 - 账本迁移：`20260908_01_prompt_archive`。新增 `ai_prompt_presets.is_archived INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1))`；`preset_004` 设为归档、非默认，其他方案内容及历史引用不改。
