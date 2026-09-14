@@ -1,5 +1,15 @@
 # 项目当前进度
 
+## 当前开发：v2.4 反馈证据与验收收口（2026-09-14）
+
+PR [#96](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/96) 的 Linux、Windows、Docker 检查全部通过，合并为 `a5ece66`，17:19 已部署至原 RunDock Web 8001。迁移 12 条、integrity=ok、外键异常 0，37 表原行原字段保持一致，只追加知识模板/Prompt/版本/账本；Worker 8765 就绪。既有服务进程链及实际 JS 响应哈希已核对；桌面与 390px 创建页五模板切换、旧任务/审片/复盘页均无脚本错误和页面级横向溢出。完整证据和 8 张截图位于 `data/backups/knowledge-profile-deploy-20260914-171848/`。
+
+随后从 master 新建 `codex/v2.4-acceptance-evidence`，补齐验收中发现的实际反馈输入缺口：新综艺 Job 在原事务冻结进入 Judge 的反馈集合（包括空数组），Run 保存同一证据。旧 Job 缺字段继续原路径、不改变 checkpoint 输入指纹；已有后续 Job 复用时验证原快照并比较业务参数，不再按当前反馈重新冻结。没有新增迁移、修改 Prompt 或评分。
+
+最终完整回归 **1078 passed / 0 failed / 0 skipped**（含浏览器），Ruff/compileall 通过；三集历史响应回放在最终补丁后再次全部一致。真实第一集于 17:34 完成 18/18 单元、coverage=100%、12 候选，第二集正在执行；这不是人工质量结论。PR5 的 CI、合并与运行验收以随后交付记录为准。
+
+真实康熙对比已于 17:19 在隔离库启动，使用原 Codex CLI / gpt-6-astra / preset_001，逐集执行，不自动重试失败或不确定调用；正式任务、候选和发布数据不用于写入验收结果。完整实时证据保存在 `data/acceptance/content-profile-v2.4/real-model/`。三集历史响应回放在补丁后仍结果/请求指纹一致。真实分析、人工盲审及访谈/知识各两条素材的质量门禁尚未全部完成；不发布 v2.4、不进入 v2.5，VERSION 仍为 2.3.0。
+
 ## 当前开发：v2.4 五模板创建入口（2026-09-14）
 
 PR [#95](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/95) 三项 CI 通过，合并为 `06d4d12`，16:46 已部署至原 RunDock Web 8001。Worker 8765 就绪，迁移 11 条、integrity=ok、外键异常 0；所有旧行原字段不变，仅追加访谈 Profile/Prompt/版本/账本。证据：`data/backups/interview-profile-deploy-20260914-164633/acceptance.json`。

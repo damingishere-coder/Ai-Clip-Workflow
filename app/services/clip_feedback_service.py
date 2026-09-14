@@ -143,9 +143,14 @@ def save_clip_feedback(task_id: str, clip_id: str, payload: ClipFeedbackCreate) 
 
 
 def list_recent_feedback_context(selection_profile: str, limit: int = 20) -> list[dict]:
-    safe_limit = max(1, min(50, int(limit)))
     with get_connection() as connection:
-        rows = connection.execute(
+        return list_recent_feedback_context_with_connection(connection, selection_profile, limit)
+
+
+def list_recent_feedback_context_with_connection(connection, selection_profile: str, limit: int = 20) -> list[dict]:
+    """Read the unchanged context query inside a new Job's snapshot transaction."""
+    safe_limit = max(1, min(50, int(limit)))
+    rows = connection.execute(
             """
             SELECT decision, reason_code, note, title_snapshot, summary_snapshot,
                    start_time, end_time, created_at, decision_source
@@ -163,7 +168,7 @@ def list_recent_feedback_context(selection_profile: str, limit: int = 20) -> lis
             LIMIT ?
             """,
             (selection_profile, safe_limit),
-        ).fetchall()
+    ).fetchall()
     return [dict(row) for row in rows]
 
 

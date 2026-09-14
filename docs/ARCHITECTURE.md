@@ -1,5 +1,13 @@
 # 系统架构
 
+## 2026-09-14：Judge 反馈快照与后续 Job 幂等
+
+新综艺 `ai_analysis` / `auto_pipeline` Job 在原创建事务中使用现有反馈查询，保存 `generation_snapshot_v1.snapshot.feedback_context`（来源、查询版本、完整反馈项目）。外层哈希覆盖反馈；执行时通过 `ComedyAnalysisRequest.feedback_context` 注入，Run meta 保存相同集合。明确 `[]` 不查询最新反馈；只有旧 Job 缺字段时使用旧实时查询。现有反馈来源语义保持原样，不把默认 keep 追认为人工接受，不产生新的学习或策略应用。
+
+recall/expansion/global namespace 的输入指纹不增加反馈字段，Judge 单元继续按实际 Prompt 计算 request_fingerprint。因此旧成功单元与旧恢复协议不因新增元数据失效。Run 可还原实际 Judge 输入，不只依赖无法逆推出正文的哈希。
+
+`mark_job_completed_with_followup` 复用已有 Job 时，在同一事务连接校验原策略快照，再比较调用方业务参数；不能按当前模型或新反馈重新冻结旧 Job。缺反馈/Provider 身份字段的旧快照保持兼容，损坏哈希与不同 start_step/retry 仍拒绝。无数据库迁移。
+
 ## 2026-09-14：五 Profile 与 Provider 执行边界
 
 `builtin_profiles()` 正式注册五种模板；访谈和知识均进入 `content_analyzer`，分别使用 story_value / knowledge_value 等通用维度，不复制 Analyzer、不复用 humor_score 承载新含义。创建页从 Registry 读取模板及约束，先选择 Profile、有效 Prompt、Provider，再在任务插入事务冻结策略。

@@ -132,6 +132,7 @@ class ComedyAnalysisRequest:
     ai_preference: str
     provider_name: str
     prompt_template: str | None = None
+    feedback_context: list[dict] | None = None
 
 
 @dataclass(frozen=True)
@@ -204,7 +205,7 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
             candidate_rows,
         )
 
-    feedback = list_recent_feedback_context("variety_comedy", limit=20)
+    feedback = request.feedback_context if request.feedback_context is not None else list_recent_feedback_context("variety_comedy", limit=20)
     judge_payload, judge_warning = _global_judge(
         provider,
         expanded,
