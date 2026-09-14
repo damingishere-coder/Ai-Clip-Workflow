@@ -109,6 +109,10 @@ def _rebuild_ai_runs_without_prompt_fk(connection) -> None:
     # Reconstruct the actual pre-Profile schema, not an impossible hybrid with
     # the new ledger/index but missing columns. This is an isolated test DB.
     from app.db import content_profile_migration
+    from app.db import interview_profile_migration
+    connection.execute("DELETE FROM ai_prompt_versions WHERE preset_id=?", (interview_profile_migration.SEED["prompt_id"],))
+    connection.execute("DELETE FROM ai_prompt_presets WHERE id=?", (interview_profile_migration.SEED["prompt_id"],))
+    connection.execute("DELETE FROM schema_migrations WHERE version=?", (interview_profile_migration.VERSION,))
     connection.execute("DROP INDEX idx_ai_runs_content_profile")
     for column in ("content_profile_version_id", "content_profile_sha256", "content_profile_json"):
         connection.execute(f"ALTER TABLE task_generation_rules DROP COLUMN {column}")
@@ -175,7 +179,7 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
         ).fetchall()
         indexes = _index_names(connection)
 
-    assert len(migrations) == 10
+    assert len(migrations) == 11
     from app.services import weekly_review_schema
     weekly_migration = next(row for row in migrations if row["version"] == weekly_review_schema.VERSION)
     assert weekly_migration["checksum"] == weekly_review_schema.CHECKSUM
@@ -298,7 +302,7 @@ def test_legacy_ai_runs_gain_prompt_fk_without_losing_data(isolated_database):
     database_module.init_db()
     with _connect(isolated_database) as connection:
         prompt_version_id = connection.execute(
-            "SELECT id FROM ai_prompt_versions ORDER BY created_at, id LIMIT 1"
+            "SELECT id FROM ai_prompt_versions WHERE preset_id='preset_001' ORDER BY created_at, id LIMIT 1"
         ).fetchone()[0]
         connection.execute("CREATE TABLE migration_run_audit (run_id TEXT NOT NULL)")
         connection.execute(
@@ -372,7 +376,7 @@ def test_prompt_fk_rebuild_failure_rolls_back_and_restores_foreign_keys(isolated
     database_module.init_db()
     with _connect(isolated_database) as connection:
         prompt_version_id = connection.execute(
-            "SELECT id FROM ai_prompt_versions ORDER BY created_at, id LIMIT 1"
+            "SELECT id FROM ai_prompt_versions WHERE preset_id='preset_001' ORDER BY created_at, id LIMIT 1"
         ).fetchone()[0]
         _seed_analysis_run(connection, prompt_version_id=prompt_version_id)
         _rebuild_ai_runs_without_prompt_fk(connection)
@@ -420,7 +424,7 @@ def test_prompt_fk_migration_rejects_orphan_reference_without_rewrite(isolated_d
     database_module.init_db()
     with _connect(isolated_database) as connection:
         prompt_version_id = connection.execute(
-            "SELECT id FROM ai_prompt_versions ORDER BY created_at, id LIMIT 1"
+            "SELECT id FROM ai_prompt_versions WHERE preset_id='preset_001' ORDER BY created_at, id LIMIT 1"
         ).fetchone()[0]
         _seed_analysis_run(connection, prompt_version_id=prompt_version_id)
         _rebuild_ai_runs_without_prompt_fk(connection)

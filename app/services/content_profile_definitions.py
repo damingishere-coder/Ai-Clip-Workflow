@@ -1,0 +1,39 @@
+"""New content policies; published legacy baselines remain unchanged."""
+
+from app.models.content_profile import (
+    ContentProfile, DurationPolicy, RecallPolicy, WindowPolicy, ExpansionPolicy,
+    ScoringPolicy, ScoreDimension, HardGate, DedupePolicy, SelectionPolicy,
+)
+from app.services.content_profile_baselines import legacy_profile_baselines
+
+
+def interview_profile() -> ContentProfile:
+    return ContentProfile(
+        id="interview_story", name="人物访谈与故事", description="识别真实经历、故事、冲突与情绪转折，保留表达上下文。",
+        recommended_scenes=("人物访谈", "名人采访", "深度聊天"), rules_version="interview-v1",
+        analyzer_key="content", prompt_preset_id="profile_interview_v1", prompt_template_key="content-stages-v1",
+        duration=DurationPolicy(strategy="sentence_bounds", min_seconds=45, max_seconds=240,
+                                recommended_min_seconds=60, recommended_max_seconds=180),
+        recall=RecallPolicy(strategy="content_windows", preliminary_limit=18, windows=(
+            WindowPolicy(provider="non_local", seconds=300, overlap_seconds=60, char_budget=10000, recall_limit=3),
+            WindowPolicy(provider="local", seconds=180, overlap_seconds=45, char_budget=5000, recall_limit=3),
+        )),
+        expansion=ExpansionPolicy(strategy="content_context", before_seconds=120, after_seconds=180),
+        scoring=ScoringPolicy(strategy="content_weighted", dimensions=tuple(
+            ScoreDimension(id=key, name=name, weight=weight) for key, name, weight in (
+                ("story_value", "故事价值", .25), ("completeness", "完整度", .25),
+                ("conflict", "冲突与转折", .20), ("hook", "开场吸引力", .15),
+                ("novelty", "新鲜度", .10), ("title_fit", "标题适配", .05),
+            )), hard_gates=(HardGate(dimension="story_value", minimum=70), HardGate(dimension="completeness", minimum=70)),
+            a_threshold=78, b_threshold=65),
+        dedupe=DedupePolicy(strategy="content_topic", recall_distance_seconds=30,
+                            topic_distance_seconds=120, final_overlap=.4),
+        selection=SelectionPolicy(strategy="a_only", candidate_pool_default=12, candidate_pool_max=12,
+                                  final_target_default=5, final_target_max=12),
+        title_strategy="围绕真实人物经历与冲突，避免虚构爆料或夸大情绪",
+        selection_rules=("保留起因、经历与结果，不截断关键解释", "故事价值不以笑声或综艺互动衡量", "允许候选不足，不为凑数降低门槛"),
+    )
+
+
+def builtin_profiles() -> tuple[ContentProfile, ...]:
+    return (*legacy_profile_baselines(), interview_profile())

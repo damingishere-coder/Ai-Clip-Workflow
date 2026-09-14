@@ -541,6 +541,7 @@ def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
             "general": "通用内容价值",
             "variety_comedy": "康熙笑点选片模式",
             "long_live_talk": "长直播高光（语言类）",
+            "interview_story": "人物访谈与故事",
         }.get(task.get("selection_profile") or "general", "通用内容价值"),
         "final_clip_target": int(task.get("final_clip_target") or 5),
         "highlight_density_per_hour": int(task.get("highlight_density_per_hour") or 4),

@@ -1,5 +1,16 @@
 # Development Log
 
+## 2026-09-14 Content Profile PR3：访谈共享分析流程
+
+- PR2 #94 合并 `cc8ae63`，16:23 更新原 RunDock Web 8001；Worker 8765 就绪，迁移 10、integrity ok、外键 0；34 张旧表逐行原字段一致，历史任务与分析页可读。备份及哈希证据在 `data/backups/profile-registry-deploy-20260914-162259/`。
+- 从该 master 创建独立 `codex/v2.4-interview-shared-analyzer`。只新增访谈内容策略和共享 Analyzer，不改康熙 Prompt、三阶段、旧指纹或旧迁移种子。
+- 访谈通过新增量迁移建立独立 Profile/Prompt v1，占用当前最大 slot 后一个空位，冲突直接回滚，不覆盖用户预设。任务创建冻结默认模板；API 白名单及重启兼容同步。
+- 每个召回/扩展/全局评审单元在 checkpoint 保存与复用前验证输出、来源与边界。初始音频/视觉权重为 0；通用评分写既有 `quality_evidence_json` 和 Run，A 级按 final target 默认入选，C 级保留轻量观察。
+- 测试使用隔离数据库、合成转写与 FakeProvider；真实访谈质量不以模拟通过替代。最终验证及 PR 交付状态见项目进度。
+- 完整回归 1047 passed，随后两项补充及参数上限修改由 35 项定向测试通过，Ruff/compileall 通过；浏览器原三个有效方案加新增访谈方案精确集合验证通过，归档康熙方案仍不可选。正式库副本迁移到 11 条，所有旧行不变，仅新增策略/Prompt/账本；正式 PR3 迁移尚未执行。
+- 创建、修改候选池或切换到访谈时拒绝超过 12 条；Run 记录实际数量与时长。显式切换 Profile 保留用户已有 Prompt 选择，新建任务才使用模板默认 Prompt，两条语义分别有测试。
+- 最终 diff 复查发现康熙历史 evidence 也有 score_breakdown，但没有新维度名称表；评分 UI 现仅对同时有名称快照的新结果切换展示，保留旧三项中文评分。增加实际页面兼容断言，13 项共享流程测试通过。
+
 ## 2026-09-14 Content Profile PR2：Registry、迁移与冻结证据
 
 - PR1 #93 三项 CI 通过并 squash 为 `4264e31`，无需部署；从新主干创建 `codex/v2.4-profile-registry-snapshots`。

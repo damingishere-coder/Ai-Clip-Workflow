@@ -8,10 +8,10 @@ import json
 import hashlib
 
 from app.models.content_profile import ContentProfile
-from app.services.content_profile_baselines import legacy_profile_baselines
+from app.services.content_profile_definitions import builtin_profiles
 
 
-_BUILTINS = {p.id: p for p in legacy_profile_baselines()}
+_BUILTINS = {p.id: p for p in builtin_profiles()}
 JOB_SNAPSHOT_KEY = "generation_snapshot_v1"
 SELECTION_FIELDS = (
     "selection_profile", "candidate_clip_count", "final_clip_target", "max_clip_duration",
@@ -24,6 +24,12 @@ def registered_profile(profile_id: str) -> ContentProfile:
         return _BUILTINS[profile_id]
     except KeyError as exc:
         raise ValueError(f"不支持的 Content Profile：{profile_id}") from exc
+
+
+def validate_content_candidate_limit(profile_id: str, candidate_count: int) -> None:
+    profile = registered_profile(profile_id)
+    if profile.analyzer_key == "content" and not 1 <= candidate_count <= profile.selection.candidate_pool_max:
+        raise ValueError(f"{profile.name}的候选池必须为 1–{profile.selection.candidate_pool_max} 条")
 
 
 def _version(connection, version_id: str) -> tuple[dict, ContentProfile]:

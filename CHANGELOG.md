@@ -6,6 +6,10 @@
 
 ## Unreleased
 
+### Added
+
+- v2.4 PR3：新增人物访谈 Profile 与独立 Prompt，复用统一内容召回、上下文扩展、全局评审和 AI checkpoint；故事评分可在审片页追溯，康熙流程保持兼容。五模板创建 UI 和真实素材验收在后续 PR 完成。
+
 ### Internal
 
 - 接入三个旧内容模式 Registry、不可变 Profile 版本和任务/新 Job/分析 Run 快照；康熙参数从冻结基线读取。旧 Prompt、旧分析及旧 Job 恢复协议保留；不支持的新策略或损坏快照明确拒绝。

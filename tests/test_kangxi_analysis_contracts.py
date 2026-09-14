@@ -244,7 +244,9 @@ def test_browser_shows_prompt_revision_separately_from_analysis_count(leased_tas
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{port}/tasks/{task_id}", wait_until="networkidle")
-            assert page.locator('input[name="ai_prompt_preset_id"]').count() == 3
+            assert set(page.locator('input[name="ai_prompt_preset_id"]').evaluate_all("els => els.map(el => el.value)")) == {
+                "preset_001", "preset_002", "preset_003", "profile_interview_v1",
+            }
             assert page.locator('input[value="preset_004"]').count() == 0
             page.locator('[data-prompt-preset-tab][data-preset-id="preset_002"]').click()
             page.locator('[name="preset_name_preset_002"]').fill("未选择的编辑不能保存")

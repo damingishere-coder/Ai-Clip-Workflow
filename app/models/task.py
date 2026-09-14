@@ -78,7 +78,7 @@ class TaskCreate(BaseModel):
     original_video_path: Optional[str] = None
     max_clip_duration: int = Field(default=10, ge=1, le=60)
     candidate_clip_count: int = Field(default=12, ge=1, le=50)
-    selection_profile: Literal["general", "variety_comedy", "long_live_talk"]
+    selection_profile: Literal["general", "variety_comedy", "long_live_talk", "interview_story"]
     final_clip_target: int = Field(default=5, ge=1, le=12)
     highlight_density_per_hour: int = Field(default=4, ge=1, le=10)
     highlight_total_limit: int = Field(default=30, ge=1, le=50)
@@ -142,7 +142,7 @@ class TaskCandidateClipCountUpdate(BaseModel):
 
 
 class TaskSelectionSettingsUpdate(BaseModel):
-    selection_profile: Literal["general", "variety_comedy", "long_live_talk"]
+    selection_profile: Literal["general", "variety_comedy", "long_live_talk", "interview_story"]
     final_clip_target: int = Field(default=5, ge=1, le=12)
     highlight_density_per_hour: int = Field(default=4, ge=1, le=10)
     highlight_total_limit: int = Field(default=30, ge=1, le=50)

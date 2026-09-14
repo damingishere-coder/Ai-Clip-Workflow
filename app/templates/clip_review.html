@@ -72,11 +72,17 @@
       </div>
 
       {% if clip.quality_tier %}
-      <section class="clip-quality-card" aria-label="笑点质量评分">
+      <section class="clip-quality-card" aria-label="内容质量评分">
         <div class="clip-quality-scores">
+          {% if clip.quality_evidence.get('score_dimensions') and clip.quality_evidence.get('score_breakdown') %}
+          {% for dimension, score in clip.quality_evidence.score_breakdown.items() %}
+          <span><strong>{{ "%.0f"|format(score) }}</strong>{{ clip.quality_evidence.get('score_dimensions', {}).get(dimension, dimension) }}</span>
+          {% endfor %}
+          {% else %}
           <span><strong>{{ "%.0f"|format(clip.humor_score) }}</strong>笑点闭环</span>
           <span><strong>{{ "%.0f"|format(clip.completeness_score) }}</strong>内容完整</span>
           <span><strong>{{ "%.0f"|format(clip.audio_reaction_score) }}</strong>音频反应</span>
+          {% endif %}
         </div>
         {% if clip.quality_evidence.get('why_selected') %}
         <p><strong>为什么值得剪：</strong>{{ clip.quality_evidence.get('why_selected') }}</p>
