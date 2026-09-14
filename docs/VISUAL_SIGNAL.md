@@ -4,6 +4,29 @@
 
 正式运行版本仍为 v2.4.0。`frame_sampling_service.py` 新增独立采样服务，尚未接入 Analyzer、任务 API、评分或后台 Job，不新增数据库迁移。生产视觉能力保持关闭；后续 PR 才接 VisualProvider、checkpoint/证据及 Judge/UI/清理。
 
+## PR2：可选视觉请求与恢复证据（开发中）
+
+PR #100 已通过最终 Linux、Windows、Docker CI，合并 `d7a29b7`。随后从主干建立 `codex/v2.5-visual-evidence`。本 PR 增加 `VisualProvider` 契约、现有 Codex 的显式图像方法，以及候选证据服务；尚未接入 Analyzer/API，不开放生产视觉选项。上节的“无数据库迁移”仅指 PR1，本 PR 新增增量迁移。
+
+- `CodexCliProvider.generate_visual_json` 沿用当前可执行文件、模型、登录配置和只读临时目录，保留原文字接口与 Prompt 渲染。1–8 张 JPEG 先核对 SHA/单帧 2 MiB 上限，再将校验的字节复制为私有临时附件；不能从素材中的指令读取其他文件。视觉调用串行，等待执行槽也计入最多 90 秒时限，超时终止本次进程树。事件流缺失或出现工具事件即判失败；只容忍已实测的 CLI 技能目录描述缩短提示，仍要求完成事件与有效结果。不自动重试、不自动更换 Provider。
+- 调用前使用进程参数临时禁用 shell/unified exec、插件/apps、浏览器/电脑、额外图片读取、搜索和代理等入口，再枚举有效 MCP、逐项禁用并二次核验；隔离失败不调用模型。这些开关仅作用于该子进程，不写全局配置、不更换模型/登录。实测空 `mcp_servers={}` 会继续合并旧配置，不能当作清空；CLI 的 `-c` 路径也不支持 TOML quoted key，使用已验证的安全名称，否则降级。相关官方定义见 [配置参考](https://learn.chatgpt.com/docs/config-file/config-reference#configtoml)。
+- `VisualResponse` 是严格结构：观察类型、说明、置信等级与附件索引，必须含限制说明。引用不存在/重复附件、未知字段、过长证据或错误 JSON 不能成为成功缓存。离散帧不能证明完整心理状态、身份或视频节奏，不提供自动发布判断。
+- `prepare_candidate_visual` 在有效 Job 租约的事务中冻结采样、Prompt/schema、Provider/模型指纹和相对缓存目录。随机目录/文件名不进入模型请求身份；帧内容、实际 PTS、顺序、采样规则和提示词进入身份。恢复先查 `get_candidate_visual`，使用原附件记录，不能重新抽帧后替换旧请求。
+- `analyze_candidate_visual` 使用 `_ai_analysis_units_v1` 的独立 `optional-visual-v1` namespace。`input_fingerprint` 是整轮有效策略/原片/文字候选的冻结指纹，各候选共享，`candidate_key` 是该轮稳定候选标识。请求开始前证据表记录 pending；成功后记录经过校验的结构化证据/响应哈希。结果不确定、缓存/输入损坏、模型变化、调用后 checkpoint 丢失均降级并保留记录，不重新计费。
+- `call_status` 记录调用状态，`status` 记录可选证据是否可用；部分抽帧成功且模型成功是 partial。不可用状态不会改变任务、文字单元数、coverage、analysis_incomplete 或 quality_degraded。无 lease 不调用，lease 失效原样传播，旧进程不能继续写入或提交。
+- 图片预校验失败、等待执行槽或工具隔离失败均记录为已知未发模型的 retryable_failed；默认不自动重试，只有服务的显式 `retry_unbilled=True` 才续试同一冻结请求。它不能重试 uncertain，也不能更换旧请求。证据已完成但 checkpoint 变成可重试状态属于矛盾证据，拒绝再次调用。未知结果保留原记录。
+- `candidate_visual_evidence` 只保存可查询的证据和缓存引用，不复制候选事实或创建后台队列。恢复执行事实仍在现有 AI unit checkpoint，最终通过现有 AI 原子提交事务关联 Run；该原子关联函数目前尚未被生产调用。新增表的备份/回滚/幂等/并发迁移沿用现有执行器。
+
+生产启用前还必须完成：总轮次预算、Analyzer 插入点、Run 原子关联实际调用、证据 UI、七天/一天清理和活动/不确定/人工固定引用保护。当前不启动自动清理、不修改正式数据库，不把基础模块视为视觉分析上线。
+
+### PR2 独立实际链路验收
+
+2026-09-14，在隔离数据库/存储中，用程序生成的两张测试图制作两秒视频并加静音音轨，复用任务媒体预检、候选采样、现有 Codex / gpt-6-astra、严格 VisualResponse 和 Job checkpoint。仅发起一次视觉请求，44.875 秒完成；两帧 OCR `A27F` / `B63C` 与红圆/蓝矩形变化均正确，附件索引正确，包含离散帧限制。随后禁止 Provider 再调用，成功复用原 checkpoint 与结果哈希。隔离数据库 integrity=ok、外键异常=0，无真实任务或发布操作。
+
+证据位于本机忽略目录 `data/acceptance/v25-evidence-probe/`。响应 SHA-256：`3a27bdad0749b5dcbc6f50b55373d51acc14e55e4476512fa7e02efcc9534689`。初次准备测试素材因无音轨被现有媒体预检拒绝，尚未调用模型；补静音音轨后才进行了唯一一次实际调用。该验收证明新实现的图像/持久化/恢复技术链路，不能替代真实节目质量验收。
+
+随后针对新增的调用前工具隔离，另建 `data/acceptance/v25-evidence-probe-restricted/` 做独立验证：本机有效 MCP 三项均被临时禁用，23 条进程参数覆盖、不写全局配置；两帧观察、OCR、严格结构与 checkpoint 复用再次通过，37.485 秒、一个模型调用。响应 SHA-256：`45c6ba4343dd103575520231eab491ead829a0387675308bf431ddb4222cfcc9`。两次技术验证均有各自冻结请求与已完成记录，没有重新发送不确定请求。
+
 ### 可复用能力与时间约定
 
 - 读取原片复用 `storage_service.validate_source_video_path` 允许根目录检查；写入仅限当前任务 `analysis/visual/<随机运行标识>`，解析路径后拒绝符号链接逃逸。

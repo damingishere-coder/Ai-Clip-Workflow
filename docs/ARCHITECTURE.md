@@ -1,5 +1,11 @@
 # 系统架构
 
+## v2.5 可选视觉证据基础（生产入口关闭）
+
+`ai.visual_provider` 定义独立图像能力，`CodexCliProvider.generate_visual_json` 沿用现有执行配置。`visual_evidence_service` 在有效 Workflow Job 内冻结附件请求，通过 `unit_checkpoint.execute_checkpointed_ai_unit` 的 `optional-visual-v1` namespace 执行，不能走无 lease 的 untracked 分支。`candidate_visual_evidence` 提供候选/Job/Run 与相对图片目录的可查询引用，支持未完成 Run 的失败追踪和后续缓存清理；不另建后台队列，不复制候选事实。
+
+新的请求身份包含内容 SHA、实际帧 PTS/顺序、Prompt/schema 和模型指纹，随机目录名不改变请求。已开始的调用若丢失 checkpoint，证据表的 pending/completed 标识阻止把它当作新调用。成功缓存不要求图片仍在；不确定调用保持 unavailable 并留证。Run 关联由现有候选/分析/Task 原子事务接入，当前仅提供绑定函数，尚未启用。旧 Analyzer、文字覆盖率与生产策略不变。数据库/恢复说明见 [数据库结构](DATABASE_SCHEMA.md) 与 [Visual Signal](VISUAL_SIGNAL.md)。
+
 ## v2.5 基础模块（尚未接入生产）
 
 `frame_sampling_service.plan_candidate_frames` 负责原片绝对时间计划；`CandidateFrameSampler` 在任务 `analysis/visual` 内执行有限抽帧，复用现有路径白名单、FFmpeg 与进程树终止能力。实际帧 PTS、原片/图片 SHA、采样来源与失败原因进入本地 manifest。一轮共享候选/字节/时间预算；不调用发布封面服务、不改变任务或 Job 状态机，也不新增数据库迁移。

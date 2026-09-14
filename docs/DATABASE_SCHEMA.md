@@ -1,5 +1,15 @@
 # 数据库结构说明
 
+## v2.5 可选视觉证据增量（尚未部署）
+
+迁移 `20260914_04_visual_evidence` 由 `app/db/visual_evidence_migration.py` 定义，通过现有 `database._run_schema_migrations` 执行；账本增加至 13 项，不修改已应用 checksum。升级前复用 SQLite 在线备份，新建表/索引/触发器在同一事务内验证失败即回滚。
+
+新增 `candidate_visual_evidence`：关联 task、Workflow Job、可空 AI Run；`(workflow_job_id,candidate_key)` 唯一。请求 JSON/指纹、Provider/模型、原片与帧 SHA/时间/采样来源为不可变请求证据，触发器禁止覆盖。结果另有 status、call_status、结构化 evidence_json/校验和、failure_reason；cache_relative_dir、pinned、cache_cleaned_at 为后续清理提供引用。图片留在任务文件系统，不存 base64；恢复调用继续使用 `workflow_jobs.checkpoint_json`，不是第二套队列。
+
+验证阶段同时核对索引/触发器定义，避免同名弱化触发器伪装成正确结构。Run 归属只允许在已有原子事务中绑定；绑定后不得转移到另一 Run。已知未调用失败与计费结果不确定分别记录，不能将两者混为一个自动重试入口。
+
+旧 Task、Prompt、Run 和 checkpoint 不回填视觉字段，不改历史数据。回退功能时保留增量表与历史证据，停用可选入口；恢复旧程序前在副本验证。不能用旧备份覆盖升级后的新增记录来宣称无损回滚。
+
 ## 2026-09-14：Content Profile PR5
 
 无新表、列或迁移，账本仍为 12 条。新综艺 Job 既有 payload 快照增加 `feedback_context`，Run 的既有 analysis payload 保存同一集合；历史 Job/Run 不追认、不重写。上下文保留 `decision_source` 等查询来源，默认 keep 的统计含义没有变化。

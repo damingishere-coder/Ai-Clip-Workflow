@@ -1,5 +1,16 @@
 # Development Log
 
+## 2026-09-14 v2.5 PR2：视觉 Provider 与证据恢复
+
+- PR #100 修正 Linux FFmpeg 末尾无帧测试后，最终 head `5ee181f` 三项 CI 通过，合并 `d7a29b7`；新建 `codex/v2.5-visual-evidence`。原四份审计修改仍排除，正式 Web/Worker 继续 v2.4.0 / `15f3838`。
+- 增加独立 VisualProvider 契约及 Codex 显式图片方法，保留文字接口。附件复制前校验、串行/时限、受控进程树终止和事件流校验，不替换模型/认证。按实际 CLI 证据仅放行已知的技能目录描述缩短提示，不将该提示误判为工具执行。
+- 增加候选视觉证据表/不可变请求触发器，迁移账本 13 项；证据冻结与所有状态写入绑定当前 Job lease，执行复用原 AI unit checkpoint。模型变化、图片损坏、调用后 checkpoint 缺失、计费不确定不重发，旧 worker 无法落账。无生产 Analyzer/API 入口，不运行正式迁移。
+- 定向覆盖 Provider、恢复、旧文字兼容及迁移；修正测试夹具使用真实任务目录映射，避免把 task id 当作现有 task_dir_name。旧库夹具补齐旧版本已经维护的目录字段，保留逐行比较，未改变生产旧迁移逻辑。完整回归和独立实际图像链路验收进行中。
+- 一次隔离实际图像链路通过：两秒生成视频→两帧→Codex / gpt-6-astra→严格视觉证据→SQLite/checkpoint，44.875 秒；两帧代码/图形均正确，禁用再次调用后成功复用。准备阶段无音轨被媒体预检拒绝，补静音后才首次调用；没有模型重试。验收 DB integrity=ok、外键异常 0，未触碰正式 Task/Run/发布。等待执行槽后补检查当前 lease，避免已取消 worker 启动视觉进程。
+- 审查补齐进程级工具限制：查官方配置和本机 features/MCP 行为，逐项禁用并复核 MCP、shell/apps/plugins 等，配置隔离失败在请求前降级；不更改认证或全局配置。独立限制后探测一次调用 37.485 秒成功、两帧 OCR 正确、原结果可复用。修复 completed 证据与 retryable checkpoint 矛盾时可能重发的恢复缺口；明确未调用失败的 retryable 分类和显式续试，uncertain 仍禁止重发。
+- 首次全量 1135 项有 14 项新视觉夹具失败，其余 1121 项通过：旧 Job 测试会 reload 数据库配置，夹具通过旧存储配置隐式回查了错误目录。现直接使用任务创建返回的真实目录映射，旧队列＋视觉＋原文字 Provider 的 60 项组合测试通过；没有修改生产存储或旧测试。失败日志保留，最终全量另存 `data/acceptance/v25-evidence-regression-final/`。
+- 最终完整回归 1143 passed，0 failed/0 skipped，185.32 秒；Ruff 与 Python compileall 通过，9 条既有弃用提示。新增 39 项针对视觉请求、事件/工具限制、lease 与计费恢复、元数据/图片损坏、迁移备份/回滚/幂等/并发及触发器漂移，未以大量重复测试替代风险验证。
+
 ## 2026-09-14 v2.5 PR1：候选内抽帧与图像技术验证
 
 - v2.4 交付文档 PR #99 的三项 CI 通过后合并 `d3f8054`，从 master 新建 `codex/v2.5-frame-sampling-baseline`。正式服务继续运行 v2.4.0 / `15f3838`；原四份审计修改排除。

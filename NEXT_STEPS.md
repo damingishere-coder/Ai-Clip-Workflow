@@ -2,6 +2,9 @@
 
 ## 下一阶段：v2.5 候选视觉验证（2026-09-14）
 
+- PR #100 已完成全部 CI 并合并 `d7a29b7`。当前 `codex/v2.5-visual-evidence` 增加 VisualProvider、不可变采样请求与可选 AI checkpoint/SQLite 证据；最终 1143 项回归、Ruff/编译和隔离实际视觉/恢复链路验收通过，准备独立 PR/CI。尚未接入生产 Analyzer、UI、评分或清理，正式版本仍为 v2.4.0。
+- 此 PR 验收后接各 Profile 的可选证据/Judge、Run 原子提交关联、总预算、UI 与缓存生命周期。先完整验证关闭/降级和人工边界，再发布 v2.5；不提前进入 v2.5.5。
+
 - 当前独立分支 `codex/v2.5-frame-sampling-baseline`：候选采样基础服务与 26 项定向测试完成，真实双图 CLI 调用和隔离康熙抽帧均通过。尚未接生产路由/评分/数据库，正式服务继续 v2.4.0；实现与证据边界见 [Visual Signal](docs/VISUAL_SIGNAL.md)。本 PR 审查、回归和 CI 完成后再接视觉 Provider/证据。
 - v2.4.0 已经 PR #98 合并、最终 CI、Windows 实机门禁、Release 与原 RunDock Web/Worker 部署验收，提交 `15f3838`；37 张历史表原记录保留。证据与限制见 PROJECT_STATUS。
 - 第一个 v2.5 PR：候选范围内关键帧采样与现有 Codex CLI 图像能力验证，默认关闭视觉，不改变生产 Analyzer 路由或 Provider/模型/认证。真实图像调用若失败，保留证据，不自动切换 Provider 或重试不确定请求。

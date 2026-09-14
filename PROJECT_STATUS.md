@@ -1,5 +1,11 @@
 # 项目当前进度
 
+## 当前开发：v2.5 PR2 视觉证据基础（2026-09-14）
+
+抽帧 PR #100 的最终 Linux、Windows、Docker CI 全部通过，合并 `d7a29b7`。随后在 `codex/v2.5-visual-evidence` 实现可选 VisualProvider、候选请求冻结和证据表，继续使用既有 AI checkpoint/lease。当前只在隔离环境验证，没有生产 Analyzer/API 调用入口、没有修改正式数据库或服务。正式 Web/Worker 继续 v2.4.0 / `15f3838`。后续还有 Judge、UI、轮次预算与清理，不能把本阶段表述为 v2.5 已交付。
+
+本 PR 最终验证：1143 项完整回归全部通过，Ruff/编译通过；工具受限的实际图像链路 37.485 秒完成，严格证据落库并成功复用、无重复请求。先前测试夹具失败及修复证据保留在开发日志与忽略的验收目录中。
+
 ## 当前开发：v2.5 PR1 基础验证（2026-09-14）
 
 v2.4 交付账本 PR #99 已合并为 `d3f8054`。独立 `codex/v2.5-frame-sampling-baseline` 开发候选内抽帧，26 项定向测试通过；现有 Codex / gpt-6-astra 一次双图能力测试通过，另有 6 帧康熙候选本地采样通过。没有 Analyzer/API/数据库接入，正式 Web/Worker 仍是已验收的 v2.4.0 / `15f3838`。详细行为、限制和剩余 PR 见 [Visual Signal](docs/VISUAL_SIGNAL.md)，不能将基础模块视为视觉分析已经上线。
