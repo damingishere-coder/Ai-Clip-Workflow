@@ -1,5 +1,9 @@
 # Development Log
 
+## 2026-09-14 v2.5 发布验收准备
+
+PR #102 最终 head c15bd50 的本地 1187 项回归及三项 CI 通过（Linux 1174 passed、13 skipped），合并 04b3fef。新建 codex/v2.5-release-acceptance，统一应用/Worker/页面/备份/文档版本为 2.5.0；尚未更新正式运行副本。WAL-safe 备份已验证并恢复到隔离目录，52 任务/403 候选/577 成片/746 发布记录一致。首次误用旧备份 CLI 的包校验失败，保留为拒绝证据；正式恢复包只使用 backup_restore_runtime 生成的 v25-wal-safe-pre-upgrade-20260914-222740.zip。
+
 ## 2026-09-14 v2.5 PR3：可选视觉流程、证据界面与缓存生命周期
 
 - PR #101 最终 head `99805fc` 通过 Linux/Windows/Docker CI（Linux 1136 passed、11 skipped），合并 `52f1909`。最后补齐 CLI 缺失/附件复制/进程未启动的已知未计费分类，进程开始后通信失败保持不确定并终止进程树；44 项定向回归通过。新建 `codex/v2.5-visual-pipeline`，四份原审计改动继续排除。
