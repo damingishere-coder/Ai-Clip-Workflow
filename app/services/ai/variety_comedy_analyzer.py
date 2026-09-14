@@ -225,6 +225,7 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
     ]
     if request.visual_session is not None:
         request.visual_session.judge(scored, provider, text_complete=not (recall_failures or expansion_failures or judge_warning or recall_stats["invalid_item_count"] or expansion_stats["invalid_item_count"]))
+    all_scored = list(scored)
     scored = dedupe_scored_candidates(scored)
     candidate_pool_limit = max(1, min(COMEDY_POLICY.selection.candidate_pool_max, int(request.candidate_pool_limit or COMEDY_POLICY.selection.candidate_pool_default)))
     kept = [item for item in scored if item["quality_tier"] in {"A", "B"}]
@@ -242,6 +243,11 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
     clips = []
     for index, item in enumerate(kept, start=1):
         clips.append(_to_clip_payload(item, index))
+
+    from app.services.review_observation_service import build_observations
+    review_observations = build_observations(clips, scored=all_scored,
+        source_to_clip={item["source_id"]: clip["clip_id"] for item, clip in zip(kept, clips, strict=True)},
+        profile_id="variety_comedy")
 
     selected_count = sum(1 for clip in clips if clip["selected_by_default"])
     summary = (
@@ -296,6 +302,7 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
             "analysis_incomplete": bool(failed_units or invalid_item_count or judge_warning),
             "quality_degraded": bool(judge_warning),
             "failed_stages": failed_stages,
+            "review_observations": review_observations,
         },
     )
 

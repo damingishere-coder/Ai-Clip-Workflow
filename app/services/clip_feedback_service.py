@@ -40,7 +40,7 @@ def record_review_toggle_feedback_with_connection(
         """
         SELECT decision, reason_code
         FROM clip_feedback
-        WHERE task_id = ? AND clip_candidate_id = ?
+        WHERE task_id = ? AND clip_candidate_id = ? AND decision_source != 'observation_review'
         ORDER BY created_at DESC, rowid DESC
         LIMIT 1
         """,
@@ -79,15 +79,20 @@ def record_review_toggle_feedback_with_connection(
 
 
 def save_clip_feedback(task_id: str, clip_id: str, payload: ClipFeedbackCreate) -> dict:
-    from app.services.task_service import _now_iso, get_clip_candidate, get_task  # noqa: F811
-
-    task = get_task(task_id, include_video_probe=False)
-    if not task:
-        raise ValueError("任务不存在")
-    clip = get_clip_candidate(task_id, clip_id)
+    from app.services.task_service import _now_iso
     now = _now_iso()
 
     with get_connection() as connection:
+        # Snapshot attribution and candidate mutation must observe the same Run;
+        # reanalysis can delete/recreate a candidate with the same database ID.
+        connection.execute("BEGIN IMMEDIATE")
+        task_row = connection.execute("SELECT * FROM tasks WHERE id=? AND is_deleted=0", (task_id,)).fetchone()
+        clip_row = connection.execute("SELECT * FROM clip_candidates WHERE task_id=? AND id=? AND is_deleted=0", (task_id, clip_id)).fetchone()
+        if task_row is None:
+            raise ValueError("任务不存在")
+        if clip_row is None:
+            raise ValueError("候选片段不存在")
+        task, clip = dict(task_row), dict(clip_row)
         source_run_id = str(clip.get("source_analysis_run_id") or "").strip() or None
         if source_run_id is not None:
             source_run = connection.execute(
@@ -161,7 +166,7 @@ def list_recent_feedback_context_with_connection(connection, selection_profile: 
                            ORDER BY f.created_at DESC, f.rowid DESC
                        ) AS feedback_rank
                 FROM clip_feedback f
-                WHERE f.selection_profile = ?
+                WHERE f.selection_profile = ? AND f.decision_source != 'observation_review'
             )
             WHERE feedback_rank = 1
             ORDER BY created_at DESC

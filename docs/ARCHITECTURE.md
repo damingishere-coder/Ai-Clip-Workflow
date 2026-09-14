@@ -1,5 +1,9 @@
 # 系统架构
 
+## 开发中：v2.5.5 人工经验入口
+
+Analyzer 保留原调用链，增加轻量初始观察到 AI Run；明确人工评价复用 clip_feedback，以 Run + 候选来源 + 哈希归因。Content Review 独立聚合这类反馈，不需要官方账号，不驱动 Prompt/Profile 或发布状态。官方表现报告与 Challenger 仍在后续 PR，见 [Content Intelligence](CONTENT_INTELLIGENCE.md)。
+
 ## 当前：v2.5.0 可选视觉已接入
 
 正式服务已交付五种 Content Profile、候选内视觉验证、辅助综合评审与证据/缓存生命周期。视觉默认关闭，任务显式选择后冻结到原 Workflow Job，原子提交关联 AI Run；普通可选证据失败不改变文字覆盖率。以下 PR1/PR2 和按日期的阶段段落为历史说明，最终流程见 [Visual Signal](VISUAL_SIGNAL.md)，真实版本/部署证据见 PROJECT_STATUS.md。

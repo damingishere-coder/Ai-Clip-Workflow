@@ -1061,11 +1061,13 @@ def list_content_review_works(account_id: str = "", limit: int = 100) -> list[di
                    (
                        SELECT f.decision FROM clip_feedback f
                        WHERE f.clip_candidate_id = c.id
+                         AND f.decision_source != 'observation_review'
                        ORDER BY f.created_at DESC, f.rowid DESC LIMIT 1
                    ) AS review_decision,
                    (
                        SELECT f.reason_code FROM clip_feedback f
                        WHERE f.clip_candidate_id = c.id
+                         AND f.decision_source != 'observation_review'
                        ORDER BY f.created_at DESC, f.rowid DESC LIMIT 1
                    ) AS review_reason_code
             FROM latest_items i
@@ -1122,6 +1124,7 @@ def get_prompt_comparison(account_id: str = "") -> dict:
                        (
                            SELECT f.decision FROM clip_feedback f
                            WHERE f.clip_candidate_id = c.id
+                             AND f.decision_source != 'observation_review'
                            ORDER BY f.created_at DESC, f.rowid DESC LIMIT 1
                        ) AS latest_decision
                 FROM ai_analysis_runs ar

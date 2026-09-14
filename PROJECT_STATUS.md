@@ -1,5 +1,9 @@
 # 项目当前进度
 
+## 当前开发：v2.5.5 PR1（尚未部署）
+
+分支 `codex/v2.5.5-human-review-observations` 已补 AI 初始候选快照、明确审片评价、C 级诊断及无账号也可用的人工统计。只增加第 15 项兼容迁移，正式数据库仍为 v2.5.0 的 14 项迁移。全量离线回归 1198 passed（287.34 秒），审查修正后的 107 项定向回归通过（38.83 秒，含桌面/手机 Chrome、迁移与旧流程），Ruff、编译和 7 JS 检查通过；尚未更新运行副本，PR/CI 待完成。只读审查发现的旧 C 观察遗漏与置信样本口径问题已修复并补测。证据在忽略目录 `data/acceptance/v255-human-review-regression/`；统计口径、原片身份未知限制与回退见 [Content Intelligence](docs/CONTENT_INTELLIGENCE.md)。
+
 ## v2.5.0 已发布与部署（2026-09-14 22:45）
 
 PR [#102](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/102) 合并视觉集成，PR [#103](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/103) 发布提交为 `384db79e0718ec9e4417016df0ea1fc1d9430330`。[v2.5.0 Release](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.5.0) 已发布为 Latest，指向同一提交；PR 与合并后主干三项 CI 全通过。

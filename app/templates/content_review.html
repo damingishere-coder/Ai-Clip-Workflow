@@ -29,6 +29,15 @@
 
 <div class="page-alert" id="content-review-message" hidden></div>
 
+<section class="panel" id="human-review-report">
+  <h2>人工审片</h2>
+  <p>跨任务与内容类型统计，不受上方抖音账号筛选影响；没有官方数据也可以查看。</p>
+  <label>分析批次时间范围 <select id="human-review-days" aria-label="人工审片时间范围"><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="180">最近 180 天</option></select></label>
+  <p id="human-review-report-status" role="status">等待加载</p>
+  <div id="human-review-summary"></div>
+  <div id="human-review-groups"></div>
+</section>
+
 {% if not accounts %}
 <section class="panel empty-state content-review-empty">
   <p class="eyebrow">Account Required</p>
@@ -180,5 +189,6 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ url_for('static', path='js/human-review.js') }}?v=20260915-1"></script>
 {% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260911-manual-review-v1"></script>{% endif %}
 {% endblock %}
