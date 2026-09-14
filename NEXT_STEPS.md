@@ -2,6 +2,7 @@
 
 ## 下一阶段：v2.5 候选视觉验证（2026-09-14）
 
+- 当前独立分支 `codex/v2.5-frame-sampling-baseline`：候选采样基础服务与 26 项定向测试完成，真实双图 CLI 调用和隔离康熙抽帧均通过。尚未接生产路由/评分/数据库，正式服务继续 v2.4.0；实现与证据边界见 [Visual Signal](docs/VISUAL_SIGNAL.md)。本 PR 审查、回归和 CI 完成后再接视觉 Provider/证据。
 - v2.4.0 已经 PR #98 合并、最终 CI、Windows 实机门禁、Release 与原 RunDock Web/Worker 部署验收，提交 `15f3838`；37 张历史表原记录保留。证据与限制见 PROJECT_STATUS。
 - 第一个 v2.5 PR：候选范围内关键帧采样与现有 Codex CLI 图像能力验证，默认关闭视觉，不改变生产 Analyzer 路由或 Provider/模型/认证。真实图像调用若失败，保留证据，不自动切换 Provider 或重试不确定请求。
 - 后续依次补可选 VisualProvider、视觉 checkpoint/证据、Judge/UI/清理与降级；视觉失败不能改变文字 coverage 或设置阻止切片的 quality_degraded。完成验收后再进入 v2.5.5、v2.6。
