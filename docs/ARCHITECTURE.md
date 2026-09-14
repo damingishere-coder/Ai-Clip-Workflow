@@ -1,12 +1,17 @@
 # 系统架构
 
-## v2.5 可选视觉证据基础（生产入口关闭）
+## 当前：v2.5.0 可选视觉已接入
+
+正式服务已交付五种 Content Profile、候选内视觉验证、辅助综合评审与证据/缓存生命周期。视觉默认关闭，任务显式选择后冻结到原 Workflow Job，原子提交关联 AI Run；普通可选证据失败不改变文字覆盖率。以下 PR1/PR2 和按日期的阶段段落为历史说明，最终流程见 [Visual Signal](VISUAL_SIGNAL.md)，真实版本/部署证据见 PROJECT_STATUS.md。
+
+
+## 历史 PR2：v2.5 可选视觉证据基础
 
 `ai.visual_provider` 定义独立图像能力，`CodexCliProvider.generate_visual_json` 沿用现有执行配置。`visual_evidence_service` 在有效 Workflow Job 内冻结附件请求，通过 `unit_checkpoint.execute_checkpointed_ai_unit` 的 `optional-visual-v1` namespace 执行，不能走无 lease 的 untracked 分支。`candidate_visual_evidence` 提供候选/Job/Run 与相对图片目录的可查询引用，支持未完成 Run 的失败追踪和后续缓存清理；不另建后台队列，不复制候选事实。
 
 新的请求身份包含内容 SHA、实际帧 PTS/顺序、Prompt/schema 和模型指纹，随机目录名不改变请求。已开始的调用若丢失 checkpoint，证据表的 pending/completed 标识阻止把它当作新调用。成功缓存不要求图片仍在；不确定调用保持 unavailable 并留证。Run 关联由现有候选/分析/Task 原子事务接入，当前仅提供绑定函数，尚未启用。旧 Analyzer、文字覆盖率与生产策略不变。数据库/恢复说明见 [数据库结构](DATABASE_SCHEMA.md) 与 [Visual Signal](VISUAL_SIGNAL.md)。
 
-## v2.5 基础模块（尚未接入生产）
+## 历史 PR1：v2.5 基础模块
 
 `frame_sampling_service.plan_candidate_frames` 负责原片绝对时间计划；`CandidateFrameSampler` 在任务 `analysis/visual` 内执行有限抽帧，复用现有路径白名单、FFmpeg 与进程树终止能力。实际帧 PTS、原片/图片 SHA、采样来源与失败原因进入本地 manifest。一轮共享候选/字节/时间预算；不调用发布封面服务、不改变任务或 Job 状态机，也不新增数据库迁移。
 
@@ -120,7 +125,7 @@ clip subtitle_track   → immutable subtitle_revision → SRT/VTT/ASS/编辑器
 
 ### 1.1 架构形态
 
-当前 v2.3.0 保持 **FastAPI 单体应用 + SQLite + Windows 发布 Worker**。视频、AI、页面、内容复盘和调度器仍在同一个应用中；只有必须使用宿主系统 Chrome 的真实发布与作品指标同步动作由 Windows Worker 执行，不引入 Redis、Celery 或微服务。
+当前 v2.5.0 继续保持 **FastAPI 单体应用 + SQLite + Windows 发布 Worker**。视频、AI、页面、内容复盘和调度器仍在同一个应用中；只有必须使用宿主系统 Chrome 的真实发布与作品指标同步动作由 Windows Worker 执行，不引入 Redis、Celery 或微服务。
 
 v2.1 的架构目标不是云端多租户，而是把一台 Windows 电脑上的长视频生产与发布链路做完整、可恢复、可审计。SQLite 是唯一业务事实来源，E 盘任务目录保存大文件，浏览器 Profile 和平台登录态只保留在本机且不进入 Git。
 
@@ -381,7 +386,7 @@ Worker 会把容器内 `/workspace/tasks/...` 映射到宿主 `.env` 的 `TASKS_
 
 ## 8. 架构演进路线
 
-### 8.1 当前阶段：v2.3 本地生产闭环
+### 8.1 既有本地生产闭环
 
 - FastAPI 单体应用
 - SQLite 单文件数据库

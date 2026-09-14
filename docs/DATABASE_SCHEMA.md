@@ -1,6 +1,11 @@
 # 数据库结构说明
 
-## v2.5 可选视觉证据增量（尚未部署）
+## 当前：v2.5.0 / 14 项迁移
+
+正式库已应用第 13 项视觉证据和第 14 项可选视觉策略。迁移 14 为 tasks 增加默认关闭的 visual_enabled、task_generation_rules 增加可空 visual_policy_json、视觉证据增加 cache_cleanup_error 及任务查询索引。37 张原表的旧行旧字段已实测保留，旧任务策略保持未知/关闭。以下阶段记录不代表当前迁移数量。
+
+
+## 历史 PR2：v2.5 可选视觉证据增量
 
 迁移 `20260914_04_visual_evidence` 由 `app/db/visual_evidence_migration.py` 定义，通过现有 `database._run_schema_migrations` 执行；账本增加至 13 项，不修改已应用 checksum。升级前复用 SQLite 在线备份，新建表/索引/触发器在同一事务内验证失败即回滚。
 
