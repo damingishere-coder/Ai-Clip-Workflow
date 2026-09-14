@@ -206,6 +206,9 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
+    from app.db import intelligence_report_migration
+    if intelligence_report_migration.needs_migration(settings.database_path):
+        create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "intelligence-reports-v1")
     from app.db import human_review_migration
     if human_review_migration.needs_migration(settings.database_path):
         create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "human-review-v1")
@@ -1900,6 +1903,7 @@ def _verify_ai_prompt_version_fk_migration(connection: sqlite3.Connection) -> No
 
 
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
+    from app.db import intelligence_report_migration
     from app.db import human_review_migration
     from app.db import visual_evidence_migration, visual_policy_migration
     from app.db import knowledge_profile_migration
@@ -1998,6 +2002,11 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             version=human_review_migration.VERSION, name=human_review_migration.NAME,
             checksum=human_review_migration.CHECKSUM,
             apply=human_review_migration.apply, verify=human_review_migration.verify,
+        ),
+        SchemaMigration(
+            version=intelligence_report_migration.VERSION, name=intelligence_report_migration.NAME,
+            checksum=intelligence_report_migration.CHECKSUM,
+            apply=intelligence_report_migration.apply, verify=intelligence_report_migration.verify,
         ),
     )
 

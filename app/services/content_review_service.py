@@ -1141,25 +1141,25 @@ def get_prompt_comparison(account_id: str = "") -> dict:
         ).fetchall()
         work_rows = connection.execute(
             """
-            WITH latest_items AS (
-                SELECT i.*,
+            WITH latest_keys AS (
+                SELECT i.*,ROW_NUMBER() OVER(PARTITION BY i.aweme_id
+                    ORDER BY i.captured_at DESC,i.created_at DESC,i.rowid DESC) AS key_rank
+                FROM douyin_item_metric_snapshots i JOIN content_metric_import_batches b ON b.id=i.batch_id
+                WHERE i.account_id=? AND b.account_id=i.account_id AND b.status='committed' AND b.source_kind=?
+            ), latest_items AS (
+                SELECT i.*,COUNT(*) OVER(PARTITION BY i.batch_id,i.publish_job_id) AS batch_job_count,
                        ROW_NUMBER() OVER (
                            PARTITION BY CASE
                                WHEN i.publish_job_id IS NOT NULL THEN 'job:' || i.publish_job_id
                                ELSE 'work:' || i.aweme_id
                            END
-                           ORDER BY i.captured_at DESC, i.created_at DESC, i.rowid DESC
+                           ORDER BY i.captured_at DESC, i.created_at DESC, i.id DESC
                        ) AS item_rank
-                FROM douyin_item_metric_snapshots i
-                JOIN content_metric_import_batches b ON b.id = i.batch_id
-                WHERE i.account_id = ? AND b.status = 'committed'
-                  AND b.source_kind = ?
-                  AND i.match_status IN ('matched_exact', 'matched_unique', 'confirmed_manual')
+                FROM latest_keys i WHERE i.key_rank=1
             )
             SELECT i.*, c.id AS candidate_id, ar.prompt_version_id,
                    COALESCE(
                        NULLIF(i.duration_seconds, 0),
-                       NULLIF(c.duration_seconds, 0),
                        NULLIF(oc.source_duration_ms, 0) / 1000.0
                    ) AS effective_duration_seconds
             FROM latest_items i
@@ -1168,6 +1168,10 @@ def get_prompt_comparison(account_id: str = "") -> dict:
             JOIN clip_candidates c ON c.id = oc.clip_candidate_id
             JOIN ai_analysis_runs ar ON ar.id = c.source_analysis_run_id
             WHERE i.item_rank = 1 AND ar.prompt_version_id IS NOT NULL
+              AND i.batch_job_count=1
+              AND i.match_status IN ('matched_exact', 'matched_unique', 'confirmed_manual')
+              AND pj.account_id=i.account_id AND pj.platform='douyin'
+              AND pj.task_id=oc.task_id AND oc.task_id=c.task_id AND c.task_id=ar.task_id
             """,
             (resolved, DOUYIN_ITEM_EXPORT_SOURCE_KIND),
         ).fetchall()
@@ -1344,31 +1348,39 @@ def _cohort_benchmarks(rows: list[dict]) -> dict:
 def _latest_diagnosis_rows(connection, account_id: str) -> list[dict]:
     rows = connection.execute(
         """
-        WITH latest_items AS (
-            SELECT i.*, b.id AS metric_batch_id,
+        WITH latest_keys AS (
+            SELECT i.*,ROW_NUMBER() OVER(PARTITION BY i.aweme_id
+                ORDER BY i.captured_at DESC,i.created_at DESC,i.rowid DESC) AS key_rank
+            FROM douyin_item_metric_snapshots i JOIN content_metric_import_batches b ON b.id=i.batch_id
+            WHERE i.account_id=? AND b.account_id=i.account_id AND b.status='committed' AND b.source_kind=?
+        ), latest_items AS (
+            SELECT i.*, i.batch_id AS metric_batch_id,
+                   COUNT(*) OVER(PARTITION BY i.batch_id,i.publish_job_id) AS batch_job_count,
                    ROW_NUMBER() OVER (
                        PARTITION BY CASE
                            WHEN i.publish_job_id IS NOT NULL THEN 'job:' || i.publish_job_id
                            ELSE 'work:' || i.aweme_id
                        END
-                       ORDER BY i.captured_at DESC, i.created_at DESC, i.rowid DESC
+                       ORDER BY i.captured_at DESC, i.created_at DESC, i.id DESC
                    ) AS item_rank
-            FROM douyin_item_metric_snapshots i
-            JOIN content_metric_import_batches b ON b.id = i.batch_id
-            WHERE i.account_id = ? AND b.status = 'committed'
-              AND b.source_kind = ?
+            FROM latest_keys i WHERE i.key_rank=1
         )
         SELECT i.*, pj.title AS publish_title, oc.clip_candidate_id,
+               pj.account_id AS source_account,pj.platform AS source_platform,
+               pj.task_id AS publish_task,oc.task_id AS output_task,
+               COALESCE(v.profile_id, CASE WHEN json_valid(ar.analysis_payload_json)
+                   THEN json_extract(ar.analysis_payload_json,'$.analysis_meta.selection_profile') END, 'unknown') AS profile_bucket,
                c.title AS candidate_title,
                COALESCE(
                    NULLIF(i.duration_seconds, 0),
-                   NULLIF(c.duration_seconds, 0),
                    NULLIF(oc.source_duration_ms, 0) / 1000.0
                ) AS effective_duration_seconds
         FROM latest_items i
         LEFT JOIN publish_jobs pj ON pj.id = i.publish_job_id
         LEFT JOIN output_clip oc ON oc.id = pj.output_clip_id
         LEFT JOIN clip_candidates c ON c.id = oc.clip_candidate_id
+        LEFT JOIN ai_analysis_runs ar ON ar.id=c.source_analysis_run_id AND ar.task_id=c.task_id
+        LEFT JOIN content_profile_versions v ON v.id=ar.content_profile_version_id
         WHERE i.item_rank = 1
         ORDER BY COALESCE(i.published_at, i.captured_at) DESC
         """,
@@ -1377,6 +1389,9 @@ def _latest_diagnosis_rows(connection, account_id: str) -> list[dict]:
     result = []
     for source in rows:
         row = dict(source)
+        if row.get("publish_job_id") and (row["batch_job_count"] > 1 or row["source_account"] != account_id
+                or row["source_platform"] != "douyin" or not row["output_task"] or row["publish_task"] != row["output_task"]):
+            row["match_status"] = "ambiguous"
         duration = float(row.get("effective_duration_seconds") or 0)
         average_watch = row.get("average_watch_seconds")
         row["watch_ratio"] = (
@@ -1480,7 +1495,16 @@ def _build_content_review_insights(account_id: str) -> dict:
     ]
     recommendations = []
     for work in eligible:
-        cohort, cohort_key = _select_comparable_cohort(work, eligible)
+        peers = [item for item in eligible if item['publish_job_id'] != work['publish_job_id']]
+        cohort, cohort_key = _select_comparable_cohort(work, peers)
+        if not cohort:
+            continue
+        comparable = (len(cohort) >= 8 and cohort_key['label'] == '同体裁、同片长、同发布年龄'
+            and work['profile_bucket'] != 'unknown'
+            and all(item['profile_bucket'] == work['profile_bucket'] for item in cohort))
+        cohort_key['profile'] = work['profile_bucket']
+        cohort_key['minimum_peers'] = 8
+        cohort_key['fallback'] = not comparable
         benchmarks = _cohort_benchmarks(cohort)
         five = float(work["five_second_completion_rate"])
         bounce = float(work["two_second_bounce_rate"])
@@ -1561,7 +1585,7 @@ def _build_content_review_insights(account_id: str) -> dict:
                     }
                     for metric, values in benchmarks.items()
                 },
-                "data_sufficiency": "sufficient",
+                "data_sufficiency": "sufficient" if comparable else "insufficient",
                 "priority_score": round(float(definition["priority"]) + score, 6),
             }
         )
@@ -1784,6 +1808,8 @@ def create_content_experiment(account_id: str, recommendation_id: str) -> dict:
     if recommendation is None:
         raise ContentReviewError("这条建议已经更新，请刷新页面后重新选择", status_code=409)
     baseline = recommendation["baseline"]
+    if recommendation.get("data_sufficiency") != "sufficient":
+        raise ContentReviewError("比较样本不足，不能建立正式作品实验", status_code=409)
     if not baseline.get("batch_id"):
         raise ContentReviewError("还没有可冻结的官方作品导出基线", status_code=409)
     experiment_id = f"experiment-{uuid4().hex[:16]}"

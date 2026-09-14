@@ -484,14 +484,20 @@ def _diagnosis_item(index: int, *, title: str, published_at: str, **overrides) -
 def _seed_diagnosis_baseline(account_id: str, *, captured_at: str = "2026-08-29T12:00:00+08:00") -> dict:
     items = []
     for index in range(9):
-        published_at = f"2026-08-2{index}T10:00:00+08:00"
+        # A genuinely comparable legacy cohort: same Profile and publish age.
+        published_at = f"2026-08-28T10:{index:02d}:00+08:00"
         title = f"诊断基线作品 {index}"
-        _insert_publish_job(
+        job_id = _insert_publish_job(
             account_id,
             title=title,
             published_at=published_at,
             duration_seconds=60,
         )
+        version_id = _attach_prompt_chain(job_id, f"diagnosis-{index}")
+        with get_connection() as connection:
+            connection.execute("UPDATE ai_analysis_runs SET analysis_payload_json=? WHERE prompt_version_id=?",
+                (json.dumps({"clips": [], "analysis_meta": {"selection_profile": "variety_comedy"}}), version_id))
+            connection.commit()
         overrides = {}
         if index == 8:
             overrides = {
@@ -512,7 +518,7 @@ def _seed_diagnosis_baseline(account_id: str, *, captured_at: str = "2026-08-29T
         _diagnosis_item(
             99,
             title="没有候选的作品",
-            published_at="2026-08-28T18:00:00+08:00",
+            published_at="2026-08-20T18:00:00+08:00",
         )
     )
     return content_review_service.commit_douyin_item_export(
@@ -563,7 +569,7 @@ def _attach_prompt_chain(job_id: str, label: str) -> str:
                 clip_count, analysis_payload_json, created_at
             ) VALUES (?, ?, 1, 'test', 'Test', 'test-model', ?, ?, 1, 1, ?, ?)
             """,
-            (run_id, job["task_id"], version_id, prompt_hash, json.dumps({"clips": []}), now),
+            (run_id, job["task_id"], version_id, prompt_hash, json.dumps({"clips": [], "analysis_meta": {"selection_profile": "variety_comedy"}}), now),
         )
         connection.execute(
             """
@@ -1038,7 +1044,7 @@ def test_prompt_comparison_only_includes_versions_used_by_selected_account():
 
 @pytest.mark.parametrize(
     ("candidate_duration", "expected_ratio"),
-    [(60, 0.5), (0, 1 / 3)],
+    [(60, 1 / 3), (0, 1 / 3)],  # Mutable candidate duration never overrides the 90-second cut.
 )
 def test_prompt_comparison_uses_effective_duration_for_official_export_watch_ratio(
     candidate_duration: int,

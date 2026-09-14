@@ -1,5 +1,9 @@
 # 数据库结构说明
 
+## 开发中：v2.5.5 PR2 增量
+
+第 16 项 `20260915_02_intelligence_reports` 新增 `content_intelligence_reports`：可空账号、唯一请求 UUID、配置哈希、schema_version、冻结报告 JSON/哈希、生成时间，以及账号/时间索引。没有官方账号时可保存人工审片报告，不伪造账号或官方基线。复用既有迁移账本、升级前备份、事务失败回滚和校验；旧表数据不变。报告服务只有创建/读取，无修改或自动应用接口；读取时核对正文、配置及账号证据。正式库仍为 14 项，版本交付时统一部署。
+
 ## 开发中：v2.5.5 PR1 增量
 
 第 15 项 `20260915_01_human_review` 为 `clip_feedback` 增加可空 `analysis_candidate_key`、`observation_sha256` 与 Run/候选/时间索引；不回填旧反馈，不复制候选或官方数据。新 AI 初始观察放入已有 Run JSON。当前正式库仍是下面记录的 14 项迁移。详细归因与回退见 [Content Intelligence](CONTENT_INTELLIGENCE.md)。

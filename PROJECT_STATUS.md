@@ -1,6 +1,12 @@
 # 项目当前进度
 
-## 当前开发：v2.5.5 PR1（尚未部署）
+## 当前开发：v2.5.5 PR2（尚未部署）
+
+人工审片 PR [#105](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/105) 的最终提交 `dec9e49` 已通过 Linux、Windows、Docker 三项 CI，合并为 `fd47c2c`；Linux 1188 passed、15 平台跳过。当前独立分支 `codex/v2.5.5-intelligence-reports` 增加官方作品特征、冻结报告和小样本保护，继续进行回归及审查。正式服务仍是 v2.5.0 / `384db79`，尚未迁移第 15/16 项，也没有触发正式 AI、同步或发布。
+
+报告阶段基础全量 1216 passed、0 failed/0 skipped（221.71 秒），95 项定向回归通过（33.58 秒），Ruff/编译/8 JS 通过；随后初始/成片边界校验和报告页面补测 11 passed。桌面与手机 Chrome、迁移失败回滚/幂等/恢复均包含在验证中。最终 PR/CI 状态待完成，证据在忽略目录 `data/acceptance/v255-intelligence-reports-regression/`。
+
+## 历史开发：v2.5.5 PR1
 
 分支 `codex/v2.5.5-human-review-observations` 已补 AI 初始候选快照、明确审片评价、C 级诊断及无账号也可用的人工统计。只增加第 15 项兼容迁移，正式数据库仍为 v2.5.0 的 14 项迁移。全量离线回归 1198 passed（287.34 秒），审查修正后的 107 项定向回归通过（38.83 秒，含桌面/手机 Chrome、迁移与旧流程），Ruff、编译和 7 JS 检查通过；尚未更新运行副本，PR/CI 待完成。只读审查发现的旧 C 观察遗漏与置信样本口径问题已修复并补测。证据在忽略目录 `data/acceptance/v255-human-review-regression/`；统计口径、原片身份未知限制与回退见 [Content Intelligence](docs/CONTENT_INTELLIGENCE.md)。
 
