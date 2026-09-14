@@ -1,5 +1,21 @@
 # 项目当前进度
 
+## 当前开发：v2.4 工程验收政策更新（2026-09-14）
+
+用户明确同意：工程测试、兼容性及运行验收通过即可继续下一版本，真实质量在日常使用中补验，不再要求专门素材或逐条盲审。人物访谈、知识观点在创建页和任务页标“试用”；显示标记不改变冻结 Profile、Prompt、评分或历史哈希。人工审片、字幕、排期/发布边界保留。
+
+继续已有 PR #98 收口 2.4.0 工程交付：同步应用、Worker、备份版本、页面、文档与发布检查；新增试用提示验证。以下旧记录中“人工未完成所以不进入 v2.5”仅反映更新前门槛，已被本节替代；真实质量 pending 仍保留。新提交的测试、CI、实机门禁、Tag/Release 与部署结果在完成后记入本节，不预先宣称已发布。
+
+本轮完整本地回归 **1078 passed / 0 failed**，耗时 218.49 秒；版本与 Chrome 试用提示的 5 项定向检查也通过。Ruff、diff 检查通过。正式服务在这些检查期间仍为 `4eaff62` / 2.3.0；2.4.0 的合并、实机发布与部署尚待本轮后续交付。
+
+## 当前开发：v2.4 PR5 已交付，质量验收待完成（2026-09-14）
+
+PR [#97](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/97) 的 Linux、Windows、Docker CI 全部通过，合并为 `4eaff62`，17:45 更新既有 RunDock Web 8001。正式库迁移保持 12 条，integrity=ok、外键异常 0，37 表原行原字段保持一致、0 新增业务记录；Worker 8765 就绪，旧任务/审片/AI history 可读。备份及实际验收位于 `data/backups/feedback-evidence-deploy-20260914-174451/`。本补丁没有数据库结构变化，也没有改变既有排期。
+
+从最新 master 建立 `codex/v2.4-quality-acceptance-record` 收集 PR6 质量证据。真实康熙分析使用启动时加载的 `a5ece66`，独立进程和数据库；PR5 的代码兼容另由最终确定性回放和 1078 项完整测试验证，不能把这批真实调用标为 `4eaff62` 执行。人工盲审、访谈与知识各两条真实素材仍是版本门禁，未满足前不发布 v2.4、不开发 v2.5。
+
+18:05:38，三集真实分析全部结束：每集 18/18 单元、coverage=100%、12 条候选，共 54 个成功单元；failed_units/invalid_item_count 均为 0，analysis_incomplete/quality_degraded 均为 false，无 heartbeat 异常或不确定单元。三集旧响应回放与三集反馈桥接回放全部一致；后者使用同一隔离反馈比较 PR4 与 PR5，不发生模型调用。原片与转写哈希保持不变，隔离音频/转写副本一致；原片 Range GET 可读，不替代人工观看。[脱敏验收证据](docs/CONTENT_PROFILE_ACCEPTANCE_EVIDENCE.json) 已保存，本机完整审片包为 `data/acceptance/content-profile-v2.4/人工对比材料-完整批次.md`。PR6 保持质量证据草稿，正式版本仍为 2.3.0。
+
 ## 当前开发：v2.4 反馈证据与验收收口（2026-09-14）
 
 PR [#96](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/96) 的 Linux、Windows、Docker 检查全部通过，合并为 `a5ece66`，17:19 已部署至原 RunDock Web 8001。迁移 12 条、integrity=ok、外键异常 0，37 表原行原字段保持一致，只追加知识模板/Prompt/版本/账本；Worker 8765 就绪。既有服务进程链及实际 JS 响应哈希已核对；桌面与 390px 创建页五模板切换、旧任务/审片/复盘页均无脚本错误和页面级横向溢出。完整证据和 8 张截图位于 `data/backups/knowledge-profile-deploy-20260914-171848/`。

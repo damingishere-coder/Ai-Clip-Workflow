@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-14",
+  "release_version": "2.3.0",
+  "target_version": "2.4",
+  "version_accepted": false,
+  "human_review": "pending",
+  "real_analysis_code_commit": "a5ece66e3d9e996a707ce51382bcc26d62285ddc",
+  "final_production_code_commit": "4eaff62e98b1ae49896db0102e25d5846c4308eb",
+  "provider": "codex",
+  "model": "gpt-6-astra",
+  "samples": [
+    {
+      "sample_id": "kangxi-01",
+      "status": "completed",
+      "run_id": "739ffcc89bc9",
+      "candidate_count": 12,
+      "unit_states": {
+        "completed": 18
+      },
+      "analysis_meta": {
+        "expected_units": 18,
+        "completed_units": 18,
+        "failed_units": 0,
+        "coverage_percent": 100.0,
+        "analysis_incomplete": false,
+        "quality_degraded": false,
+        "invalid_item_count": 0,
+        "failed_stages": [],
+        "prompt_version_id": "promptv_preset_001_003",
+        "prompt_sha256": "c27bcd8a8dd421019e1e19121eee304b70b4ca4b4c36cb12c03b047bf6181129",
+        "content_profile_version_id": "profile-variety_comedy-677b6fddda50f749128b",
+        "content_profile_sha256": "677b6fddda50f749128b7674cbc2c30e1002d235815231cda270639ddd6119c7"
+      },
+      "evidence_sha256": "3afa95a331d4badfac086e8e78a535ccbaaba1ccb416548a413c42f0ef242cca",
+      "source_sha256": "73424b8bc546d4c56ea63c27ee1638f819eaff4feb0ed42e047c9c9051f6ef64",
+      "transcript_sha256": "7e94e385c3e8fbe1950fff1c2cf3913ed9ef1d5f1778d1f6c68e98a1ac3466ce",
+      "media_copies_equal": true,
+      "source_range_get": 206,
+      "feedback_bridge_equal": true,
+      "human_review": "pending"
+    },
+    {
+      "sample_id": "kangxi-02",
+      "status": "completed",
+      "run_id": "cbb46c8b912b",
+      "candidate_count": 12,
+      "unit_states": {
+        "completed": 18
+      },
+      "analysis_meta": {
+        "expected_units": 18,
+        "completed_units": 18,
+        "failed_units": 0,
+        "coverage_percent": 100.0,
+        "analysis_incomplete": false,
+        "quality_degraded": false,
+        "invalid_item_count": 0,
+        "failed_stages": [],
+        "prompt_version_id": "promptv_preset_001_003",
+        "prompt_sha256": "c27bcd8a8dd421019e1e19121eee304b70b4ca4b4c36cb12c03b047bf6181129",
+        "content_profile_version_id": "profile-variety_comedy-677b6fddda50f749128b",
+        "content_profile_sha256": "677b6fddda50f749128b7674cbc2c30e1002d235815231cda270639ddd6119c7"
+      },
+      "evidence_sha256": "6f57a1ad87837004c16ae081d68e478283c80c0b0c3545bf0d5304006ec37fa0",
+      "source_sha256": "6472585184714ec931ccde3c1d518c5ba70140d3e841ec6129e17547761d46f3",
+      "transcript_sha256": "ba82acff540c2dffc18a5619ac38869a86378cfd813dc6e96f733003725e55c0",
+      "media_copies_equal": true,
+      "source_range_get": 206,
+      "feedback_bridge_equal": true,
+      "human_review": "pending"
+    },
+    {
+      "sample_id": "kangxi-03",
+      "status": "completed",
+      "run_id": "7eb789459c18",
+      "candidate_count": 12,
+      "unit_states": {
+        "completed": 18
+      },
+      "analysis_meta": {
+        "expected_units": 18,
+        "completed_units": 18,
+        "failed_units": 0,
+        "coverage_percent": 100.0,
+        "analysis_incomplete": false,
+        "quality_degraded": false,
+        "invalid_item_count": 0,
+        "failed_stages": [],
+        "prompt_version_id": "promptv_preset_001_003",
+        "prompt_sha256": "c27bcd8a8dd421019e1e19121eee304b70b4ca4b4c36cb12c03b047bf6181129",
+        "content_profile_version_id": "profile-variety_comedy-677b6fddda50f749128b",
+        "content_profile_sha256": "677b6fddda50f749128b7674cbc2c30e1002d235815231cda270639ddd6119c7"
+      },
+      "evidence_sha256": "1f8f180fd9b0acd76916a79a9048b0ec9ff46d0a38cbbecf6356a42a656ce550",
+      "source_sha256": "02ed48e5e38792d2401d14b8b82daf45a68ecc0985f7b93212183f75faf30c46",
+      "transcript_sha256": "35aea755c11be36719948e0bb985ad9bcdecc5ed9e34a6381f90ca40d0e5e70c",
+      "media_copies_equal": true,
+      "source_range_get": 206,
+      "feedback_bridge_equal": true,
+      "human_review": "pending"
+    }
+  ],
+  "limitations": [
+    "Frozen response replay does not prove human quality.",
+    "Real calls loaded the PR4 code; the PR5 bridge is an offline replay.",
+    "Interview and knowledge material acceptance is pending."
+  ],
+  "local_report_sha256": {
+    "replay-report.json": "46c55c83cedcc922b89802b0591f614c45a415375c5bc787049bd11497733506",
+    "feedback-bridge-report.json": "62580b38b8c531333642a28b2da220c6cfb047c0d833aba498391299eca345c8",
+    "technical-summary.json": "0aee7d3018ca480d929a2d84dfabf0a0dff18d4d3e3d973c23f2678ca9564cf2",
+    "media-copy-verification.json": "6c35b53824c06a97c249976ea0f259ce0709d3e9e0b297f6c85bfe710350a535"
+  }
+}
