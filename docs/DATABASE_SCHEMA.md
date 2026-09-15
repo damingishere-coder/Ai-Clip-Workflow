@@ -1,5 +1,9 @@
 # 数据库结构说明
 
+## 开发中：v2.6 PR1 素材目录（第 20 项，正式库尚未执行）
+
+`20260915_06_material_catalog` 新增 source_materials（唯一 source_key、源路径、名称、大小、元数据 JSON/identity_sha256、时间）、material_scans（不可变目录清单/哈希、创建/过期时间）及 material_registrations（预览外键、唯一请求 UUID/请求哈希、返回素材 ID 列表、时间）。这三类记录不可 UPDATE；素材列表按创建时间与 ID 分页。仅新增表/索引/触发器，沿用原迁移账本、自动备份、事务失败回滚和并发初始化；不修改旧任务、Job、Prompt 或 Profile，不回填历史原片哈希。identity_sha256 是元数据 JSON 摘要，不能用于官方作品的完整原片归因。
+
 ## v2.5.5 正式运行：19 项迁移
 
 2026-09-15 10:08 原服务升级到 v2.5.5 / `c0d7962`，正式库顺序执行 15–19 五项增量，deep readiness、integrity=ok、FK=0。升级前后 38 张旧表原字段原记录保留，仅 schema_migrations 新增 5 行；报告、Challenger、策略事件没有伪造数据。升级前真实 WAL-safe 备份已隔离恢复并验证重复初始化。每项迁移独立事务；若后项失败，已成功前项保留并前向续迁。旧程序无法识别新账本时会拒绝 readiness，不能单纯退旧代码或删除账本；实际证据见 PROJECT_STATUS，以下“开发中”段落为迁移实现时的历史记录。

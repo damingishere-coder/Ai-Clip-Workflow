@@ -1,5 +1,11 @@
 # 项目当前进度
 
+## 当前开发：v2.6 PR1 素材目录与登记（尚未部署）
+
+v2.5.5 证据 PR #111 最终 `d3fae7d` 三项 CI 通过，合并 `884af4d`；从最新 master 建立 `codex/v2.6-material-catalog`。首步单独验证文件访问与登记边界：目录预览、明确确认、元数据版本、重复/并发复用、响应丢失重试和素材池页面。后续 PR 才在原 Workflow Job 接任务/复制及生产队列；本 PR 不生成生产任务、不复制原片、不调用 AI。
+
+新增功能/迁移/1440 与 390 Chrome 定向 14 项通过（11.79 秒）；完整回归 1266 passed、0 failed/0 skipped（348.90 秒），Ruff、编译、11 JS 通过，只读审查无本 PR 阻塞。全量后仅补目录输入框现有 control 样式，两宽度 Chrome 再测 2 passed（8.79 秒）。首轮迁移夹具遗漏旧 task_dir_name，被既有初始化补齐；修正为旧正常任务后严格比较通过。证据在忽略目录 `data/acceptance/v26-material-catalog-regression/`；准备独立 PR/CI。正式仍 v2.5.5 / `c0d7962`、19 项迁移，第 20 项尚未部署。
+
 ## 当前：v2.5.5 已发布与部署（2026-09-15 10:08）
 
 [PR #110](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/110) 版本提交 `c0d7962fe4ee23e81bc93669bb5ff1777502eb63` 已通过 PR 与最终主干三项 CI；[v2.5.5 Release](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.5.5) 已发布为 Latest，指向同一提交。下一阶段为 v2.6 目录素材与内容生产队列，尚未开发其业务功能。
