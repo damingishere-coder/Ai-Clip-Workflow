@@ -1,5 +1,9 @@
 # 系统架构
 
+## v2.6 开发：本机素材登记
+
+`material_catalog_service` 在用户显式输入目录后读取非递归元数据、保存不可变预览；确认时重新验证目录和文件身份，在同一 SQLite 事务写 source_materials 与幂等登记回执。它不扩展 storage_service 的媒体下载根、不启动 Job、不打开模型。此阶段 identity_sha256 仅证明保存的元数据，后续 task-bound 导入 Job 才计算完整视频哈希和复制产物校验。Queue 继续复用 workflow_jobs，见 [内容生产队列](CONTENT_PRODUCTION_QUEUE.md)；正式服务仍为 v2.5.5。
+
 ## 当前代码：v2.5.5 人工经验与受控实验
 
 Analyzer 保留原调用链，增加轻量初始观察到 AI Run；明确人工评价复用 clip_feedback，以 Run + 候选来源 + 哈希归因。`content_intelligence_service` 冻结人工统计和官方作品特征；`content_challenger_service` 保存独立归档的 Prompt 草稿、版本与差异；`challenger_trial_service` 在用户明确创建试验时绑定原任务/Job/Run。`challenger_experiment_service` 复用 Content Review 实验、官方事实与 Prompt 版本，验证实际 Job/Run 控制条件、冻结结论并提供独立人工策略启用/回退；报告、草稿、试验和结论都不自动改生产。见 [Content Intelligence](CONTENT_INTELLIGENCE.md)。

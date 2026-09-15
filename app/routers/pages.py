@@ -331,6 +331,12 @@ async def content_review_page(request: Request):
     )
 
 
+@router.get("/materials")
+def material_catalog_page(request: Request):
+    return templates.TemplateResponse(name="materials.html", request=request,
+        context={"request": request, "settings": settings, "active_page": "materials"})
+
+
 @router.get("/content-review/challengers")
 def content_challengers_page(request: Request, report_id: str):
     from app.services.content_intelligence_service import get_report

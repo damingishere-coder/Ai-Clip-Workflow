@@ -206,6 +206,9 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
+    from app.db import material_catalog_migration
+    if material_catalog_migration.needs_migration(settings.database_path):
+        create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "material-catalog-v1")
     from app.db import challenger_experiment_migration
     if challenger_experiment_migration.needs_migration(settings.database_path):
         create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "challenger-experiments-v1")
@@ -1912,7 +1915,7 @@ def _verify_ai_prompt_version_fk_migration(connection: sqlite3.Connection) -> No
 
 
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
-    from app.db import content_challenger_migration, challenger_trial_migration, challenger_experiment_migration
+    from app.db import content_challenger_migration, challenger_trial_migration, challenger_experiment_migration, material_catalog_migration
     from app.db import intelligence_report_migration
     from app.db import human_review_migration
     from app.db import visual_evidence_migration, visual_policy_migration
@@ -2032,6 +2035,11 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             version=challenger_experiment_migration.VERSION, name=challenger_experiment_migration.NAME,
             checksum=challenger_experiment_migration.CHECKSUM,
             apply=challenger_experiment_migration.apply, verify=challenger_experiment_migration.verify,
+        ),
+        SchemaMigration(
+            version=material_catalog_migration.VERSION, name=material_catalog_migration.NAME,
+            checksum=material_catalog_migration.CHECKSUM,
+            apply=material_catalog_migration.apply, verify=material_catalog_migration.verify,
         ),
     )
 
