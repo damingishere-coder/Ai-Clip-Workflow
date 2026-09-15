@@ -1,10 +1,10 @@
 # 系统架构
 
-## 开发中：v2.5.5 人工经验入口
+## 当前代码：v2.5.5 人工经验与受控实验
 
 Analyzer 保留原调用链，增加轻量初始观察到 AI Run；明确人工评价复用 clip_feedback，以 Run + 候选来源 + 哈希归因。`content_intelligence_service` 冻结人工统计和官方作品特征；`content_challenger_service` 保存独立归档的 Prompt 草稿、版本与差异；`challenger_trial_service` 在用户明确创建试验时绑定原任务/Job/Run。`challenger_experiment_service` 复用 Content Review 实验、官方事实与 Prompt 版本，验证实际 Job/Run 控制条件、冻结结论并提供独立人工策略启用/回退；报告、草稿、试验和结论都不自动改生产。见 [Content Intelligence](CONTENT_INTELLIGENCE.md)。
 
-## 当前：v2.5.0 可选视觉已接入
+## v2.5.0 已交付：可选视觉接入
 
 正式服务已交付五种 Content Profile、候选内视觉验证、辅助综合评审与证据/缓存生命周期。视觉默认关闭，任务显式选择后冻结到原 Workflow Job，原子提交关联 AI Run；普通可选证据失败不改变文字覆盖率。以下 PR1/PR2 和按日期的阶段段落为历史说明，最终流程见 [Visual Signal](VISUAL_SIGNAL.md)，真实版本/部署证据见 PROJECT_STATUS.md。
 
@@ -129,7 +129,7 @@ clip subtitle_track   → immutable subtitle_revision → SRT/VTT/ASS/编辑器
 
 ### 1.1 架构形态
 
-当前 v2.5.0 继续保持 **FastAPI 单体应用 + SQLite + Windows 发布 Worker**。视频、AI、页面、内容复盘和调度器仍在同一个应用中；只有必须使用宿主系统 Chrome 的真实发布与作品指标同步动作由 Windows Worker 执行，不引入 Redis、Celery 或微服务。
+当前 v2.5.5 继续保持 **FastAPI 单体应用 + SQLite + Windows 发布 Worker**。视频、AI、页面、内容复盘和调度器仍在同一个应用中；只有必须使用宿主系统 Chrome 的真实发布与作品指标同步动作由 Windows Worker 执行，不引入 Redis、Celery 或微服务。
 
 v2.1 的架构目标不是云端多租户，而是把一台 Windows 电脑上的长视频生产与发布链路做完整、可恢复、可审计。SQLite 是唯一业务事实来源，E 盘任务目录保存大文件，浏览器 Profile 和平台登录态只保留在本机且不进入 Git。
 

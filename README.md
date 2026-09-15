@@ -11,7 +11,7 @@
 [English](README.en.md) · [快速开始](#快速开始) · [界面预览](#界面预览) · [使用文档](docs/README.md) · [更新日志](CHANGELOG.md)
 
 [![CI](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-2.5.0-2563eb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.5.5-2563eb)](CHANGELOG.md)
 ![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078d4)
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776ab)
 [![MIT](https://img.shields.io/badge/License-MIT-64748b)](LICENSE)
@@ -20,11 +20,13 @@
 
 ## 当前开发状态
 
-**2.5.0 可选视觉理解** 接入五种内容模板：棚内综艺、人物访谈、知识观点、长直播、通用。新建任务可选择内容类型、Prompt 和 AI Provider；访谈、知识使用各自的提示词与评分维度，当前标为**试用**，真实内容质量待日常使用验证。通用和长直播保留旧默认 Prompt，可在创建时自行选择适合素材的方案。
+**2.5.5 选片经验与受控实验** 支持五种内容模板：棚内综艺、人物访谈、知识观点、长直播、通用。新建任务可选择内容类型、Prompt 和 AI Provider；访谈、知识使用各自的提示词与评分维度，当前标为**试用**，真实内容质量待日常使用验证。通用和长直播保留旧默认 Prompt，可在创建时自行选择适合素材的方案。
 
 新任务可显式开启**视觉辅助（试用）**，只对召回候选抽取少量关键帧，经现有 Codex 核验后参与综合评审。默认关闭；普通视觉失败或预算耗尽继续文字/音频流程，分析历史保留来源、限制与失败原因。图片可固定或按保留期清理，结构证据保留；视觉不能替代人工审片。
 
-后续依次为 v2.5 视觉辅助、v2.5.5 选片经验、v2.6 批量生产。按用户批准的更新规则，工程测试、兼容性和运行验收通过后继续迭代，真实内容质量在日常使用中补验；不要求用户专门准备素材或逐条完成盲审。人工审片、排期与发布边界保留。实际发布/部署状态见 [当前进度](PROJECT_STATUS.md)，规则与证据见 [实施账本](docs/CONTENT_PROFILE_ROLLOUT.md) 和 [验收要求](docs/CONTENT_PROFILE_ACCEPTANCE.md)。
+内容复盘可保存人工审片与官方作品的经验报告，显示样本量、时间范围、未知归因和缺失指标。用户可据此编写 Challenger 草稿，创建明确的试验任务；真实官方基线达到门槛后才建立作品实验。实验结论与正式启用分别确认，系统不会自动修改 Prompt 或评分权重。
+
+v2.5.5 工程与运行验收完成后再进入 v2.6 批量生产，当前仍为单文件上传。真实内容质量在日常使用中补验，不要求用户专门准备素材或逐条完成盲审。人工审片、排期与发布边界保留。实际发布/部署状态见 [当前进度](PROJECT_STATUS.md)，经验口径见 [Content Intelligence](docs/CONTENT_INTELLIGENCE.md)。
 
 ## 让制作流程连起来
 

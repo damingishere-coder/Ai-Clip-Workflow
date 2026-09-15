@@ -1,5 +1,17 @@
 # Development Log
 
+## 2026-09-15 v2.5.5 交付预检通过
+
+- 7 个版本、备份、readiness、原生脚本和 Worker 测试文件：38 passed、0 failed/0 skipped、8 warnings，5.02 秒；Ruff、Python 编译、10 JS 与 release_gate.ps1 解析均通过。
+- 仅在隔离测试目录执行，证据 `data/acceptance/v255-release-preflight/` 被 Git 忽略；未运行实机门禁或修改正式数据库。最终 PR/CI 后再沿用原服务执行 Windows 验收与部署。
+
+## 2026-09-15 v2.5.5 版本验收准备
+
+- PR #109 精确 head `b0f66fa` 的 Linux/Windows/Docker 全绿，Linux 1229 passed、23 skipped、102.59 秒；合并 `da6f9a9`，新建 `codex/v2.5.5-release-acceptance`。版本文件、备份 APP_VERSION、Worker、README、门禁和指南统一；保留 v2.5.0 检查清单为历史快照，不复用旧报告宣称新版本验收。
+- 只读刷新原服务：RunDock 两记录仍运行于 offline-runtime，Web/Worker 2.5.0 / `384db79`；深度 readiness ready，正式数据库 root/data/workflow.sqlite3，迁移 14、integrity ok、FK 0。当前无 queued/running Workflow Job，无 PUBLISHING，最近排期 11:00（部署前须再次核对）。
+- 通过 scripts.backup_restore_runtime（WAL-safe 钩子）生成 `niuma-studio-v255-pre-upgrade-20260915-094435.zip`，含本机配置、不含媒体；verify 和隔离 restore 均通过，52/403/577/746 行数一致。未恢复环境到正式路径。独立 `v255_db_compatibility.py` 只升级恢复副本，38 表旧字段/旧行全部保留，19 项迁移、integrity ok、FK 0，重复初始化未增加业务记录。原服务、原库和原片未升级/迁移/重跑。
+- 当前只准备交付检查，最终 Windows gate、正式部署、浏览器/版本归属和 Release 尚未执行；不能重跑硬编码旧目标的 v25_release_maintenance.py。
+
 ## 2026-09-15 v2.5.5 PR3c：冻结作品实验与独立人工启用
 
 - 基础冻结源码全量 1250 passed、0 failed/0 skipped、9 warnings / 336.35 秒，Ruff、编译、10 JS 通过。只读审查确认两项收尾：把 Run 不完整/成片边界变化从统计排除提前为入组拒绝；旧非 Challenger 实验时长 fallback 保持 master 原行为。修复时一次补丁匹配到另一 COALESCE，立即由实际 diff 发现并恢复，未保留误改。手机确认行及日期展示一起补测，最终 59 项定向全部通过（67.83 秒），包含 8 项新服务、Chrome、原 Content Review/报告、试验和迁移；新版手机截图已查看。

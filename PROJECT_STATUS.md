@@ -1,5 +1,13 @@
 # 项目当前进度
 
+## 当前：v2.5.5 版本交付验收（尚未部署）
+
+版本/备份/启动入口预检完成：7 个测试文件 38 passed、0 failed/0 skipped（5.02 秒），Ruff、Python 编译、10 个 JS 和发布脚本 PowerShell 解析全部通过；证据在忽略目录 `data/acceptance/v255-release-preflight/`。此结果不替代最终 Windows 实机门禁。
+
+功能 PR [#109](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/109) 最终 `b0f66fa` 三项 CI 通过（Linux 1229 passed / 23 平台跳过 / 102.59 秒），squash 合并 `da6f9a9`。当前独立分支 `codex/v2.5.5-release-acceptance` 同步 VERSION、Web、Worker、备份清单、中英文 README、门禁与指南为 2.5.5；正式运行仍是 2.5.0 / `384db79`，实际升级、Windows 实机、Tag/Release 均待本版最终提交 CI 后执行。
+
+2026-09-15 09:44 的 WAL-safe 升级备份已校验并恢复到隔离目录（环境不恢复、媒体不复制）：52 tasks、403 candidates、577 outputs、746 publish jobs。真实备份副本顺序升级 14→19、重复 init 均通过；38 张原表旧字段旧记录保留，integrity=ok/FK=0、新报告/Challenger/策略事件 0。私有备份在 `data/backups/v255-release/`，恢复/兼容证据在忽略目录 `data/acceptance/v255-backup-restore/`、`v255-upgrade-probe/`。版本检查进行中，后续先对最终干净 master 做 Windows 门禁，再更新原 RunDock 服务并验证旧任务与新页面；v2.6 尚未开始。
+
 ## 当前开发：v2.5.5 PR3c 正式实验与人工启用（尚未部署）
 
 试验任务 PR [#108](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/108) 最终 `846ba66` 三项 CI 全通过（Linux 1219 passed / 21 平台跳过 / 80.50 秒），合并 `8be1195`。从最新 master 建立 `codex/v2.5.5-challenger-experiments`，复用 Content Review 实验与 Prompt 版本，补冻结官方基线、实际 Run/Job 策略核验、人工结论留证及独立启用/回退。
