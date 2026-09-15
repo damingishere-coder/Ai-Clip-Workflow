@@ -2,6 +2,8 @@
 
 ## 2026-09-15 v2.6 PR4a 实际成片证据
 
+- PR #115 首轮 CI 发现 test_partial_ai_analysis 四项仅 mock Task、未建立实际记录，新增准备快照先报告任务不存在。补上隔离 Task 夹具并保留原有缺失/不完整/质量降级门禁断言；不放宽生产校验。此前全量在准备快照补丁前收集，最终 CI 正确覆盖到了这一遗漏。
+
 - PR #114 最终 8750750 的 Linux/Windows/Docker CI 全部通过，合并 28c01c9。从最新 master 新建 codex/v2.6-cut-review-evidence。
 - 原计划人工凭据 PR 按实际风险拆出成片证据前置：此前 output_clip 在落库时重新读候选边界，无法证明 FFmpeg 实际执行范围。CutResult 现在携带实际毫秒边界；新结果标 cut_plan_v1，没有执行计划的旧内部调用仅标 legacy_inferred，历史 cut_commit 保持原样并继续可读。
 - 切片前冻结选集、候选来源 Run、活动 Run 正文哈希、原片路径/文件标识与实际策略；准备前后和原子提交时复核。变化、缺失/重复结果和未知状态拒绝激活，保留旧 active 成片。采样指纹明确标 size-head-tail-v1，不当作完整原片 SHA-256。
