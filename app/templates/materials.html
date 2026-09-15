@@ -44,11 +44,12 @@
     <div class="form-row">
       <label>长直播每小时密度<input class="control" name="highlight_density_per_hour" type="number" min="1" max="10" value="4" required></label>
       <label>长直播候选总上限<input class="control" name="highlight_total_limit" type="number" min="1" max="50" value="30" required></label>
+      <label><input type="checkbox" name="auto_production">导入后自动转写、分析和预切；完成后等待人工审片</label>
       <label>字幕策略<select class="control" name="subtitle_strategy"><option value="original">保留原视频，人工确认</option><option value="review">进入字幕审核</option></select></label>
     </div>
     <label class="material-check"><input name="visual_enabled" type="checkbox"><span>候选画面辅助验证 · 试用</span></label>
     <label class="material-check"><input name="create_new_production" type="checkbox"><span>为已生产过的素材明确创建新任务</span></label>
-    <p class="material-note">本阶段导入完成后逐步处理；自动生产会随统一审核接入。Provider 使用已有配置，当前不会调用 AI。</p>
+    <p class="material-note">未勾选自动生产时只复制导入；勾选后使用所选 Provider 转写、分析并预切，完成后等待人工确认，不自动进入内容准备或排期。</p>
     <label class="material-check"><input name="confirmed" type="checkbox"><span>已核对素材和配置，确认复制原片并创建这些任务</span></label>
     <p id="batch-selection-count">已选 0 个素材</p>
     <button class="primary-button" id="batch-create" type="submit" disabled>确认创建批次</button>

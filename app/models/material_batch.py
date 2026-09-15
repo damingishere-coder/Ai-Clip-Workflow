@@ -18,11 +18,10 @@ class BatchSettings(BaseModel):
     highlight_total_limit: int = Field(default=30, ge=1, le=50)
     visual_enabled: bool = False
     subtitle_strategy: Literal["original", "review"] = "original"
-    # Enabled only alongside the production review gate in a later PR.
-    auto_production: Literal[False] = False
+    auto_production: bool = False
 
     def task_payload(self, name: str) -> TaskCreate:
-        return TaskCreate(task_name=name[:120], **self.model_dump(exclude={"subtitle_strategy", "auto_production"}))
+        return TaskCreate(task_name=name[:120], auto_mode=self.auto_production, **self.model_dump(exclude={"subtitle_strategy", "auto_production"}))
 
 
 class MaterialBatchCreate(BaseModel):

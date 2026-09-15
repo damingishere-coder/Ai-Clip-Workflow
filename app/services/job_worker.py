@@ -64,7 +64,8 @@ def execute_job(
                 if job_type == job_service.JOB_TYPE_MATERIAL_IMPORT:
                     from app.services.material_import_service import execute_import
                     result = execute_import(job_id, task_id, job.get("payload_json") or {})
-                    job_service.mark_job_completed(job_id, result)
+                    from app.services.batch_pipeline_service import finish_import
+                    finish_import(job_id, task_id, result)
                 elif job_type == job_service.JOB_TYPE_VIDEO_CUT:
                     _execute_video_cut(job_id, task_id)
                 elif job_type == job_service.JOB_TYPE_TRANSCRIPT:

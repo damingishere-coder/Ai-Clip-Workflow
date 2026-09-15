@@ -52,6 +52,7 @@ def test_batch_confirmation_survives_lost_response_and_reload(width, batch_db, t
             form.locator('[name=selection_profile]').select_option('variety_comedy')
             assert form.locator('[name=ai_prompt_preset_id]').input_value() == 'preset_001'
             assert page.locator('#batch-create').is_disabled()
+            form.locator('[name=auto_production]').set_checked(width == 390)
             form.locator('[name=confirmed]').check()
             with db.get_connection() as c:
                 assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 0
@@ -59,6 +60,7 @@ def test_batch_confirmation_survives_lost_response_and_reload(width, batch_db, t
             page.wait_for_function("document.getElementById('batch-status').textContent.includes('请求已保留')")
             saved = page.evaluate("localStorage.getItem('niuma-material-batch-pending-v1')")
             assert json.loads(saved) == submitted[0]
+            assert submitted[0]['settings']['auto_production'] == (width == 390)
             page.reload(wait_until='networkidle')
             assert page.locator('#batch-pending').is_visible()
             assert form.locator('[name=selection_profile]').is_disabled()

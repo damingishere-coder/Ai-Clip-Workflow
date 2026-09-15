@@ -109,6 +109,8 @@ class PipelineEngine:
             if isinstance(start_step, TaskStatus)
             else TaskStatus(start_step) if start_step else self._resolve_start_step(task, retry=retry)
         )
+        from app.services.batch_pipeline_service import validate_execution
+        batch_config = validate_execution(task_id, resolved_start_step.value, job_id)
         config = self._load_auto_config(task)
         checkpoint: AutoPipelineCheckpoint | None = None
         if job_id:
@@ -197,6 +199,11 @@ class PipelineEngine:
                                 step.value,
                                 outputs=self._checkpoint_outputs(task_id, step, context[step.value]),
                             )
+                if batch_config is not None and step == TaskStatus.VIDEO_CUTTING:
+                    from app.services.batch_pipeline_service import pause_for_review
+                    paused = pause_for_review(task_id)
+                    append_task_log(task_id, paused["message"])
+                    return paused
                 if step == TaskStatus.SUBTITLE_DRAFTING:
                     return self._pending_subtitle_review_result(task_id)
             except PipelineCancelledError as exc:
@@ -1704,6 +1711,11 @@ class PipelineEngine:
         return [dict(row) for row in rows]
 
     def _resolve_target_count(self, task: dict, config: dict) -> int:
+        from app.services.batch_pipeline_service import configuration
+        with get_connection() as connection:
+            batch_config = configuration(connection, task.get("id"))
+        if batch_config is not None:
+            return int(batch_config["final_clip_target"])
         from app.services.content_profile_service import registered_profile
         profile = registered_profile(task.get("selection_profile") or "general")
         if profile.analyzer_key == "content":
@@ -1916,10 +1928,6 @@ def run_auto_pipeline(
     start_step: TaskStatus | str | None = None,
     job_id: str | None = None,
 ) -> dict:
-    from app.services.material_batch_service import task_item
-    with get_connection() as connection:
-        if task_item(connection, task_id):
-            raise ValueError("批量自动生产将在人工审核门槛接入后启用；当前请逐步处理")
     return PipelineEngine().run(task_id, retry=retry, start_step=start_step, job_id=job_id)
 
 

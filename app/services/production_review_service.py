@@ -154,7 +154,9 @@ def state(task_id):
                     message = str(exc)
             if prepared_jobs(c, task_id):
                 message += "；更换成片或字幕决定前，请先在发送中心取消或处理已有发布任务"
-            return {"required": True, "can_confirm": not prepared_jobs(c, task_id), "approved": approved, "ready": ready,
+            from app.services.batch_pipeline_service import configuration
+            suggested_mode = "subtitled" if configuration(c, task_id).get("subtitle_strategy") == "review" else "original"
+            return {"suggested_delivery_mode": suggested_mode, "required": True, "can_confirm": not prepared_jobs(c, task_id), "approved": approved, "ready": ready,
                     "message": message, "manifest_sha256": cuts.digest(value),
                     "cut_run_id": value["cut_run_id"], "revision": value["revision"],
                     "delivery_mode": review["delivery_mode"] if approved else None,

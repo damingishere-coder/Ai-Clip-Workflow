@@ -55,7 +55,8 @@ def frozen_job_payload(connection, task_id, job_type, payload):
     if not item:
         return None
     if job_type == "auto_pipeline":
-        raise MaterialError("批量自动生产将在人工审核门槛接入后启用；当前请逐步处理")
+        from app.services.batch_pipeline_service import configuration, require_start
+        require_start(configuration(connection, task_id), payload.get("start_step"))
     generation = item["generation"]
     if payload.get("provider") and payload["provider"] != generation["snapshot"]["provider"]:
         raise MaterialError("AI Provider 与批次冻结配置不同，请使用原配置或另建生产任务")
@@ -120,7 +121,8 @@ def _get_batch(c, batch_id, *, reused=False):
         FROM material_batch_items i JOIN source_materials m ON m.id=i.material_id
         JOIN tasks t ON t.id=i.task_id JOIN workflow_jobs j ON j.id=i.job_id
         LEFT JOIN material_imports x ON x.item_id=i.id WHERE i.batch_id=? ORDER BY m.file_name,i.id""", (batch_id,)).fetchall()
-    return {**batch, "config": config, "items": [dict(r) for r in items], "reused": reused}
+    from app.services.task_service import STATUS_LABELS
+    return {**batch, "config": config, "items": [{**dict(r), "task_status_label": STATUS_LABELS.get(r["task_status"], r["task_status"])} for r in items], "reused": reused}
 
 
 def get_batch(batch_id):

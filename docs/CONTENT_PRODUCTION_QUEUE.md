@@ -1,5 +1,13 @@
 # 内容生产队列实施说明
 
+## 当前增量：批次自动生产
+
+素材池明确勾选 `auto_production` 后，Task 冻结 auto_mode，`material_import` 成功时复用 `mark_job_completed_with_followup` 在同一 lease 事务完成父 Job 与创建/复用 auto_pipeline。复制证据已提交而 followup 失败时保留原副本，重试重新验证完整哈希再完成该事务；不会创建第二个有效后续 Job。
+
+批次 Pipeline 仅允许 PREPARING_SOURCE、TRANSCRIBING、AI_ANALYZING、CLIP_SELECTING、VIDEO_CUTTING。原 handler/checkpoint 继续复用，完成后核对成片执行证据并设置 pending_review，完成 Workflow Job 释放槽位。即使恢复请求显式指定 metadata/schedule 步骤也拒绝。选择数量采用冻结 final_clip_target；未启用自动生产的旧批次不被接管。
+
+AI 不确定/部分失败遵循原失败和人工重试规则；部分切片失败保留结果并显示失败，不能当作全部完成或批准发布。此增量无新迁移，不开放全自动排期。统一 Inbox 与首页在下一 PR。
+
 v2.5.5 的版本、运行与数据兼容验收已完成。v2.6 沿用 FastAPI、SQLite、本地文件和 Windows Worker，不增加队列基础设施。每个相邻 PR 合并后再开新短期分支，整版验收后更新原正式服务。
 
 ## PR 顺序
