@@ -8,6 +8,7 @@ import uvicorn
 
 from app.db import database as db
 from app.main import app
+from app.services import job_service
 from tests.test_content_review_browser import _free_port
 from tests.test_production_review import output_batch as _output_batch, batch_db as _batch_db, human_db as _human_db
 
@@ -22,6 +23,8 @@ def test_actual_output_confirmation_then_stale_version(width, output_batch, tmp_
     if not chrome.exists():
         pytest.skip('Chrome unavailable')
     task,candidate,_ = output_batch
+    from tests.test_workflow_capacity import queued_jobs
+    other = job_service.claim_job(queued_jobs(1, 'transcript')[0]['id'], 'other-task')
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(app,host='127.0.0.1',port=port,log_level='warning',lifespan='off'))
     thread = threading.Thread(target=server.run,daemon=True)
@@ -39,6 +42,8 @@ def test_actual_output_confirmation_then_stale_version(width, output_batch, tmp_
             page.on('request',lambda r:writes.append(r.url) if r.method=='POST' else None)
             page.goto(f'http://127.0.0.1:{port}/tasks/{task}/clips',wait_until='networkidle')
             page.locator('#production-review-outputs video').wait_for(state='attached')
+            playwright.expect(page.locator('#generate-clips-button')).to_be_enabled()
+            assert job_service.get_job(other['id'])['status'] == 'running'
             assert page.locator('input[name="production-delivery"]').count() == 0
             assert page.locator('#production-review-prepare').is_hidden()
             page.locator('#production-review-confirm').click()
@@ -75,6 +80,50 @@ def test_actual_output_confirmation_then_stale_version(width, output_batch, tmp_
             assert '创建任务时确定' in page.locator('#production-review-policy-note').inner_text()
             page.locator('#production-review').screenshot(path=str(tmp_path/f'production-review-{width}.png'))
             assert not errors
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1')
+            browser.close()
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+
+@pytest.mark.parametrize('width', [1440, 390])
+def test_returning_to_review_restores_cut_without_resubmitting(width, output_batch):
+    playwright = pytest.importorskip('playwright.sync_api')
+    chrome = Path(os.environ.get('PROGRAMFILES', 'C:/Program Files'))/'Google/Chrome/Application/chrome.exe'
+    if not chrome.exists():
+        pytest.skip('Chrome unavailable')
+    task, _, _ = output_batch
+    job = job_service.create_job(task, 'video_cut')
+    port = _free_port()
+    server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=port, log_level='warning', lifespan='off'))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic()+10
+    while not server.started and time.monotonic() < deadline:
+        time.sleep(.05)
+    try:
+        assert server.started
+        with playwright.sync_playwright() as runtime:
+            browser = runtime.chromium.launch(executable_path=str(chrome), headless=True)
+            page = browser.new_page(viewport={'width': width, 'height': 1000})
+            errors, writes = [], []
+            page.on('pageerror', lambda e: errors.append(str(e)))
+            page.on('request', lambda r: writes.append(r.url) if r.method == 'POST' else None)
+            url = f'http://127.0.0.1:{port}/tasks/{task}/clips'
+            for _ in range(2):
+                page.goto(url, wait_until='domcontentloaded')
+                playwright.expect(page.locator('#cut-job-message')).to_contain_text('独立切片通道')
+                assert page.locator('#generate-clips-button').is_disabled()
+                assert page.locator('#cut-job-progress').is_visible()
+                page.goto(f'http://127.0.0.1:{port}/tasks', wait_until='domcontentloaded')
+            page.goto(url, wait_until='domcontentloaded')
+            playwright.expect(page.locator('#cut-job-message')).to_contain_text('独立切片通道')
+            job_service.request_job_cancel(job['id'])
+            playwright.expect(page.locator('#generate-clips-button')).to_be_enabled(timeout=5000)
+            assert not writes and not errors
+            with db.get_connection() as c:
+                assert c.execute("SELECT count(*) FROM workflow_jobs WHERE task_id=? AND job_type='video_cut'", (task,)).fetchone()[0] == 1
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1')
             browser.close()
     finally:

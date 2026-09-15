@@ -307,11 +307,21 @@ def get_job(job_id: str) -> dict | None:
             """,
             (job_id,),
         ).fetchone()
+        queue_hint = None
+        if row and row["job_type"] == JOB_TYPE_VIDEO_CUT and row["status"] == JOB_STATUS_QUEUED:
+            other = connection.execute(
+                "SELECT 1 FROM workflow_jobs WHERE task_id=? AND status='running' AND lease_expires_at>?",
+                (row["task_id"], _now_iso()),
+            ).fetchone()
+            queue_hint = ("这条素材仍在处理，结束后自动切片；其他素材可以继续操作。" if other else
+                          "已进入独立切片通道，按切片提交顺序处理；无需等待其他素材的转写或 AI 分析。")
     if not row:
         return None
     result = _row_to_dict(row)
     result["status_label"] = JOB_STATUS_LABELS.get(result.get("status"), result.get("status"))
     result["job_type_label"] = JOB_TYPE_LABELS.get(result.get("job_type"), result.get("job_type"))
+    if queue_hint:
+        result["queue_hint"] = queue_hint
     return result
 
 
@@ -358,13 +368,18 @@ def mark_job_running(job_id: str) -> dict | None:
     return claim_job(job_id, f"legacy:{uuid4().hex}")
 
 
-def _has_live_execution(connection, now: str) -> bool:
+def execution_lane(job_type: str) -> str:
+    return "cut" if job_type == JOB_TYPE_VIDEO_CUT else "background"
+
+
+def _has_live_execution(connection, now: str, job_type: str, task_id: str) -> bool:
     # Include cancel-requested jobs until their executor stops or lease expires.
-    # Every Workflow Job uses the same local heavy slot; Publisher's independent
-    # Scheduler remains outside this ledger and is unchanged.
+    # One slot per lane, with a shared task boundary across both lanes.
+    # Publisher's independent Scheduler remains outside this ledger.
     return bool(connection.execute(
-        "SELECT 1 FROM workflow_jobs WHERE status=? AND lease_expires_at>? LIMIT 1",
-        (JOB_STATUS_RUNNING, now),
+        """SELECT 1 FROM workflow_jobs WHERE status=? AND lease_expires_at>?
+           AND (task_id=? OR (job_type='video_cut')=(?='video_cut')) LIMIT 1""",
+        (JOB_STATUS_RUNNING, now, task_id, job_type),
     ).fetchone())
 
 
@@ -377,7 +392,7 @@ def claim_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> dict |
         now_iso = now.isoformat(timespec="seconds")
         lease_expires_at = (now + timedelta(seconds=max(30, lease_seconds))).isoformat(timespec="seconds")
         row = connection.execute(
-            "SELECT status, lease_expires_at, cancel_requested, attempt_count, max_attempts, next_attempt_at FROM workflow_jobs WHERE id = ?",
+            "SELECT status, job_type, task_id, lease_expires_at, cancel_requested, attempt_count, max_attempts, next_attempt_at FROM workflow_jobs WHERE id = ?",
             (job_id,),
         ).fetchone()
         if not row:
@@ -391,7 +406,7 @@ def claim_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> dict |
             connection.commit()
             return None
         if ((row["status"] == JOB_STATUS_QUEUED and row["next_attempt_at"] and row["next_attempt_at"] > now_iso)
-                or _has_live_execution(connection, now_iso)):
+                or _has_live_execution(connection, now_iso, row["job_type"], row["task_id"])):
             connection.commit()
             return None
         connection.execute(
@@ -418,8 +433,10 @@ def claim_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> dict |
     return get_job(job_id)
 
 
-def claim_next_job(lease_owner: str, lease_seconds: int = 120) -> dict | None:
-    """按创建时间领取一个重型任务，保证本地默认串行。"""
+def claim_next_job(lease_owner: str, lease_seconds: int = 120, *, lane: str | None = None) -> dict | None:
+    """通道内按创建时间领取；手动切片与其他任务独立，同一任务互斥。"""
+    if lane not in {None, "cut", "background"}:
+        raise ValueError("未知处理通道")
     lease_token = uuid4().hex
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -450,22 +467,24 @@ def claim_next_job(lease_owner: str, lease_seconds: int = 120) -> dict | None:
             """,
             (JOB_STATUS_FAILED, now, now, JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, now),
         )
-        if _has_live_execution(connection, now):
-            connection.commit()
-            return None
         row = connection.execute(
             """
-            SELECT id FROM workflow_jobs
-            WHERE cancel_requested = 0
-              AND attempt_count < max_attempts
+            SELECT queued.id FROM workflow_jobs queued
+            WHERE queued.cancel_requested = 0
+              AND queued.attempt_count < queued.max_attempts
+              AND (? IS NULL OR (queued.job_type='video_cut')=(?='cut'))
               AND (
-                (status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
-                OR (status = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
+                (queued.status = ? AND (queued.next_attempt_at IS NULL OR queued.next_attempt_at <= ?))
+                OR (queued.status = ? AND (queued.lease_expires_at IS NULL OR queued.lease_expires_at <= ?))
               )
-            ORDER BY created_at ASC, rowid ASC
+              AND NOT EXISTS (
+                SELECT 1 FROM workflow_jobs live WHERE live.status='running' AND live.lease_expires_at>?
+                AND (live.task_id=queued.task_id OR (live.job_type='video_cut')=(queued.job_type='video_cut'))
+              )
+            ORDER BY queued.created_at ASC, queued.rowid ASC
             LIMIT 1
             """,
-            (JOB_STATUS_QUEUED, now, JOB_STATUS_RUNNING, now),
+            (lane, lane, JOB_STATUS_QUEUED, now, JOB_STATUS_RUNNING, now, now),
         ).fetchone()
         if row:
             cursor = connection.execute(

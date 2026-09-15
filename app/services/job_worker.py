@@ -1,6 +1,6 @@
 """单进程持久化工作流 Worker。
 
-数据库 lease 让应用重启后可接管过期任务；默认只运行一个本地重型任务。
+数据库 lease 让应用重启后可接管过期任务；后台分析和交互切片各有一个执行通道。
 """
 
 from __future__ import annotations
@@ -249,32 +249,41 @@ def _job_progress_state(job: dict) -> tuple[int, str, str]:
 
 
 class WorkflowJobRunner:
-    """应用生命周期内的单 worker 线程。"""
+    """后台处理与交互切片各一个线程；租约和进程锁限制实际容量。"""
 
     def __init__(self, poll_seconds: float = 1.0) -> None:
         self.poll_seconds = poll_seconds
         self.owner = f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._cut_thread: threading.Thread | None = None
         self._next_visual_cleanup = 0.0
         self._visual_cleanup_cursor = ""
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
+        if self._stop_event.is_set() and any(t and t.is_alive() for t in (self._thread, self._cut_thread)):
             return
-        self._thread = threading.Thread(target=self._run, name="workflow-job-worker", daemon=True)
-        self._thread.start()
+        self._stop_event.clear()
+        for attribute, lane in (("_thread", "background"), ("_cut_thread", "cut")):
+            thread = getattr(self, attribute)
+            if thread and thread.is_alive():
+                continue
+            thread = threading.Thread(target=self._run, args=(lane,), name=f"workflow-{lane}-worker", daemon=True)
+            setattr(self, attribute, thread)
+            thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
-        if self._thread:
-            self._thread.join(timeout=25)
+        deadline = time.monotonic() + 25
+        for thread in (self._thread, self._cut_thread):
+            if thread:
+                thread.join(timeout=max(0, deadline - time.monotonic()))
 
-    def _run(self) -> None:
+    def _run(self, lane: str | None = None) -> None:
         while not self._stop_event.is_set():
-            job = job_service.claim_next_job(self.owner)
+            job = job_service.claim_next_job(self.owner, lane=lane) if lane else job_service.claim_next_job(self.owner)
             if not job:
-                if time.monotonic() >= self._next_visual_cleanup:
+                if lane != "cut" and time.monotonic() >= self._next_visual_cleanup:
                     self._next_visual_cleanup = time.monotonic() + 3600
                     try:
                         from app.services.visual_cache_service import cleanup_visual_cache

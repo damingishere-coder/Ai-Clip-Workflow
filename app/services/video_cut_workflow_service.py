@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from app.core.config import settings
 from app.models.task import TaskStatus
+from app.services.workflow_capacity_service import cut_execution_boundary
 from app.services.storage_service import get_artifact_paths, get_source_video_path, validate_source_video_path
 from app.services.task_log_service import append_task_log
 from app.services.video_cut_service import CutResult, cut_clips, parse_time_to_seconds
@@ -526,6 +527,7 @@ def _resolve_final_cut_status(results: list[CutResult]) -> tuple[TaskStatus, str
 
 # ---------- 切片主流程 ----------
 
+@cut_execution_boundary
 def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> dict:
     from app.services.material_batch_service import require_task_source
     require_task_source(task_id)

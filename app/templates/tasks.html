@@ -6,12 +6,13 @@
   <div>
     <p class="eyebrow">Tasks</p>
     <h1>任务列表</h1>
-    <p>查看每条直播视频的处理状态、候选片段数量与异常信息。</p>
+    <p>每条素材独立推进。其他任务转写或分析时，可以继续审片、切片和安排已完成的内容。</p>
   </div>
   <a class="primary-button" href="/tasks/new">新建任务</a>
 </section>
 
 <section class="panel">
+  <p class="form-hint">切片使用独立通道，按提交顺序处理。选一条已分析的任务，点击“审片与切片”；确认成片后即可进入发送中心准备内容、排期。</p>
   <div class="toolbar">
     <input class="control" type="search" placeholder="搜索任务名称">
     <select class="control" aria-label="平台筛选">
@@ -63,7 +64,7 @@
           <td>{{ task.candidate_count }}</td>
           <td>
             {% if task.output_clip_count > 0 %}
-            <span class="status-pill tone-blue">待加字幕</span>
+            <span class="status-pill tone-blue">{{ '保留原字幕' if task.subtitle_strategy == 'original' else ('新增字幕' if task.subtitle_strategy == 'review' else '字幕工作台') }}</span>
             {% set link = task.publish_link_state or {} %}
             <span class="status-pill tone-{{ 'green' if link.state == 'linked' else ('amber' if link.state in ['needs_sync', 'attention'] else 'blue') }}">
               {{ link.label or "等待发送关联" }}
@@ -77,8 +78,8 @@
           <td>{{ task.created_at }}</td>
           <td class="action-links">
             <a href="/tasks/{{ task.id }}">详情</a>
-            <a href="/tasks/{{ task.id }}/clips/review">审核</a>
-            <a href="/subtitles/{{ task.id }}">字幕</a>
+            <a href="/tasks/{{ task.id }}/clips/review">审片与切片</a>
+            {% if task.subtitle_strategy != 'original' %}<a href="/subtitles/{{ task.id }}">字幕</a>{% endif %}
             {% if task.output_clip_count > 0 %}<a href="/publish?task_id={{ task.id }}&tab=content">发送中心</a>{% endif %}
             <button class="link-button danger js-hide-task" type="button" data-task-id="{{ task.id }}" data-task-title="{{ task.title }}">永久删除</button>
           </td>

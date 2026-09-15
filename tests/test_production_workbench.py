@@ -64,6 +64,31 @@ def test_busy_task_hidden_and_failed_job_not_double_counted(output_batch):
     assert result['counts']['clips']['count'] == 0
 
 
+def test_other_task_processing_does_not_block_review_content_sync_or_schedule(output_batch, monkeypatch):
+    from app.services import publish_service
+    from app.services.publish_scheduler import PublishScheduler
+    task, _, _ = output_batch
+    legacy('other-processing-task')
+    pending = job_service.create_job('other-processing-task', 'transcript')
+    busy = job_service.claim_job(pending['id'], 'isolated-background')
+    monkeypatch.setattr(publish_service, '_generate_default_publish_cover', lambda *_: {})
+    assert review.state(task)['can_confirm']
+    review.confirm(task, consent(task))
+    assert review.state(task)['ready']
+    result = publish_service.sync_task_publish_jobs(task, prefer_subtitled=False)
+    assert result['status'] == 'ok', result['errors']
+    assert result['created_count'] > 0
+    publish = result['jobs'][0]
+    # Isolated export target exercises real scheduling readiness without an
+    # external account or Worker. No scheduler loop or publication is started.
+    with db.get_connection() as c:
+        c.execute("UPDATE publish_jobs SET publish_mode='manual_export' WHERE id=?", (publish['id'],))
+        c.commit()
+    scheduled = PublishScheduler().update_schedule(publish['id'], (datetime.now(timezone.utc)+timedelta(days=2)).isoformat())
+    assert scheduled['job']['status'] == 'SCHEDULED'
+    assert job_service.get_job(busy['id'])['status'] == 'running'
+
+
 def test_legacy_auto_review_flag_pagination_escaping_and_readonly(human_db, monkeypatch):
     for i in range(23):
         legacy(f'legacy-{i}')
