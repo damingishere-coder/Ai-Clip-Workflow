@@ -1,5 +1,11 @@
 # 系统架构
 
+## v2.6 切片执行证据
+
+保持原 FFmpeg 参数、cut_runs 激活规则和租约 fencing。CutPlan 已执行的 start 与 duration 回传为毫秒计划边界（不宣称解码帧 PTS，fast copy 仍受关键帧影响），output_clip 不再把执行期间修改后的候选时间当作已执行时间。切片前后复核活动 Run、选集/来源/边界和原片文件标识，证据与成片结果原子提交；任意不一致拒绝激活并保留旧成片。新 cut_run_evidence 为后续人审凭据提供依据，不代表已经人工审核通过。
+
+源文件现有采样指纹标明 size-head-tail-v1；文件 stat 用于识别正常本机文件变化，不宣称抵御同用户恶意恢复时间戳等篡改。没有把它冒充批量导入所做的全量 SHA-256。旧 Prompt、Analyzer、评分、字幕时间轴和发布执行器不变。
+
 ## Workflow Job 全局执行容量（v2.6 开发中）
 
 `claim_job` / `claim_next_job` 在 SQLite 写事务内共用有效 running 租约门槛，默认同时只领取一个 Job。领取仍保持原重试/取消/到期恢复语义，同秒按插入顺序。一个有效取消请求尚未结束执行时不会提前让出槽位。

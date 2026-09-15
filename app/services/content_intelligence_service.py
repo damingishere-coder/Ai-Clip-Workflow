@@ -106,7 +106,7 @@ def _features(row, run, duplicated_job):
     observation = next((o for o in run["observations"] if o.get("clip_key") == row.get("clip_key")), None) if run_valid else None
     duration = _number(row.get("duration_seconds"))
     duration_basis = "official_export" if duration and duration > 0 else "unknown"
-    cut_duration = _number(row.get("source_duration_ms")) if chain_valid and row.get("snapshot_source") == "cut_commit" else None
+    cut_duration = _number(row.get("source_duration_ms")) if chain_valid and row.get("snapshot_source") in {"cut_commit", "cut_plan_v1"} else None
     if duration_basis == "unknown":
         duration = cut_duration / 1000 if cut_duration and cut_duration > 0 else None
         duration_basis = "cut_snapshot" if duration else "unknown"
@@ -122,7 +122,7 @@ def _features(row, run, duplicated_job):
     score = observation.get("quality_score") if observation else None
     initial_start = _clock_ms(observation.get("start_time")) if observation else None
     initial_end = _clock_ms(observation.get("end_time")) if observation else None
-    bounds_known = (chain_valid and row.get("snapshot_source") == "cut_commit"
+    bounds_known = (chain_valid and row.get("snapshot_source") in {"cut_commit", "cut_plan_v1"}
         and initial_start is not None and initial_end is not None and initial_end > initial_start
         and row.get("source_start_ms") is not None and row.get("source_end_ms") is not None)
     bounds_match = (initial_start == row["source_start_ms"] and initial_end == row["source_end_ms"]) if bounds_known else None

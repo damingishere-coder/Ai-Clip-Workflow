@@ -108,3 +108,20 @@ def test_media_decode_sample_wraps_timeout(monkeypatch, tmp_path: Path):
     )
     with pytest.raises(ValueError, match="解码抽样超过"):
         media_preflight_service._run_decode_sample(media, 0)
+
+
+def test_successful_cut_returns_actual_ffmpeg_plan(monkeypatch, tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    plan = video_cut_service.build_output_path(tmp_path, 1, {"id":"clip", "title":"test", "start_time":"1.250", "end_time":"5.750"})
+    commands = []
+    def success(command, **kwargs):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"test-output")
+        return SimpleNamespace(returncode=0, stderr="")
+    monkeypatch.setattr(video_cut_service.subprocess, "run", success)
+    result = video_cut_service.cut_single_clip("ffmpeg", source, plan)
+    assert result.status == "completed"
+    assert (result.source_start_ms, result.source_end_ms) == (1250,5750)
+    assert commands[0][commands[0].index("-ss")+1] == "1.250"
+    assert commands[0][commands[0].index("-t")+1] == "4.500"

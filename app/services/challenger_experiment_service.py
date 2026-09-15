@@ -151,7 +151,7 @@ def validate_assignment(connection, experiment, job, *, historical=False):
     run = dict(row)
     if (job["account_id"] != experiment["account_id"] or job["platform"] != "douyin"
             or not job["task_id"] == run["task_id"] == run["output_task"] == run["candidate_task"]
-            or run["snapshot_source"] != "cut_commit" or (not historical and not run["is_active"])
+            or run["snapshot_source"] not in {"cut_commit", "cut_plan_v1"} or (not historical and not run["is_active"])
             or run["prompt_version_id"] != draft["challenger_prompt_version_id"]):
         _fail("发布作品实际 Run 与实验策略不匹配")
     from app.services.challenger_trial_service import validate_trial_run, task_binding

@@ -57,3 +57,9 @@ PR2 验证记录：17 项新增功能/迁移/浏览器定向通过；完整离�
 本 PR 无 DDL，migration regression 继续验证已有 21 项；真实短视频复制回归、实际双进程争锁/进程树结束、十路混合领取、FIFO、取消、重启与 timeout 定向通过。旧断言中允许 live Job 同时领取其他 Job 的部分已改为新串行验收。
 
 容量范围是 Workflow Job 队列。旧同步 audio/transcript/cuts API 和独立 Publisher 尚不属于此锁；批次自动生产后续只走受控 Job 入口。1289 项完整离线回归、Ruff、编译及 12 JS 检查通过，正式部署仍等待整个 v2.6 验收。
+
+## PR4a 成片执行证据（人工凭据前置）
+
+代码审查发现原 output_clip 的边界来自提交时读取候选，而不是执行时的 CutPlan，因此先独立修复这一可重现风险，再实现统一人审。新 cut_run_evidence 保存切前选集/Run 哈希和结果，准备及提交两处核对；成片实际时间来自 FFmpeg 已执行的 start/duration。变化时整批拒绝激活，旧结果保留。此 PR 不开放自动生产、不创建人工确认，不替代后续字幕/发布服务门槛。
+
+边界证据表示实际执行的 FFmpeg -ss/-t 计划，不是从成片解码反推的首尾帧；fast copy 仍可能受关键帧影响，策略也被记录。Run 快照同时冻结实际 Provider、模型、Prompt/Profile 版本和哈希、请求数量及分析载荷哈希。当前下游统计兼容 cut_plan_v1 标签；新人工凭据必须读取并校验 cut_run_evidence 与 output_clip 一致性，不能只看标签。

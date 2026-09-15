@@ -401,7 +401,7 @@ def test_cut_commit_saves_immutable_source_bounds():
     assert row["source_end_ms"] == 5750
     assert row["source_duration_ms"] == 4500
     assert row["source_fingerprint"] == "fingerprint-v1"
-    assert row["snapshot_source"] == "cut_commit"
+    assert row["snapshot_source"] == "legacy_inferred"
 
 
 def test_cue_api_supports_time_range_and_pagination():

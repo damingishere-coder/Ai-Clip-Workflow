@@ -22,6 +22,7 @@ def cleanup_cut_data():
         connection.execute("DELETE FROM output_clip WHERE task_id LIKE 'test-atomic-%'")
         connection.execute("DELETE FROM cut_runs WHERE task_id LIKE 'test-atomic-%'")
         connection.execute("DELETE FROM clip_candidates WHERE task_id LIKE 'test-atomic-%'")
+        connection.execute("DELETE FROM ai_analysis_runs WHERE task_id LIKE 'test-atomic-%'")
         connection.execute("DELETE FROM tasks WHERE id LIKE 'test-atomic-%'")
         connection.commit()
 
@@ -307,7 +308,8 @@ def test_each_cut_run_uses_a_distinct_output_directory(tmp_path):
     assert _cut_run_output_dir(tmp_path, first).parent == tmp_path
 
 
-def test_process_cut_commits_batch_and_returns_run_directory(monkeypatch):
+@pytest.mark.parametrize("change", [None, "bounds", "selection", "run", "source", "missing_plan", "wrong_plan", "missing_result", "duplicate_result", "prepare_source", "prepare_run", "run_fields", "unknown_status"])
+def test_process_cut_commits_batch_and_returns_run_directory(monkeypatch, change):
     import app.services.task_service as task_service
     import app.services.video_cut_workflow_service as workflow
     from app.services import ai_analysis_workflow_service
@@ -325,6 +327,26 @@ def test_process_cut_commits_batch_and_returns_run_directory(monkeypatch):
         )
         connection.commit()
 
+    if change in {"prepare_source", "prepare_run"}:
+        from app.services import cut_evidence_service
+        snapshot = cut_evidence_service.selection_snapshot
+        calls = []
+        def changed_during_preparation(c, tid):
+            result = snapshot(c, tid)
+            calls.append(tid)
+            if len(calls) == 1:
+                if change == "prepare_source":
+                    c.execute("UPDATE tasks SET original_video_path='changed-source.mp4' WHERE id=?", (tid,))
+                else:
+                    c.execute("INSERT INTO ai_analysis_runs(id,task_id,run_number,provider,provider_label,model,analysis_payload_json,created_at,is_active) VALUES('test-atomic-preparing',?,1,'remote','remote','test','{}','now',1)", (tid,))
+                c.commit()
+            return result
+        monkeypatch.setattr(cut_evidence_service, "selection_snapshot", changed_during_preparation)
+
+    if change == "run_fields":
+        with get_connection() as c:
+            c.execute("INSERT INTO ai_analysis_runs(id,task_id,run_number,provider,provider_label,model,analysis_payload_json,created_at,is_active) VALUES('test-atomic-fields',?,1,'remote','remote','test','{}','now',1)", (task_id,))
+            c.commit()
     original_get_task = task_service.get_task
     monkeypatch.setattr(
         task_service,
@@ -354,10 +376,37 @@ def test_process_cut_commits_batch_and_returns_run_directory(monkeypatch):
         output_dir.mkdir(parents=True, exist_ok=True)
         output = output_dir / "clip.mp4"
         output.write_bytes(b"clip")
-        return [CutResult("test-atomic-process-clip", str(output), output.name, "completed")]
+        with get_connection() as c:
+            if change == "bounds":
+                c.execute("UPDATE clip_candidates SET start_time='00:00:02' WHERE task_id=?", (task_id,))
+            elif change == "selection":
+                c.execute("UPDATE clip_candidates SET enabled=0 WHERE task_id=?", (task_id,))
+            elif change == "run_fields":
+                c.execute("UPDATE ai_analysis_runs SET model='changed-model' WHERE task_id=?", (task_id,))
+            elif change == "run":
+                c.execute("INSERT INTO ai_analysis_runs(id,task_id,run_number,provider,provider_label,model,analysis_payload_json,created_at,is_active) VALUES('test-atomic-run',?,1,'remote','remote','test','{}','now',1)", (task_id,))
+            c.commit()
+        if change == "source":
+            source.write_bytes(b"changed-source")
+        result = CutResult("test-atomic-process-clip", str(output), output.name, "unknown" if change == "unknown_status" else "completed",
+                           source_start_ms=None if change == "missing_plan" else 2000 if change == "wrong_plan" else 1000,
+                           source_end_ms=3000)
+        return [] if change == "missing_result" else [result, result] if change == "duplicate_result" else [result]
 
     monkeypatch.setattr(workflow, "cut_clips", fake_cut_clips)
 
+    if change:
+        # Previously active files and rows remain usable when the new commit fails.
+        old = workflow._create_cut_run(task_id)
+        workflow._commit_cut_run_results(task_id, old["id"], [_result("test-atomic-process-clip", "old.mp4")], source_fingerprint="old")
+        preparing = change.startswith("prepare_")
+        with pytest.raises(ValueError if preparing else RuntimeError, match="准备切片" if preparing else "未能原子写入"):
+            workflow.process_task_video_cuts(task_id, sync_publish_jobs=False)
+        with get_connection() as c:
+            assert c.execute("SELECT cut_run_id FROM output_clip WHERE task_id=? AND is_active=1", (task_id,)).fetchone()[0] == old["id"]
+            assert not c.execute("SELECT 1 FROM cut_run_evidence WHERE task_id=?", (task_id,)).fetchone()
+            assert c.execute("SELECT status FROM cut_runs WHERE task_id=? ORDER BY run_number DESC LIMIT 1", (task_id,)).fetchone()[0] == ("completed" if preparing else "failed")
+        return
     result = workflow.process_task_video_cuts(task_id, sync_publish_jobs=False)
 
     assert Path(result["output_dir"]).name.startswith("run_0001_")
@@ -369,3 +418,24 @@ def test_process_cut_commits_batch_and_returns_run_directory(monkeypatch):
     assert len(rows) == 1
     assert rows[0]["cut_run_id"] == result["cut_run_id"]
     assert rows[0]["is_active"] == 1
+    from app.services.cut_evidence_service import read_evidence
+    with get_connection() as c:
+        receipt = read_evidence(c, result["cut_run_id"])
+        assert receipt["evidence"]["inputs"]["selection"]["clips"][0]["start_ms"] == 1000
+        assert receipt["evidence"]["results"][0]["source_end_ms"] == 3000
+        assert receipt["evidence"]["inputs"]["source_fingerprint"]["kind"] == "size-head-tail-v1"
+        with pytest.raises(Exception, match="immutable"):
+            c.execute("UPDATE cut_run_evidence SET evidence_sha256='changed' WHERE cut_run_id=?", (result["cut_run_id"],))
+
+
+def test_output_snapshot_uses_executed_plan_even_if_candidate_was_edited():
+    from app.services.video_cut_workflow_service import _create_cut_run, _insert_output_clip_record
+    task_id = "test-atomic-executed-plan"
+    _create_task(task_id)
+    _insert_candidate(task_id, "test-atomic-plan-clip")
+    run = _create_cut_run(task_id)
+    result = CutResult("test-atomic-plan-clip", "C:/tmp/plan.mp4", "plan.mp4", "completed", source_start_ms=1250, source_end_ms=5750)
+    _insert_output_clip_record(task_id, run["id"], result, source_fingerprint="sampled")
+    with get_connection() as c:
+        row = c.execute("SELECT * FROM output_clip WHERE task_id=?", (task_id,)).fetchone()
+        assert (row["source_start_ms"],row["source_end_ms"],row["source_duration_ms"],row["snapshot_source"]) == (1250,5750,4500,"cut_plan_v1")

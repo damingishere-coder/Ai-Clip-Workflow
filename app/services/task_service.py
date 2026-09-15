@@ -1346,7 +1346,7 @@ def list_enabled_clip_candidates(task_id: str) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, task_id, clip_key, title, start_time, end_time, duration_seconds, cover_time_seconds,
+            SELECT id, task_id, clip_key, title, start_time, end_time, duration_seconds, cover_time_seconds, source_analysis_run_id,
                    summary, reason, highlight_reason, spread_value, suggested_editing, confidence_score,
                    quality_tier, quality_score, text_quality_score, humor_score, completeness_score,
                    audio_reaction_score, topic_key, key_moment_time, quality_evidence_json, rejection_reason,
