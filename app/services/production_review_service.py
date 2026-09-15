@@ -25,12 +25,21 @@ def prepared_jobs(c, task_id):
     return bool(c.execute("SELECT 1 FROM publish_jobs WHERE task_id=? AND status NOT IN ('PUBLISHED','EXPORTED','CANCELLED') LIMIT 1", (task_id,)).fetchone())
 
 
+def _task_config(c, task_id):
+    row = c.execute("SELECT auto_config_json FROM tasks WHERE id=?", (task_id,)).fetchone()
+    try:
+        config = json.loads(row[0] or "{}") if row else {}
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ProductionReviewConflict("任务字幕配置已损坏，请先修复配置后重试") from exc
+    if not isinstance(config, dict):
+        _fail("任务字幕配置格式无效，请先修复配置后重试")
+    return config
+
+
 def requires_review(c, task_id):
     if task_item(c, task_id):
         return True
-    row = c.execute("SELECT auto_config_json FROM tasks WHERE id=?", (task_id,)).fetchone()
-    config = json.loads(row[0] or "{}") if row else {}
-    return isinstance(config, dict) and config.get("subtitle_strategy") in {"original", "review"}
+    return _task_config(c, task_id).get("subtitle_strategy") in {"original", "review"}
 
 
 def manifest(c, task_id):
@@ -183,8 +192,7 @@ def delivery_policy(c, task_id):
     from app.services.batch_pipeline_service import configuration
     config = configuration(c, task_id)
     if config is None:
-        row = c.execute("SELECT auto_config_json FROM tasks WHERE id=?", (task_id,)).fetchone()
-        config = json.loads(row[0] or "{}") if row else {}
+        config = _task_config(c, task_id)
     if config is None or config.get("subtitle_strategy") not in {"original", "review"}:
         _fail("任务字幕配置缺失，请先核对创建记录")
     mode = "subtitled" if config["subtitle_strategy"] == "review" else "original"
