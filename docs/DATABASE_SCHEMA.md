@@ -1,5 +1,11 @@
 # 数据库结构说明
 
+## v2.6.0 数据兼容验收
+
+版本包含迁移 20–23：素材预览/登记、批次/导入、切片证据、人工凭据与事务门槛。没有第 24 项迁移，队列和 Inbox 复用旧状态。正式备份隔离恢复后验证 19→23、重复初始化、41 张旧表原字段和记录保留，完整性正常、外键异常 0。正式升级进度以 PROJECT_STATUS.md 为准；下文“正式仍 19 项”为相应 PR 的历史记录。
+
+回退优先停用新批次入口并保留新增结构及执行证据。旧二进制拒绝未知迁移，不能删账本或无条件恢复旧库；发生新的外部发布事实后须保存当前快照再评估恢复。
+
 ## 批次自动预切（无 DDL）
 
 本增量复用第 21 项 material_batches.config_json 的 auto_production/subtitle_strategy 和已有 tasks.auto_mode、workflow_jobs.payload/result/checkpoint；没有第 24 项迁移。原子完成导入并创建 followup 沿用现有 Job 事务。旧批次 config 中 false 或缺失表示不自动生产，不回填或改写旧配置。

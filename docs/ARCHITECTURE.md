@@ -1,5 +1,9 @@
 # 系统架构
 
+## v2.6.0 交付边界
+
+素材池 → 冻结批次 → 原 Workflow Job 串行导入与生产 → 不可变成片证据 → 人工统一审片及字幕决定 → 原内容准备/排期。production_workbench_service 只读聚合现有状态，Review Inbox 不持久化另一份状态机。复制、AI、切片失败及重启仍由原 Job/checkpoint 恢复；不确定 AI 不扩大重试权限。所有业务已顺序合并，实际版本与部署以 PROJECT_STATUS.md 为准。
+
 ## 批次自动预切的复用边界
 
 新增 batch_pipeline_service 是现有 Pipeline 的批次策略适配，不是第二个任务状态机。只允许冻结配置指定的自动任务通过 Workflow Job 运行，入队和实际执行双重检查允许步骤；成功预切后按 cut_run_evidence 验证完整版本并暂停。恢复仍使用原 AutoPipelineCheckpoint，不添加旧 Job 指纹字段或改旧恢复解释。后续字幕与内容准备由已合并的人工凭据服务控制。
