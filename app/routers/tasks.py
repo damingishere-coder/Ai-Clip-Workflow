@@ -497,7 +497,7 @@ async def resume_auto_pipeline(task_id: str, background_tasks: BackgroundTasks) 
             raise ValueError("任务不存在")
         if not task.get("auto_mode"):
             raise ValueError("该任务未开启全自动模式")
-        if (task.get("subtitle_strategy") == "original" and task.get("status") == "pending_review"
+        if (task.get("subtitle_strategy") in {"original", "review"} and task.get("status") == "pending_review"
                 and task.get("output_clip_count", 0) > 0):
             raise ValueError("任务已按创建设置完成切片，请检查成片后继续，无需重新运行自动流程")
         if not task.get("analysis_exists"):

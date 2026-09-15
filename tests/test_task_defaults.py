@@ -121,7 +121,7 @@ def test_created_subtitle_policy_blocks_original_fallback_before_sync_mutations(
                            task_id=task_id, task_dir_name=task_id)
         monkeypatch.setattr(publish_service, '_list_completed_publish_clips', lambda *_: [{'output_clip_id':'unrendered'}])
         monkeypatch.setattr(publish_service, '_supersede_stale_publish_jobs', lambda *_: pytest.fail('不可先改发布记录'))
-        with pytest.raises(ValueError, match='创建时已选择新增字幕'):
+        with pytest.raises(ValueError, match='生成完整成片'):
             publish_service.sync_task_publish_jobs(task_id, prefer_subtitled=False)
     finally:
         with get_connection() as c:

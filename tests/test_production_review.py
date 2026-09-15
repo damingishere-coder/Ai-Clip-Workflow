@@ -22,12 +22,26 @@ batch_db, human_db = _batch_db, _human_db
 @pytest.fixture
 def output_batch(batch_db, tmp_path, monkeypatch, request):
     from app.services import material_batch_service as batches
-    payload, _ = batch_input(tmp_path, 1, settings={'selection_profile':'variety_comedy',
-        'subtitle_strategy':getattr(request, 'param', 'original')})
-    item = batches.create_batch(payload)['items'][0]
-    stub_preflight(monkeypatch)
-    job_worker.execute_job(item['job_id'])
-    task = item['task_id']
+    policy = getattr(request, 'param', 'original')
+    if policy.startswith('single-'):
+        from app.models.task import TaskCreate
+        from app.services.task_lifecycle_service import create_task_record
+        task = uuid4().hex
+        create_task_record(TaskCreate(task_name='普通上传', selection_profile='general',
+                                     subtitle_strategy=policy.removeprefix('single-')), task_id=task)
+        source = tmp_path/'managed'/'uploaded.mp4'
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b'isolated-upload')
+        with db.get_connection() as c:
+            c.execute('UPDATE tasks SET original_video_path=? WHERE id=?', (str(source), task))
+            c.commit()
+    else:
+        payload, _ = batch_input(tmp_path, 1, settings={'selection_profile':'variety_comedy',
+            'subtitle_strategy':policy})
+        item = batches.create_batch(payload)['items'][0]
+        stub_preflight(monkeypatch)
+        job_worker.execute_job(item['job_id'])
+        task = item['task_id']
     candidate = uuid4().hex
     _insert_candidate(task, candidate)
     run = cuts._create_cut_run(task)
@@ -48,24 +62,35 @@ def consent(task, mode='original'):
                                    delivery_mode=mode, confirmed=True)
 
 
-@pytest.mark.parametrize('output_batch', ['original', 'review'], indirect=True)
+@pytest.mark.parametrize('output_batch', ['original', 'review', 'single-original', 'single-review'], indirect=True)
 def test_confirm_uses_creation_policy_and_rejects_client_override(output_batch):
     task,candidate,_ = output_batch
     before = review.state(task)
     mode = before['configured_delivery_mode']
     wrong = 'subtitled' if mode == 'original' else 'original'
+    from app.services.publish_service import sync_task_publish_jobs
+    with pytest.raises(ValueError, match='人工确认'):
+        sync_task_publish_jobs(task, prefer_subtitled=False)
+    assert 'id="production-review"' in TestClient(app).get(f'/tasks/{task}/clips/review').text
     with pytest.raises(ValueError, match='创建任务时确定'):
         review.confirm(task, consent(task, wrong))
     payload = ProductionReviewConfirm(request_key=uuid4(), manifest_sha256=before['manifest_sha256'], confirmed=True)
     review.confirm(task, payload)
     assert review.state(task)['delivery_mode'] == mode
     assert review.confirm(task, payload)['reused']
+    if mode == 'original':
+        assert review.check_preparation(task)
+    else:
+        with pytest.raises(ValueError, match='字幕审核'):
+            sync_task_publish_jobs(task, prefer_subtitled=False)
     with db.get_connection() as c:
         c.execute("UPDATE clip_candidates SET end_time='00:00:04' WHERE id=?", (candidate,))
         c.commit()
     stale = review.state(task)
     assert not stale['can_confirm']
     assert stale['configured_delivery_mode'] == mode
+    with pytest.raises(ValueError, match='已变化'):
+        sync_task_publish_jobs(task, prefer_subtitled=False)
 
 
 def test_historical_explicit_subtitle_decision_is_preserved(output_batch, monkeypatch):
@@ -77,6 +102,30 @@ def test_historical_explicit_subtitle_decision_is_preserved(output_batch, monkey
     assert state['configured_delivery_mode'] == 'subtitled'
     assert state['delivery_policy_source'] == 'previous_review'
     assert not state['ready']
+
+
+@pytest.mark.parametrize('output_batch', ['single-original', 'single-review'], indirect=True)
+def test_single_upload_manual_cut_waits_for_review_without_auto_sync(output_batch, monkeypatch):
+    from app.services import publish_service
+    from app.services import ai_analysis_workflow_service as analysis_meta_service
+    task, candidate, _ = output_batch
+    monkeypatch.setattr(analysis_meta_service, 'get_task_ai_analysis_meta', lambda *_: {'coverage_percent': 100})
+    monkeypatch.setattr(analysis_meta_service, 'validate_ai_analysis_meta_for_cut', lambda value, *_: value)
+    monkeypatch.setattr(publish_service, 'sync_task_publish_jobs', lambda *_args, **_kwargs: pytest.fail('人工确认前不可自动同步'))
+
+    def cut(**kwargs):
+        folder = kwargs['output_dir']
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder/'clip.mp4'
+        path.write_bytes(b'isolated-cut-output')
+        return [CutResult(candidate, str(path), path.name, 'completed', source_start_ms=1000, source_end_ms=3000)]
+
+    monkeypatch.setattr(cuts, 'cut_clips', cut)
+    result = cuts.process_task_video_cuts(task)
+    assert result['publish_sync'] is None
+    assert review.state(task)['can_confirm']
+    with pytest.raises(ValueError, match='人工确认'):
+        review.check_preparation(task)
 
 
 def insert_publish(task, output, status='DRAFT', *, mode='original'):

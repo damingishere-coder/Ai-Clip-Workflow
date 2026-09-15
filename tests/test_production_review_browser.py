@@ -15,7 +15,7 @@ output_batch, batch_db, human_db = _output_batch, _batch_db, _human_db
 
 
 @pytest.mark.parametrize('width',[1440,390])
-@pytest.mark.parametrize('output_batch', ['original', 'review'], indirect=True)
+@pytest.mark.parametrize('output_batch', ['original', 'review', 'single-original', 'single-review'], indirect=True)
 def test_actual_output_confirmation_then_stale_version(width, output_batch, tmp_path):
     playwright = pytest.importorskip('playwright.sync_api')
     chrome = Path(os.environ.get('PROGRAMFILES','C:/Program Files'))/'Google/Chrome/Application/chrome.exe'

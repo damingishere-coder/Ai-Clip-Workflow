@@ -865,7 +865,7 @@ def get_task_live_status(task_id: str) -> dict:
         }:
             primary_action = "publish"
         elif status in AUTO_PIPELINE_RESUMABLE_STATUSES:
-            primary_action = "review_outputs" if (task.get("subtitle_strategy") == "original"
+            primary_action = "review_outputs" if (task.get("subtitle_strategy") in {"original", "review"}
                 and status == TaskStatus.pending_review.value and output_clip_count > 0) else "resume"
         elif is_running:
             primary_action = "processing"

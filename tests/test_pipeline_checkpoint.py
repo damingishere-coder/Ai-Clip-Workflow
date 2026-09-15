@@ -773,12 +773,13 @@ def test_completed_subtitle_checkpoint_keeps_manual_review_gate(tmp_path: Path) 
     engine._generate_metadata.assert_not_called()
 
 
-def test_creation_skip_subtitles_stops_before_drafting_with_checkpoint():
+@pytest.mark.parametrize('strategy', ['original', 'review'])
+def test_creation_subtitle_policy_stops_for_output_review_before_drafting_with_checkpoint(strategy):
     task_id = 'test-pipeline-checkpoint-creation-skip'
     create_task_record(TaskCreate(task_name=task_id, selection_profile='general', auto_mode=True,
-                                 subtitle_strategy='original'), task_id=task_id)
+                                 subtitle_strategy=strategy), task_id=task_id)
     task = task_service.get_task(task_id, include_video_probe=False)
-    assert json.loads(task['auto_config_json'])['subtitle_delivery_mode'] == 'original'
+    assert json.loads(task['auto_config_json'])['subtitle_delivery_mode'] == ('original' if strategy == 'original' else 'subtitled')
     job = _claim_auto_job(task_id, TaskStatus.SUBTITLE_DRAFTING, 'creation-skip-owner')
     engine = PipelineEngine()
     engine._prepare_subtitle_drafts = Mock(side_effect=AssertionError('不应制作字幕'))

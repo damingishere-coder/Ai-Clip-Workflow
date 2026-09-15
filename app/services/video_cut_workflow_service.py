@@ -527,9 +527,9 @@ def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> 
     from app.services.material_batch_service import require_task_source
     require_task_source(task_id)
     from app.db.database import get_connection
-    from app.services.material_batch_service import task_item
+    from app.services.production_review_service import requires_review
     with get_connection() as connection:
-        if task_item(connection, task_id):
+        if requires_review(connection, task_id):
             sync_publish_jobs = False  # Pre-cut is never human consent.
     from app.services.task_service import (
         get_status_label,

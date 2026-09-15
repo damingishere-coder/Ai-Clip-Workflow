@@ -1,4 +1,4 @@
-"""Explicit human consent for batch output versions, independent of AI feedback."""
+"""Explicit consent for configured output versions, independent of AI feedback."""
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -25,10 +25,19 @@ def prepared_jobs(c, task_id):
     return bool(c.execute("SELECT 1 FROM publish_jobs WHERE task_id=? AND status NOT IN ('PUBLISHED','EXPORTED','CANCELLED') LIMIT 1", (task_id,)).fetchone())
 
 
+def requires_review(c, task_id):
+    if task_item(c, task_id):
+        return True
+    row = c.execute("SELECT auto_config_json FROM tasks WHERE id=?", (task_id,)).fetchone()
+    config = json.loads(row[0] or "{}") if row else {}
+    return isinstance(config, dict) and config.get("subtitle_strategy") in {"original", "review"}
+
+
 def manifest(c, task_id):
-    if not task_item(c, task_id):
+    if not requires_review(c, task_id):
         return None
-    require_imported_source(c, task_id)
+    if task_item(c, task_id):
+        require_imported_source(c, task_id)
     epoch = c.execute("SELECT revision FROM production_review_epochs WHERE task_id=?", (task_id,)).fetchone()
     run = c.execute("SELECT id,status FROM cut_runs WHERE task_id=? AND is_active=1 ORDER BY run_number DESC LIMIT 1", (task_id,)).fetchone()
     if not run or run["status"] != "completed":
@@ -137,7 +146,7 @@ def readiness_issue(job):
 
 def state(task_id):
     with get_connection() as c:
-        if not task_item(c, task_id):
+        if not requires_review(c, task_id):
             return {"required": False}
         policy = {}
         try:
@@ -173,6 +182,9 @@ def delivery_policy(c, task_id):
     """Use frozen creation settings; preserve explicit historical human decisions."""
     from app.services.batch_pipeline_service import configuration
     config = configuration(c, task_id)
+    if config is None:
+        row = c.execute("SELECT auto_config_json FROM tasks WHERE id=?", (task_id,)).fetchone()
+        config = json.loads(row[0] or "{}") if row else {}
     if config is None or config.get("subtitle_strategy") not in {"original", "review"}:
         _fail("任务字幕配置缺失，请先核对创建记录")
     mode = "subtitled" if config["subtitle_strategy"] == "review" else "original"
@@ -199,7 +211,7 @@ def confirm(task_id, payload):
             _fail("请先在发送中心取消或处理已有发布任务，再重新确认成片")
         value = manifest(c, task_id)
         if value is None:
-            _fail("此入口仅适用于批次生产任务，旧任务继续使用原审核流程")
+            _fail("此入口适用于创建时已设置字幕方式的任务，旧任务继续使用原审核流程")
         if cuts.digest(value) != payload.manifest_sha256:
             _fail("预览后成片版本已变化，请刷新并重新核对")
         mode, _ = delivery_policy(c, task_id)
@@ -245,7 +257,7 @@ def subtitle_review(task_id, payload=None):
 def complete_subtitle_status(task_id, payload):
     with get_connection() as c:
         c.execute("BEGIN IMMEDIATE")
-        if not task_item(c, task_id):
+        if not requires_review(c, task_id):
             return
         try:
             review = require_ready(c, task_id)
