@@ -222,6 +222,8 @@ def _execute_subtitle(job_id: str, task_id: str, payload: dict) -> None:
         )
         return
     job_service.mark_job_completed(job_id, result)
+    from app.services.production_review_service import complete_subtitle_status
+    complete_subtitle_status(task_id, payload)
 
 
 def _job_no_progress_timeout(job: dict) -> int:

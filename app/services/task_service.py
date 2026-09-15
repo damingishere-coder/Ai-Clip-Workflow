@@ -1241,6 +1241,10 @@ def sync_reviewed_clips_to_publish_center(
     task_id: str,
     payloads: list[ClipCandidateBatchItem],
 ) -> dict:
+    from app.services.material_batch_service import task_item
+    with get_connection() as connection:
+        if task_item(connection, task_id):
+            raise ValueError("批次请先保存修改并通过队列生成切片，再确认实际成片后同步内容准备")
     with get_connection() as connection:
         task = connection.execute(
             "SELECT auto_mode, status FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",

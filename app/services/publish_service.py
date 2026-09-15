@@ -1392,6 +1392,8 @@ def _metadata_prompt(item: dict, platform: str = "douyin", *, frozen_copy_rules:
 
 
 def generate_publish_metadata(item: dict, use_ai: bool = False, *, platform: str = "douyin") -> dict:
+    from app.services.production_review_service import check_preparation
+    check_preparation(item.get("task_id"), item.get("output_clip_id") or item.get("id"))
     fallback_title = _sanitize_publish_title(
         _default_title_for_clip(item, platform=platform),
         platform=platform,
@@ -1659,6 +1661,8 @@ def _insert_opencli_job(
     video_source: str = "original",
     inherited: dict | None = None,
 ) -> dict:
+    from app.services.production_review_service import check_preparation
+    check_preparation(item.get("task_id"), item.get("output_clip_id") or item.get("id"), video_source)
     inherited = inherited or {}
     raw_video_path, _ = _resolve_publish_video_path(
         {
@@ -1765,8 +1769,16 @@ def refresh_send_queue(use_ai: bool = False, platform: str | None = None) -> dic
     updated_covers = 0
     skipped = 0
     skipped_removed = 0
+    pending_review = 0
     errors: list[str] = []
     for item in _list_completed_publish_clips():
+        from app.services.production_review_service import check_preparation
+        try:
+            batch_review = check_preparation(item.get("task_id"), item.get("output_clip_id"))
+        except (ValueError, OSError):
+            pending_review += 1
+            continue
+        video_source = batch_review["delivery_mode"] if batch_review else "original"
         item_metadata: dict | None = None
         cover_state: dict[str, Any] = {"attempted": False, "cover": None}
 
@@ -1774,7 +1786,7 @@ def refresh_send_queue(use_ai: bool = False, platform: str | None = None) -> dic
             if not cover_state["attempted"]:
                 cover_state["attempted"] = True
                 try:
-                    cover_state["cover"] = _generate_default_publish_cover(item)
+                    cover_state["cover"] = _generate_default_publish_cover(item, video_source)
                 except Exception as exc:
                     cover_state["cover"] = {"cover_error": str(exc)}
                     errors.append(f"{item.get('output_file_name') or item.get('output_clip_id')} / 自动封面：{exc}")
@@ -1796,7 +1808,7 @@ def refresh_send_queue(use_ai: bool = False, platform: str | None = None) -> dic
             try:
                 if item_metadata is None:
                     item_metadata = generate_publish_metadata(item, use_ai=use_ai, platform=target_platform)
-                created.append(_insert_opencli_job(item, target_platform, item_metadata, ensure_cover_for_item()))
+                created.append(_insert_opencli_job(item, target_platform, item_metadata, ensure_cover_for_item(), video_source=video_source))
             except Exception as exc:
                 errors.append(
                     f"{item.get('output_file_name') or item.get('output_clip_id')} / "
@@ -1808,10 +1820,11 @@ def refresh_send_queue(use_ai: bool = False, platform: str | None = None) -> dic
         "status": "ok" if not errors else "partial",
         "message": (
             f"已新增 {len(created)} 条发送任务，自动选择 {len(created) + updated_covers} 张封面帧，"
-            f"跳过 {skipped} 条已存在任务、{skipped_removed} 条手动移除内容，{len(errors)} 条需要处理。"
+            f"跳过 {skipped} 条已存在任务、{skipped_removed} 条手动移除内容、{pending_review} 条待成片或字幕确认，{len(errors)} 条需要处理。"
         ),
         "created": created,
         "skipped_removed": skipped_removed,
+        "pending_production_review": pending_review,
         "errors": errors,
         **get_publish_center_context(),
     }
@@ -2109,6 +2122,10 @@ def sync_task_publish_jobs(
     prefer_subtitled: bool = True,
     restore_removed: bool = True,
 ) -> dict:
+    from app.services.production_review_service import check_preparation
+    batch_review = check_preparation(task_id)
+    if batch_review:
+        prefer_subtitled = batch_review["delivery_mode"] == "subtitled"
     with get_connection() as connection:
         task = connection.execute(
             "SELECT id, platform, auto_mode, status FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -2116,7 +2133,7 @@ def sync_task_publish_jobs(
         ).fetchone()
     if not task:
         raise ValueError("任务不存在")
-    if bool(task["auto_mode"]) and task["status"] == TaskStatus.PENDING_SUBTITLE_REVIEW.value:
+    if not batch_review and bool(task["auto_mode"]) and task["status"] == TaskStatus.PENDING_SUBTITLE_REVIEW.value:
         raise ValueError("自动流水线正在等待字幕审核，请先批量烧录，或明确跳过字幕并完成片段审核")
     items = _list_completed_publish_clips(task_id)
     if not items:
@@ -2155,7 +2172,7 @@ def sync_task_publish_jobs(
                         )
                 skipped += 1
                 continue
-            if _is_user_removed_job(latest):
+            if _is_user_removed_job(latest) and not batch_review:
                 if restore_removed:
                     try:
                         restored_job = _restore_removed_publish_job_for_sync(latest)
@@ -2408,6 +2425,8 @@ def generate_publish_cover_for_item(
     output_clip_id = str(item.get("output_clip_id") or item.get("id") or "").strip()
     if not output_clip_id:
         raise ValueError("封面生成失败：缺少切片编号。")
+    from app.services.production_review_service import check_preparation
+    check_preparation(item.get("task_id"), output_clip_id, video_source)
     _, video_path = _resolve_publish_video_path(
         {
             **item,
@@ -2612,6 +2631,8 @@ def backfill_missing_publish_covers(platform: str | None = None) -> dict:
 
 
 def generate_publish_cover_frames(payload: PublishCoverFrameBatchCreate) -> dict:
+    from app.services.production_review_service import check_preparation
+    check_preparation(payload.task_id, payload.output_clip_id, payload.video_source)
     output_clip = _get_output_clip_for_publish(payload.task_id, payload.output_clip_id)
     if not output_clip:
         raise ValueError("切片记录不存在。")
@@ -2628,6 +2649,8 @@ def generate_publish_cover_frames(payload: PublishCoverFrameBatchCreate) -> dict
 
 
 def generate_publish_cover(payload: PublishCoverCreate, job_id: str | None = None) -> dict:
+    from app.services.production_review_service import check_preparation
+    check_preparation(payload.task_id, payload.output_clip_id, payload.video_source)
     output_clip = _get_output_clip_for_publish(payload.task_id, payload.output_clip_id)
     if not output_clip:
         raise ValueError("切片记录不存在。")
@@ -2702,6 +2725,8 @@ def _validate_api_publish_ready(payload: PublishJobCreate) -> tuple[dict, dict]:
 
 
 def create_publish_job(payload: PublishJobCreate) -> dict:
+    from app.services.production_review_service import check_preparation
+    check_preparation(payload.task_id, payload.output_clip_id, payload.video_source)
     output_clip = _get_output_clip_for_publish(payload.task_id, payload.output_clip_id)
     if not output_clip:
         raise ValueError("切片记录不存在。")

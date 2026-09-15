@@ -28,6 +28,8 @@ from app.services.task_log_service import append_task_log
 def prepare_task_subtitle_review(task_id: str) -> dict[str, Any]:
     """从原片主时间轴生成所有成功切片的字幕草稿。"""
     from app.services import task_service
+    from app.services.production_review_service import subtitle_review
+    subtitle_review(task_id)
 
     task = task_service.get_task(task_id, include_video_probe=False)
     if not task:
@@ -123,6 +125,10 @@ def enqueue_task_subtitle_render(
     continue_pipeline: bool = False,
 ) -> dict[str, Any]:
     from app.services import task_service
+    from app.services.production_review_service import subtitle_review
+    batch_review = subtitle_review(task_id)
+    if batch_review:
+        continue_pipeline = False  # Batch consent does not authorize scheduling.
 
     task = task_service.get_task(task_id, include_video_probe=False)
     if not task:
@@ -166,8 +172,15 @@ def enqueue_task_subtitle_render(
         "continue_pipeline": continue_pipeline,
         "subtitle_delivery_mode": "subtitled",
     }
+    if batch_review:
+        job_payload.update(production_review_id=batch_review["id"], production_review_sha256=batch_review["manifest_sha256"])
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        if batch_review:
+            from app.services.production_review_service import require_cut_review
+            current = require_cut_review(connection, task_id)
+            if not current or current["id"] != batch_review["id"]:
+                raise ValueError("成片确认已变化，请刷新后重试字幕审核")
         if continue_pipeline:
             current_task = connection.execute(
                 "SELECT status FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -234,6 +247,10 @@ def enqueue_task_subtitle_render(
 
 def skip_task_subtitles_to_review(task_id: str) -> dict[str, Any]:
     from app.services import task_service
+    from app.services.material_batch_service import task_item
+    with get_connection() as connection:
+        if task_item(connection, task_id):
+            raise ValueError("批次请在实际成片确认面板明确选择保留原字幕")
 
     now = task_service._now_iso()
     with get_connection() as connection:
@@ -314,6 +331,8 @@ def skip_task_subtitles_and_resume(task_id: str) -> dict[str, Any]:
 
 
 def execute_subtitle_render_job(job_id: str, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services.production_review_service import subtitle_review
+    batch_review = subtitle_review(task_id, payload)
     items = payload.get("items") or []
     if not isinstance(items, list) or not items:
         raise ValueError("字幕 Job 没有待渲染条目")
@@ -374,7 +393,7 @@ def execute_subtitle_render_job(job_id: str, task_id: str, payload: dict[str, An
         "completed_count": len(completed),
         "total_count": total,
         "completed": completed,
-        "resume_requested": bool(payload.get("continue_pipeline")),
+        "resume_requested": bool(payload.get("continue_pipeline")) and not batch_review,
         "resume_job_id": "",
     }
 

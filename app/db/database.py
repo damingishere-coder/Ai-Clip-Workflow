@@ -191,6 +191,10 @@ class SchemaMigration:
     requires_foreign_keys_off: bool = False
 
 
+class ProductionReviewConflict(ValueError):
+    status_code = 409
+
+
 @contextmanager
 def get_connection() -> Iterator[sqlite3.Connection]:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -201,11 +205,18 @@ def get_connection() -> Iterator[sqlite3.Connection]:
     connection.execute("PRAGMA journal_mode = WAL")
     try:
         yield connection
+    except sqlite3.IntegrityError as exc:
+        if str(exc).startswith("review_boundary:"):
+            raise ProductionReviewConflict(str(exc).split(":", 1)[1]) from exc
+        raise
     finally:
         connection.close()
 
 
 def init_db() -> None:
+    from app.db import production_review_migration
+    if production_review_migration.needs_migration(settings.database_path):
+        create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "production-review-v1")
     from app.db import cut_evidence_migration
     if cut_evidence_migration.needs_migration(settings.database_path):
         create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "cut-evidence-v1")
@@ -1921,7 +1932,7 @@ def _verify_ai_prompt_version_fk_migration(connection: sqlite3.Connection) -> No
 
 
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
-    from app.db import content_challenger_migration, challenger_trial_migration, challenger_experiment_migration, material_catalog_migration, material_batch_migration, cut_evidence_migration
+    from app.db import content_challenger_migration, challenger_trial_migration, challenger_experiment_migration, material_catalog_migration, material_batch_migration, cut_evidence_migration, production_review_migration
     from app.db import intelligence_report_migration
     from app.db import human_review_migration
     from app.db import visual_evidence_migration, visual_policy_migration
@@ -2056,6 +2067,11 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             version=cut_evidence_migration.VERSION, name=cut_evidence_migration.NAME,
             checksum=cut_evidence_migration.CHECKSUM,
             apply=cut_evidence_migration.apply, verify=cut_evidence_migration.verify,
+        ),
+        SchemaMigration(
+            version=production_review_migration.VERSION, name=production_review_migration.NAME,
+            checksum=production_review_migration.CHECKSUM,
+            apply=production_review_migration.apply, verify=production_review_migration.verify,
         ),
     )
 
