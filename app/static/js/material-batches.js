@@ -46,6 +46,13 @@
       const response = await fetch('/api/material-batches?limit=20');
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '批次读取失败');
+      const requested = new URLSearchParams(location.search).get('batch');
+      if (requested && !data.batches.some(batch => batch.id === requested)) {
+        const pinnedResponse = await fetch(`/api/material-batches/${encodeURIComponent(requested)}`);
+        const pinned = await pinnedResponse.json();
+        if (!pinnedResponse.ok) throw new Error(pinned.detail || '指定批次读取失败');
+        data.batches.unshift(pinned);
+      }
       const list = byId('batch-list'); list.replaceChildren();
       for (const batch of data.batches) {
         const card = node('article', ''); card.className = 'material-item'; card.dataset.batchId = batch.id;

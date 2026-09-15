@@ -85,6 +85,18 @@ def test_report_copy_legacy_readonly_and_compact_disclosure(
             page.get_by_text("查看当时使用的完整生成规则（Prompt）").first.click()
             assert page.locator(".content-review-prompt-item pre").first.is_visible()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            # Force the real refresh race: replace the clicked node before clipboard completion.
+            page.evaluate("""Object.defineProperty(navigator, 'clipboard', {configurable:true,
+                value:{writeText: text => new Promise(resolve => {window.finishCopy=resolve; window.pendingCopyText=text;})}})""")
+            page.get_by_role('button',name='已复制报告与修改建议',exact=True).click()
+            page.evaluate("""() => {
+                window.clickedCopy=document.querySelector('[data-weekly-copy-report]');
+                renderWeeklyReport({reports:weeklyReports});
+                window.finishCopy();
+            }""")
+            page.get_by_role('button',name='已复制报告与修改建议',exact=True).wait_for()
+            assert page.evaluate('!window.clickedCopy.isConnected')
+            assert report_id in page.evaluate('window.pendingCopyText')
             legacy_application(sample, report_id)
             page.reload(wait_until="networkidle")
             page.get_by_role("heading", name="历史已应用的改动", exact=True).wait_for()

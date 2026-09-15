@@ -109,7 +109,8 @@ def test_publish_review_and_shanghai_today_count(output_batch):
 
 def test_manual_import_waiting_for_explicit_processing_is_visible(batch_db,tmp_path,monkeypatch):
     payload,_ = batch_input(tmp_path,1)
-    item = batches.create_batch(payload)['items'][0]
+    batch = batches.create_batch(payload)
+    item = batch['items'][0]
     stub_preflight(monkeypatch)
     job_worker.execute_job(item['job_id'])
     assert work.inbox('start')['items'][0]['task_id'] == item['task_id']
@@ -119,7 +120,7 @@ def test_manual_import_waiting_for_explicit_processing_is_visible(batch_db,tmp_p
     with db.get_connection() as c:
         c.execute("UPDATE workflow_jobs SET status='failed' WHERE id=?",(item['job_id'],))
         c.commit()
-    assert work.inbox('errors')['items'][0]['url'] == '/materials'
+    assert work.inbox('errors')['items'][0]['url'] == '/materials?batch='+batch['id']
 
 
 def test_reviewable_uses_account_scope_and_existing_evidence_threshold(human_db,monkeypatch):
