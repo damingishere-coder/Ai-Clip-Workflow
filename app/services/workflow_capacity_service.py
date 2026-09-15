@@ -69,6 +69,30 @@ def try_lock(path, *, shared=False):
     return handle
 
 
+def _live_cut_owner(path, waiting_job_id):
+    # Legacy synchronous calls have no job lease. Their extra OS lock is held
+    # only while they own the cut slot, and dies with the calling process.
+    marker = try_lock(path.with_name(path.name+'.sync'))
+    if marker is None:
+        return True
+    marker.close()
+    try:
+        with path.open('rb') as source:
+            source.seek(1)  # The first byte is locked on Windows.
+            owner = json.loads(source.read(2048))
+        if not isinstance(owner, dict) or owner.get('job_id') == waiting_job_id:
+            return False
+        with database.get_connection() as connection:
+            return bool(connection.execute(
+                """SELECT 1 FROM workflow_jobs WHERE id=? AND lease_token=?
+                   AND status='running' AND lease_expires_at>?
+                   AND job_type IN ('video_cut','auto_pipeline')""",
+                (owner.get('job_id'), owner.get('lease_token'), job_service._now_iso()),
+            ).fetchone())
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 @contextmanager
 def _locked_slot(job_id, path, *, shared=False, cut_lane=False):
     started, last_report, handle = time.monotonic(), float("-inf"), None
@@ -80,27 +104,22 @@ def _locked_slot(job_id, path, *, shared=False, cut_lane=False):
                 break
             # A healthy cut (including automatic pre-cut) may take longer than
             # orphan recovery's timeout. Keep waiting while its lease is live.
-            if cut_lane:
-                with database.get_connection() as connection:
-                    live = connection.execute(
-                        """SELECT 1 FROM workflow_jobs WHERE id<>? AND status='running'
-                           AND lease_expires_at>? AND job_type IN ('video_cut','auto_pipeline')""",
-                        (job_id, job_service._now_iso()),
-                    ).fetchone()
-                if live:
-                    started = time.monotonic()
+            if cut_lane and _live_cut_owner(path, job_id):
+                started = time.monotonic()
             if time.monotonic() - started >= WAIT_SECONDS:
                 raise RuntimeError("旧执行进程仍占有重型处理槽位，尚未执行本任务；请检查旧进程退出后重试")
             if time.monotonic() - last_report >= 5:
                 job_service.update_job_progress(job_id, 10, "等待旧执行进程释放重型处理槽位，尚未开始处理")
                 last_report = time.monotonic()
             time.sleep(.1)
-        _require_slot_lease(job_id)
-        # Metadata is diagnostic only. A stale PID never grants lock ownership.
+        lease = _require_slot_lease(job_id)
+        # Metadata only extends waiting for a live owner; it never grants access.
+        # A leading space lets waiters read metadata past Windows' locked byte.
         if not shared:
             handle.seek(0)
             handle.truncate()
-            handle.write(json.dumps({"pid": os.getpid(), "job_id": job_id}, separators=(",", ":")).encode())
+            handle.write(b' ' + json.dumps({"pid": os.getpid(), "job_id": job_id, "lease_token": lease[2]},
+                                          separators=(",", ":")).encode())
             handle.flush()
         yield
     finally:
@@ -153,11 +172,20 @@ def cut_execution_boundary(function):
             with execution_slot(lease[0]):
                 return guarded(task_id, *args, **kwargs)
         with ExitStack() as stack:
-            for path, shared in _slot_paths(task_id, 'cut'):
+            for index, (path, shared) in enumerate(_slot_paths(task_id, 'cut')):
                 handle = try_lock(path, shared=shared)
                 if handle is None:
                     raise ValueError('切片通道或这条素材正在处理，请使用“生成切片”加入独立队列')
                 stack.callback(handle.close)
+                if index == 1:
+                    marker = try_lock(path.with_name(path.name+'.sync'))
+                    if marker is None:
+                        raise ValueError('旧同步切片进程尚未退出，请稍后重试')
+                    stack.callback(marker.close)
+                    handle.seek(0)
+                    handle.truncate()
+                    handle.write(b' {}')  # Legacy callers have no durable lease.
+                    handle.flush()
             with database.get_connection() as connection:
                 if connection.execute("SELECT 1 FROM workflow_jobs WHERE task_id=? AND status='running' AND lease_expires_at>?",
                                       (task_id, job_service._now_iso())).fetchone():

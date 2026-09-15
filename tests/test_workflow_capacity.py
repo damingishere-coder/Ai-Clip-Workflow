@@ -314,28 +314,68 @@ def test_automatic_pipeline_cut_uses_physical_cut_limit(human_db, monkeypatch, o
 def test_healthy_automatic_cut_does_not_hit_orphan_wait_timeout(human_db, monkeypatch):
     automatic = job_service.claim_job(queued_jobs(1, 'auto_pipeline')[0]['id'], 'automatic')
     manual = queued_jobs(1)[0]
-    lock = capacity.try_lock(human_db.with_name(human_db.name+'.workflow-cut.lock'))
     monkeypatch.setattr(capacity, 'WAIT_SECONDS', .1)
     called = []
     monkeypatch.setattr(job_worker, '_execute_video_cut',
                         lambda jid, tid: (called.append(tid), job_service.mark_job_completed(jid)))
-    try:
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            result = pool.submit(job_worker.execute_job, manual['id'])
-            try:
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with job_service.job_lease_context(automatic['id'], automatic['lease_owner'], automatic['lease_token']):
+            with capacity._locked_slot(automatic['id'], human_db.with_name(human_db.name+'.workflow-cut.lock')):
+                result = pool.submit(job_worker.execute_job, manual['id'])
                 deadline = time.monotonic()+5
                 while '等待旧执行' not in job_service.get_job(manual['id'])['message'] and time.monotonic() < deadline:
                     time.sleep(.02)
                 assert '等待旧执行' in job_service.get_job(manual['id'])['message']
-                time.sleep(.35)  # Several orphan timeouts, but the other lease is live.
+                time.sleep(.35)  # Several orphan timeouts, but the actual owner lease is live.
                 assert not result.done() and not called
-                finish(automatic)
-            finally:
-                lock.close()
-            assert result.result(timeout=5)['status'] == 'completed'
-            assert called == [manual['task_id']]
+            finish(automatic)
+        assert result.result(timeout=5)['status'] == 'completed'
+        assert called == [manual['task_id']]
+
+
+@pytest.mark.parametrize('stale_token', [False, True])
+def test_unrelated_live_pipeline_does_not_hide_orphan_cut_lock(human_db, monkeypatch, stale_token):
+    automatic = job_service.claim_job(queued_jobs(1, 'auto_pipeline')[0]['id'], 'automatic')
+    manual = queued_jobs(1)[0]
+    lock = capacity.try_lock(human_db.with_name(human_db.name+'.workflow-cut.lock'))
+    try:
+        if stale_token:
+            lock.write(b' '+json.dumps({'job_id':automatic['id'], 'lease_token':'expired-token'}).encode())
+            lock.flush()
+        monkeypatch.setattr(capacity, 'WAIT_SECONDS', .1)
+        monkeypatch.setattr(job_worker, '_execute_video_cut', lambda *_: pytest.fail('orphan still owns lock'))
+        with pytest.raises(RuntimeError, match='仍占有'):
+            job_worker.execute_job(manual['id'])
+        assert job_service.get_job(automatic['id'])['status'] == 'running'
     finally:
         lock.close()
+
+
+def test_healthy_legacy_sync_cut_keeps_waiting_queue_alive(human_db, monkeypatch):
+    manual, legacy = queued_jobs(2)
+    job_service.request_job_cancel(legacy['id'])  # This caller uses the old sync API.
+    entered, release = threading.Event(), threading.Event()
+    def old_cut(_):
+        entered.set()
+        assert release.wait(5)
+    guarded = capacity.cut_execution_boundary(old_cut)
+    monkeypatch.setattr(capacity, 'WAIT_SECONDS', .1)
+    monkeypatch.setattr(job_worker, '_execute_video_cut', lambda jid, _: job_service.mark_job_completed(jid))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        synchronous = pool.submit(guarded, legacy['task_id'])
+        try:
+            assert entered.wait(5)
+            queued = pool.submit(job_worker.execute_job, manual['id'])
+            deadline = time.monotonic()+5
+            while '等待旧执行' not in job_service.get_job(manual['id'])['message'] and time.monotonic() < deadline:
+                time.sleep(.02)
+            assert '等待旧执行' in job_service.get_job(manual['id'])['message']
+            time.sleep(.35)
+            assert not queued.done()
+        finally:
+            release.set()
+        synchronous.result(timeout=5)
+        assert queued.result(timeout=5)['status'] == 'completed'
 
 
 def test_new_executor_waits_for_orphan_and_runs_after_it_exits(human_db, monkeypatch):
