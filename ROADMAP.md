@@ -1,10 +1,10 @@
 # NiuMa Studio Roadmap
 
-> v2.6 当前：素材登记 PR #112 已合并；批次任务/受控复制处于第二份独立 PR 验证中。正式仍为 v2.5.5；全局并发、人工凭据/Inbox、首页和整版运行验收依次推进。
+> v2.6 功能已按独立 PR 完成工程交付，最终版本 CI、实机门禁及原服务部署见 PROJECT_STATUS。
 
 路线图用于说明牛马片场下一阶段的优先级，不代表固定交付日期。平台页面、外部 API 和本地环境变化可能影响顺序。
 
-## 当前版本：2.5.5
+## 当前版本：2.6.0
 
 当前目标是稳定 Windows 本地单用户生产闭环：
 
@@ -26,9 +26,9 @@
 - v2.4：五种内容模板、共享访谈/知识分析、不可变策略证据已接入 master；康熙三阶段、旧任务、旧 Prompt 和 checkpoint 保留。访谈/知识标试用，工程发布与真实质量结论分开记录，实际发布状态见 PROJECT_STATUS。
 - v2.5：候选抽帧、可选视觉 Provider/checkpoint、辅助综合评审、证据页与缓存生命周期已接入 master；默认关闭并标试用。1187 项本地回归及三项 CI、Windows 实机门禁与原服务验收通过，v2.5.0 已发布部署。
 - v2.5.5：人工评价、冻结报告、Prompt-only Challenger、显式试验任务、官方基线实验与独立人工启用/回退已交付。版本 `c0d7962` 的 CI、Windows 实机和原服务验收通过，Release 已发布；无官方基线只提供人工统计/草稿，不伪造效果结论，证据见 PROJECT_STATUS。
-- v2.6：首步目录素材预览与确认登记开发中；后续接原子批量任务、受限 Workflow Job 队列与统一审核 Inbox，保留原片与人工发布边界。正式运行仍为 v2.5.5，阶段方案见 [内容生产队列](docs/CONTENT_PRODUCTION_QUEUE.md)。
+- v2.6：目录素材池、原子批次、受限 Workflow Job、可恢复预切、人工凭据、统一 Inbox 与首页已交付工程实现，保留原片与人工发布边界。正式运行状态见 PROJECT_STATUS，方案见 [内容生产队列](docs/CONTENT_PRODUCTION_QUEUE.md)。
 
-具体 PR、数据库变化及验收/回滚规则以 [实施账本](docs/CONTENT_PROFILE_ROLLOUT.md) 为准。目录批量导入属于 v2.6 目标，当前创建页仍为单文件上传。
+具体 PR、数据库变化及验收/回滚规则以 [实施账本](docs/CONTENT_PROFILE_ROLLOUT.md) 为准。目录批量导入位于素材池，单文件创建页继续保留。
 
 ## 2.3 已交付
 

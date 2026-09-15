@@ -1,5 +1,9 @@
 # 内容生产队列实施说明
 
+## v2.6.0 当前范围
+
+素材预览、幂等批次、逐项复制、全局容量、自动预切暂停、人工凭据、统一待办及首页均已合并。下面保留各 PR 的设计与验证过程；最终发布、实际运行及未完成验收以 PROJECT_STATUS.md 为准。访谈/知识与视觉仍标试用，工程验收不代表真实内容质量已证明提升。
+
 ## 当前增量：批次自动生产
 
 素材池明确勾选 `auto_production` 后，Task 冻结 auto_mode，`material_import` 成功时复用 `mark_job_completed_with_followup` 在同一 lease 事务完成父 Job 与创建/复用 auto_pipeline。复制证据已提交而 followup 失败时保留原副本，重试重新验证完整哈希再完成该事务；不会创建第二个有效后续 Job。

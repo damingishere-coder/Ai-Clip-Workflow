@@ -26,7 +26,7 @@ from app.services.database_backup_service import (
 )
 
 
-APP_VERSION = "2.5.5"
+APP_VERSION = "2.6.0"
 ARCHIVE_FORMAT_VERSION = 1
 BACKUP_TIMEZONE = ZoneInfo("Asia/Shanghai")
 MANIFEST_ENTRY = "manifest.json"
