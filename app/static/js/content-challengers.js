@@ -23,6 +23,7 @@
       const trial = node('a', '使用此草稿创建试验任务'); trial.className = 'secondary-button';
       trial.href = `/tasks/new?challenger_id=${encodeURIComponent(draft.id)}`; detail.append(trial);
     }
+    window.NiuMaExperiments?.draftExperiment(detail, draft);
   }
   async function history() {
     const data = await request(`/api/content-review/challengers?report_id=${encodeURIComponent(reportId)}`);

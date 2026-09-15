@@ -11,7 +11,7 @@ from app.models.content_review import (
     DouyinAnalyticsExportSyncRequest,
 )
 from app.services import content_review_service
-from app.models.content_challenger import ChallengerDraftCreate
+from app.models.content_challenger import ChallengerDraftCreate, ChallengerExperimentCreate, PolicyDecision
 from app.services.publishers.base import PublishError, PublishWorkerUnavailable
 from app.services.publishers.worker_client import PublishWorkerClient
 
@@ -110,6 +110,51 @@ def challenger_detail(challenger_id: str) -> dict:
     from app.services.content_challenger_service import get_challenger
     try:
         return get_challenger(challenger_id)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.get("/challengers/{challenger_id}/experiment-context")
+def challenger_experiment_context(challenger_id: str, report_id: str = Query(min_length=1, max_length=120)) -> dict:
+    from app.services.challenger_experiment_service import experiment_context
+    try:
+        return experiment_context(challenger_id, report_id)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.post("/challengers/{challenger_id}/experiments")
+def create_challenger_experiment(challenger_id: str, payload: ChallengerExperimentCreate) -> dict:
+    from app.services.challenger_experiment_service import create_experiment
+    try:
+        return create_experiment(challenger_id, payload)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.get("/experiments/{experiment_id}/policy-preview")
+def content_policy_preview(experiment_id: str, action: str = Query(pattern="^(activate|rollback)$")) -> dict:
+    from app.services.challenger_experiment_service import policy_preview
+    try:
+        return policy_preview(experiment_id, action)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.get("/experiments/{experiment_id}/policy-events")
+def content_policy_events(experiment_id: str) -> dict:
+    from app.services.challenger_experiment_service import policy_events
+    try:
+        return {"events": policy_events(experiment_id)}
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.post("/experiments/{experiment_id}/policy-events")
+def content_policy_apply(experiment_id: str, payload: PolicyDecision) -> dict:
+    from app.services.challenger_experiment_service import apply_policy
+    try:
+        return apply_policy(experiment_id, payload)
     except content_review_service.ContentReviewError as exc:
         _raise_content_review_http(exc)
 

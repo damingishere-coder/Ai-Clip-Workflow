@@ -16,3 +16,18 @@ class ChallengerDraftCreate(BaseModel):
     hypothesis: str = Field(min_length=1, max_length=1000)
     prompt_text: str = Field(min_length=1, max_length=30000)
     request_key: UUID
+
+
+class ChallengerExperimentCreate(BaseModel):
+    report_id: str = Field(min_length=1, max_length=120)
+    report_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    challenger_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    cohort_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    confirm: bool = False
+
+
+class PolicyDecision(BaseModel):
+    action: Literal["activate", "rollback"]
+    preview_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    confirm: bool = False
+    request_key: UUID

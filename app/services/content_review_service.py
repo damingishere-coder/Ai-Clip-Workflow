@@ -1654,6 +1654,9 @@ def _experiment_metric_summary(rows: list[dict]) -> dict:
 
 
 def _experiment_progress(connection, experiment: dict) -> dict:
+    if experiment.get("challenger_id"):
+        from app.services.challenger_experiment_service import progress
+        return progress(connection, experiment)
     assigned_count = int(
         connection.execute(
             "SELECT COUNT(*) FROM content_improvement_experiment_items WHERE experiment_id = ?",
@@ -1896,6 +1899,9 @@ def update_content_experiment(experiment_id: str, decision: str) -> dict:
             """,
             (status, stored_decision, now, now, experiment_id),
         )
+        if experiment.get("challenger_id"):
+            from app.services.challenger_experiment_service import freeze_decision
+            freeze_decision(connection, experiment, stored_decision, progress, now)
         connection.commit()
     return {"status": status, "decision": stored_decision, "message": "实验结论已记录。"}
 
@@ -1938,6 +1944,8 @@ def assign_publish_job_to_experiment(experiment_id: str, publish_job_id: str) ->
         if job.get("platform") != "douyin" or job.get("account_id") != experiment["account_id"]:
             connection.rollback()
             raise ContentReviewError("实验与发布内容的抖音账号不一致", status_code=409)
+        from app.services.challenger_experiment_service import validate_assignment
+        validate_assignment(connection, experiment, job)
         existing = connection.execute(
             """
             SELECT experiment_id FROM content_improvement_experiment_items
@@ -2018,6 +2026,8 @@ def set_publish_job_experiment(publish_job_id: str, experiment_id: str = "") -> 
         if job.get("platform") != "douyin" or job.get("account_id") != experiment["account_id"]:
             connection.rollback()
             raise ContentReviewError("实验与发布内容的抖音账号不一致", status_code=409)
+        from app.services.challenger_experiment_service import validate_assignment
+        validate_assignment(connection, experiment, job)
         if existing is not None and existing["experiment_id"] == normalized_experiment_id:
             connection.commit()
             return {"status": "already_assigned", "experiment_id": normalized_experiment_id}

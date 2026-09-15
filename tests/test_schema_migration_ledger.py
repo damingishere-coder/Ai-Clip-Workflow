@@ -184,7 +184,7 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
         ).fetchall()
         indexes = _index_names(connection)
 
-    assert len(migrations) == 18
+    assert len(migrations) == 19
     from app.services import weekly_review_schema
     weekly_migration = next(row for row in migrations if row["version"] == weekly_review_schema.VERSION)
     assert weekly_migration["checksum"] == weekly_review_schema.CHECKSUM
@@ -248,6 +248,11 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
 def test_content_feedback_migration_failure_rolls_back_and_can_retry(isolated_database):
     database_module.init_db()
     with _connect(isolated_database) as connection:
+        # Removing this old table also removes migration 19's columns/triggers.
+        # Rewind its test-only dependent schema and ledger together.
+        from app.db import challenger_experiment_migration
+        connection.execute("DROP TABLE content_policy_events")
+        connection.execute("DELETE FROM schema_migrations WHERE version=?", (challenger_experiment_migration.VERSION,))
         connection.execute(
             "DELETE FROM schema_migrations WHERE version = ?",
             (database_module.CONTENT_FEEDBACK_LOOP_MIGRATION_VERSION,),

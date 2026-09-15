@@ -201,5 +201,6 @@
 {% block extra_scripts %}
 <script src="{{ url_for('static', path='js/human-review.js') }}?v=20260915-1"></script>
 <script src="{{ url_for('static', path='js/content-intelligence.js') }}?v=20260915-1"></script>
-{% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260911-manual-review-v1"></script>{% endif %}
+<script src="{{ url_for('static', path='js/content-experiments.js') }}?v=20260915-1"></script>
+{% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260915-experiments"></script>{% endif %}
 {% endblock %}

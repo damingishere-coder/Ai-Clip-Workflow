@@ -2,7 +2,7 @@
 
 ## 开发中：v2.5.5 人工经验入口
 
-Analyzer 保留原调用链，增加轻量初始观察到 AI Run；明确人工评价复用 clip_feedback，以 Run + 候选来源 + 哈希归因。`content_intelligence_service` 冻结人工统计和官方作品特征；`content_challenger_service` 保存独立归档的 Prompt 草稿、版本与差异；`challenger_trial_service` 在用户明确创建试验时绑定原任务/Job/Run，不更新正式策略。官方实验策略核验及独立人工启用在后续 PR，见 [Content Intelligence](CONTENT_INTELLIGENCE.md)。
+Analyzer 保留原调用链，增加轻量初始观察到 AI Run；明确人工评价复用 clip_feedback，以 Run + 候选来源 + 哈希归因。`content_intelligence_service` 冻结人工统计和官方作品特征；`content_challenger_service` 保存独立归档的 Prompt 草稿、版本与差异；`challenger_trial_service` 在用户明确创建试验时绑定原任务/Job/Run。`challenger_experiment_service` 复用 Content Review 实验、官方事实与 Prompt 版本，验证实际 Job/Run 控制条件、冻结结论并提供独立人工策略启用/回退；报告、草稿、试验和结论都不自动改生产。见 [Content Intelligence](CONTENT_INTELLIGENCE.md)。
 
 ## 当前：v2.5.0 可选视觉已接入
 

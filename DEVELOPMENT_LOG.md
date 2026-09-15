@@ -1,5 +1,15 @@
 # Development Log
 
+## 2026-09-15 v2.5.5 PR3c：冻结作品实验与独立人工启用
+
+- 基础冻结源码全量 1250 passed、0 failed/0 skipped、9 warnings / 336.35 秒，Ruff、编译、10 JS 通过。只读审查确认两项收尾：把 Run 不完整/成片边界变化从统计排除提前为入组拒绝；旧非 Challenger 实验时长 fallback 保持 master 原行为。修复时一次补丁匹配到另一 COALESCE，立即由实际 diff 发现并恢复，未保留误改。手机确认行及日期展示一起补测，最终 59 项定向全部通过（67.83 秒），包含 8 项新服务、Chrome、原 Content Review/报告、试验和迁移；新版手机截图已查看。
+- PR #108 最终 `846ba66` 三项 CI 全绿，Linux 1219 passed / 21 skipped / 80.50 秒；squash 合并 `8be1195` 后建立独立实验分支，四份原有审计修改保留。
+- 第 19 项迁移复用实验表增加可空 Challenger/策略/结论 JSON 与哈希，核心证据约束只针对新绑定实验。新增轻量 content_policy_events，保存启用/回退前后 Prompt 版本、请求幂等及完整人工预览。
+- 报告 schema v2 逐作品保存导出周与验证后的执行条件；旧报告保持可读，缺失条件不推定为视觉关闭或空反馈。正式基线精确匹配 Champion/Profile/规则、Provider/模型、选择参数、视觉状态及反馈哈希，固定五秒完播为主指标，至少 20 作品、3 原片、3 周且主指标无缺失。
+- 两个发布实验归属入口验证任务 → 输出 → 候选 → Run → 冻结 Job。进度保留已发布后失活旧切片，按最新官方导出键及独立 Job 去重。人工结论冻结当时统计；keep 不更新正式策略，另行预览确认才更新正式 Prompt 新任务正文。比较并发人工改动、请求幂等、恢复原始正文及旧任务不变均有测试。
+- 初轮 4 服务测试中两次夹具断言分别忽略原 Prompt 尾换行、把预设 updated_at 当策略版本；修正比较口径，并保证回退保留启用前原始正文。4 项随后全通过。追加缺失/去重/CAS 测试后，62 项定向基础结果 59 passed、1 failed、2 errors：旧账本夹具移除实验表后仍保留新迁移记录，新迁移夹具遗漏旧表必填 baseline_batch_id。仅修正隔离夹具，未弱化迁移验证；21 项迁移/账本重新全绿。
+- 桌面/手机 Chrome 两项完整确认流程通过（26.92 秒）；无确认不提交，实验 keep 不启用，启用与回退各一次，未触发 AI/同步/排期。新增护栏样本和缺失展示后最终完整离线回归进行中，证据写入忽略目录 `data/acceptance/v255-challenger-experiments-regression/`。
+
 ## 2026-09-15 v2.5.5 PR3b：显式试验任务
 
 - 最终冻结源码完整回归 1240 passed、0 failed/0 skipped、9 warnings，312.30 秒，包含 Chrome；Ruff、编译及 9 JS 全通过。没有真实 AI、正式数据库、同步或发布操作；证据在忽略目录 `data/acceptance/v255-challenger-trials-final/`。

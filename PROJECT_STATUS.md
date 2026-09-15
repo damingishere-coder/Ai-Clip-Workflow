@@ -1,5 +1,11 @@
 # 项目当前进度
 
+## 当前开发：v2.5.5 PR3c 正式实验与人工启用（尚未部署）
+
+试验任务 PR [#108](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/108) 最终 `846ba66` 三项 CI 全通过（Linux 1219 passed / 21 平台跳过 / 80.50 秒），合并 `8be1195`。从最新 master 建立 `codex/v2.5.5-challenger-experiments`，复用 Content Review 实验与 Prompt 版本，补冻结官方基线、实际 Run/Job 策略核验、人工结论留证及独立启用/回退。
+
+基础完整回归 **1250 passed、0 failed/0 skipped、9 warnings（336.35 秒）**，Ruff、编译、10 JS 通过。审查收尾前置 Run 完整性/成片边界检查、保留旧实验时长口径及调整手机展示后，**59 项定向全部通过（67.83 秒）**，含两种入组 API 和 1440/390 Chrome；此前 21 项迁移/账本回归通过。没有把基础全量冒充收尾后的全量重跑，最终 CI 将检查提交。第 19 项迁移增加实验可空证据与策略操作记录，旧实验不回填；正式 Web/Worker 仍为 v2.5.0 / `384db79`，正式库仍 14 项，未执行新迁移、真实 AI、同步或投稿。版本完成后统一交付，再进入 v2.6。
+
 ## 当前开发：v2.5.5 PR3b 显式试验任务（尚未部署）
 
 草稿 PR [#107](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/107) 最终 `3439725` 三项 CI 通过（Linux 1205 passed / 19 平台跳过），合并 `3a7ecd0`。新分支 `codex/v2.5.5-challenger-trial-tasks` 接草稿 → 明确确认 → 原创建任务流程 → 冻结 Job/Run；草稿仍归档，普通选择器不可选，试验不能改绑 Profile/Prompt 或启动全自动流水线。
