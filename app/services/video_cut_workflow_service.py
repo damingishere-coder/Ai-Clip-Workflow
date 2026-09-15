@@ -514,6 +514,8 @@ def _resolve_final_cut_status(results: list[CutResult]) -> tuple[TaskStatus, str
 # ---------- 切片主流程 ----------
 
 def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> dict:
+    from app.services.material_batch_service import require_task_source
+    require_task_source(task_id)
     from app.services.task_service import (
         get_status_label,
         get_task,

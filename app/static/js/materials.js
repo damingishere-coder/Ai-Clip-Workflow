@@ -79,6 +79,7 @@
         card.dataset.materialId = item.id; library.append(card);
       }
       if (!data.materials.length) library.append(node('p', '暂无素材。先选择文件夹并扫描预览。'));
+      window.dispatchEvent(new Event('material-library-updated'));
       byId('material-previous').disabled = offset === 0;
       byId('material-next').disabled = offset + 50 >= data.total;
     } catch (error) { if (token === generation) byId('material-total').textContent = error.message; }

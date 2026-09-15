@@ -1,5 +1,11 @@
 # 系统架构
 
+## v2.6 批次导入接入（开发中）
+
+`material_batch_service.create_batch` 复用 `insert_task_record_with_connection` 与原 Workflow Job 创建函数，以单事务建立真实无源 Task、批次及 material_import Job；不在请求事务复制媒体。`material_import_service.execute_import` 由原 Worker dispatch 执行，复制和完成证据受当前租约约束，文件路径含 token 防止迟到进程覆盖。成功证据与任务源原子提交，随后 Job 完成；该两步之间重启时验证已提交副本后完成原 Job。
+
+Profile/Prompt/Provider/反馈/视觉沿用既有 generation_snapshot_v1，任务配置编辑和不匹配 Provider 被阻止；单任务兼容路径不受此限制。待导入批次不能进入转写、AI、切片或自动生产。新增表描述批次与来源证据，进度由原 Task/Job 投影，不另建队列状态机。
+
 ## v2.6 开发：本机素材登记
 
 `material_catalog_service` 在用户显式输入目录后读取非递归元数据、保存不可变预览；确认时重新验证目录和文件身份，在同一 SQLite 事务写 source_materials 与幂等登记回执。它不扩展 storage_service 的媒体下载根、不启动 Job、不打开模型。此阶段 identity_sha256 仅证明保存的元数据，后续 task-bound 导入 Job 才计算完整视频哈希和复制产物校验。Queue 继续复用 workflow_jobs，见 [内容生产队列](CONTENT_PRODUCTION_QUEUE.md)；正式服务仍为 v2.5.5。

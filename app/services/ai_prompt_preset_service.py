@@ -153,6 +153,8 @@ def update_task_ai_prompt_preset(task_id: str, preset_id: str) -> dict:
     now = _now_iso()
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        from app.services.material_batch_service import require_editable_policy
+        require_editable_policy(connection, task_id)
         from app.services.challenger_trial_service import task_binding
         if task_binding(connection, task_id):
             from app.services.content_review_service import ContentReviewError

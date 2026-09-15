@@ -333,8 +333,10 @@ async def content_review_page(request: Request):
 
 @router.get("/materials")
 def material_catalog_page(request: Request):
+    from app.services.content_profile_service import list_content_profiles
     return templates.TemplateResponse(name="materials.html", request=request,
-        context={"request": request, "settings": settings, "active_page": "materials"})
+        context={"request": request, "settings": settings, "active_page": "materials",
+                 "content_profiles": list_content_profiles(), "prompt_presets": list_ai_prompt_presets()})
 
 
 @router.get("/content-review/challengers")

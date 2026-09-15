@@ -49,6 +49,8 @@ def update_task_visual(task_id: str, enabled: bool) -> dict:
     from app.services.task_service import get_task, _now_iso
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        from app.services.material_batch_service import require_editable_policy
+        require_editable_policy(connection, task_id)
         if not connection.execute("SELECT 1 FROM tasks WHERE id=? AND COALESCE(is_deleted,0)=0", (task_id,)).fetchone():
             raise ValueError("任务不存在")
         if connection.execute("SELECT 1 FROM workflow_jobs WHERE task_id=? AND status IN ('queued','running')", (task_id,)).fetchone():
