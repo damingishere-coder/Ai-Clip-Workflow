@@ -11,6 +11,7 @@ from app.models.content_review import (
     DouyinAnalyticsExportSyncRequest,
 )
 from app.services import content_review_service
+from app.models.content_challenger import ChallengerDraftCreate
 from app.services.publishers.base import PublishError, PublishWorkerUnavailable
 from app.services.publishers.worker_client import PublishWorkerClient
 
@@ -74,6 +75,41 @@ def read_intelligence_report(report_id: str) -> dict:
     from app.services.content_intelligence_service import get_report
     try:
         return get_report(report_id)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.get("/challengers/context")
+def challenger_context(report_id: str = Query(min_length=1, max_length=120),
+                       profile_id: str = Query(min_length=1, max_length=80),
+                       preset_id: str | None = Query(default=None, max_length=80)) -> dict:
+    from app.services.content_challenger_service import draft_context
+    try:
+        return draft_context(report_id, profile_id, preset_id)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.post("/challengers")
+def create_challenger(payload: ChallengerDraftCreate) -> dict:
+    from app.services.content_challenger_service import create_draft
+    try:
+        return create_draft(payload)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.get("/challengers")
+def challenger_list(report_id: str = Query(min_length=1, max_length=120)) -> dict:
+    from app.services.content_challenger_service import list_challengers
+    return {"challengers": list_challengers(report_id)}
+
+
+@router.get("/challengers/{challenger_id}")
+def challenger_detail(challenger_id: str) -> dict:
+    from app.services.content_challenger_service import get_challenger
+    try:
+        return get_challenger(challenger_id)
     except content_review_service.ContentReviewError as exc:
         _raise_content_review_http(exc)
 

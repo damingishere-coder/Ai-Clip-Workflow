@@ -1,5 +1,9 @@
 # 数据库结构说明
 
+## 开发中：v2.5.5 PR3a 增量
+
+第 17 项 `20260915_03_content_challengers` 新增 `content_strategy_challengers`。记录来源报告/哈希、Profile 版本、Champion/Challenger Prompt 版本、独立归档预设、请求 UUID/哈希、不可变策略 JSON/哈希及状态/时间。核心证据禁止 UPDATE，引用复用既有报告、Profile 与 Prompt 表，不增加一套执行器或任务事实。迁移前备份、事务回滚与校验继续使用原账本；旧表旧行不变。正式库仍为 14 项，版本完成后统一部署。
+
 ## 开发中：v2.5.5 PR2 增量
 
 第 16 项 `20260915_02_intelligence_reports` 新增 `content_intelligence_reports`：可空账号、唯一请求 UUID、配置哈希、schema_version、冻结报告 JSON/哈希、生成时间，以及账号/时间索引。没有官方账号时可保存人工审片报告，不伪造账号或官方基线。复用既有迁移账本、升级前备份、事务失败回滚和校验；旧表数据不变。报告服务只有创建/读取，无修改或自动应用接口；读取时核对正文、配置及账号证据。正式库仍为 14 项，版本交付时统一部署。

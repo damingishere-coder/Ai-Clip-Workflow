@@ -312,6 +312,20 @@ async def content_review_page(request: Request):
     )
 
 
+@router.get("/content-review/challengers")
+def content_challengers_page(request: Request, report_id: str):
+    from app.services.content_intelligence_service import get_report
+    from app.services.content_profile_service import list_content_profiles
+    from app.services.content_review_service import ContentReviewError
+    try:
+        report = get_report(report_id)
+    except ContentReviewError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return templates.TemplateResponse(name="content_challengers.html", request=request,
+        context={"request": request, "settings": settings, "active_page": "content_review",
+                 "report": report, "profiles": list_content_profiles(), "presets": list_ai_prompt_presets()})
+
+
 @router.get("/tasks/{task_id}/visual-evidence")
 async def visual_evidence_page(request: Request, task_id: str, run_id: str | None = None):
     task = get_task(task_id, include_video_probe=False)
