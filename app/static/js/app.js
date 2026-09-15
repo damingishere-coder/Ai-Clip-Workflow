@@ -1885,7 +1885,7 @@ function renderTaskLiveActions(data) {
   if (reviewAction) reviewAction.hidden = !actions.review;
   const syncAction = taskLiveActions.querySelector("[data-live-sync-action]");
   if (syncAction) {
-    syncAction.hidden = primaryAction === "subtitle_review" || Number(data.counts?.outputs || 0) <= 0;
+    syncAction.hidden = ["subtitle_review", "production_review"].includes(primaryAction) || Number(data.counts?.outputs || 0) <= 0;
   }
   const subtitleSkip = taskLiveActions.querySelector("[data-live-subtitle-skip]");
   if (subtitleSkip) subtitleSkip.hidden = primaryAction !== "subtitle_review";

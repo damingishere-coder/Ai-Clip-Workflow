@@ -461,6 +461,9 @@ def _commit_cut_run_results(
                 if committed_status == "completed_with_errors"
                 else TaskStatus.completed if committed_status == "completed" else TaskStatus.failed
             )
+            from app.services.material_batch_service import task_item
+            if final_task_status == TaskStatus.completed and task_item(connection, task_id):
+                final_task_status = TaskStatus.pending_review
             task_finalized = _finalize_task_for_cut_run(
                 task_id,
                 cut_run_id,
@@ -529,7 +532,8 @@ def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> 
     from app.db.database import get_connection
     from app.services.material_batch_service import task_item
     with get_connection() as connection:
-        if task_item(connection, task_id):
+        is_batch = bool(task_item(connection, task_id))
+        if is_batch:
             sync_publish_jobs = False  # Pre-cut is never human consent.
     from app.services.task_service import (
         get_status_label,
@@ -684,10 +688,12 @@ def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> 
     else:
         append_task_log(task_id, "切割批次已完成，但任务已取消或已有更新批次，未覆盖当前主状态")
 
+    awaiting_review = is_batch and final_status == TaskStatus.completed and commit_result["task_finalized"]
     return {
         "status": final_status.value,
         "status_label": get_status_label(final_status.value),
-        "message": "视频切割流程已完成",
+        "message": "切片已生成，请确认实际成片与字幕方式后进入内容准备" if awaiting_review else "视频切割流程已完成",
+        "awaiting_production_review": awaiting_review,
         "output_dir": str(cut_output_dir),
         "cut_run_id": cut_run_id,
         "cut_run_number": cut_run["run_number"],

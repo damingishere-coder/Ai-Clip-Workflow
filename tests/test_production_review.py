@@ -47,6 +47,40 @@ def consent(task, mode='original'):
                                    delivery_mode=mode, confirmed=True)
 
 
+def test_completed_batch_cut_points_to_actual_review_before_publish(output_batch):
+    from app.services.task_service import get_task_live_status
+    task, _, _ = output_batch
+    with db.get_connection() as c:
+        c.execute("UPDATE tasks SET auto_mode=1,status='completed',progress=100 WHERE id=?", (task,))
+        c.commit()
+    live = get_task_live_status(task)
+    assert live['actions']['primary'] == 'production_review'
+    assert live['status_label'] == '待确认实际成片'
+    assert live['progress'] < 100
+    review.confirm(task, consent(task))
+    live = get_task_live_status(task)
+    assert live['actions']['primary'] == 'production_review'
+    assert live['status_label'] == '待进入内容准备'
+
+
+def test_recut_batch_records_pending_review_atomically(output_batch, tmp_path):
+    task, candidate, _ = output_batch
+    run = cuts._create_cut_run(task)
+    with db.get_connection() as c:
+        selection = evidence.selection_snapshot(c, task)
+        c.execute("UPDATE tasks SET status='cutting' WHERE id=?", (task,))
+        c.commit()
+    path = tmp_path/'recut.mp4'
+    path.write_bytes(b'new-isolated-cut')
+    result = CutResult(candidate, str(path), path.name, 'completed', source_start_ms=1000, source_end_ms=3000)
+    outcome = cuts._commit_cut_run_results(task, run['id'], [result], source_fingerprint='test',
+        cut_inputs={'selection':selection, 'source':evidence.source_stamp(selection['source_path'])})
+    assert outcome['task_finalized']
+    with db.get_connection() as c:
+        assert c.execute('SELECT status FROM tasks WHERE id=?', (task,)).fetchone()[0] == 'pending_review'
+    assert not review.state(task)['approved']
+
+
 def insert_publish(task, output, status='DRAFT', *, mode='original'):
     key = uuid4().hex
     with db.get_connection() as c:

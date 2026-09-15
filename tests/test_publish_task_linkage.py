@@ -197,6 +197,38 @@ def _job(job_id: str) -> dict:
     return dict(row)
 
 
+@pytest.mark.parametrize("status", ["PUBLISHED", "EXPORTED", "FAILED", "NEED_REVIEW"])
+def test_refresh_preserves_history_and_failure_retry_path(tmp_path, fake_cover, status):
+    task = _insert_task(tmp_path)
+    candidate = _insert_candidate(task, "history")
+    output, _ = _insert_output(tmp_path, task, candidate, "history", active=True)
+    job = _insert_job(task, output, "douyin", status)
+    before = _job(job)
+    for _ in range(2):
+        result = publish_service.refresh_send_queue(platform="douyin")
+        assert not [j for j in result["created"] if j["task_id"] == task]
+    assert _job(job) == before
+    with get_connection() as connection:
+        assert connection.execute("SELECT count(*) FROM publish_jobs WHERE task_id=?", (task,)).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("history_status", ["PUBLISHED", "EXPORTED"])
+def test_removed_duplicate_does_not_hide_success_or_restore_on_task_sync(tmp_path, fake_cover, history_status):
+    task = _insert_task(tmp_path)
+    candidate = _insert_candidate(task, "history")
+    output, _ = _insert_output(tmp_path, task, candidate, "history", active=True)
+    history = _insert_job(task, output, "douyin", history_status, created_at=_time(-30))
+    removed = _insert_job(task, output, "douyin", "CANCELLED", error_code=publish_service.USER_REMOVED_ERROR_CODE)
+    before = [_job(history), _job(removed)]
+    assert publish_service.sync_task_publish_jobs(task)["created_count"] == 0
+    assert publish_service.sync_task_publish_jobs(task)["restored_count"] == 0
+    assert not [j for j in publish_service.refresh_send_queue(platform="douyin")["created"] if j["task_id"] == task]
+    assert [_job(history), _job(removed)] == before
+    # Successful history on another platform cannot suppress a genuinely missing draft.
+    result = publish_service.refresh_send_queue(platform="bilibili")
+    assert len([j for j in result["created"] if j["task_id"] == task]) == 1
+
+
 def test_first_sync_creates_only_douyin_and_is_idempotent(
     tmp_path: Path,
     fake_cover: Path,

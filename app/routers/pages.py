@@ -119,6 +119,11 @@ async def task_detail_page(request: Request, task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
 
+    from app.db.database import get_connection
+    from app.services.material_batch_service import task_item
+    with get_connection() as connection:
+        is_batch = bool(task_item(connection, task_id))
+
     from app.services.challenger_trial_service import task_trial
     try:
         trial = task_trial(task_id)
@@ -133,6 +138,7 @@ async def task_detail_page(request: Request, task_id: str):
             "active_page": "tasks",
             "settings": settings,
             "task": task,
+            "production_review_required": is_batch,
             "publish_link_state": get_task_publish_link_state(task_id),
             "workflow_steps": get_task_workflow_steps(task),
             "transcript_lines": get_transcript_preview(task_id),

@@ -1501,6 +1501,16 @@ def _find_latest_publish_job(output_clip_id: str, platform: str) -> dict | None:
     return _normalize_job(row) if row else None
 
 
+def _has_completed_publish_job(output_clip_id: str, platform: str) -> bool:
+    """Successful history wins even when a newer draft was cancelled or removed."""
+    with get_connection() as connection:
+        return connection.execute(
+            """SELECT 1 FROM publish_jobs WHERE output_clip_id = ? AND platform = ?
+               AND status IN ('PUBLISHED', 'EXPORTED') LIMIT 1""",
+            (output_clip_id, platform),
+        ).fetchone() is not None
+
+
 def _is_user_removed_job(job: dict | None) -> bool:
     return bool(
         job
@@ -1793,6 +1803,9 @@ def refresh_send_queue(use_ai: bool = False, platform: str | None = None) -> dic
             return cover_state["cover"] or {}
 
         for target_platform in target_platforms:
+            if _has_completed_publish_job(item["output_clip_id"], target_platform):
+                skipped += 1
+                continue
             existing_job = _find_active_publish_job(item["output_clip_id"], target_platform)
             if existing_job:
                 skipped += 1
@@ -1802,8 +1815,12 @@ def refresh_send_queue(use_ai: bool = False, platform: str | None = None) -> dic
                         _update_job_cover(existing_job["id"], cover)
                         updated_covers += 1
                 continue
-            if _is_user_removed_job(_find_latest_publish_job(item["output_clip_id"], target_platform)):
+            latest_job = _find_latest_publish_job(item["output_clip_id"], target_platform)
+            if _is_user_removed_job(latest_job):
                 skipped_removed += 1
+                continue
+            if latest_job and _normalize_publish_status(latest_job.get("status")) != PUBLISH_STATUS_CANCELLED:
+                skipped += 1  # Failed jobs retain their explicit retry path.
                 continue
             try:
                 if item_metadata is None:
@@ -1820,7 +1837,7 @@ def refresh_send_queue(use_ai: bool = False, platform: str | None = None) -> dic
         "status": "ok" if not errors else "partial",
         "message": (
             f"已新增 {len(created)} 条发送任务，自动选择 {len(created) + updated_covers} 张封面帧，"
-            f"跳过 {skipped} 条已存在任务、{skipped_removed} 条手动移除内容、{pending_review} 条待成片或字幕确认，{len(errors)} 条需要处理。"
+            f"跳过 {skipped} 条已有记录（含已发送/已导出）、{skipped_removed} 条手动移除内容、{pending_review} 条待成片或字幕确认，{len(errors)} 条需要处理。"
         ),
         "created": created,
         "skipped_removed": skipped_removed,
@@ -2152,6 +2169,9 @@ def sync_task_publish_jobs(
         item_metadata: dict | None = None
         item_covers: dict[str, dict] = {}
         for platform in platforms:
+            if _has_completed_publish_job(item["output_clip_id"], platform):
+                skipped += 1
+                continue
             latest = _find_latest_publish_job(item["output_clip_id"], platform)
             latest_status = _normalize_publish_status(latest.get("status")) if latest else ""
             if latest and latest_status != PUBLISH_STATUS_CANCELLED:

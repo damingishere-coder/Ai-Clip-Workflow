@@ -863,6 +863,18 @@ def get_task_live_status(task_id: str) -> dict:
         elif is_running:
             primary_action = "processing"
 
+    from app.services.production_review_service import state as production_review_state
+    production_review = production_review_state(task_id)
+    if production_review.get("required") and not is_running and output_clip_count > 0:
+        if not production_review.get("ready"):
+            primary_action = "production_review"
+            display_status_label = "待确认实际成片" if not production_review.get("approved") else "待字幕审核"
+            overall_progress = min(overall_progress, 90)
+            runtime_status = "idle"
+        elif not publish["total"]:
+            primary_action = "production_review"
+            display_status_label = "待进入内容准备"
+
     return {
         "task_id": task_id,
         "snapshot_at": _now_iso(),
@@ -880,6 +892,7 @@ def get_task_live_status(task_id: str) -> dict:
         "workflow_steps": workflow_steps,
         "active_operation": activity,
         "publish": publish,
+        "production_review": production_review,
         "log_lines": _read_task_log_tail(task_id),
         "counts": {
             "candidates": candidate_count,
