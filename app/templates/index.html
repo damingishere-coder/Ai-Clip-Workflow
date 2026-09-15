@@ -9,11 +9,11 @@
     <h1>工作台</h1>
     <p>导入素材、查看生产进度，再集中处理审片、字幕和发送待办。</p>
   </div>
-  <a class="secondary-button" href="/review-inbox">打开统一待办</a>
+  <a class="secondary-button" href="/materials?view=inbox">打开统一待办</a>
 </section>
 
 <section class="production-cards" aria-label="生产工作台">
-{% for card in production.cards %}<a class="production-card" href="{{ card.url }}"><span>{{ card.label }}</span><strong>{{ card.value }}</strong><small>{{ card.note }}</small></a>{% endfor %}
+{% for card in production.cards %}<a class="production-card" href="{{ card.url | replace('/review-inbox?category=', '/materials?view=inbox&category=') }}"><span>{{ card.label }}</span><strong>{{ card.value }}</strong><small>{{ card.note }}</small></a>{% endfor %}
 </section>
 
 <section class="panel dashboard-overview-panel" aria-labelledby="weekly-overview-title">

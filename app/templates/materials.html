@@ -1,8 +1,14 @@
 {% extends "base.html" %}
 {% block title %}素材池 · {{ settings.app_name }}{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', path='css/materials.css') }}?v=20260915-cards">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', path='css/production-workbench.css') }}?v=20260915-inbox"><link rel="stylesheet" href="{{ url_for('static', path='css/materials.css') }}?v=20260915-inbox">{% endblock %}
 {% block content %}
-<section class="page-heading material-heading"><div><p class="eyebrow">SOURCE LIBRARY</p><h1>把素材，变成下一条作品。</h1><p>选择视频 · 配置批次 · 开始制作</p></div><a class="secondary-button" href="#material-scan-form">＋ 添加素材</a></section>
+{% set material_view = request.query_params.get("view", "library") %}
+<section class="page-heading material-heading"><div><p class="eyebrow">SOURCE LIBRARY</p><h1>把素材，变成下一条作品。</h1><p>选择视频 · 配置批次 · 集中处理待办</p></div><a class="secondary-button" href="/materials#material-scan-form" data-material-view="library">＋ 添加素材</a></section>
+<nav class="material-view-nav" aria-label="素材池工作区">
+  <a href="/materials" data-material-view="library" {% if material_view != 'inbox' %}aria-current="page"{% endif %}>素材与批次</a>
+  <a href="/materials?view=inbox" data-material-view="inbox" {% if material_view == 'inbox' %}aria-current="page"{% endif %}>统一待办 <span id="material-inbox-count">…</span></a>
+</nav>
+<div id="material-library-view" {% if material_view == 'inbox' %}hidden{% endif %}>
 <section class="panel material-panel material-import-panel">
   <h2>添加本机素材</h2>
   <form id="material-scan-form">
@@ -79,5 +85,10 @@
   <div class="panel-header"><div><p class="eyebrow">03 / 制作记录</p><h2 id="batch-history-title">最近批次</h2><p class="material-note">查看导入进度，展开批次继续处理任务。</p></div><button type="button" class="secondary-button" id="batch-refresh">刷新进度</button></div>
   <div id="batch-list" class="material-batch-grid"></div>
 </section>
+</div>
+<section id="material-inbox-view" class="material-inbox-view" aria-label="统一待办" {% if material_view != 'inbox' %}hidden{% endif %}>
+  <p id="material-inbox-status" role="status"></p><button id="material-inbox-retry" class="secondary-button" type="button" hidden>重新加载待办</button>
+  <div id="material-inbox-content"><p class="material-note">正在加载待办…</p></div><noscript><p>请启用 JavaScript 查看内嵌待办。</p></noscript>
+</section>
 {% endblock %}
-{% block extra_scripts %}<script src="{{ url_for('static', path='js/materials.js') }}?v=20260915-cards"></script><script src="{{ url_for('static', path='js/material-batches.js') }}?v=20260915-cards"></script>{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/material-inbox.js') }}?v=20260915-inbox"></script><script src="{{ url_for('static', path='js/materials.js') }}?v=20260915-inbox"></script><script src="{{ url_for('static', path='js/material-batches.js') }}?v=20260915-inbox"></script>{% endblock %}

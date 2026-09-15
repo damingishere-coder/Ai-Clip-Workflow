@@ -138,3 +138,26 @@
 
 .material-batch-card:only-child { grid-column: 1 / -1; }
 @media (min-width: 1100px) { .material-batch-card:only-child .material-batch-items { grid-template-columns: repeat(2,minmax(0,1fr)); column-gap: 28px; } }
+
+/* One material workspace, with independent library and review views. */
+#material-library-view[hidden], #material-inbox-view[hidden], #material-inbox-retry[hidden] { display: none; }
+.material-view-nav { display: flex; flex-wrap: wrap; gap: 6px; padding: 5px; margin: 0 0 24px; width: fit-content; border: 1px solid #e2e9f3; border-radius: 13px; background: #eaf0f8; }
+.material-view-nav a { display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-radius: 9px; font-size: 13px; color: #6a7d98; font-weight: 600; text-decoration: none; }
+.material-view-nav a[aria-current] { color: #286be0; background: #fff; box-shadow: 0 2px 8px #263e6510; }
+#material-inbox-count { padding: 1px 7px; border-radius: 5px; background: #dfe9f8; font-size: 11px; }
+.material-view-nav a:focus-visible { outline: 2px solid #3478f6; outline-offset: 2px; }
+.material-inbox-panel { padding: 24px; }
+.material-inbox-panel .panel-header .material-note { margin: 8px 0 0; font-size: 12px; }
+#material-inbox-status { color: #607896; font-size: 12px; }
+#material-inbox-status:empty { display: none; }
+.material-inbox-panel .production-filters { gap: 8px; margin: 20px 0; }
+.material-inbox-panel .production-filters a { font-size: 12px; padding: 8px 12px; border-radius: 8px; }
+.material-inbox-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; margin: 20px 0; align-items: stretch; }
+.material-inbox-grid .production-item { flex-direction: column; align-items: stretch; justify-content: space-between; padding: 20px; border: 1px solid #e3eaf3; border-radius: 14px; background: #fff; min-width: 0; gap: 12px; }
+.material-inbox-grid .production-item h3 { margin: 14px 0 10px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.material-inbox-grid .production-item p { font-size: 12px; line-height: 1.7; margin: 0; }
+.material-inbox-grid .production-item > a { align-self: flex-end; font-size: 12px; }
+.material-inbox-grid .production-item .status-pill { font-size: 10px; }
+.material-inbox-grid .production-empty { grid-column: 1/-1; border: 1px dashed #d9e3f2; border-radius: 14px; font-size: 13px; }
+@media (max-width: 1400px) { .material-inbox-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 700px) { .material-inbox-panel { padding: 18px; } .material-inbox-grid { grid-template-columns: 1fr; } .material-view-nav a { padding: 10px 14px; } }

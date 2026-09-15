@@ -78,8 +78,15 @@ def test_legacy_auto_review_flag_pagination_escaping_and_readonly(human_db, monk
     assert result['counts']['clips'] == dict(label='待审片',unit='片段',count=46,tasks=23)
     client = TestClient(app)
     for page in (1,2):
-        response = client.get('/review-inbox',params={'category':'clips','page':page})
+        response = client.get('/review-inbox',params={'category':'clips','page':page,'embedded':'1'})
         assert response.status_code == 200 and '<script>alert(1)</script>' not in response.text
+    old_link = client.get('/review-inbox?category=clips&page=2')
+    assert 'http-equiv="refresh"' in old_link.text
+    assert '/materials?view=inbox&amp;category=clips&amp;page=2' in old_link.text
+    assert '<main' not in old_link.text
+    materials = client.get('/materials?view=inbox')
+    assert 'id="material-inbox-view"' in materials.text
+    assert 'href="/review-inbox"' not in materials.text
     assert client.get('/review-inbox?category=unknown').status_code == 400
     assert client.get('/review-inbox?page=0').status_code == 422
     with sqlite3.connect(human_db) as c:
