@@ -27,5 +27,36 @@
   <div id="material-library" class="material-list"></div>
   <div class="button-row"><button class="secondary-button" id="material-previous" type="button">上一页</button><button class="secondary-button" id="material-next" type="button">下一页</button></div>
 </section>
+<section class="panel material-panel" id="batch-panel">
+  <h2>批量创建任务</h2>
+  <p>勾选上方已登记素材，统一选择内容配置。确认后逐个复制到任务存储，原片保留。</p>
+  <form id="material-batch-form">
+    <div class="form-row">
+      <label>内容类型 / Content Profile<select class="control" name="selection_profile" required><option value="">请选择内容类型</option>{% for profile in content_profiles %}<option value="{{ profile.id }}" data-prompt="{{ profile.prompt_preset_id }}">{{ profile.name }}{{ ' · 试用' if profile.id in ['interview_story','knowledge_opinion'] else '' }}</option>{% endfor %}</select></label>
+      <label>Prompt 方案<select class="control" name="ai_prompt_preset_id" required>{% for preset in prompt_presets %}<option value="{{ preset.id }}">{{ preset.name }}</option>{% endfor %}</select></label>
+      <label>AI Provider<select class="control" name="ai_provider">{% for provider,label in [('codex','Codex CLI'),('remote','远程 AI'),('local','本地 AI')] %}<option value="{{ provider }}" {{ 'selected' if settings.ai_default_provider == provider else '' }}>{{ label }}</option>{% endfor %}</select></label>
+    </div>
+    <div class="form-row">
+      <label>候选池上限<input class="control" name="candidate_clip_count" type="number" min="1" max="50" value="12" required></label>
+      <label>最终启用目标<input class="control" name="final_clip_target" type="number" min="1" max="12" value="5" required></label>
+      <label>单条最长（分钟）<input class="control" name="max_clip_duration" type="number" min="1" max="60" value="10" required></label>
+    </div>
+    <div class="form-row">
+      <label>长直播每小时密度<input class="control" name="highlight_density_per_hour" type="number" min="1" max="10" value="4" required></label>
+      <label>长直播候选总上限<input class="control" name="highlight_total_limit" type="number" min="1" max="50" value="30" required></label>
+      <label>字幕策略<select class="control" name="subtitle_strategy"><option value="original">保留原视频，人工确认</option><option value="review">进入字幕审核</option></select></label>
+    </div>
+    <label class="material-check"><input name="visual_enabled" type="checkbox"><span>候选画面辅助验证 · 试用</span></label>
+    <label class="material-check"><input name="create_new_production" type="checkbox"><span>为已生产过的素材明确创建新任务</span></label>
+    <p class="material-note">本阶段导入完成后逐步处理；自动生产会随统一审核接入。Provider 使用已有配置，当前不会调用 AI。</p>
+    <label class="material-check"><input name="confirmed" type="checkbox"><span>已核对素材和配置，确认复制原片并创建这些任务</span></label>
+    <p id="batch-selection-count">已选 0 个素材</p>
+    <button class="primary-button" id="batch-create" type="submit" disabled>确认创建批次</button>
+  </form>
+  <div id="batch-pending" hidden><p id="batch-pending-description"></p><button type="button" class="primary-button" id="batch-retry">重试同一批次请求</button><button type="button" class="secondary-button" id="batch-abandon">清除本地重试记录</button></div>
+  <p id="batch-status" role="status"></p>
+  <h3>最近批次</h3><button type="button" class="secondary-button" id="batch-refresh">刷新导入进度</button>
+  <div id="batch-list" class="material-list"></div>
+</section>
 {% endblock %}
-{% block extra_scripts %}<script src="{{ url_for('static', path='js/materials.js') }}?v=20260915-catalog"></script>{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/materials.js') }}?v=20260915-batches"></script><script src="{{ url_for('static', path='js/material-batches.js') }}?v=20260915-batches"></script>{% endblock %}

@@ -10,4 +10,9 @@
 .material-item .material-check { margin: 0; }
 #material-status { overflow-wrap: anywhere; }
 #material-preview[hidden] { display: none; }
+#batch-pending[hidden] { display: none; }
+#material-batch-form label { min-width: 0; }
+#material-batch-form .control { width: 100%; box-sizing: border-box; }
+#material-batch-form .form-row { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; }
+@media (max-width: 700px) { #material-batch-form .form-row { grid-template-columns: 1fr; } }
 @media (max-width: 600px) { .material-panel .panel-header { align-items: flex-start; flex-wrap: wrap; } }

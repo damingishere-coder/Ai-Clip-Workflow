@@ -57,7 +57,11 @@ def execute_job(
 
     with job_service.job_lease_context(job_id, owner, lease_token):
         try:
-            if job_type == job_service.JOB_TYPE_VIDEO_CUT:
+            if job_type == job_service.JOB_TYPE_MATERIAL_IMPORT:
+                from app.services.material_import_service import execute_import
+                result = execute_import(job_id, task_id, job.get("payload_json") or {})
+                job_service.mark_job_completed(job_id, result)
+            elif job_type == job_service.JOB_TYPE_VIDEO_CUT:
                 _execute_video_cut(job_id, task_id)
             elif job_type == job_service.JOB_TYPE_TRANSCRIPT:
                 _execute_transcript(job_id, task_id, job.get("payload_json") or {})

@@ -1,5 +1,11 @@
 # 数据库结构说明
 
+## v2.6 第 21 项迁移（开发中）
+
+`20260915_07_material_batches` 新增三表：`material_batches` 保存唯一 request_key、请求哈希、配置与配置哈希；`material_batch_items` 关联素材、实际 Task、material_import Job、冻结 generation_snapshot_v1，普通首生产通过部分唯一索引保护；`material_imports` 保存成功的完整视频 SHA-256、托管路径、大小、媒体预检及租约证据。三者 UPDATE 被拒绝，不覆盖原任务/Prompt/Run 数据。状态使用 Workflow Job 查询；没有复制状态机。
+
+任务源与 material_imports 在同一有效租约事务激活；Job 未完成时可校验该证据恢复。备份/失败事务回滚/并发初始化/旧 Task 原值保持由迁移测试覆盖。正式数据库仍 19 项，20–21 尚未部署；功能回退保留增量表，不删除账本或覆盖旧备份。
+
 ## 开发中：v2.6 PR1 素材目录（第 20 项，正式库尚未执行）
 
 `20260915_06_material_catalog` 新增 source_materials（唯一 source_key、源路径、名称、大小、元数据 JSON/identity_sha256、时间）、material_scans（不可变目录清单/哈希、创建/过期时间）及 material_registrations（预览外键、唯一请求 UUID/请求哈希、返回素材 ID 列表、时间）。这三类记录不可 UPDATE；素材列表按创建时间与 ID 分页。仅新增表/索引/触发器，沿用原迁移账本、自动备份、事务失败回滚和并发初始化；不修改旧任务、Job、Prompt 或 Profile，不回填历史原片哈希。identity_sha256 是元数据 JSON 摘要，不能用于官方作品的完整原片归因。

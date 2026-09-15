@@ -164,6 +164,8 @@ def get_task_transcript_status(task_id: str) -> dict:
 # ---------- 音频提取 ----------
 
 def process_task_audio(task_id: str, job_id: str | None = None) -> dict:
+    from app.services.material_batch_service import require_task_source
+    require_task_source(task_id)
     from app.services.task_service import get_task, update_task_status  # noqa: F811
 
     task = get_task(task_id)
@@ -219,6 +221,8 @@ def process_task_transcript(
     job_id: str | None = None,
     allow_uncertain_retry: bool = False,
 ) -> dict:
+    from app.services.material_batch_service import require_task_source
+    require_task_source(task_id)
     from app.services.task_service import get_task, update_task_status  # noqa: F811
 
     task = get_task(task_id)
@@ -324,6 +328,8 @@ def process_task_transcript_workflow(
     provider: str | None = None,
     job_id: str | None = None,
 ) -> dict:
+    from app.services.material_batch_service import require_task_source
+    require_task_source(task_id)
     from app.services.task_service import get_task  # noqa: F811
 
     task = get_task(task_id)

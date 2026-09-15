@@ -17,6 +17,7 @@ from app.routers import (
     content_review,
     media,
     materials,
+    material_batches,
     pages,
     publish,
     settings as settings_router,
@@ -255,6 +256,7 @@ app.include_router(tasks.router)
 app.include_router(subtitles.router)
 app.include_router(media.router)
 app.include_router(materials.router)
+app.include_router(material_batches.router)
 app.include_router(publish.router)
 app.include_router(content_review.router)
 app.include_router(settings_router.router)

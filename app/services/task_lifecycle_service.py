@@ -137,15 +137,13 @@ ACTIVE_TASK_STATUSES = {
 
 
 def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir_name: str | None = None) -> dict:
-    from app.services.task_service import _now_iso, get_status_label, STATUS_PROGRESS  # noqa: F811
-    from app.services.content_profile_service import registered_profile, validate_content_candidate_limit
+    from app.services.task_service import get_status_label  # noqa: F811
+    from app.services.content_profile_service import validate_content_candidate_limit
     validate_content_candidate_limit(payload.selection_profile, payload.candidate_clip_count)
 
     resolved_task_id = task_id or uuid4().hex[:12]
     resolved_task_dir_name = task_dir_name
-    now = _now_iso()
     source_path = payload.original_video_path
-    has_source_file = bool(source_path)
     media_preflight = None
     if source_path:
         valid, error_message = validate_source_video_path(source_path)
@@ -165,85 +163,10 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
         )
     create_task_directory(resolved_task_id, resolved_task_dir_name)
 
-    initial_status = TaskStatus.CREATED.value if payload.auto_mode else (
-        TaskStatus.pending_processing.value if has_source_file else TaskStatus.pending_video.value
-    )
-    progress = STATUS_PROGRESS[initial_status]
-    auto_config = {
-        "auto_clip_count": payload.auto_clip_count,
-        "auto_min_clip_seconds": payload.auto_min_clip_seconds,
-        "auto_max_clip_seconds": payload.auto_max_clip_seconds,
-        "auto_schedule_mode": payload.auto_schedule_mode,
-        "auto_schedule_start_at": payload.auto_schedule_start_at or "",
-        "auto_schedule_interval_hours": payload.auto_schedule_interval_hours,
-        "auto_schedule_daily_start_time": payload.auto_schedule_daily_start_time,
-        "auto_schedule_daily_end_time": payload.auto_schedule_daily_end_time,
-        "auto_metadata_use_ai": payload.auto_metadata_use_ai,
-    }
-
     with get_connection() as connection:
-        existing_columns = {
-            row["name"] for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
-        }
-        insert_data = {
-            "id": resolved_task_id,
-            "task_name": payload.task_name,
-            "task_dir_name": resolved_task_dir_name,
-            "source_type": "upload",
-            "platform": payload.platform,
-            "original_video_path": payload.original_video_path,
-            "nas_file_path": None,
-            "max_clip_duration": payload.max_clip_duration,
-            "candidate_clip_count": payload.candidate_clip_count,
-            "selection_profile": payload.selection_profile,
-            "visual_enabled": int(payload.visual_enabled),
-            "final_clip_target": payload.final_clip_target,
-            "highlight_density_per_hour": payload.highlight_density_per_hour,
-            "highlight_total_limit": payload.highlight_total_limit,
-            "ai_preference": payload.ai_preference,
-            "ai_prompt_preset_id": payload.ai_prompt_preset_id or registered_profile(payload.selection_profile).prompt_preset_id,
-            "auto_mode": 1 if payload.auto_mode else 0,
-            "auto_config_json": json.dumps(auto_config, ensure_ascii=False),
-            "status": initial_status,
-            "progress": progress,
-            "error_message": None,
-            "last_error": None,
-            "is_deleted": 0,
-            "deleted_at": None,
-            "created_at": now,
-            "updated_at": now,
-        }
-
-        from app.services.challenger_trial_service import prepare_trial, bind_trial
         connection.execute("BEGIN IMMEDIATE")
-        trial = prepare_trial(connection, payload)
-        selected_prompt = connection.execute("SELECT is_archived FROM ai_prompt_presets WHERE id=?", (insert_data["ai_prompt_preset_id"],)).fetchone()
-        if not selected_prompt or (selected_prompt[0] and trial is None):
-            raise ValueError("所选 Prompt 不存在或已归档，请选择有效方案")
-
-        if "title" in existing_columns:
-            insert_data["title"] = payload.task_name
-        if "source_path" in existing_columns:
-            insert_data["source_path"] = payload.original_video_path
-        if "max_clip_minutes" in existing_columns:
-            insert_data["max_clip_minutes"] = payload.max_clip_duration
-        if "target_clip_count" in existing_columns:
-            insert_data["target_clip_count"] = payload.candidate_clip_count
-
-        columns = [column for column in insert_data if column in existing_columns]
-        placeholders = ", ".join("?" for _ in columns)
-        connection.execute(
-            f"INSERT INTO tasks ({', '.join(columns)}) VALUES ({placeholders})",
-            tuple(insert_data[column] for column in columns),
-        )
-        from app.services.weekly_review_service import freeze_task
-        freeze_task(connection, resolved_task_id)
-        from app.services.content_profile_service import freeze_task_profile, freeze_task_provider
-        freeze_task_profile(connection, resolved_task_id)
-        freeze_task_provider(connection, resolved_task_id, payload.ai_provider)
-        from app.services.visual_policy_service import freeze_task_visual
-        freeze_task_visual(connection, resolved_task_id, payload.visual_enabled)
-        bind_trial(connection, resolved_task_id, trial, now)
+        initial_status = insert_task_record_with_connection(connection, payload,
+            task_id=resolved_task_id, task_dir_name=resolved_task_dir_name)
         connection.commit()
 
     append_task_log(resolved_task_id, "任务已创建")
@@ -262,6 +185,99 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
     if media_preflight:
         result["media_preflight"] = media_preflight.to_dict()
     return result
+
+
+def insert_task_record_with_connection(connection: Connection, payload: TaskCreate, *, task_id: str, task_dir_name: str) -> str:
+    """Insert and freeze a task in the caller's transaction; no files or commit.
+
+    Source validation/directory allocation belong to the existing wrapper or
+    a fenced material import Job. Batch placeholders must have no source path.
+    """
+    from app.services.task_service import _now_iso, STATUS_PROGRESS
+    from app.services.content_profile_service import registered_profile, validate_content_candidate_limit
+    validate_content_candidate_limit(payload.selection_profile, payload.candidate_clip_count)
+    resolved_task_id, resolved_task_dir_name = task_id, task_dir_name
+    now = _now_iso()
+    has_source_file = bool(payload.original_video_path)
+    initial_status = TaskStatus.CREATED.value if payload.auto_mode else (
+        TaskStatus.pending_processing.value if has_source_file else TaskStatus.pending_video.value
+    )
+    progress = STATUS_PROGRESS[initial_status]
+    auto_config = {
+        "auto_clip_count": payload.auto_clip_count,
+        "auto_min_clip_seconds": payload.auto_min_clip_seconds,
+        "auto_max_clip_seconds": payload.auto_max_clip_seconds,
+        "auto_schedule_mode": payload.auto_schedule_mode,
+        "auto_schedule_start_at": payload.auto_schedule_start_at or "",
+        "auto_schedule_interval_hours": payload.auto_schedule_interval_hours,
+        "auto_schedule_daily_start_time": payload.auto_schedule_daily_start_time,
+        "auto_schedule_daily_end_time": payload.auto_schedule_daily_end_time,
+        "auto_metadata_use_ai": payload.auto_metadata_use_ai,
+    }
+
+    existing_columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
+    }
+    insert_data = {
+        "id": resolved_task_id,
+        "task_name": payload.task_name,
+        "task_dir_name": resolved_task_dir_name,
+        "source_type": "upload",
+        "platform": payload.platform,
+        "original_video_path": payload.original_video_path,
+        "nas_file_path": None,
+        "max_clip_duration": payload.max_clip_duration,
+        "candidate_clip_count": payload.candidate_clip_count,
+        "selection_profile": payload.selection_profile,
+        "visual_enabled": int(payload.visual_enabled),
+        "final_clip_target": payload.final_clip_target,
+        "highlight_density_per_hour": payload.highlight_density_per_hour,
+        "highlight_total_limit": payload.highlight_total_limit,
+        "ai_preference": payload.ai_preference,
+        "ai_prompt_preset_id": payload.ai_prompt_preset_id or registered_profile(payload.selection_profile).prompt_preset_id,
+        "auto_mode": 1 if payload.auto_mode else 0,
+        "auto_config_json": json.dumps(auto_config, ensure_ascii=False),
+        "status": initial_status,
+        "progress": progress,
+        "error_message": None,
+        "last_error": None,
+        "is_deleted": 0,
+        "deleted_at": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    from app.services.challenger_trial_service import prepare_trial, bind_trial
+    trial = prepare_trial(connection, payload)
+    selected_prompt = connection.execute("SELECT is_archived FROM ai_prompt_presets WHERE id=?", (insert_data["ai_prompt_preset_id"],)).fetchone()
+    if not selected_prompt or (selected_prompt[0] and trial is None):
+        raise ValueError("所选 Prompt 不存在或已归档，请选择有效方案")
+
+    if "title" in existing_columns:
+        insert_data["title"] = payload.task_name
+    if "source_path" in existing_columns:
+        insert_data["source_path"] = payload.original_video_path
+    if "max_clip_minutes" in existing_columns:
+        insert_data["max_clip_minutes"] = payload.max_clip_duration
+    if "target_clip_count" in existing_columns:
+        insert_data["target_clip_count"] = payload.candidate_clip_count
+
+    columns = [column for column in insert_data if column in existing_columns]
+    placeholders = ", ".join("?" for _ in columns)
+    connection.execute(
+        f"INSERT INTO tasks ({', '.join(columns)}) VALUES ({placeholders})",
+        tuple(insert_data[column] for column in columns),
+    )
+    from app.services.weekly_review_service import freeze_task
+    freeze_task(connection, resolved_task_id)
+    from app.services.content_profile_service import freeze_task_profile, freeze_task_provider
+    freeze_task_profile(connection, resolved_task_id)
+    freeze_task_provider(connection, resolved_task_id, payload.ai_provider)
+    from app.services.visual_policy_service import freeze_task_visual
+    freeze_task_visual(connection, resolved_task_id, payload.visual_enabled)
+    bind_trial(connection, resolved_task_id, trial, now)
+
+    return initial_status
 
 
 def update_task_status(
@@ -434,6 +450,9 @@ def update_task_ai_preference(task_id: str, ai_preference: str | None) -> dict:
     now = _now_iso()
     normalized_preference = (ai_preference or "").strip()
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        from app.services.material_batch_service import require_editable_policy
+        require_editable_policy(connection, task_id)
         connection.execute(
             """
             UPDATE tasks
@@ -465,6 +484,9 @@ def update_task_candidate_clip_count(task_id: str, candidate_clip_count: int) ->
 
     now = _now_iso()
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        from app.services.material_batch_service import require_editable_policy
+        require_editable_policy(connection, task_id)
         connection.execute(
             """
             UPDATE tasks
@@ -510,6 +532,8 @@ def update_task_selection_settings(
     now = _now_iso()
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        from app.services.material_batch_service import require_editable_policy
+        require_editable_policy(connection, task_id)
         from app.services.challenger_trial_service import task_binding
         trial_binding = task_binding(connection, task_id)
         if trial_binding and selection_profile != task["selection_profile"]:

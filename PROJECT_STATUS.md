@@ -1,6 +1,12 @@
 # 项目当前进度
 
-## 当前开发：v2.6 PR1 素材目录与登记（尚未部署）
+## 当前开发：v2.6 PR2 批次任务与原片导入（尚未部署）
+
+PR #112 的三项 CI 通过并合并 `a3f9ef1`；当前短期分支 `codex/v2.6-batch-import`。已接事务内批次/Task/Workflow Job 创建、配置冻结、受租约保护的原片复制与真实哈希/媒体校验、跨浏览器刷新重试、素材池批次进度。第 21 项迁移仅在隔离库执行，正式仍 v2.5.5 / `c0d7962`、19 项迁移。
+
+批次默认只导入并等待逐步处理；自动生产暂不开放，人工审核/排期边界会在后续 PR 一并接入。新增定向 17 项、旧 Profile/Provider/素材/迁移 56 项通过；真实十条短视频复制解码及原片保留通过。完整离线基线 1283 passed（377.80 秒）、最终批次/浏览器增量 15 passed、最终 cuts-async 门禁单项通过；Ruff、编译及 12 JS 通过。只读审查无确定性阻塞，待独立 PR/CI。全局重型并发、统一 Inbox 和首页工作台仍属后续 PR。
+
+## 已合并：v2.6 PR1 素材目录与登记（尚未部署）
 
 v2.5.5 证据 PR #111 最终 `d3fae7d` 三项 CI 通过，合并 `884af4d`；从最新 master 建立 `codex/v2.6-material-catalog`。首步单独验证文件访问与登记边界：目录预览、明确确认、元数据版本、重复/并发复用、响应丢失重试和素材池页面。后续 PR 才在原 Workflow Job 接任务/复制及生产队列；本 PR 不生成生产任务、不复制原片、不调用 AI。
 
@@ -8,7 +14,7 @@ v2.5.5 证据 PR #111 最终 `d3fae7d` 三项 CI 通过，合并 `884af4d`；从
 
 ## 当前：v2.5.5 已发布与部署（2026-09-15 10:08）
 
-[PR #110](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/110) 版本提交 `c0d7962fe4ee23e81bc93669bb5ff1777502eb63` 已通过 PR 与最终主干三项 CI；[v2.5.5 Release](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.5.5) 已发布为 Latest，指向同一提交。下一阶段为 v2.6 目录素材与内容生产队列，尚未开发其业务功能。
+[PR #110](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/110) 版本提交 `c0d7962fe4ee23e81bc93669bb5ff1777502eb63` 已通过 PR 与最终主干三项 CI；[v2.5.5 Release](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.5.5) 已发布为 Latest，指向同一提交。v2.6 当前开发进度见本文顶部；正式服务仍保持本版本。
 
 - Windows 11 / PowerShell 7.6.5 / Docker Desktop 4.40.0 的最终提交实机门禁 17 项通过；Demo 3 任务、6 候选、6 manual_export 草稿。有效证据位于忽略目录 `data/acceptance/v255-release-tests/windows-ps7-attempt2/`。
 - 10:08:02–10:08:46 沿用原 RunDock Web/Worker 完成维护。实际版本均为 2.5.5，监听进程父链对应原管理记录与 `Ai-Clip-Workflow-offline-runtime`；deep readiness=ready，实际数据库路径与启动参数一致。

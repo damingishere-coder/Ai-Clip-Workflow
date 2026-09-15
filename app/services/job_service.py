@@ -15,6 +15,7 @@ from uuid import uuid4
 from app.db.database import get_connection
 
 # ── 支持的 job 类型 ──────────────────────────────────────────────
+JOB_TYPE_MATERIAL_IMPORT = "material_import"
 JOB_TYPE_VIDEO_CUT = "video_cut"
 JOB_TYPE_AI_ANALYSIS = "ai_analysis"
 JOB_TYPE_TRANSCRIPT = "transcript"
@@ -38,6 +39,7 @@ JOB_STATUS_LABELS = {
 }
 
 JOB_TYPE_LABELS = {
+    JOB_TYPE_MATERIAL_IMPORT: "素材导入",
     JOB_TYPE_VIDEO_CUT: "自动切片",
     JOB_TYPE_AI_ANALYSIS: "AI 分析",
     JOB_TYPE_TRANSCRIPT: "转写",

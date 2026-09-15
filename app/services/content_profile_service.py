@@ -160,8 +160,15 @@ def _task_provider(connection, task_id: str) -> dict | None:
 def freeze_new_job_payload(connection, task_id: str, job_type: str, payload: dict | None) -> dict:
     """New jobs get evidence; retries never call this and retain old ledgers."""
     result = dict(payload or {})
+    from app.services.material_batch_service import require_imported_source
+    if job_type != "material_import":
+        require_imported_source(connection, task_id)
     if job_type not in {"ai_analysis", "auto_pipeline"}:
         return result
+    from app.services.material_batch_service import frozen_job_payload
+    batch_payload = frozen_job_payload(connection, task_id, job_type, result)
+    if batch_payload is not None:
+        return batch_payload
     from app.core.config import settings
     from app.services.ai_prompt_preset_service import get_task_ai_prompt_snapshot_with_connection
     task = connection.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
@@ -203,6 +210,12 @@ def freeze_new_job_payload(connection, task_id: str, job_type: str, payload: dic
 
 def read_job_snapshot(job: dict, *, connection=None) -> dict | None:
     payload = job.get("payload_json") or {}
+    from app.services.material_batch_service import task_item
+    from app.db.database import get_connection
+    with (nullcontext(connection) if connection is not None else get_connection()) as batch_connection:
+        batch = task_item(batch_connection, job.get("task_id"))
+        if batch and payload.get(JOB_SNAPSHOT_KEY) != batch["generation"]:
+            raise ValueError("批次 Job 缺少冻结策略或策略已变化，不能回退当前配置")
     if JOB_SNAPSHOT_KEY not in payload:
         if job.get("task_id"):
             from app.db.database import get_connection

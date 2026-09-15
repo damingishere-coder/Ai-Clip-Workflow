@@ -1914,6 +1914,10 @@ def run_auto_pipeline(
     start_step: TaskStatus | str | None = None,
     job_id: str | None = None,
 ) -> dict:
+    from app.services.material_batch_service import task_item
+    with get_connection() as connection:
+        if task_item(connection, task_id):
+            raise ValueError("批量自动生产将在人工审核门槛接入后启用；当前请逐步处理")
     return PipelineEngine().run(task_id, retry=retry, start_step=start_step, job_id=job_id)
 
 

@@ -1,5 +1,16 @@
 # Development Log
 
+## 2026-09-15 v2.6 PR2 批次任务与可恢复导入
+
+- 收口只读审查无确定性原子性/恢复/审核门槛阻塞。修正待导入 cuts-async 预期门禁被映射为 500 的错误，现返回 409 且不创建 Job；最终单项 API 回归和 Ruff 通过。全量之后还把旧残件清理移到空间检查之前，增量覆盖“残件占满磁盘后恢复”，并使浏览器刷新显示实际冻结配置。
+- PR #112 素材池最终 `607a902` 的 Linux/Windows/Docker 三项 CI 通过，Squash 合并 `a3f9ef1`。从该 master 新建 `codex/v2.6-batch-import`，正式服务仍 v2.5.5 / `c0d7962`、19 项迁移。
+- 复用 Task 插入/策略冻结，抽出调用方事务 helper；批次、真实 pending_video 任务、批次项、material_import Job 一起提交。不同请求重复素材明确拒绝并指向已有任务，只有显式再次生产才允许新建；同 UUID 返回原结果。
+- 新增第 21 项增量迁移：material_batches、material_batch_items、material_imports 与不可变约束/幂等索引。任务策略快照继续使用 generation_snapshot_v1，旧任务及旧 Job 解释不变。
+- 导入使用 lease-token 独立临时/最终文件，句柄身份、分块取消/进展、原片双读 SHA-256、副本完整 SHA-256、FFprobe 与首尾解码、磁盘预检。成功证据与 Task 源路径同事务激活，Job 终态异常时按已提交证明恢复，不重复复制。旧 claim 残件清理限项目托管文件且保护已引用原片。
+- 真实双轨视频十任务首次暴露 Windows Python stat/fstat 的 ctime 差异（复制文件路径 ctime 与句柄 ctime 不同）；改为同 API 前后严格比较，并跨 API 校验 dev/inode/size/mtime。原片路径版本及完整字节校验保留；十文件实测通过。
+- UI 提供统一 Profile/Prompt/Provider/数量/字幕配置和明确确认。请求正文与 UUID 在提交前写入本机浏览器，丢响应→刷新→再次确认仍复用原批次。自动生产暂显式关闭，后续与人工门槛一起开放。
+- 定向 17 passed（17.75 秒）：原子回滚、并发十任务、重复生产确认、真实复制、提交后恢复、低空间/错误哈希/文件替换/句柄替换/旧 lease、模拟重解析点、待导入操作阻挡、迁移备份恢复与 Chrome 1440/390；旧 Profile/Provider/素材/迁移 56 passed，原素材页面两宽度回归通过。完整离线基线 1283 passed、0 failed/0 skipped（377.80 秒），最终批次/Chrome 增量 15 passed（外层 18.16 秒）；Ruff app/scripts/tests、编译、12 JS 全过。证据在 `data/acceptance/v26-batch-import-regression/`。
+
 ## 2026-09-15 v2.6 PR1 素材目录与确认登记
 
 - 完整离线 1266 passed、0 failed/0 skipped、9 warnings（348.90 秒），Ruff、编译及 11 JS 全过，证据在忽略目录 `data/acceptance/v26-material-catalog-regression/`。只读审查无当前登记流程阻塞；记录复制阶段句柄竞态、完整内容哈希、Windows reparse 专项验证与预览保留策略的后续要求。

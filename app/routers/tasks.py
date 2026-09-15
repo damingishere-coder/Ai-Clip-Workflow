@@ -549,6 +549,8 @@ async def process_video_cuts_async(
             task_id=task_id,
             job_type=job_service.JOB_TYPE_VIDEO_CUT,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=getattr(exc, "status_code", 400), detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"创建切片任务失败：{exc}") from exc
 
