@@ -35,7 +35,7 @@ WITH candidate AS (
 SELECT t.id,t.task_name title,t.status,t.updated_at,COALESCE(cc.n,0) candidates,
  COALESCE(o.n,0) outputs,COALESCE(o.subtitle_pending,0) subtitle_pending,
  COALESCE(o.unprepared,0) unprepared,b.id batch_item,
- j.status job_status,j.message job_message,j.error_message job_error,
+ j.status job_status,j.job_type,j.message job_message,j.error_message job_error,
  EXISTS(SELECT 1 FROM workflow_jobs w WHERE w.task_id=t.id AND w.status IN ('queued','running')) busy,
  EXISTS(SELECT 1 FROM workflow_jobs w WHERE w.task_id=t.id AND w.status='running') running,
  r.delivery_mode,CASE WHEN r.id IS NOT NULL AND r.revision=e.revision
@@ -56,7 +56,8 @@ def _classify(row):
         return None
     status = row['status'].lower()
     if status in {'failed', 'completed_with_errors'} or status.startswith('failed_') or row['job_status'] == 'failed':
-        return 'errors', 1, row['job_error'] or '处理未完成，请查看任务中的失败步骤和恢复提示', f"/tasks/{row['id']}"
+        return 'errors', 1, row['job_error'] or '处理未完成，请查看任务中的失败步骤和恢复提示', (
+            '/materials' if row['job_type']=='material_import' else f"/tasks/{row['id']}")
     if row['batch_item']:
         if row['outputs'] and not row['approved']:
             return 'clips', row['outputs'], '查看实际成片并确认；版本变化后需要重新核对', f"/tasks/{row['id']}/clips"

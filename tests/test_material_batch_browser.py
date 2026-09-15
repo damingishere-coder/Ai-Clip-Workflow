@@ -71,6 +71,17 @@ def test_batch_confirmation_survives_lost_response_and_reload(width, batch_db, t
             assert page.locator('[data-batch-id]').count() == 1
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1')
             assert page.evaluate("localStorage.getItem('niuma-material-batch-pending-v1')") is None
+            with db.get_connection() as c:
+                failed = c.execute('SELECT id FROM workflow_jobs ORDER BY rowid LIMIT 1').fetchone()[0]
+                c.execute("UPDATE workflow_jobs SET status='failed',error_message='copy interrupted' WHERE id=?",(failed,))
+                c.commit()
+            page.locator('#batch-refresh').click()
+            retry = page.locator(f'[data-retry-import="{failed}"]')
+            retry.wait_for()
+            retry.click()
+            page.wait_for_function("document.getElementById('batch-status').textContent.includes('已重新排入导入队列')")
+            with db.get_connection() as c:
+                assert c.execute('SELECT status FROM workflow_jobs WHERE id=?',(failed,)).fetchone()[0] == 'queued'
             page.locator('#batch-panel').screenshot(path=str(tmp_path/f'batch-panel-{width}.png'))
             assert not errors
             with db.get_connection() as c:

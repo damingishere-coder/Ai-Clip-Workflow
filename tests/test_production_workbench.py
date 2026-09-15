@@ -116,6 +116,10 @@ def test_manual_import_waiting_for_explicit_processing_is_visible(batch_db,tmp_p
     assert work.inbox('start')['counts']['start']['count'] == 1
     cards = {x['label']:x for x in work.dashboard()['cards']}
     assert '1 个待继续处理' in cards['处理中']['note']
+    with db.get_connection() as c:
+        c.execute("UPDATE workflow_jobs SET status='failed' WHERE id=?",(item['job_id'],))
+        c.commit()
+    assert work.inbox('errors')['items'][0]['url'] == '/materials'
 
 
 def test_reviewable_uses_account_scope_and_existing_evidence_threshold(human_db,monkeypatch):
