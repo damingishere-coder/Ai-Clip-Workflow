@@ -42,7 +42,7 @@ Profile/Prompt/Provider/反馈/视觉沿用既有 generation_snapshot_v1，任�
 
 ## v2.6 开发：本机素材登记
 
-`material_catalog_service` 在用户显式输入目录后读取非递归元数据、保存不可变预览；确认时重新验证目录和文件身份，在同一 SQLite 事务写 source_materials 与幂等登记回执。它不扩展 storage_service 的媒体下载根、不启动 Job、不打开模型。此阶段 identity_sha256 仅证明保存的元数据，后续 task-bound 导入 Job 才计算完整视频哈希和复制产物校验。Queue 继续复用 workflow_jobs，见 [内容生产队列](CONTENT_PRODUCTION_QUEUE.md)；正式服务仍为 v2.5.5。
+`material_catalog_service` 在用户显式选择或输入目录后读取元数据、保存不可变预览。网页目录浏览使用受本机管理/同源保护的 POST 接口，扫描通过 recursive 参数选择是否递归（页面默认开启，旧 API 默认单层）；全树最多 10000 项/20 层、最多扫描登记 1000 个视频，任务批次仍最多 200。预览项提供相对路径，源身份仍绑定实际直属目录，所以不同层级入口登记同一源时复用。确认时重新验证预览根目录、源目录和文件身份，在同一 SQLite 事务写 source_materials 与幂等登记回执。它拒绝链接/重解析点与网络路径，不扩展 storage_service 的媒体下载根、不启动 Job、不打开模型。此阶段 identity_sha256 仅证明保存的元数据，后续 task-bound 导入 Job 才计算完整视频哈希和复制产物校验。Queue 继续复用 workflow_jobs，见 [内容生产队列](CONTENT_PRODUCTION_QUEUE.md)；正式运行证据以 PROJECT_STATUS 为准。
 
 ## 当前代码：v2.5.5 人工经验与受控实验
 

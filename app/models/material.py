@@ -7,13 +7,19 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class MaterialScan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     directory: str = Field(min_length=1, max_length=2048)
+    recursive: bool = False
+
+
+class MaterialDirectoryBrowse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    directory: str = Field(default="", max_length=2048)
 
 
 class MaterialRegistration(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scan_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     manifest_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
-    source_keys: list[str] = Field(min_length=1, max_length=200)
+    source_keys: list[str] = Field(min_length=1, max_length=1000)
     request_key: UUID
     confirmed: bool = False
 

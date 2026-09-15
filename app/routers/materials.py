@@ -1,16 +1,25 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from app.models.material import MaterialRegistration, MaterialScan
+from app.models.material import MaterialDirectoryBrowse, MaterialRegistration, MaterialScan
 from app.services import material_catalog_service as catalog
 
 router = APIRouter(prefix="/api/materials", tags=["materials"])
+
+
+@router.post("/directories")
+def browse_material_directories(payload: MaterialDirectoryBrowse):
+    # POST keeps local filesystem discovery behind the same-origin admin boundary.
+    try:
+        return catalog.browse_directories(payload.directory)
+    except catalog.MaterialError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
 
 
 @router.post("/scan")
 def scan_materials(payload: MaterialScan):
     # Existing admin/same-origin middleware protects this explicit local action.
     try:
-        return catalog.scan_directory(payload.directory)
+        return catalog.scan_directory(payload.directory, recursive=payload.recursive)
     except catalog.MaterialError as exc:
         raise HTTPException(exc.status_code, str(exc)) from exc
 
