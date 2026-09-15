@@ -1,3 +1,13 @@
+## 当前：发送中心恢复已部署（2026-09-16 00:34）
+
+[PR #126](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/126) 已合并，00:33:20 原 RunDock Web 8001 更新到 `4a4efc0ab35da2a60095e37f008b68cca81d8307`，运行目录仍 `Ai-Clip-Workflow-offline-runtime`，版本仍 2.6.0。Worker 8765 原进程 PID 146404 保持运行；Web 新监听 PID 147380，父链对应原 RunDock 记录。deep readiness=ready，迁移 23 项，integrity=ok、外键异常 0。
+
+维护前在线快照 `before-deploy.sqlite3` 及 SHA-256 已保存，51 张表更新前后完全一致，配置与外部原片/托管媒体元数据指纹未变。正式全局同步连续两次新增 0、错误 0；1045 条 publish_jobs 在两次同步前后逐条相同，318 条 PUBLISHED 与最初备份逐条相同；293 条误补草稿仅转 CANCELLED，原片、历史输出及历史凭据未删除。当前抖音 WAITING=3、SCHEDULED=6。
+
+E1843 最新 6 条按北京时间 **2026-09-16 07:00、10:00、13:00、16:00、19:00、22:00** 排期，沿用抖音原账号、原视频字幕；更新后逐条核对时间、账号、成片版本及状态不变。当前仅证实已排期，实际发送结果应在执行后查看，未伪造已发送。
+
+正式 app.js、production-review.js、production-review.css 三项响应哈希与运行文件一致，HTML 含新维护说明，未确认的另一批次任务 live API 显示待确认实际成片与 review_outputs。正式浏览器控制通道持续报 `Unable to load browser request-header policy`，因此正式页面实点验收没有完成；不以 HTTP 成功替代浏览器验收。隔离 Chrome 8 项覆盖两宽度、原字幕/新增字幕及内容准备跳转。此次后续仅交付文档，无需重启服务。
+
 ## 发送中心同步与素材批次修复（2026-09-16）
 
 已核实全局“同步遗漏切片”只检查活动状态，遗漏 PUBLISHED/EXPORTED，导致 2026-09-15 23:57–23:58 为同一切片新增 293 条 WAITING；原历史没有被改写。修复按切片与平台核对所有成功历史，覆盖较新的移除记录遮蔽历史成功的情况；FAILED 保留显式重试入口。按钮补充当前平台全部任务的扫描范围。
@@ -6,7 +16,7 @@
 
 本次用户明确委托修复并安排下一轮发布。已在线备份并经原 dismiss API 撤下 293 条重复草稿，318 条 PUBLISHED 逐条不变。E1843 `7b9ee764910c` 最新第 3 次切割的 6 条成片完成时长/轨道/完整解码/哈希与三时点抽帧核对，保留原字幕；授权说明单独留证，未宣称用户本人已逐条观看。通过原确认、同步、账号选择、预览和批量排期 API，安排北京时间 2026-09-16 07:00、10:00、13:00、16:00、19:00、22:00，抖音原账号。Scheduler 已读到 6 SCHEDULED、Worker 在线；尚未到实际发布时刻，不将排期视为成功发送。
 
-定向 55 passed，Ruff/JS 通过，完整回归及 PR/CI/正式代码部署继续验收。生产恢复、媒体校验和备份证据保存在修复工作目录的忽略目录 `data/acceptance/publish-sync-repair/`；不提交媒体、数据库或配置。
+最终完整离线回归 **1383 passed、0 failed**（467.64 秒，9 条既有弃用警告），整合后流程定向 49 passed、1440/390 Chrome 共 8 项交互通过；Ruff、compileall、JS 检查通过。PR #126 最终提交 `982b39f` 的 Linux、Windows、Docker CI `34994797454` 全通过，Squash 合并为 `4a4efc0`。生产恢复、媒体校验和备份证据保存在修复工作目录的忽略目录 `data/acceptance/publish-sync-repair/`；不提交媒体、数据库或配置。
 
 # 项目当前进度
 
@@ -328,3 +338,4 @@ PR [#88](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/88) 已 squ
 | 单条素材进度 | 以任务页面和当前数据库为准；历史日志里的处理百分比、候选数量和排期不是实时状态 |
 
 Issue #23 仍保留早期 v2.0 实机验收标题；本次 v2.3 实机验收已经完成。Issue 的旧标题或开放状态不能替代最新发布证据。
+
