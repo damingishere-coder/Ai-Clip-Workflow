@@ -68,5 +68,5 @@ def pause_for_review(task_id):
     except (ValueError, OSError) as exc:
         raise PipelineCheckpointError(str(exc)) from exc
     update_task_status(task_id, TaskStatus.pending_review)
-    return {'status':'pending_review', 'message':'批次预切完成，等待人工检查实际成片并决定字幕方式',
+    return {'status':'pending_review', 'message':'批次预切完成，等待人工检查实际成片；字幕沿用创建时的设置',
             'cut_run_id':proof['cut_run_id'], 'task':get_task(task_id, include_video_probe=False)}

@@ -2,7 +2,7 @@
 {% block title %}片段审核 - {{ settings.app_name }}{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', path='vendor/nouislider/nouislider.min.css') }}?v=15.8.1">
-<style>#production-review [hidden] { display: none !important; } #production-review fieldset { min-width: 0; } #production-review label { display: block; margin: 12px 0; }</style>
+<link rel="stylesheet" href="{{ url_for('static', path='css/production-review.css') }}?v=20260915-1">
 {% endblock %}
 
 {% block content %}
@@ -28,25 +28,33 @@
 <div class="page-alert" id="clip-review-message" hidden></div>
 
 {% if production_review_required %}
-<section class="panel" id="production-review" data-task-id="{{ task.id }}">
-  <h2>确认实际成片</h2>
-  <p>批量任务生成视频后，请逐条检查画面、声音和内容完整性。更改候选、重新分析或生成新成片后，需要重新确认。</p>
-  <p id="production-review-status" role="status">正在读取成片版本…</p>
-  <button type="button" class="secondary-button" id="production-review-refresh">刷新成片</button>
-  <div id="production-review-outputs"></div>
-  <fieldset id="production-review-choice" disabled>
-    <legend>字幕交付方式</legend>
-    <label><input type="radio" name="production-delivery" value="original" checked>保留视频原字幕，不新增字幕</label>
-    <label><input type="radio" name="production-delivery" value="subtitled">审核并制作新字幕</label>
-    <label><input type="checkbox" id="production-review-checked">我已检查本次全部实际成片，确认可以继续生产</label>
-    <button type="button" class="primary-button" id="production-review-confirm">确认成片与字幕选择</button>
-  </fieldset>
-  <div class="toolbar">
-    <button type="button" class="secondary-button" id="production-review-subtitles" hidden>准备字幕审核</button>
-    <a href="/subtitles/{{ task.id }}" id="production-review-subtitle-link" hidden>进入字幕工作台</a>
-    <button type="button" class="primary-button" id="production-review-prepare" hidden>进入内容准备</button>
+<section class="panel production-review-panel" id="production-review" data-task-id="{{ task.id }}" aria-labelledby="production-review-title">
+  <header class="production-review-header">
+    <div><p class="eyebrow">成片验收</p><h2 id="production-review-title">看过成片，再继续</h2><p class="production-review-note">检查画面、声音和内容完整性，确认这版视频可以使用。</p></div>
+    <button type="button" class="secondary-button" id="production-review-refresh">刷新成片</button>
+  </header>
+  <div class="production-review-layout">
+    <div class="production-review-main">
+      <div class="production-review-state"><span class="production-review-dot" aria-hidden="true"></span><p id="production-review-status" role="status">正在读取成片版本…</p></div>
+      <div id="production-review-empty" class="production-review-empty" hidden><strong>当前还没有可确认的成片</strong><p>如果修改过片段，请先保存选择并生成最新切片，再回来检查。</p><a class="secondary-button" href="#generate-clips-button">查看切片操作 ↗</a></div>
+      <div id="production-review-outputs" class="production-output-grid"></div>
+    </div>
+    <aside class="production-review-next">
+      <p class="eyebrow">本任务字幕设置</p><strong id="production-review-policy">正在读取创建设置…</strong><p id="production-review-policy-note" class="production-review-note">字幕方式沿用创建任务时的选择。</p>
+      <div class="production-review-divider"></div>
+      <fieldset id="production-review-choice" disabled>
+        <legend class="sr-only">确认成片</legend>
+        <label class="production-review-check"><input type="checkbox" id="production-review-checked"><span>我已检查全部成片<br><small>画面、声音和内容均可使用</small></span></label>
+        <button type="button" class="primary-button" id="production-review-confirm">确认成片</button>
+      </fieldset>
+      <div class="production-review-actions">
+        <button type="button" class="primary-button" id="production-review-subtitles" hidden>继续字幕审核 →</button>
+        <a href="/subtitles/{{ task.id }}" id="production-review-subtitle-link" hidden>打开已有字幕</a>
+        <button type="button" class="primary-button" id="production-review-prepare" hidden>进入内容准备 →</button>
+      </div>
+      <p class="production-review-footnote">成片版本变化后需要重新检查。排期和发送在发送中心单独确认。</p>
+    </aside>
   </div>
-  <p>确认仅记录当前版本；进入内容准备仍需点击操作，排期和发送沿用发送中心的独立确认。</p>
 </section>
 {% endif %}
 
@@ -251,7 +259,7 @@
       <div class="button-row review-actions">
         <button class="secondary-button review-action-button" id="save-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/clips/batch-update" {{ "disabled" if not clips else "" }}>保存修改</button>
         <button class="primary-button review-action-button review-action-main" id="generate-clips-button" type="button" data-endpoint="/api/tasks/{{ task.id }}/process/cuts-async" {{ "disabled" if not clips else "" }}>生成切片</button>
-        <a class="secondary-button review-action-button" href="/subtitles/{{ task.id }}">去字幕推送</a>
+        {% if not production_review_required %}<a class="secondary-button review-action-button" href="/subtitles/{{ task.id }}">去字幕推送</a>{% endif %}
 {% if not production_review_required %}
         <button class="secondary-button review-action-button" type="button" data-sync-publish-task data-sync-reviewed-clips="true" data-task-id="{{ task.id }}" {{ "disabled" if not clips else "" }}>保存并同步发送中心</button>
 {% endif %}
@@ -390,7 +398,7 @@
 </div>
 {% endblock %}
 {% block extra_scripts %}
-{% if production_review_required %}<script src="{{ url_for('static', path='js/production-review.js') }}?v=20260915-1"></script>{% endif %}
+{% if production_review_required %}<script src="{{ url_for('static', path='js/production-review.js') }}?v=20260915-2"></script>{% endif %}
 <script src="{{ url_for('static', path='vendor/nouislider/nouislider.min.js') }}?v=15.8.1"></script>
 <script src="{{ url_for('static', path='js/human-review.js') }}?v=20260915-1"></script>
 {% endblock %}

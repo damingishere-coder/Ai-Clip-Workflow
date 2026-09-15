@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import json
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -21,7 +23,8 @@ def _headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {settings.local_admin_token}"}
 
 
-def test_task_create_and_upload_api_use_ten_minutes_and_twelve_candidates(monkeypatch, tmp_path):
+@pytest.mark.parametrize('strategy', [None, 'original', 'review'])
+def test_task_create_and_upload_api_use_ten_minutes_and_twelve_candidates(monkeypatch, tmp_path, strategy):
     payload = TaskCreate(task_name="默认值模型测试", selection_profile="general")
     assert payload.max_clip_duration == 10
     assert payload.candidate_clip_count == 12
@@ -58,7 +61,8 @@ def test_task_create_and_upload_api_use_ten_minutes_and_twelve_candidates(monkey
 
     response = TestClient(app).post(
         "/api/tasks/upload",
-        data={"task_name": "上传默认值测试", "platform": "general", "selection_profile": "general"},
+        data={"task_name": "上传默认值测试", "platform": "general", "selection_profile": "general",
+              **({'subtitle_strategy': strategy} if strategy else {})},
         files={"video_file": ("source.mp4", b"fake-video", "video/mp4")},
         headers=_headers(),
     )
@@ -66,6 +70,7 @@ def test_task_create_and_upload_api_use_ten_minutes_and_twelve_candidates(monkey
     assert response.status_code == 200
     assert captured["payload"].max_clip_duration == 10
     assert captured["payload"].candidate_clip_count == 12
+    assert captured["payload"].subtitle_strategy == strategy
 
 
 def test_new_task_page_selects_new_defaults():
@@ -74,6 +79,54 @@ def test_new_task_page_selects_new_defaults():
     assert response.status_code == 200
     assert re.search(r'name="max_clip_duration"[^>]*value="10"', response.text)
     assert re.search(r'<option value="12"\s+selected>12 条</option>', response.text)
+    assert 'name="subtitle_strategy"' in response.text
+
+
+@pytest.mark.parametrize('strategy', [None, 'original', 'review'])
+def test_creation_freezes_subtitle_settings_without_changing_legacy_default(monkeypatch, strategy):
+    task_id = f'{PREFIX}subtitle'
+    monkeypatch.setattr('app.services.task_lifecycle_service.create_task_directory', lambda *_: None)
+    try:
+        create_task_record(TaskCreate(task_name='字幕设置', selection_profile='general',
+                                     subtitle_strategy=strategy), task_id=task_id, task_dir_name=task_id)
+        with get_connection() as c:
+            config = json.loads(c.execute('SELECT auto_config_json FROM tasks WHERE id=?', (task_id,)).fetchone()[0])
+        if strategy is None:
+            assert 'subtitle_strategy' not in config and 'subtitle_delivery_mode' not in config
+        else:
+            assert config['subtitle_strategy'] == strategy
+            assert config['subtitle_delivery_mode'] == ('original' if strategy == 'original' else 'subtitled')
+            assert config['subtitle_decided_at']
+    finally:
+        with get_connection() as c:
+            c.execute('DELETE FROM tasks WHERE id=?', (task_id,))
+            c.commit()
+
+
+def test_original_output_review_cannot_restart_auto_selection(monkeypatch):
+    monkeypatch.setattr(tasks_router.task_service, 'get_task', lambda *a, **k: {
+        'auto_mode':True, 'status':'pending_review', 'subtitle_strategy':'original',
+        'output_clip_count':2, 'analysis_exists':True})
+    monkeypatch.setattr(tasks_router, 'start_auto_pipeline', lambda *a, **k: pytest.fail('不应重新选片'))
+    response = TestClient(app).post('/api/tasks/creation-skip/process/auto-resume', headers=_headers())
+    assert response.status_code == 400 and '检查成片' in response.json()['detail']
+
+
+def test_created_subtitle_policy_blocks_original_fallback_before_sync_mutations(monkeypatch):
+    from app.services import publish_service
+    task_id = f'{PREFIX}subtitle-sync'
+    monkeypatch.setattr('app.services.task_lifecycle_service.create_task_directory', lambda *_: None)
+    try:
+        create_task_record(TaskCreate(task_name='新增字幕', selection_profile='general', subtitle_strategy='review'),
+                           task_id=task_id, task_dir_name=task_id)
+        monkeypatch.setattr(publish_service, '_list_completed_publish_clips', lambda *_: [{'output_clip_id':'unrendered'}])
+        monkeypatch.setattr(publish_service, '_supersede_stale_publish_jobs', lambda *_: pytest.fail('不可先改发布记录'))
+        with pytest.raises(ValueError, match='创建时已选择新增字幕'):
+            publish_service.sync_task_publish_jobs(task_id, prefer_subtitled=False)
+    finally:
+        with get_connection() as c:
+            c.execute('DELETE FROM tasks WHERE id=?', (task_id,))
+            c.commit()
 
 
 def test_new_defaults_persist_without_rewriting_explicit_historical_values(monkeypatch):

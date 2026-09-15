@@ -64,6 +64,7 @@ async def create_upload_task(
     highlight_total_limit: int = Form(30),
     ai_preference: str | None = Form(None),
     auto_mode: bool = Form(False),
+    subtitle_strategy: str | None = Form(None),
     auto_clip_count: str = Form("auto"),
     auto_min_clip_seconds: int = Form(15),
     auto_max_clip_seconds: int = Form(300),
@@ -106,6 +107,7 @@ async def create_upload_task(
             highlight_total_limit=(highlight_total_limit if selection_profile == "long_live_talk" else 30),
             ai_preference=ai_preference,
             auto_mode=auto_mode,
+            subtitle_strategy=subtitle_strategy,
             auto_clip_count=auto_clip_count,
             auto_min_clip_seconds=auto_min_clip_seconds,
             auto_max_clip_seconds=auto_max_clip_seconds,
@@ -495,6 +497,9 @@ async def resume_auto_pipeline(task_id: str, background_tasks: BackgroundTasks) 
             raise ValueError("任务不存在")
         if not task.get("auto_mode"):
             raise ValueError("该任务未开启全自动模式")
+        if (task.get("subtitle_strategy") == "original" and task.get("status") == "pending_review"
+                and task.get("output_clip_count", 0) > 0):
+            raise ValueError("任务已按创建设置完成切片，请检查成片后继续，无需重新运行自动流程")
         if not task.get("analysis_exists"):
             raise ValueError("还没有可恢复的 AI 分析结果")
         return start_auto_pipeline(

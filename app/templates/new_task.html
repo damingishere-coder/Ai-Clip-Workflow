@@ -144,6 +144,15 @@
       </label>
     </div>
 
+    <label>
+      <span>字幕处理</span>
+      <select name="subtitle_strategy" aria-describedby="new-task-subtitle-help">
+        <option value="original">跳过字幕 · 保留原视频画面</option>
+        <option value="review">新增字幕 · 进入字幕审核</option>
+      </select>
+      <span class="form-hint" id="new-task-subtitle-help">创建时确定字幕方式。跳过字幕会保留画面中已有的字幕，AI 选片所需的语音转写仍会执行；新增字幕会在切片后进入字幕审核。</span>
+    </label>
+
     {% if not challenger_trial %}
     <fieldset>
       <legend>全自动模式</legend>

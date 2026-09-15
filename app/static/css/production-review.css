@@ -1,0 +1,38 @@
+#production-review [hidden] { display: none !important; }
+#production-review .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.production-review-panel { padding: 24px; }
+.production-review-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
+.production-review-header h2 { font-size: 22px; margin: 6px 0 10px; }
+.production-review-header > button { flex-shrink: 0; }
+.production-review-header > div { min-width: 0; }
+#production-review .production-review-note { color: #718097; font-size: 12px; line-height: 1.8; margin: 8px 0 0; }
+.production-review-layout { display: grid; grid-template-columns: minmax(0,1fr) 310px; gap: 24px; }
+.production-review-main { min-width: 0; }
+.production-review-state { display: flex; align-items: flex-start; gap: 10px; padding: 13px 16px; background: #f0f5fc; border-radius: 10px; color: #46658a; }
+.production-review-state p { margin: 0; font-size: 13px; line-height: 1.7; }
+.production-review-dot { width: 7px; height: 7px; flex-shrink: 0; background: #5c8aca; border-radius: 50%; margin-top: 7px; }
+#production-review[data-state="waiting"] .production-review-state { color: #91652c; background: #fff8ed; }
+#production-review[data-state="waiting"] .production-review-dot { background: #ce963f; }
+#production-review[data-state="approved"] .production-review-state { color: #247456; background: #eef8f3; }
+#production-review[data-state="approved"] .production-review-dot { background: #42a47f; }
+.production-review-empty { padding: 24px 18px; margin-top: 14px; border: 1px dashed #dce4f0; border-radius: 12px; }
+.production-review-empty strong { font-size: 14px; }
+.production-review-empty p { font-size: 12px; color: #768498; line-height: 1.7; margin: 10px 0 16px; }
+.production-review-next { min-width: 0; background: #f6f8fc; border: 1px solid #e5ebf4; border-radius: 14px; padding: 20px; align-self: start; }
+#production-review-policy { display: block; margin-top: 12px; font-size: 14px; line-height: 1.7; }
+.production-review-divider { height: 1px; background: #e0e7f1; margin: 18px 0; }
+#production-review-choice { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 16px; }
+#production-review .production-review-check { display: flex; align-items: flex-start; gap: 10px; margin: 0; font-size: 13px; line-height: 1.7; }
+#production-review .production-review-check input { appearance: auto; width: 16px; height: 16px; min-height: 0; flex: 0 0 16px; padding: 0; margin: 3px 0 0; accent-color: #3478f6; }
+.production-review-check small { font-size: 11px; color: #7b899c; font-weight: 400; }
+#production-review-choice:disabled .production-review-check { opacity: .55; }
+.production-review-actions { display: grid; gap: 12px; }
+.production-review-actions a { text-align: center; font-size: 12px; }
+.production-review-footnote { font-size: 11px; color: #8290a4; line-height: 1.8; margin: 16px 0 0; }
+.production-output-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin-top: 14px; }
+.production-output-grid details { min-width: 0; padding: 16px; border: 1px solid #e1e8f2; border-radius: 12px; background: #fff; align-self: start; }
+.production-output-grid summary { overflow-wrap: anywhere; cursor: pointer; font-size: 13px; font-weight: 600; line-height: 1.7; }
+.production-output-grid video { display: block; margin-top: 12px; width: 100%; max-height: 340px; background: #101827; border-radius: 8px; }
+#production-review :focus-visible { outline: 2px solid #3478f6; outline-offset: 3px; }
+@media (max-width: 1100px) { .production-review-layout { grid-template-columns: minmax(0,1fr) 270px; gap: 16px; } .production-output-grid { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .production-review-panel { padding: 18px; } .production-review-layout { grid-template-columns: 1fr; } .production-review-header h2 { font-size: 19px; } .production-review-header { flex-direction: column; gap: 12px; } .production-review-next { padding: 18px; } }

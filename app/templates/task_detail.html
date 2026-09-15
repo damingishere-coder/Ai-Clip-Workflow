@@ -16,13 +16,15 @@
   {% set header_transcript_progress = task.transcript_progress or {} %}
   <div class="button-row"{% if task.auto_mode %} data-live-task-actions{% endif %}>
     {% if task.auto_mode %}
+      {% set creation_output_review = task.subtitle_strategy == 'original' and task.status == 'pending_review' and task.output_clip_count > 0 %}
+      <a class="primary-button" data-live-primary-action="review_outputs" href="/tasks/{{ task.id }}/clips/review" {% if not creation_output_review %}hidden{% endif %}>检查成片</a>
       <button class="primary-button js-process-action" type="button" data-live-primary-action="retry" data-endpoint="/api/tasks/{{ task.id }}/process/auto-retry" {% if not task.status.startswith("FAILED_") %}hidden{% endif %}>重试全自动流程</button>
-      <button class="primary-button js-process-action" type="button" data-live-primary-action="resume" data-endpoint="/api/tasks/{{ task.id }}/process/auto-resume" {% if task.status not in ["pending_review", "completed_with_errors", "failed"] %}hidden{% endif %}>继续全自动流程</button>
+      <button class="primary-button js-process-action" type="button" data-live-primary-action="resume" data-endpoint="/api/tasks/{{ task.id }}/process/auto-resume" {% if creation_output_review or task.status not in ["pending_review", "completed_with_errors", "failed"] %}hidden{% endif %}>继续全自动流程</button>
       <a class="primary-button" data-live-primary-action="subtitle_review" href="/subtitles/{{ task.id }}" {% if task.status != "PENDING_SUBTITLE_REVIEW" %}hidden{% endif %}>前往字幕审核</a>
-      <button class="secondary-button" type="button" data-live-subtitle-skip data-task-id="{{ task.id }}" {% if task.status != "PENDING_SUBTITLE_REVIEW" %}hidden{% endif %}>跳过字幕，进入片段审核</button>
+      <button class="secondary-button" type="button" data-live-subtitle-skip data-task-id="{{ task.id }}" {% if task.subtitle_strategy or task.status != "PENDING_SUBTITLE_REVIEW" %}hidden{% endif %}>跳过字幕，进入片段审核</button>
       <a class="primary-button" data-live-primary-action="publish" href="/publish?task_id={{ task.id }}&tab=content" {% if task.status not in ["READY_TO_PUBLISH", "COMPLETED", "completed"] %}hidden{% endif %}>前往发送中心</a>
       <button class="secondary-button" type="button" data-live-primary-action="processing" disabled {% if task.status.startswith("FAILED_") or task.status in ["pending_review", "PENDING_SUBTITLE_REVIEW", "completed", "completed_with_errors", "failed", "READY_TO_PUBLISH", "COMPLETED"] %}hidden{% endif %}>全自动处理中</button>
-      <a class="secondary-button" data-live-review-action href="/tasks/{{ task.id }}/clips/review" {% if not task.analysis_exists %}hidden{% endif %}>检查候选片段</a>
+      <a class="secondary-button" data-live-review-action href="/tasks/{{ task.id }}/clips/review" {% if creation_output_review or not task.analysis_exists %}hidden{% endif %}>检查候选片段</a>
       <button class="secondary-button" type="button" data-live-sync-action data-sync-publish-task data-task-id="{{ task.id }}" {% if task.output_clip_count <= 0 or task.status == "PENDING_SUBTITLE_REVIEW" %}hidden{% endif %}>同步发送中心</button>
     {% elif task.transcript_exists %}
     <button class="secondary-button" id="start-workflow-button" type="button" disabled>转写已完成</button>

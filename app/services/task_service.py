@@ -509,6 +509,11 @@ def _probe_video(path: Path | None) -> dict[str, str]:
 
 def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
     task = dict(row)
+    try:
+        stored_config = json.loads(task.get("auto_config_json") or "{}")
+        subtitle_strategy = stored_config.get("subtitle_strategy") if isinstance(stored_config, dict) else None
+    except (ValueError, TypeError):
+        subtitle_strategy = None
     task_name = task.get("task_name") or "未命名任务"
     platform = task.get("platform") or "general"
     status = task.get("status") or TaskStatus.pending_video.value
@@ -558,6 +563,7 @@ def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
         "last_error": task.get("last_error") or task.get("error_message") or "",
         "auto_mode": bool(task.get("auto_mode")),
         "auto_config_json": task.get("auto_config_json") or "",
+        "subtitle_strategy": subtitle_strategy,
         "is_deleted": bool(task.get("is_deleted")),
         "deleted_at": _format_datetime(task.get("deleted_at")),
         "task_dir_name": task.get("task_dir_name") or task["id"],
@@ -859,7 +865,8 @@ def get_task_live_status(task_id: str) -> dict:
         }:
             primary_action = "publish"
         elif status in AUTO_PIPELINE_RESUMABLE_STATUSES:
-            primary_action = "resume"
+            primary_action = "review_outputs" if (task.get("subtitle_strategy") == "original"
+                and status == TaskStatus.pending_review.value and output_clip_count > 0) else "resume"
         elif is_running:
             primary_action = "processing"
 
@@ -887,6 +894,7 @@ def get_task_live_status(task_id: str) -> dict:
         },
         "actions": {
             "primary": primary_action,
+            "subtitle_skip": task.get("subtitle_strategy") is None,
             "review": candidate_count > 0,
             "publish": output_clip_count > 0
             and status

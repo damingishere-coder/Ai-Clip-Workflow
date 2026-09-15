@@ -20,9 +20,10 @@ batch_db, human_db = _batch_db, _human_db
 
 
 @pytest.fixture
-def output_batch(batch_db, tmp_path, monkeypatch):
+def output_batch(batch_db, tmp_path, monkeypatch, request):
     from app.services import material_batch_service as batches
-    payload, _ = batch_input(tmp_path, 1)
+    payload, _ = batch_input(tmp_path, 1, settings={'selection_profile':'variety_comedy',
+        'subtitle_strategy':getattr(request, 'param', 'original')})
     item = batches.create_batch(payload)['items'][0]
     stub_preflight(monkeypatch)
     job_worker.execute_job(item['job_id'])
@@ -45,6 +46,37 @@ def output_batch(batch_db, tmp_path, monkeypatch):
 def consent(task, mode='original'):
     return ProductionReviewConfirm(request_key=uuid4(), manifest_sha256=review.state(task)['manifest_sha256'],
                                    delivery_mode=mode, confirmed=True)
+
+
+@pytest.mark.parametrize('output_batch', ['original', 'review'], indirect=True)
+def test_confirm_uses_creation_policy_and_rejects_client_override(output_batch):
+    task,candidate,_ = output_batch
+    before = review.state(task)
+    mode = before['configured_delivery_mode']
+    wrong = 'subtitled' if mode == 'original' else 'original'
+    with pytest.raises(ValueError, match='创建任务时确定'):
+        review.confirm(task, consent(task, wrong))
+    payload = ProductionReviewConfirm(request_key=uuid4(), manifest_sha256=before['manifest_sha256'], confirmed=True)
+    review.confirm(task, payload)
+    assert review.state(task)['delivery_mode'] == mode
+    assert review.confirm(task, payload)['reused']
+    with db.get_connection() as c:
+        c.execute("UPDATE clip_candidates SET end_time='00:00:04' WHERE id=?", (candidate,))
+        c.commit()
+    stale = review.state(task)
+    assert not stale['can_confirm']
+    assert stale['configured_delivery_mode'] == mode
+
+
+def test_historical_explicit_subtitle_decision_is_preserved(output_batch, monkeypatch):
+    task,_,_ = output_batch
+    with monkeypatch.context() as scope:
+        scope.setattr(review, 'delivery_policy', lambda *_: ('subtitled', 'creation'))
+        review.confirm(task, consent(task, 'subtitled'))
+    state = review.state(task)
+    assert state['configured_delivery_mode'] == 'subtitled'
+    assert state['delivery_policy_source'] == 'previous_review'
+    assert not state['ready']
 
 
 def insert_publish(task, output, status='DRAFT', *, mode='original'):
@@ -138,6 +170,7 @@ def test_publishing_freezes_mutations_but_can_record_external_result(output_batc
     assert review.state(task)['ready']
 
 
+@pytest.mark.parametrize('output_batch', ['review'], indirect=True)
 def test_subtitle_decision_requires_verified_current_delivery(output_batch):
     task,_,output = output_batch
     value = review.confirm(task,consent(task,'subtitled'))
@@ -187,6 +220,7 @@ def test_batch_processing_requires_workflow_lease(output_batch):
         require_task_source(task)
 
 
+@pytest.mark.parametrize('output_batch', ['review'], indirect=True)
 def test_subtitle_revision_and_render_are_bound_without_auto_resume(output_batch, monkeypatch, tmp_path):
     from app.services import subtitle_auto_workflow_service as subtitles
     task,_,output = output_batch
@@ -241,8 +275,9 @@ def test_prepared_jobs_require_cancellation_before_new_delivery_consent(output_b
     with db.get_connection() as c:
         c.execute("UPDATE publish_jobs SET status='CANCELLED' WHERE id=?",(key,))
         c.commit()
-    review.confirm(task,replacement)
-    assert review.state(task)['delivery_mode'] == 'subtitled'
+    with pytest.raises(ValueError, match='创建任务时确定'):
+        review.confirm(task,replacement)
+    assert review.state(task)['delivery_mode'] == 'original'
 
 
 def test_invalid_scheduled_batch_moves_to_review_and_does_not_dispatch(output_batch, monkeypatch):
