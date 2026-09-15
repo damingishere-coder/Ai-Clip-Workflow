@@ -49,7 +49,7 @@
   </div>
   <div class="button-row">
     <button class="primary-button" id="subtitle-batch-approve-render" type="button">审核并批量烧录</button>
-    <button class="secondary-button" id="subtitle-skip-and-resume" type="button">跳过字幕，进入片段审核</button>
+    {% if not task.subtitle_strategy %}<button class="secondary-button" id="subtitle-skip-and-resume" type="button">跳过字幕，进入片段审核</button>{% endif %}
   </div>
   <div class="subtitle-batch-job" id="subtitle-batch-job" hidden>
     <div class="large-progress"><span id="subtitle-batch-progress-bar" style="width:0%"></span></div>
@@ -452,6 +452,6 @@
 <script src="{{ url_for('static', path='vendor/wavesurfer/wavesurfer.min.js') }}?v=7.12.11"></script>
 <script src="{{ url_for('static', path='vendor/wavesurfer/regions.min.js') }}?v=7.12.11"></script>
 <script src="{{ url_for('static', path='vendor/wavesurfer/timeline.min.js') }}?v=7.12.11"></script>
-<script src="{{ url_for('static', path='js/subtitle-editor.js') }}?v=20260824-pr4"></script>
+<script src="{{ url_for('static', path='js/subtitle-editor.js') }}?v=20260915-subtitle-policy"></script>
 {% endif %}
 {% endblock %}

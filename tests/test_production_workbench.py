@@ -29,13 +29,18 @@ def legacy(task, status='pending_review', count=2):
         c.commit()
 
 
+@pytest.mark.parametrize('output_batch', ['original', 'review'], indirect=True)
 def test_batch_review_subtitle_prepare_and_invalid_epoch_projection(output_batch):
     task,candidate,output = output_batch
     assert work.inbox()['counts']['clips']['count'] == 1
-    review.confirm(task,consent(task,'subtitled'))
-    assert work.inbox()['counts']['subtitles']['count'] == 1
-    assert work.inbox()['counts']['prepare']['count'] == 0
-    review.confirm(task,consent(task))
+    mode = review.state(task)['configured_delivery_mode']
+    review.confirm(task,consent(task, mode))
+    if mode == 'subtitled':
+        assert work.inbox()['counts']['subtitles']['count'] == 1
+        assert work.inbox()['counts']['prepare']['count'] == 0
+        with pytest.raises(ValueError, match='创建任务时确定'):
+            review.confirm(task,consent(task))
+        return
     assert work.inbox()['counts']['prepare']['count'] == 1
     assert work.inbox()['counts']['clips']['count'] == 0
     insert_publish(task,output)

@@ -2128,7 +2128,7 @@ def sync_task_publish_jobs(
         prefer_subtitled = batch_review["delivery_mode"] == "subtitled"
     with get_connection() as connection:
         task = connection.execute(
-            "SELECT id, platform, auto_mode, status FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            "SELECT id, platform, auto_mode, status, auto_config_json FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
             (task_id,),
         ).fetchone()
     if not task:
@@ -2138,6 +2138,16 @@ def sync_task_publish_jobs(
     items = _list_completed_publish_clips(task_id)
     if not items:
         raise ValueError("当前任务还没有可同步的激活切片")
+    strategy = None
+    if not batch_review:
+        try:
+            strategy = json.loads(task["auto_config_json"] or "{}").get("subtitle_strategy")
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise ValueError("任务字幕配置无法读取，请先核对任务设置") from exc
+    if strategy in {"original", "review"}:
+        prefer_subtitled = strategy == "review"
+        if prefer_subtitled and any(_preferred_video_source(item, True) != "subtitled" for item in items):
+            raise ValueError("创建时已选择新增字幕，请先完成当前切片的字幕审核与烧录，再进入内容准备")
 
     superseded_count = _supersede_stale_publish_jobs(task_id)
     created: list[dict] = []

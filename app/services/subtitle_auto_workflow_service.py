@@ -297,6 +297,8 @@ def skip_task_subtitles_to_review(task_id: str) -> dict[str, Any]:
         if not isinstance(config, dict):
             connection.rollback()
             raise ValueError("任务字幕配置格式无效，请先修复配置后重试")
+        if config.get("subtitle_strategy") == "review":
+            raise ValueError("创建时已选择新增字幕，请继续审核字幕内容")
         config["subtitle_delivery_mode"] = "original"
         config["subtitle_decided_at"] = now
         connection.execute(

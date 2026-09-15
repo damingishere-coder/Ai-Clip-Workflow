@@ -214,6 +214,10 @@ def insert_task_record_with_connection(connection: Connection, payload: TaskCrea
         "auto_schedule_daily_end_time": payload.auto_schedule_daily_end_time,
         "auto_metadata_use_ai": payload.auto_metadata_use_ai,
     }
+    if payload.subtitle_strategy is not None:
+        auto_config.update(subtitle_strategy=payload.subtitle_strategy,
+                           subtitle_delivery_mode="original" if payload.subtitle_strategy == "original" else "subtitled",
+                           subtitle_decided_at=now)
 
     existing_columns = {
         row["name"] for row in connection.execute("PRAGMA table_info(tasks)").fetchall()

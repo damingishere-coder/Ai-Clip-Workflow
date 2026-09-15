@@ -1,4 +1,4 @@
-"""Explicit human consent for batch output versions, independent of AI feedback."""
+"""Explicit consent for configured output versions, independent of AI feedback."""
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -25,10 +25,28 @@ def prepared_jobs(c, task_id):
     return bool(c.execute("SELECT 1 FROM publish_jobs WHERE task_id=? AND status NOT IN ('PUBLISHED','EXPORTED','CANCELLED') LIMIT 1", (task_id,)).fetchone())
 
 
+def _task_config(c, task_id):
+    row = c.execute("SELECT auto_config_json FROM tasks WHERE id=?", (task_id,)).fetchone()
+    try:
+        config = json.loads(row[0] or "{}") if row else {}
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ProductionReviewConflict("任务字幕配置已损坏，请先修复配置后重试") from exc
+    if not isinstance(config, dict):
+        _fail("任务字幕配置格式无效，请先修复配置后重试")
+    return config
+
+
+def requires_review(c, task_id):
+    if task_item(c, task_id):
+        return True
+    return _task_config(c, task_id).get("subtitle_strategy") in {"original", "review"}
+
+
 def manifest(c, task_id):
-    if not task_item(c, task_id):
+    if not requires_review(c, task_id):
         return None
-    require_imported_source(c, task_id)
+    if task_item(c, task_id):
+        require_imported_source(c, task_id)
     epoch = c.execute("SELECT revision FROM production_review_epochs WHERE task_id=?", (task_id,)).fetchone()
     run = c.execute("SELECT id,status FROM cut_runs WHERE task_id=? AND is_active=1 ORDER BY run_number DESC LIMIT 1", (task_id,)).fetchone()
     if not run or run["status"] != "completed":
@@ -98,7 +116,7 @@ def _delivery(c, task_id, output_id, mode):
             WHERE sj.task_id=? AND sj.output_clip_id=? AND sj.is_active=1
               AND sj.status='completed' AND sj.validation_status='verified' ORDER BY sj.updated_at DESC LIMIT 1""", (task_id, output_id)).fetchone()
     if not row or not Path(row["path"] or "").is_file():
-        _fail("请先完成当前成片的字幕审核和验证，或明确确认保留原字幕")
+        _fail("请先完成当前成片的字幕审核和验证")
     return row["path"]
 
 
@@ -137,11 +155,15 @@ def readiness_issue(job):
 
 def state(task_id):
     with get_connection() as c:
-        if not task_item(c, task_id):
+        if not requires_review(c, task_id):
             return {"required": False}
+        policy = {}
         try:
-            value = manifest(c, task_id)
+            mode, source = delivery_policy(c, task_id)
+            policy = {"configured_delivery_mode": mode, "delivery_policy_source": source,
+                      "suggested_delivery_mode": mode}
             _idle(c, task_id)
+            value = manifest(c, task_id)
             review = current_review(c, task_id)
             approved = bool(review and review["manifest_sha256"] == cuts.digest(value))
             ready, message = False, "请逐条查看成片后确认"
@@ -149,20 +171,35 @@ def state(task_id):
                 message = "成片已确认，等待字幕审核"
                 try:
                     require_ready(c, task_id)
-                    ready, message = True, "成片和字幕决定已完成，可进入内容准备"
+                    ready, message = True, "成片已确认，可进入内容准备"
                 except (ValueError, OSError) as exc:
                     message = str(exc)
             if prepared_jobs(c, task_id):
-                message += "；更换成片或字幕决定前，请先在发送中心取消或处理已有发布任务"
-            from app.services.batch_pipeline_service import configuration
-            suggested_mode = "subtitled" if configuration(c, task_id).get("subtitle_strategy") == "review" else "original"
-            return {"suggested_delivery_mode": suggested_mode, "required": True, "can_confirm": not prepared_jobs(c, task_id), "approved": approved, "ready": ready,
+                message += "；重新确认成片前，请先在发送中心取消或处理已有发布任务"
+            return {**policy, "required": True, "can_confirm": not prepared_jobs(c, task_id), "approved": approved, "ready": ready,
                     "message": message, "manifest_sha256": cuts.digest(value),
                     "cut_run_id": value["cut_run_id"], "revision": value["revision"],
                     "delivery_mode": review["delivery_mode"] if approved else None,
                     "outputs": [{**o, "media_url": f"/media/tasks/{task_id}/output-clips/{o['id']}"} for o in value["outputs"]]}
         except (ValueError, OSError) as exc:
-            return {"required": True, "can_confirm": False, "approved": False, "ready": False, "message": str(exc), "outputs": []}
+            processing = bool(c.execute("SELECT 1 FROM workflow_jobs WHERE task_id=? AND status IN ('queued','running')", (task_id,)).fetchone())
+            return {**policy, "required": True, "can_confirm": False, "approved": False, "ready": False,
+                    "processing": processing, "message": str(exc), "outputs": []}
+
+
+def delivery_policy(c, task_id):
+    """Use frozen creation settings; preserve explicit historical human decisions."""
+    from app.services.batch_pipeline_service import configuration
+    config = configuration(c, task_id)
+    if config is None:
+        config = _task_config(c, task_id)
+    if config is None or config.get("subtitle_strategy") not in {"original", "review"}:
+        _fail("任务字幕配置缺失，请先核对创建记录")
+    mode = "subtitled" if config["subtitle_strategy"] == "review" else "original"
+    previous = current_review(c, task_id)
+    if previous and previous["delivery_mode"] != mode:
+        return previous["delivery_mode"], "previous_review"
+    return mode, "creation"
 
 
 def confirm(task_id, payload):
@@ -179,23 +216,26 @@ def confirm(task_id, payload):
             return {"review_id": existing["id"], "reused": True}
         _idle(c, task_id)
         if prepared_jobs(c, task_id):
-            _fail("请先在发送中心取消或处理已有发布任务，再更换成片或字幕确认")
+            _fail("请先在发送中心取消或处理已有发布任务，再重新确认成片")
         value = manifest(c, task_id)
         if value is None:
-            _fail("此入口仅适用于批次生产任务，旧任务继续使用原审核流程")
+            _fail("此入口适用于创建时已设置字幕方式的任务，旧任务继续使用原审核流程")
         if cuts.digest(value) != payload.manifest_sha256:
             _fail("预览后成片版本已变化，请刷新并重新核对")
+        mode, _ = delivery_policy(c, task_id)
+        if payload.delivery_mode is not None and payload.delivery_mode != mode:
+            _fail("字幕方式已在创建任务时确定，审片确认不能更改；请刷新后重试")
         now, review_id = datetime.now(timezone.utc).isoformat(), uuid4().hex
         c.execute("INSERT INTO production_review_epochs(task_id,revision) VALUES(?,?) ON CONFLICT(task_id) DO NOTHING", (task_id, value["revision"]))
         c.execute("""INSERT INTO production_reviews(id,task_id,cut_run_id,revision,request_key,request_sha256,
             manifest_json,manifest_sha256,delivery_mode,source,created_at) VALUES(?,?,?,?,?,?,?,?,?,'human_confirmation',?)""",
             (review_id, task_id, value["cut_run_id"], value["revision"], str(payload.request_key), request_sha,
-             cuts.canonical(value), cuts.digest(value), payload.delivery_mode, now))
+             cuts.canonical(value), cuts.digest(value), mode, now))
         task = c.execute("SELECT auto_config_json FROM tasks WHERE id=?", (task_id,)).fetchone()
         config = json.loads(task["auto_config_json"] or "{}")
-        config.update(subtitle_delivery_mode=payload.delivery_mode, subtitle_decided_at=now)
+        config.update(subtitle_delivery_mode=mode, subtitle_decided_at=now)
         c.execute("UPDATE tasks SET auto_config_json=?,status=?,updated_at=? WHERE id=?",
-                  (json.dumps(config, ensure_ascii=False), "PENDING_SUBTITLE_REVIEW" if payload.delivery_mode == "subtitled" else "completed", now, task_id))
+                  (json.dumps(config, ensure_ascii=False), "PENDING_SUBTITLE_REVIEW" if mode == "subtitled" else "completed", now, task_id))
         c.commit()
     return {"review_id": review_id, "reused": False}
 
@@ -204,7 +244,7 @@ def prepare_subtitles(task_id):
     with get_connection() as c:
         review = require_cut_review(c, task_id)
         if not review or review["delivery_mode"] != "subtitled":
-            _fail("请先确认成片并选择审核新增字幕")
+            _fail("请先确认成片；只有创建时选择新增字幕的任务需要准备字幕")
         _idle(c, task_id)
     from app.services.subtitle_auto_workflow_service import prepare_task_subtitle_review
     return prepare_task_subtitle_review(task_id)
@@ -215,7 +255,7 @@ def subtitle_review(task_id, payload=None):
         review = require_cut_review(c, task_id)
     if review:
         if review["delivery_mode"] != "subtitled":
-            _fail("当前已确认保留原字幕；如需新增字幕，请重新确认交付选择")
+            _fail("当前任务使用原视频画面，无需新增字幕")
         if payload is not None and (payload.get("production_review_id") != review["id"]
                 or payload.get("production_review_sha256") != review["manifest_sha256"]):
             _fail("字幕任务绑定的成片确认已失效，请重新审核")
@@ -225,7 +265,7 @@ def subtitle_review(task_id, payload=None):
 def complete_subtitle_status(task_id, payload):
     with get_connection() as c:
         c.execute("BEGIN IMMEDIATE")
-        if not task_item(c, task_id):
+        if not requires_review(c, task_id):
             return
         try:
             review = require_ready(c, task_id)

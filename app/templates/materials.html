@@ -61,7 +61,7 @@
       <label>单条最长（分钟）<input class="control" name="max_clip_duration" type="number" min="1" max="60" value="10" required></label>
     </div>
     <label class="material-option material-check"><input type="checkbox" name="auto_production"><span><strong>导入后自动制作</strong><small>自动转写、AI 选片和预切，完成后等待你审片。</small></span></label>
-    <div class="material-subtitle-setting"><label>字幕处理<select class="control" name="subtitle_strategy" aria-describedby="batch-subtitle-help"><option value="original">跳过字幕 · 保留原视频画面</option><option value="review">新增字幕 · 进入字幕审核</option></select></label><p id="batch-subtitle-help" class="material-note">不新增或烧录字幕，已有字幕保留。AI 选片所需的语音转写仍会执行；成片仍需人工审核，审片时可改选字幕方式。</p></div>
+    <div class="material-subtitle-setting"><label>字幕处理<select class="control" name="subtitle_strategy" aria-describedby="batch-subtitle-help"><option value="original">跳过字幕 · 保留原视频画面</option><option value="review">新增字幕 · 进入字幕审核</option></select></label><p id="batch-subtitle-help" class="material-note">不新增或烧录字幕，已有字幕保留。AI 选片所需的语音转写仍会执行；成片仍需人工审核，字幕方式按此设置执行。</p></div>
     <details class="material-advanced"><summary>更多制作设置 <span>AI 方案与选片参数</span></summary><div class="material-advanced-fields">
       <label>Prompt 方案<select class="control" name="ai_prompt_preset_id" required>{% for preset in prompt_presets %}<option value="{{ preset.id }}">{{ preset.name }}</option>{% endfor %}</select></label>
       <label>AI 服务<select class="control" name="ai_provider">{% for provider,label in [('codex','Codex CLI'),('remote','远程 AI'),('local','本地 AI')] %}<option value="{{ provider }}" {{ 'selected' if settings.ai_default_provider == provider else '' }}>{{ label }}</option>{% endfor %}</select></label>
@@ -91,4 +91,4 @@
   <div id="material-inbox-content"><p class="material-note">正在加载待办…</p></div><noscript><p>请启用 JavaScript 查看内嵌待办。</p></noscript>
 </section>
 {% endblock %}
-{% block extra_scripts %}<script src="{{ url_for('static', path='js/material-inbox.js') }}?v=20260915-inbox"></script><script src="{{ url_for('static', path='js/materials.js') }}?v=20260915-inbox"></script><script src="{{ url_for('static', path='js/material-batches.js') }}?v=20260915-inbox"></script>{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/material-inbox.js') }}?v=20260915-inbox"></script><script src="{{ url_for('static', path='js/materials.js') }}?v=20260915-inbox"></script><script src="{{ url_for('static', path='js/material-batches.js') }}?v=20260915-subtitle-policy"></script>{% endblock %}

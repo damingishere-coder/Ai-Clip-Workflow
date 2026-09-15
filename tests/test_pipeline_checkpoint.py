@@ -771,3 +771,26 @@ def test_completed_subtitle_checkpoint_keeps_manual_review_gate(tmp_path: Path) 
     assert result["status"] == "pending_subtitle_review"
     engine._prepare_subtitle_drafts.assert_not_called()
     engine._generate_metadata.assert_not_called()
+
+
+@pytest.mark.parametrize('strategy', ['original', 'review'])
+def test_creation_subtitle_policy_stops_for_output_review_before_drafting_with_checkpoint(strategy):
+    task_id = 'test-pipeline-checkpoint-creation-skip'
+    create_task_record(TaskCreate(task_name=task_id, selection_profile='general', auto_mode=True,
+                                 subtitle_strategy=strategy), task_id=task_id)
+    task = task_service.get_task(task_id, include_video_probe=False)
+    assert json.loads(task['auto_config_json'])['subtitle_delivery_mode'] == ('original' if strategy == 'original' else 'subtitled')
+    job = _claim_auto_job(task_id, TaskStatus.SUBTITLE_DRAFTING, 'creation-skip-owner')
+    engine = PipelineEngine()
+    engine._prepare_subtitle_drafts = Mock(side_effect=AssertionError('不应制作字幕'))
+    engine._generate_metadata = Mock(side_effect=AssertionError('不应跳过审片'))
+    with job_service.job_lease_context(job['id'], 'creation-skip-owner', job['lease_token']):
+        result = engine.run(task_id, start_step=TaskStatus.SUBTITLE_DRAFTING, job_id=job['id'])
+        assert result['status'] == 'pending_review'
+        # A retry uses the same policy without inventing a subtitle draft checkpoint.
+        assert engine.run(task_id, start_step=TaskStatus.SUBTITLE_DRAFTING, job_id=job['id'])['status'] == 'pending_review'
+    engine._prepare_subtitle_drafts.assert_not_called()
+    engine._generate_metadata.assert_not_called()
+    with get_connection() as c:
+        assert not c.execute('SELECT 1 FROM subtitle_tracks WHERE task_id=?', (task_id,)).fetchone()
+        assert not c.execute('SELECT 1 FROM publish_jobs WHERE task_id=?', (task_id,)).fetchone()
