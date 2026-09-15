@@ -16,7 +16,7 @@ output_batch, batch_db, human_db = _output_batch, _batch_db, _human_db
 
 @pytest.mark.parametrize('width',[1440,390])
 @pytest.mark.parametrize('output_batch', ['original', 'review', 'single-original', 'single-review'], indirect=True)
-def test_actual_output_confirmation_then_stale_version(width, output_batch, tmp_path):
+def test_actual_output_confirmation_then_stale_version(width, output_batch, tmp_path, monkeypatch):
     playwright = pytest.importorskip('playwright.sync_api')
     chrome = Path(os.environ.get('PROGRAMFILES','C:/Program Files'))/'Google/Chrome/Application/chrome.exe'
     if not chrome.exists():
@@ -54,6 +54,16 @@ def test_actual_output_confirmation_then_stale_version(width, output_batch, tmp_
                 assert c.execute('SELECT count(*) FROM production_reviews').fetchone()[0] == 1
                 assert c.execute('SELECT delivery_mode FROM production_reviews').fetchone()[0] == mode
                 assert c.execute('SELECT count(*) FROM publish_jobs').fetchone()[0] == 0
+            if mode == 'original':
+                from app.services import publish_service
+                monkeypatch.setattr(publish_service, '_generate_default_publish_cover', lambda *_: {})
+                page.locator('#production-review-prepare').click()
+                page.wait_for_url(f'**/publish?task_id={task}&tab=content')
+                with db.get_connection() as c:
+                    jobs = c.execute('SELECT status FROM publish_jobs WHERE task_id=?', (task,)).fetchall()
+                    assert len(jobs) == 1 and jobs[0][0] == 'WAITING'
+                page.goto(f'http://127.0.0.1:{port}/tasks/{task}/clips', wait_until='networkidle')
+            with db.get_connection() as c:
                 c.execute("UPDATE clip_candidates SET end_time='00:00:04' WHERE id=?",(candidate,))
                 c.commit()
             page.locator('#production-review-refresh').click()

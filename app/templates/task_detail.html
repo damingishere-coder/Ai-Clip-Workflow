@@ -55,7 +55,12 @@
   {% if not task.auto_mode %}hidden{% endif %}
 >
   <strong>全自动模式已接管这个任务。</strong>
+  {% if production_review_required %}
+  <p>素材池自动流程完成转写、AI 选片和预切后，会暂停等待检查实际成片。重新切片后也需要确认当前版本；字幕沿用创建时设置，保留原字幕时，确认后点击“进入内容准备”，再到发送中心单独安排发布。</p>
+  <a class="primary-button" href="/tasks/{{ task.id }}/clips/review#production-review">检查并确认当前成片</a>
+  {% else %}
   <p>系统会自动推进音频提取、转写、AI 选片和视频切割；切片后会生成字幕草稿并暂停。审核烧录可恢复后续流程；跳过字幕则先进入片段审核，保存确认后才同步发送中心。</p>
+  {% endif %}
 </section>
 
 <section class="detail-grid">
