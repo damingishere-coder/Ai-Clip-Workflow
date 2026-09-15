@@ -12,7 +12,7 @@ import pytest
 
 from app.db import database as db
 from app.services import job_service, job_worker, workflow_capacity_service as capacity
-from app.services.managed_process_service import terminate_process_tree
+from app.services.managed_process_service import popen_process_group, terminate_process_tree
 from tests.test_human_review import human_db as _human_db_fixture
 
 human_db = _human_db_fixture
@@ -83,7 +83,7 @@ print('held' if lock else 'busy',flush=True)
 sys.stdin.readline()
 if lock: lock.close()
 """
-    child = subprocess.Popen([sys.executable,'-c',script,str(path)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+    child = popen_process_group([sys.executable,'-c',script,str(path)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                              text=True,creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     assert child.stdout.readline().strip() == 'held'
     return child

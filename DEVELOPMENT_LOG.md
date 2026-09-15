@@ -2,6 +2,8 @@
 
 ## 2026-09-15 v2.6 PR3 全局重型容量与恢复
 
+- CI 等待期间复核发现测试夹具原 Popen 未创建独立 POSIX session，而清理使用 killpg；Windows 本地全量未覆盖此风险。改用已有 popen_process_group 隔离测试自有进程组，再进行定向检查和最终提交 CI，旧提交不合并。
+
 - PR #113 最终 `eda06af` 的 Linux/Windows/Docker CI 全过，Squash 合并 `528eba1`。从最新 master 建立 `codex/v2.6-queue-capacity`，本 PR 不改变数据库结构/账本，开发库仍 21 项、正式仍 19 项。
 - claim_job 与 claim_next_job 在各自 BEGIN IMMEDIATE 内检查全库未过期 running 租约，默认仅一个 Workflow Job 执行；取消请求仍占容量直到执行停止/租约过期。直接 claim 同样遵守 next_attempt_at，同秒任务按原插入顺序，批量素材按文件名入队。
 - 新 execution_slot 使用既有发布 Worker 已采用的 msvcrt/fcntl 原语，但不改 Publisher。锁由实际 Workflow 执行进程持有，以实际 SQLite 文件为作用域；锁文件不删除，PID 仅诊断，拒绝用陈旧 PID 推断可抢占。父 Web 崩溃不释放尚存子进程的锁。
