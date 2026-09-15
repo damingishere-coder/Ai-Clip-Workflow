@@ -894,7 +894,7 @@ def get_task_live_status(task_id: str) -> dict:
         },
         "actions": {
             "primary": primary_action,
-            "subtitle_skip": task.get("subtitle_strategy") is None,
+            **({"subtitle_skip": False} if task.get("subtitle_strategy") else {}),
             "review": candidate_count > 0,
             "publish": output_clip_count > 0
             and status
