@@ -54,6 +54,10 @@
     evidence.href = `/api/content-review/intelligence/reports/${encodeURIComponent(data.id)}`;
     evidence.target = '_blank'; evidence.rel = 'noopener';
     result.append(evidence);
+    const draftLink = element('a', '基于此报告起草 Challenger');
+    draftLink.href = `/content-review/challengers?report_id=${encodeURIComponent(data.id)}`;
+    draftLink.className = 'secondary-button';
+    result.append(draftLink);
   }
   async function refresh() {
     const token = ++sequence;

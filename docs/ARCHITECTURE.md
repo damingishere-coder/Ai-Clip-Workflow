@@ -2,7 +2,7 @@
 
 ## 开发中：v2.5.5 人工经验入口
 
-Analyzer 保留原调用链，增加轻量初始观察到 AI Run；明确人工评价复用 clip_feedback，以 Run + 候选来源 + 哈希归因。Content Review 独立聚合反馈；`content_intelligence_service` 在同一 SQLite 快照中冻结人工统计和官方作品特征，保存在轻量报告表。报告不驱动 Prompt/Profile、同步或发布状态；Challenger 在后续 PR，见 [Content Intelligence](CONTENT_INTELLIGENCE.md)。
+Analyzer 保留原调用链，增加轻量初始观察到 AI Run；明确人工评价复用 clip_feedback，以 Run + 候选来源 + 哈希归因。`content_intelligence_service` 在同一 SQLite 快照中冻结人工统计和官方作品特征；`content_challenger_service` 让用户基于报告保存独立归档的 Prompt 草稿、版本与差异。两者不驱动生产 Prompt/Profile、同步或发布状态；显式试验及人工启用在下一 PR，见 [Content Intelligence](CONTENT_INTELLIGENCE.md)。
 
 ## 当前：v2.5.0 可选视觉已接入
 

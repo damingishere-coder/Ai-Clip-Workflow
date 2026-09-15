@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Challenger 草稿 · {{ settings.app_name }}{% endblock %}
+{% block extra_head %}
+<style>.challenger-evidence {white-space:pre-wrap;overflow-wrap:anywhere;max-height:32rem;overflow:auto}.challenger-text {min-height:18rem}.challenger-history {display:grid;gap:12px}</style>
+{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">Content Intelligence</p><h1>Challenger 草稿</h1><p>把一个待验证假设保存为独立方案，先核对差异，再决定是否试验。</p></div><a href="/content-review" class="secondary-button">返回内容复盘</a></section>
+<section class="panel">
+  <h2>来源报告</h2>
+  <p>人工明确审阅 {{ report.report.human_review.summary.reviewed }} 条 · {{ report.report.human_review.summary.confidence_label }}；官方作品记录 {{ report.report.performance.work_count }} 条。</p>
+  <p>草稿只改变 Prompt，保持所选 Profile、评分和硬门槛。报告中的相关性不证明这个改动有效。</p>
+</section>
+<form id="challenger-draft-form" class="panel form-panel" data-report-id="{{ report.id }}">
+  <h2>1. 核对当前正式方案</h2>
+  <div class="form-row">
+    <label>内容类型<select id="challenger-profile" required><option value="">请选择内容类型</option>{% for profile in profiles %}<option value="{{ profile.id }}">{{ profile.name }}</option>{% endfor %}</select></label>
+    <label>基线 Prompt<select id="challenger-preset"><option value="">使用内容模板默认方案</option>{% for preset in presets %}<option value="{{ preset.id }}">{{ preset.name }}</option>{% endfor %}</select></label>
+  </div>
+  <button type="button" class="secondary-button" id="challenger-load">载入正式方案</button>
+  <p id="challenger-baseline-note">载入后核对实际版本，再编写草稿。</p>
+  <label>当前正式 Prompt<textarea id="challenger-original" class="challenger-text" readonly aria-label="当前正式 Prompt"></textarea></label>
+  <h2>2. 编写待验证改动</h2>
+  <label>草稿名称<input id="challenger-name" maxlength="80" required placeholder="例如：开头减少铺垫"></label>
+  <label>待验证假设<textarea id="challenger-hypothesis" maxlength="1000" required placeholder="这次只改什么？预期哪些现象会改变？"></textarea></label>
+  <label>Challenger Prompt<textarea id="challenger-prompt" class="challenger-text" maxlength="30000" required></textarea></label>
+  <label class="checkbox-row"><input id="challenger-confirm" type="checkbox" required><span>确认保存为未验证草稿，当前正式方案保持不变。</span></label>
+  <button type="submit" class="primary-button" id="challenger-save" disabled>保存 Challenger 草稿</button>
+  <p id="challenger-status" role="status">保存不会启动任务、作品实验或发布。</p>
+</form>
+<section class="panel"><h2>草稿与修改差异</h2><div id="challenger-history" class="challenger-history"></div><div id="challenger-detail"></div></section>
+{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/content-challengers.js') }}?v=20260915-1"></script>{% endblock %}

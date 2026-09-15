@@ -1,5 +1,17 @@
 # Content Intelligence：人工经验与受控实验
 
+## v2.5.5 PR3a：人工 Challenger 草稿
+
+冻结报告可打开 `/content-review/challengers?report_id=...`。用户明确选择当前 Profile 和基线 Prompt，载入正文后填写假设及改动，保存到独立的归档预设和既有 `ai_prompt_versions`。草稿不改变原 `ai_prompt_presets` 正文或默认标记，不修改 Profile 头指针，不创建 Workflow Job、作品实验或发布任务。
+
+第一阶段是 Prompt-only：完整 Profile JSON、内容哈希、规则版本、评分维度/权重/hard gates 原样冻结。当前 `_assert_supported()` 只接受代码支持的 Profile 配置；这里不会绕过它，也不把未执行的新权重当作试验结果。基线标注 `explicitly_selected_current_strategy`，不能将缺失历史证据追认为“报告已经使用过当前策略”。
+
+`GET /api/content-review/challengers/context` 只读返回实际正式方案及基线哈希；`POST /api/content-review/challengers` 验证来源报告、预览基线和请求 UUID。正式方案在预览后改变、草稿没有实际改动或来源损坏时拒绝保存。事务内新增归档预设、Prompt 版本和 Challenger，重复/并发提交返回同一记录；不覆盖已存在草稿。读取核对报告、Profile 配置、两个 Prompt 版本和完整证据哈希。
+
+第 17 项迁移新增 `content_strategy_challengers`，证据字段有不可变触发器、版本引用和索引。服务无更新生产策略接口；普通创建任务仍拒绝归档预设，因此草稿不能仅靠知道 ID 就用于生产。后续「启用试用」「建立正式实验」「记录结论」「正式启用」均是独立人工动作，必须在实际接入 PR 验证后才开放。
+
+没有官方数据也能保存**未验证假设**，不能生成伪造的官方基线实验。回退可撤下草稿入口、保留归档预设及版本证据；不能删除正式数据或迁移账本来伪装旧二进制兼容。服务/集成测试覆盖原正式表未变、幂等、过期基线、损坏证据；迁移测试覆盖旧报告保留、失败回滚、并发与备份恢复；Chrome 覆盖 1440/390 布局、实际保存/重开、HTML 文本安全及没有额外生产写入。
+
 ## v2.5.5 PR2：作品特征与冻结报告
 
 `POST /api/content-review/intelligence/reports` 显式生成报告，参数是账号（可空）、1–180 天和请求 UUID。同一请求重试返回原记录，配置不同返回 409；没有自动刷新覆盖报告。GET 列表/详情只读取，详情核对正文、配置、账号和 schema 哈希。新报告和人工统计在同一 SQLite 事务快照中读取，生成不调用 AI、同步、发布，也不改任何 Prompt/Profile。

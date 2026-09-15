@@ -1,6 +1,12 @@
 # 项目当前进度
 
-## 当前开发：v2.5.5 PR2（尚未部署）
+## 当前开发：v2.5.5 PR3a Challenger 草稿（尚未部署）
+
+报告 PR [#106](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/106) 最终 `9314aa4` 已通过 Linux、Windows、Docker 三项 CI（Linux 1199 passed、17 平台跳过），合并 `15a734d`。当前 `codex/v2.5.5-challenger-drafts` 保存人工假设、Prompt 差异、来源报告与完整 Profile/评分版本；草稿单独归档，不修改正式方案。服务/迁移 6 项、1440/390 Chrome 两项及全量 1224 项均通过（233.89 秒，0 failed/0 skipped、9 warnings），Ruff、编译、9 JS 通过，只读审查无阻塞问题。证据在忽略目录 `data/acceptance/v255-challenger-drafts-regression/`；准备独立 PR/CI。
+
+本轮把原 Challenger/实验 PR 拆成草稿与执行两个小 PR。下一步才接试验任务、实际 Run 策略匹配、现有实验及单独人工启用。正式 Web/Worker 仍是 v2.5.0 / `384db79`、迁移 14；新迁移 15–17 尚未在正式库执行。
+
+## 历史开发：v2.5.5 PR2
 
 人工审片 PR [#105](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/105) 的最终提交 `dec9e49` 已通过 Linux、Windows、Docker 三项 CI，合并为 `fd47c2c`；Linux 1188 passed、15 平台跳过。当前独立分支 `codex/v2.5.5-intelligence-reports` 增加官方作品特征、冻结报告和小样本保护，继续进行回归及审查。正式服务仍是 v2.5.0 / `384db79`，尚未迁移第 15/16 项，也没有触发正式 AI、同步或发布。
 
