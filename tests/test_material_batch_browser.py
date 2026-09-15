@@ -46,12 +46,23 @@ def test_batch_confirmation_survives_lost_response_and_reload(width, batch_db, t
             page.route('**/api/material-batches',lose_response)
             page.goto(f'http://127.0.0.1:{port}/materials',wait_until='networkidle')
             assert page.locator('[data-batch-material]').count() == 10
-            for checkbox in page.locator('[data-batch-material]').all():
-                checkbox.check()
+            page.locator('#batch-select-page').check()
+            assert page.locator('.material-source-card.is-selected').count() == 10
+            page.locator('#material-refresh').click()
+            page.wait_for_function("document.querySelectorAll('.material-source-card.is-selected').length === 10")
+            page.locator('#batch-clear-selection').click()
+            assert page.locator('.material-source-card.is-selected').count() == 0
+            page.locator('[data-batch-material]').first.check()
+            assert page.locator('#batch-select-page').evaluate('(el) => el.indeterminate')
+            page.locator('#batch-select-page').check()
             form = page.locator('#material-batch-form')
             form.locator('[name=selection_profile]').select_option('variety_comedy')
             assert form.locator('[name=ai_prompt_preset_id]').input_value() == 'preset_001'
             assert page.locator('#batch-create').is_disabled()
+            assert form.locator('[name=highlight_total_limit]').count() == 0
+            assert not form.locator('[name=ai_provider]').is_visible()
+            form.locator('[name=subtitle_strategy]').select_option('original' if width == 1440 else 'review')
+            assert ('不新增或烧录字幕' if width == 1440 else '审片后进入字幕审核') in page.locator('#batch-subtitle-help').inner_text()
             form.locator('[name=auto_production]').set_checked(width == 390)
             form.locator('[name=confirmed]').check()
             with db.get_connection() as c:
@@ -61,14 +72,23 @@ def test_batch_confirmation_survives_lost_response_and_reload(width, batch_db, t
             saved = page.evaluate("localStorage.getItem('niuma-material-batch-pending-v1')")
             assert json.loads(saved) == submitted[0]
             assert submitted[0]['settings']['auto_production'] == (width == 390)
+            assert submitted[0]['settings']['subtitle_strategy'] == ('original' if width == 1440 else 'review')
+            assert 'highlight_total_limit' not in submitted[0]['settings']
             page.reload(wait_until='networkidle')
             assert page.locator('#batch-pending').is_visible()
+            assert page.locator('#batch-selection-count').inner_text() == '已选 10 个素材'
+            assert page.locator('.material-source-card.is-selected').count() == 10
+            assert form.locator('[name=subtitle_strategy]').input_value() == submitted[0]['settings']['subtitle_strategy']
             assert form.locator('[name=selection_profile]').is_disabled()
             assert form.locator('[name=selection_profile]').input_value() == submitted[0]['settings']['selection_profile']
             page.locator('#batch-retry').click()
             page.get_by_text('已创建 10 个任务，等待逐个导入。重复请求已安全核对。',exact=True).wait_for()
             assert len(submitted) == 2 and submitted[0] == submitted[1]
             assert page.locator('[data-batch-id]').count() == 1
+            assert not page.locator('.material-batch-details').get_attribute('open') == ''
+            page.locator('.material-batch-details summary').click()
+            page.locator('#batch-refresh').click()
+            page.wait_for_function("document.querySelector('.material-batch-details').open")
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1')
             assert page.evaluate("localStorage.getItem('niuma-material-batch-pending-v1')") is None
             with db.get_connection() as c:
