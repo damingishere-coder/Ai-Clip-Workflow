@@ -1,5 +1,13 @@
 # 系统架构
 
+## Workflow Job 全局执行容量（v2.6 开发中）
+
+`claim_job` / `claim_next_job` 在 SQLite 写事务内共用有效 running 租约门槛，默认同时只领取一个 Job。领取仍保持原重试/取消/到期恢复语义，同秒按插入顺序。一个有效取消请求尚未结束执行时不会提前让出槽位。
+
+仅租约隔离不足以阻止父进程意外退出后存活子进程继续占用 CPU/GPU。`job_worker.execute_job` 因此在真实处理前进入 `workflow_capacity_service.execution_slot`，使用实际数据库旁的持久 OS 文件锁，Windows msvcrt / POSIX flock。锁由执行子进程持有，退出时由 OS 释放，锁文件保留而不按 PID 删除。等待有取消/租约检查与 120 秒上限，不自动终止无可靠身份的其他进程；到期报告失败，处理函数尚未运行。
+
+该锁不锁 Publisher Scheduler，不引入新服务/队列，也不替代 AI checkpoint 或提交 fencing。同步单任务兼容入口沿用原机制，新的后台 Workflow Job 均通过该边界。
+
 ## v2.6 批次导入接入（开发中）
 
 `material_batch_service.create_batch` 复用 `insert_task_record_with_connection` 与原 Workflow Job 创建函数，以单事务建立真实无源 Task、批次及 material_import Job；不在请求事务复制媒体。`material_import_service.execute_import` 由原 Worker dispatch 执行，复制和完成证据受当前租约约束，文件路径含 token 防止迟到进程覆盖。成功证据与任务源原子提交，随后 Job 完成；该两步之间重启时验证已提交副本后完成原 Job。

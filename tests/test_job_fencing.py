@@ -245,10 +245,13 @@ def test_claim_next_does_not_fail_live_max_attempt_worker() -> None:
         assert active and active["attempt_count"] == 1
 
         claimed_next = job_service.claim_next_job("worker-b")
-        assert claimed_next and claimed_next["id"] == queued_created["id"]
+        assert claimed_next is None
         still_active = job_service.get_job(active_created["id"])
         assert still_active["status"] == job_service.JOB_STATUS_RUNNING
         assert still_active["lease_owner"] == "worker-a"
+        with job_service.job_lease_context(active['id'], active['lease_owner'], active['lease_token']):
+            job_service.mark_job_completed(active['id'])
+        assert job_service.claim_next_job("worker-b")['id'] == queued_created['id']
     finally:
         _cleanup(active_task_id)
         _cleanup(queued_task_id)

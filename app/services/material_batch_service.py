@@ -72,6 +72,7 @@ def create_batch(payload: MaterialBatchCreate):
                 raise MaterialError("该请求编号已确认另一份批次，不能更换素材或配置")
             return _get_batch(c, existing["id"], reused=True)
         materials = [_read_material(c, mid) for mid in request["material_ids"]]
+        materials.sort(key=lambda material: (material["file_name"].casefold(), material["id"]))
         for material in materials:
             validate_source(material["source"])
             if not payload.create_new_production:

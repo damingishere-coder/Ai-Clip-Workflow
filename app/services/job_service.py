@@ -358,6 +358,16 @@ def mark_job_running(job_id: str) -> dict | None:
     return claim_job(job_id, f"legacy:{uuid4().hex}")
 
 
+def _has_live_execution(connection, now: str) -> bool:
+    # Include cancel-requested jobs until their executor stops or lease expires.
+    # Every Workflow Job uses the same local heavy slot; Publisher's independent
+    # Scheduler remains outside this ledger and is unchanged.
+    return bool(connection.execute(
+        "SELECT 1 FROM workflow_jobs WHERE status=? AND lease_expires_at>? LIMIT 1",
+        (JOB_STATUS_RUNNING, now),
+    ).fetchone())
+
+
 def claim_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> dict | None:
     """原子领取一个排队任务，或接管 lease 已过期的运行任务。"""
     lease_token = uuid4().hex
@@ -367,7 +377,7 @@ def claim_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> dict |
         now_iso = now.isoformat(timespec="seconds")
         lease_expires_at = (now + timedelta(seconds=max(30, lease_seconds))).isoformat(timespec="seconds")
         row = connection.execute(
-            "SELECT status, lease_expires_at, cancel_requested, attempt_count, max_attempts FROM workflow_jobs WHERE id = ?",
+            "SELECT status, lease_expires_at, cancel_requested, attempt_count, max_attempts, next_attempt_at FROM workflow_jobs WHERE id = ?",
             (job_id,),
         ).fetchone()
         if not row:
@@ -378,6 +388,10 @@ def claim_job(job_id: str, lease_owner: str, lease_seconds: int = 120) -> dict |
         )
         claimable = row["status"] == JOB_STATUS_QUEUED or expired
         if not claimable or int(row["cancel_requested"] or 0) or int(row["attempt_count"] or 0) >= int(row["max_attempts"] or 3):
+            connection.commit()
+            return None
+        if ((row["status"] == JOB_STATUS_QUEUED and row["next_attempt_at"] and row["next_attempt_at"] > now_iso)
+                or _has_live_execution(connection, now_iso)):
             connection.commit()
             return None
         connection.execute(
@@ -436,6 +450,9 @@ def claim_next_job(lease_owner: str, lease_seconds: int = 120) -> dict | None:
             """,
             (JOB_STATUS_FAILED, now, now, JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, now),
         )
+        if _has_live_execution(connection, now):
+            connection.commit()
+            return None
         row = connection.execute(
             """
             SELECT id FROM workflow_jobs
@@ -445,7 +462,7 @@ def claim_next_job(lease_owner: str, lease_seconds: int = 120) -> dict | None:
                 (status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
                 OR (status = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
               )
-            ORDER BY created_at ASC
+            ORDER BY created_at ASC, rowid ASC
             LIMIT 1
             """,
             (JOB_STATUS_QUEUED, now, JOB_STATUS_RUNNING, now),
