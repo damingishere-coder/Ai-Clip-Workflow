@@ -81,6 +81,9 @@ class TaskCreate(BaseModel):
     selection_profile: Literal["general", "variety_comedy", "long_live_talk", "interview_story", "knowledge_opinion"]
     ai_prompt_preset_id: Optional[str] = Field(default=None, min_length=1, max_length=80)
     ai_provider: Optional[Literal["codex", "remote", "local"]] = None
+    challenger_id: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    challenger_sha256: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    confirm_challenger: bool = False
     visual_enabled: bool = False
     final_clip_target: int = Field(default=5, ge=1, le=12)
     highlight_density_per_hour: int = Field(default=4, ge=1, le=10)

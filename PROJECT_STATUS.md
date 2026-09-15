@@ -1,5 +1,11 @@
 # 项目当前进度
 
+## 当前开发：v2.5.5 PR3b 显式试验任务（尚未部署）
+
+草稿 PR [#107](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/107) 最终 `3439725` 三项 CI 通过（Linux 1205 passed / 19 平台跳过），合并 `3a7ecd0`。新分支 `codex/v2.5.5-challenger-trial-tasks` 接草稿 → 明确确认 → 原创建任务流程 → 冻结 Job/Run；草稿仍归档，普通选择器不可选，试验不能改绑 Profile/Prompt 或启动全自动流水线。
+
+最终冻结源码完整回归 **1240 passed、0 failed/0 skipped、9 warnings（312.30 秒）**，含桌面/手机 Chrome；Ruff、Python 编译、9 JS 检查通过。首轮发现的旧 followup 参数与迁移测试问题已修复，审查后补基线过期、冻结版本保留及 Run 提交/恢复篡改校验，最终全量涵盖全部修正。证据保存在忽略目录 `data/acceptance/v255-challenger-trials-final/`。第 18 项迁移仅扩展 task_generation_rules 的可空绑定及索引/约束，旧任务未知值不回填。后续独立 PR 再完成官方实验策略核验与单独人工启用；正式 Web/Worker 继续 v2.5.0 / `384db79`，正式库迁移仍 14。
+
 ## 当前开发：v2.5.5 PR3a Challenger 草稿（尚未部署）
 
 报告 PR [#106](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/106) 最终 `9314aa4` 已通过 Linux、Windows、Docker 三项 CI（Linux 1199 passed、17 平台跳过），合并 `15a734d`。当前 `codex/v2.5.5-challenger-drafts` 保存人工假设、Prompt 差异、来源报告与完整 Profile/评分版本；草稿单独归档，不修改正式方案。服务/迁移 6 项、1440/390 Chrome 两项及全量 1224 项均通过（233.89 秒，0 failed/0 skipped、9 warnings），Ruff、编译、9 JS 通过，只读审查无阻塞问题。证据在忽略目录 `data/acceptance/v255-challenger-drafts-regression/`；准备独立 PR/CI。

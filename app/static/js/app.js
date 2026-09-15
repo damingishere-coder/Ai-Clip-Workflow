@@ -56,7 +56,7 @@ if (selectionProfileInput && longLiveSettings) {
     const profile = profiles.find(item => item.id === selectionProfileInput.value);
     if (!profile) return;
     const promptInput = document.querySelector("#new-task-prompt");
-    if (promptInput) promptInput.value = profile.prompt_preset_id;
+    if (promptInput) promptInput.value = newTaskForm.dataset.trialPreset || profile.prompt_preset_id;
     const durationInput = newTaskForm.querySelector('[name="max_clip_duration"]');
     const poolInput = newTaskForm.querySelector('[name="candidate_clip_count"]');
     const targetInput = newTaskForm.querySelector('[name="final_clip_target"]');
@@ -100,6 +100,11 @@ if (newTaskForm) {
         "task_name", "platform", "max_clip_duration", "candidate_clip_count",
         "selection_profile", "final_clip_target", "ai_prompt_preset_id", "ai_provider",
       ]) uploadData.append(key, payload[key] || "");
+      if (payload.challenger_id) {
+        uploadData.append("challenger_id", payload.challenger_id);
+        uploadData.append("challenger_sha256", payload.challenger_sha256 || "");
+        uploadData.append("confirm_challenger", payload.confirm_challenger === "true" ? "true" : "false");
+      }
       if (payload.selection_profile === "long_live_talk") {
         uploadData.append("highlight_density_per_hour", payload.highlight_density_per_hour || "4");
         uploadData.append("highlight_total_limit", payload.highlight_total_limit || "30");
@@ -576,6 +581,12 @@ function renderAiAnalysisHistory(runs) {
     const summary = document.createElement("p");
     summary.textContent = run.failure_message || run.fallback_notice || run.analysis_summary || "暂无整体总结。";
     main.append(title, meta, summary);
+    if (run.challenger?.id) {
+      const trialLink = document.createElement("a");
+      trialLink.href = `/api/content-review/challengers/${encodeURIComponent(run.challenger.id)}`;
+      trialLink.textContent = "Challenger 试验 · 查看来源版本";
+      main.append(trialLink);
+    }
     const visual = run.visual_signal || run.analysis_meta?.visual_signal;
     if (visual) {
       const link = document.createElement("a");
@@ -630,6 +641,7 @@ async function saveTaskCandidateClipCount() {
 
 async function saveTaskAiPromptSettings() {
   if (!aiAnalysisForm) return null;
+  if (aiAnalysisForm.dataset.challengerId) return {message: "Challenger 的 Profile 与 Prompt 已冻结；已保存其他分析设置。"};
   const taskId = aiAnalysisForm.dataset.taskId;
   const selected = aiAnalysisForm.querySelector("input[name='ai_prompt_preset_id']:checked");
   if (!selected) {

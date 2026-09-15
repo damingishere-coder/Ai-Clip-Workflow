@@ -1,5 +1,9 @@
 # 数据库结构说明
 
+## 开发中：v2.5.5 PR3b 增量
+
+第 18 项 `20260915_04_challenger_trials` 为 task_generation_rules 增加可空 challenger_id（引用 content_strategy_challengers）及 challenger_sha256，两字段须同时为空或提供完整绑定，增加查询索引和已绑定不可覆盖触发器。旧行原字段与 NULL 保留，原 Prompt/Profile 冻结字段及 Workflow Job 表结构不变。复用现有迁移账本、备份、DDL 事务及恢复测试；正式库尚未执行。
+
 ## 开发中：v2.5.5 PR3a 增量
 
 第 17 项 `20260915_03_content_challengers` 新增 `content_strategy_challengers`。记录来源报告/哈希、Profile 版本、Champion/Challenger Prompt 版本、独立归档预设、请求 UUID/哈希、不可变策略 JSON/哈希及状态/时间。核心证据禁止 UPDATE，引用复用既有报告、Profile 与 Prompt 表，不增加一套执行器或任务事实。迁移前备份、事务回滚与校验继续使用原账本；旧表旧行不变。正式库仍为 14 项，版本完成后统一部署。

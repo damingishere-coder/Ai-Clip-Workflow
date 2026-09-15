@@ -771,6 +771,7 @@ def _analysis_run_row_to_dict(row: Row, include_payload: bool = False) -> dict:
         "clips": clips if include_payload else [],
         "clip_summaries": _summarize_analysis_clips(clips) if include_payload else [],
         "analysis_meta": analysis_meta if include_payload else {},
+        "challenger": analysis_meta.get("challenger") if isinstance(analysis_meta.get("challenger"), dict) else None,
         "visual_signal": ({key: analysis_meta["visual_signal"].get(key) for key in ("status", "candidate_count", "verified_count")} if isinstance(analysis_meta.get("visual_signal"), dict) else None),
         "analysis_incomplete": bool(analysis_meta.get("analysis_incomplete")),
         "failure_message": incomplete_analysis_message(analysis_meta) if analysis_meta.get("analysis_incomplete") else "",
@@ -910,6 +911,14 @@ def _insert_ai_analysis_run_with_connection(
 ) -> str:
     run_id = run_id or uuid4().hex[:12]
     clips = analysis_payload.get("clips") or []
+    from app.services.challenger_trial_service import validate_trial_run
+    validate_trial_run(connection, task_id, {
+        "task_id": task_id, "analysis_payload_json": json.dumps(analysis_payload, ensure_ascii=False),
+        "ai_prompt_preset_id": prompt_preset.get("id"), "prompt_version_id": prompt_preset.get("prompt_version_id"),
+        "prompt_text_sha256": prompt_preset.get("prompt_sha256"),
+        "content_profile_version_id": prompt_preset.get("content_profile_version_id"),
+        "content_profile_sha256": prompt_preset.get("content_profile_sha256"),
+    })
     run_number = _next_ai_analysis_run_number(connection, task_id)
     connection.execute("UPDATE ai_analysis_runs SET is_active = 0 WHERE task_id = ?", (task_id,))
     connection.execute(
@@ -1098,6 +1107,11 @@ def restore_ai_analysis_run(task_id: str, run_id: str) -> dict:
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
         try:
+            from app.services.challenger_trial_service import validate_trial_run
+            current_run = connection.execute("SELECT * FROM ai_analysis_runs WHERE task_id=? AND id=?", (task_id, run_id)).fetchone()
+            if not current_run or current_run["analysis_payload_json"] != row["analysis_payload_json"]:
+                raise ValueError("AI 历史在恢复前已变化，请重新载入")
+            validate_trial_run(connection, task_id, dict(current_run))
             now = _now_iso()
             active_job = connection.execute(
                 """
@@ -1344,6 +1358,12 @@ def _commit_ai_analysis_result(
                 task_id=task_id,
                 allowed_job_types={job_service.JOB_TYPE_AI_ANALYSIS, job_service.JOB_TYPE_AUTO_PIPELINE},
             )
+            from app.services.challenger_trial_service import task_binding
+            if task_binding(connection, task_id):
+                from app.services.content_profile_service import read_job_snapshot
+                frozen = read_job_snapshot(job, connection=connection)
+                if frozen["prompt"] != prompt_preset or (analysis_payload.get("analysis_meta") or {}).get("effective_selection") != frozen["selection"]:
+                    raise ValueError("试验提交的实际策略与当前 Job 冻结证据不一致")
             current = connection.execute(
                 "SELECT status FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
                 (task_id,),
@@ -1407,6 +1427,7 @@ def _resume_committed_ai_analysis(task_id: str) -> tuple[dict, dict] | None:
     from app.services import job_service
 
     with get_connection() as connection:
+        connection.execute("BEGIN")
         job = job_service.require_job_lease_with_connection(
             connection,
             task_id=task_id,
@@ -1424,6 +1445,9 @@ def _resume_committed_ai_analysis(task_id: str) -> tuple[dict, dict] | None:
             "SELECT status FROM tasks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
             (task_id,),
         ).fetchone()
+        if row and task and str(task["status"] or "") == TaskStatus.pending_review.value:
+            from app.services.challenger_trial_service import validate_trial_run
+            validate_trial_run(connection, task_id, dict(row))
     if not row or not task or str(task["status"] or "") != TaskStatus.pending_review.value:
         return None
     run = _analysis_run_row_to_dict(row, include_payload=True)

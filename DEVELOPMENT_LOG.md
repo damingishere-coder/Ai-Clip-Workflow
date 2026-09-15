@@ -1,5 +1,16 @@
 # Development Log
 
+## 2026-09-15 v2.5.5 PR3b：显式试验任务
+
+- 最终冻结源码完整回归 1240 passed、0 failed/0 skipped、9 warnings，312.30 秒，包含 Chrome；Ruff、编译及 9 JS 全通过。没有真实 AI、正式数据库、同步或发布操作；证据在忽略目录 `data/acceptance/v255-challenger-trials-final/`。
+- PR #107 最终三项 CI 通过，Linux 1205 passed / 19 skipped / 74.39 秒；精确 head 校验后 squash 合并 `3a7ecd0`，从最新 master 新建试验任务短期分支，四份原有审计修改保留。
+- 保持草稿 Prompt 归档。创建时必须同时提供 Challenger ID/证据哈希并明确确认，事务内核对当前受支持的 Profile 与冻结 Prompt，绑定原 task_generation_rules；不更新生产头指针。试验不允许 auto_mode 或 auto_pipeline Job，仍逐步处理并人工审片。
+- 任务详情发现原分析按钮会自动 PATCH 正式 Prompt，试验页面改为只读固定方案并跳过该写入，服务端同时拒绝改绑。新 Job/Run 保存试验标记并验证真实版本；缺失/损坏标记不可假装旧 Job 回退。
+- 首轮 26 通过、1 失败为旧路由把所有 ValueError 映射为 404；新增试验冻结冲突明确返回 409，旧错误保持兼容。修正后 27 passed，包含桌面/手机 Chrome、迁移失败回滚/并发/恢复和 Profile 旧任务回归。浏览器上传与模型请求被拦截，服务测试使用隔离数据库，没有真实 AI 或生产任务。
+- 全量回归发现旧 followup 校验调用只传 payload、未传 task_id，新增绑定核验导致两项续接回归失败。补齐现有 followup_task_id 参数，不重算旧策略或反馈快照；随后定向验证旧 Job 的成功单元和续接兼容。
+- 基础全量收集 1237，1232 passed / 5 failed / 0 skipped，243.99 秒；实际四项（含两项字幕续接）由上述 followup 参数缺失引起，另一项旧视觉迁移全字段比较不接受新增 NULL 列。修复为旧字段逐项不变并验证新字段 NULL；修改测试时一次缩进错误已修正。最终定向 75 passed / 9.96 秒、24 passed / 6.22 秒、59 passed / 25.35 秒，覆盖全部原失败及相邻风险；Ruff、编译、9 JS 通过。基础全量并非最终冻结提交的全绿结果，最终 CI 将重新完整检查。
+- 只读审查后补 Champion 当前正文校验、Run 提交/恢复同事务验证和历史来源显示，旧试验保存同 Profile 时不重写冻结版本。新增完整模拟 workflow 验证一次调用后重复恢复无重发、损坏标记阻止恢复/重建。补测夹具曾违反 Profile 哈希唯一约束和 frozen settings，已修正夹具，不放宽生产约束。因涉及共享 Run 边界，冻结源码后再次运行最终完整回归。
+
 ## 2026-09-15 Challenger 草稿回归收尾
 
 - 完整离线回归 1224 passed、0 failed/0 skipped、9 warnings，233.89 秒；Ruff、Python 编译及 9 JS 语法检查通过。包含桌面/手机 Chrome 和旧库升级、失败回滚、并发迁移与备份恢复。
