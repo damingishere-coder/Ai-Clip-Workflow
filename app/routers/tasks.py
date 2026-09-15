@@ -562,9 +562,9 @@ async def process_video_cuts_async(
     return {
         "status": job["status"],
         "message": (
-            "切片任务已加入后台队列，可通过 job id 查询进度"
+            "切片已加入独立通道，无需等待其他素材的转写或 AI 分析；可以继续操作其他任务"
             if created
-            else "已有切片任务正在运行，已继续显示原任务进度"
+            else "已有切片任务排队或运行中，已继续显示原任务进度"
         ),
         "job_id": job["id"],
         "job": job,

@@ -938,7 +938,7 @@ function renderCutJobProgress(job, fallbackMessage = "") {
   if (cutJobMessage) {
     cutJobMessage.textContent = status === "failed"
       ? (job.error_message || job.message || "切片任务失败")
-      : (job.message || fallbackMessage || "正在等待切片任务更新...");
+      : (job.queue_hint || job.message || fallbackMessage || "正在等待切片任务更新...");
   }
 }
 
@@ -959,6 +959,42 @@ async function waitForCutJob(jobId) {
       throw new Error(job.error_message || job.message || "切片任务未完成");
     }
     await wait(1000);
+  }
+}
+
+async function showCompletedCut(jobId) {
+  const completedJob = await waitForCutJob(jobId);
+  const syncMessage = completedJob.result_json?.publish_sync?.message
+    ? ` ${completedJob.result_json.publish_sync.message}` : "";
+  showClipReviewMessage(
+    `${completedJob.result_json?.message || completedJob.message || "切片生成完成。"}${syncMessage} 正在刷新切片结果...`,
+    completedJob.result_json?.publish_sync?.status === "partial" ? "error" : "success",
+  );
+  window.setTimeout(() => window.location.reload(), 700);
+}
+
+async function restoreCutProgress() {
+  if (!generateClipsButton || !clipReviewForm) return;
+  isCutJobActive = true;
+  updateClipReviewActionState();
+  const originalText = generateClipsButton.textContent;
+  try {
+    const response = await fetch(`/api/tasks/${clipReviewForm.dataset.taskId}/jobs`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "读取切片进度失败");
+    const job = (data.jobs || []).find(item => item.job_type === "video_cut" && ["queued", "running"].includes(item.status));
+    if (job) {
+      generateClipsButton.textContent = "切片处理中...";
+      renderCutJobProgress(job);
+      showClipReviewMessage("切片正在后台继续，可以离开页面处理其他任务。", "info");
+      await showCompletedCut(job.id);
+    }
+  } catch (error) {
+    showClipReviewMessage(`读取切片进度失败：${error.message}`, "error");
+  } finally {
+    isCutJobActive = false;
+    updateClipReviewActionState();
+    generateClipsButton.textContent = originalText;
   }
 }
 
@@ -1638,15 +1674,7 @@ if (generateClipsButton) {
       }
       renderCutJobProgress(data.job, data.message);
       showClipReviewMessage(data.message || "切片任务已加入后台队列。", "info");
-      const completedJob = await waitForCutJob(data.job_id);
-      const syncMessage = completedJob.result_json?.publish_sync?.message
-        ? ` ${completedJob.result_json.publish_sync.message}`
-        : "";
-      showClipReviewMessage(
-        `${completedJob.result_json?.message || completedJob.message || "切片生成完成。"}${syncMessage} 正在刷新切片结果...`,
-        completedJob.result_json?.publish_sync?.status === "partial" ? "error" : "success",
-      );
-      window.setTimeout(() => window.location.reload(), 700);
+      await showCompletedCut(data.job_id);
     } catch (error) {
       showClipReviewMessage(`生成切片失败：${error.message}`, "error");
     } finally {
@@ -1655,6 +1683,7 @@ if (generateClipsButton) {
       generateClipsButton.textContent = originalText;
     }
   });
+  restoreCutProgress();
 }
 
 async function saveTaskSelectionSettings() {
