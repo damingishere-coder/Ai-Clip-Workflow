@@ -183,3 +183,27 @@ def test_forbidden_batch_resume_cannot_enqueue_or_execute(batch_db,tmp_path,monk
         job_service.create_job(task,'auto_pipeline',{'start_step':step})
     with pytest.raises(ValueError,match='只到预切'):
         PipelineEngine().run(task,start_step=step,job_id=job)
+
+
+@pytest.mark.parametrize('strategy,mode', [('original','original'),('review','subtitled')])
+def test_batch_subtitle_choice_reaches_review_without_bypassing_human_gate(
+        strategy,mode,batch_db,tmp_path,monkeypatch,stage_doubles):
+    from app.models.production_review import ProductionReviewConfirm
+    payload,_ = batch_input(tmp_path,1,settings={'selection_profile':'general','auto_production':True,
+        'candidate_clip_count':3,'final_clip_target':2,'subtitle_strategy':strategy})
+    batch = batches.create_batch(payload)
+    task = batch['items'][0]['task_id']
+    job = import_jobs(batch,monkeypatch)[0]
+    assert job_worker.execute_job(job)['result_json']['status'] == 'pending_review'
+    state = review.state(task)
+    assert state['suggested_delivery_mode'] == mode
+    assert not state['approved'] and not state['ready']
+    assert len(stage_doubles['transcript']) == 1  # Skipping subtitles still permits AI transcription.
+    with pytest.raises(ValueError,match='人工确认'):
+        review.check_preparation(task)
+    review.confirm(task,ProductionReviewConfirm(request_key=uuid4(),manifest_sha256=state['manifest_sha256'],
+        delivery_mode=mode,confirmed=True))
+    assert review.state(task)['ready'] == (strategy == 'original')
+    with db.get_connection() as c:
+        assert c.execute('SELECT count(*) FROM subtitle_jobs').fetchone()[0] == 0
+        assert c.execute('SELECT count(*) FROM publish_jobs').fetchone()[0] == 0

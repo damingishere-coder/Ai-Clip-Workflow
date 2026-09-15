@@ -127,12 +127,26 @@
       byId('material-total').textContent = `共 ${data.total} 个素材 · 第 ${Math.floor(offset / 50) + 1} 页`;
       const library = byId('material-library'); library.replaceChildren();
       for (const item of data.materials) {
-        const card = node('article', ''); card.className = 'material-item';
-        card.append(node('strong', item.file_name), node('p', item.source_path), node('p', `${size(item.size_bytes)} · ${item.content_verified ? '已完成复制与完整哈希校验' : '已登记文件版本，等待复制校验'}`));
-        if (item.duplicate_material_count) card.append(node('p', `与其他 ${item.duplicate_material_count} 份素材内容相同（完整哈希核对）。请自行决定是否再次生产。`));
+        const card = node('article', ''); card.className = 'material-item material-source-card';
+        const face = node('div', ''); face.className = 'material-card-face'; face.setAttribute('aria-hidden', 'true');
+        const format = item.file_name.split('.').pop().toUpperCase();
+        const mark = node('span', '▶'); mark.className = 'material-film-mark';
+        const episode = item.file_name.match(/^E\d+/i)?.[0] || 'VIDEO';
+        face.append(node('span', format), mark, node('span', episode));
+        const body = node('div', ''); body.className = 'material-card-body';
+        const title = node('h3', item.file_name); title.title = item.file_name;
+        const meta = node('div', ''); meta.className = 'material-card-meta';
+        const verified = node('span', item.content_verified ? '已校验' : '待复制校验');
+        verified.className = item.content_verified ? 'material-tag is-verified' : 'material-tag';
+        verified.title = item.content_verified ? '已完成复制与完整内容哈希校验' : '已登记文件版本，完整内容哈希将在复制校验后确认';
+        meta.append(node('span', size(item.size_bytes)), verified);
+        const source = node('details', ''); source.className = 'material-source-details';
+        source.append(node('summary', '文件位置'), node('p', item.source_path));
+        body.append(title, meta, source); card.append(face, body);
+        if (item.duplicate_material_count) body.append(node('p', `与其他 ${item.duplicate_material_count} 份素材内容相同，请核对后选择。`));
         card.dataset.materialId = item.id; library.append(card);
       }
-      if (!data.materials.length) library.append(node('p', '暂无素材。先选择文件夹并扫描预览。'));
+      if (!data.materials.length) { const empty = node('p', '素材库还是空的。选择上方文件夹，登记你的第一组视频。'); empty.className = 'material-empty'; library.append(empty); }
       window.dispatchEvent(new Event('material-library-updated'));
       byId('material-previous').disabled = offset === 0;
       byId('material-next').disabled = offset + 50 >= data.total;
