@@ -650,3 +650,8 @@ data/workflow.sqlite3
 ## 2026-09-14 v2.5 运行验收
 
 v2.5.0 实际库已应用迁移 13/14，迁移账本 14 项，integrity=ok/FK=0；37 张原表旧字段旧行保留，旧任务 visual_enabled=0、visual_policy_json=NULL。旧 2.4 虽可读库，但 readiness 拒绝未知迁移，不能删除账本伪造回滚；保留增量结构做功能回退优先。
+
+
+## v2.6 生产工作台与统一待办
+
+工作台与 Inbox 无新增 DDL（账本 23）。待办来自既有任务状态和审核代际；预览清理只删除 material_scans 中过期超过七天且未被 material_registrations 引用的记录，每小时空闲批量最多 200。source_materials、批次、导入证据及外部文件均不删除。

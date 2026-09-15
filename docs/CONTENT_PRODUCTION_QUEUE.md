@@ -6,7 +6,7 @@
 
 批次 Pipeline 仅允许 PREPARING_SOURCE、TRANSCRIBING、AI_ANALYZING、CLIP_SELECTING、VIDEO_CUTTING。原 handler/checkpoint 继续复用，完成后核对成片执行证据并设置 pending_review，完成 Workflow Job 释放槽位。即使恢复请求显式指定 metadata/schedule 步骤也拒绝。选择数量采用冻结 final_clip_target；未启用自动生产的旧批次不被接管。
 
-AI 不确定/部分失败遵循原失败和人工重试规则；部分切片失败保留结果并显示失败，不能当作全部完成或批准发布。此增量无新迁移，不开放全自动排期。统一 Inbox 与首页在下一 PR。
+AI 不确定/部分失败遵循原失败和人工重试规则；部分切片失败保留结果并显示失败，不能当作全部完成或批准发布。此增量无新迁移，不开放全自动排期。统一 Inbox 与首页已接入后续工作台 PR。
 
 v2.5.5 的版本、运行与数据兼容验收已完成。v2.6 沿用 FastAPI、SQLite、本地文件和 Windows Worker，不增加队列基础设施。每个相邻 PR 合并后再开新短期分支，整版验收后更新原正式服务。
 
@@ -71,3 +71,8 @@ PR2 验证记录：17 项新增功能/迁移/浏览器定向通过；完整离�
 代码审查发现原 output_clip 的边界来自提交时读取候选，而不是执行时的 CutPlan，因此先独立修复这一可重现风险，再实现统一人审。新 cut_run_evidence 保存切前选集/Run 哈希和结果，准备及提交两处核对；成片实际时间来自 FFmpeg 已执行的 start/duration。变化时整批拒绝激活，旧结果保留。此 PR 不开放自动生产、不创建人工确认，不替代后续字幕/发布服务门槛。
 
 边界证据表示实际执行的 FFmpeg -ss/-t 计划，不是从成片解码反推的首尾帧；fast copy 仍可能受关键帧影响，策略也被记录。Run 快照同时冻结实际 Provider、模型、Prompt/Profile 版本和哈希、请求数量及分析载荷哈希。当前下游统计兼容 cut_plan_v1 标签；新人工凭据必须读取并校验 cut_run_evidence 与 output_clip 一致性，不能只看标签。
+
+
+## v2.6 生产工作台与统一待办
+
+Inbox 分类优先正在处理→任务异常→人工审片→字幕→内容准备；任务级异常只出现一次，旧 reviewed 位不代表人工确认。发布 NEED_REVIEW 与 FAILED 单列；手动导入/待 AI 显示待继续处理；只读汇总不授权生产。首页可复盘数不是未读/待办状态，也不代表已达到实验样本门槛。未确认预览七天保留后有界清理；完整哈希提示只辅助用户判断重复，不自动取消任务。

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 from fastapi.templating import Jinja2Templates
 
 from app.core.config import settings
@@ -35,6 +35,17 @@ from app.services.task_service import (
 
 router = APIRouter(tags=["pages"])
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
+
+
+@router.get("/review-inbox")
+async def review_inbox_page(request: Request, category: str = 'all', page: int = Query(1, ge=1)):
+    from app.services.production_workbench_service import inbox
+    try:
+        context = inbox(category, page)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return templates.TemplateResponse(name='review_inbox.html', request=request,
+        context={'request':request, 'settings':settings, 'active_page':'review_inbox', **context})
 
 
 @router.get("/")

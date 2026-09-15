@@ -4,6 +4,7 @@
   if (!form) return;
   const key = 'niuma-material-batch-pending-v1', selected = new Set();
   let pending = null, busy = false;
+  const retryingImports = new Set();
   try { pending = JSON.parse(localStorage.getItem(key) || 'null'); } catch (_) { /* Show fresh selection. */ }
   if (pending && (!Array.isArray(pending.material_ids) || !pending.request_key || !pending.settings)) pending = null;
   const node = (tag, text) => { const element = document.createElement(tag); element.textContent = text; return element; };
@@ -45,6 +46,13 @@
       const response = await fetch('/api/material-batches?limit=20');
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '批次读取失败');
+      const requested = new URLSearchParams(location.search).get('batch');
+      if (requested && !data.batches.some(batch => batch.id === requested)) {
+        const pinnedResponse = await fetch(`/api/material-batches/${encodeURIComponent(requested)}`);
+        const pinned = await pinnedResponse.json();
+        if (!pinnedResponse.ok) throw new Error(pinned.detail || '指定批次读取失败');
+        data.batches.unshift(pinned);
+      }
       const list = byId('batch-list'); list.replaceChildren();
       for (const batch of data.batches) {
         const card = node('article', ''); card.className = 'material-item'; card.dataset.batchId = batch.id;
@@ -53,6 +61,23 @@
         for (const item of batch.items) {
           const row = node('p', ''), link = node('a', item.file_name); link.href = `/tasks/${encodeURIComponent(item.task_id)}`;
           row.append(link, node('span', ` · ${item.is_deleted ? '任务已删除' : item.job_status === 'completed' ? `已导入 · ${item.task_status_label}` : item.message || item.job_status}${item.error_message ? `：${item.error_message}` : ''}`)); card.append(row);
+          if (!item.is_deleted && ['failed','cancelled'].includes(item.job_status)) {
+            const retry = node('button', '重试导入'); retry.type = 'button'; retry.className = 'secondary-button';
+            retry.dataset.retryImport = item.job_id; retry.disabled = retryingImports.has(item.job_id);
+            retry.addEventListener('click', async () => {
+              if (retryingImports.has(item.job_id)) return;
+              retryingImports.add(item.job_id); retry.disabled = true;
+              try {
+                const response = await fetch(`/api/tasks/jobs/${encodeURIComponent(item.job_id)}/retry`, {method:'POST'});
+                const result = await response.json();
+                if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : '导入重试未通过检查');
+                byId('batch-status').textContent = `${item.file_name} 已重新排入导入队列，继续使用原任务和冻结配置。`;
+                await refresh();
+              } catch (error) { byId('batch-status').textContent = `${error.message}；请刷新导入进度后核对，未自动重试。`; }
+              finally { retryingImports.delete(item.job_id); retry.disabled = false; }
+            });
+            row.append(retry);
+          }
         }
         list.append(card);
       }

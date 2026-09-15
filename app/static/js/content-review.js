@@ -587,20 +587,41 @@ function weeklyReportText(report) {
   return lines.join("\n");
 }
 
-async function copyWeeklyReport(report, button, container) {
-  const text = weeklyReportText(report);
-  try {
-    await navigator.clipboard.writeText(text);
-    button.textContent = "已复制报告与修改建议";
-  } catch (_error) {
-    let area = container.querySelector("textarea");
+const weeklyCopyStates = new Map();
+
+function showWeeklyCopyState(reportId, button, container) {
+  const state = weeklyCopyStates.get(reportId);
+  if (!state || !button?.isConnected) return;
+  button.disabled = state.status === 'pending';
+  button.textContent = state.status === 'pending' ? '正在复制报告…' : state.status === 'copied' ? '已复制报告与修改建议' : '请在下方选中文本复制';
+  if (state.status === 'manual') {
+    let area = container.querySelector('textarea');
     if (!area) {
-      area = document.createElement("textarea"); area.readOnly = true;
-      area.setAttribute("aria-label", "报告与修改建议文本"); area.style.width = "100%"; area.rows = 8;
+      area = document.createElement('textarea'); area.readOnly = true;
+      area.setAttribute('aria-label', '报告与修改建议文本'); area.style.width = '100%'; area.rows = 8;
       container.append(area);
     }
-    area.value = text; area.focus(); area.select();
-    button.textContent = "请在下方选中文本复制";
+    area.value = state.text;
+  }
+}
+
+async function copyWeeklyReport(report, button, container) {
+  const text = weeklyReportText(report);
+  const state = {status:'pending',text};
+  weeklyCopyStates.set(report.id,state);
+  showWeeklyCopyState(report.id,button,container);
+  try {
+    await navigator.clipboard.writeText(text);
+    state.status = 'copied';
+  } catch (_error) {
+    state.status = 'manual';
+  }
+  if (weeklyCopyStates.get(report.id) !== state) return;
+  // Refresh may have replaced the clicked node while the clipboard Promise settled.
+  const current = container.querySelector(`[data-weekly-copy-report="${CSS.escape(report.id)}"]`);
+  showWeeklyCopyState(report.id,current,container);
+  if (current && state.status === 'manual') {
+    const area = container.querySelector('textarea'); area?.focus(); area?.select();
   }
 }
 
@@ -668,8 +689,10 @@ function renderWeeklyReport(data) {
   const application = report.application;
   const changes = report.result.changes || [];
   const copy = textNode("button", "复制报告与修改建议", "secondary-button"); copy.type = "button";
+  copy.dataset.weeklyCopyReport = report.id;
   copy.addEventListener("click", () => copyWeeklyReport(report, copy, changesBox));
   changesBox.append(copy, textNode("p", "本页只提供报告和建议。请将需要落实的修改交给 Codex 核对、修改并验证。"));
+  showWeeklyCopyState(report.id,copy,changesBox);
   if (report.result.format === "manual_report_v1") return;
   changesBox.append(textNode("h3", application ? (application.state === "reverted" ? "历史已回退的改动" : "历史已应用的改动") : "历史改动草案（只读）"));
   if (!changes.length) changesBox.append(textNode("p", "历史报告没有规则改动记录。"));

@@ -1,14 +1,19 @@
 {% extends "base.html" %}
 {% block title %}工作台 - {{ settings.app_name }}{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', path='css/production-workbench.css') }}?v=20260915">{% endblock %}
 
 {% block content %}
 <section class="page-heading">
   <div>
     <p class="eyebrow">Dashboard</p>
     <h1>工作台</h1>
-    <p>从直播录像到候选切片的本地处理链路，当前任务数据来自 SQLite。</p>
+    <p>导入素材、查看生产进度，再集中处理审片、字幕和发送待办。</p>
   </div>
-  <a class="secondary-button" href="/tasks">查看全部任务</a>
+  <a class="secondary-button" href="/review-inbox">打开统一待办</a>
+</section>
+
+<section class="production-cards" aria-label="生产工作台">
+{% for card in production.cards %}<a class="production-card" href="{{ card.url }}"><span>{{ card.label }}</span><strong>{{ card.value }}</strong><small>{{ card.note }}</small></a>{% endfor %}
 </section>
 
 <section class="panel dashboard-overview-panel" aria-labelledby="weekly-overview-title">

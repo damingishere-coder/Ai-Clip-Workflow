@@ -71,6 +71,20 @@ def test_batch_confirmation_survives_lost_response_and_reload(width, batch_db, t
             assert page.locator('[data-batch-id]').count() == 1
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1')
             assert page.evaluate("localStorage.getItem('niuma-material-batch-pending-v1')") is None
+            with db.get_connection() as c:
+                failed = c.execute('SELECT id FROM workflow_jobs ORDER BY rowid LIMIT 1').fetchone()[0]
+                batch_id = c.execute('SELECT id FROM material_batches').fetchone()[0]
+                c.execute("UPDATE workflow_jobs SET status='failed',error_message='copy interrupted' WHERE id=?",(failed,))
+                c.commit()
+            # An older batch outside the recent page remains actionable through the Inbox link.
+            page.route('**/api/material-batches?limit=20',lambda route:route.fulfill(json={'batches':[],'total':1}))
+            page.goto(f'http://127.0.0.1:{port}/materials?batch={batch_id}',wait_until='networkidle')
+            retry = page.locator(f'[data-retry-import="{failed}"]')
+            retry.wait_for()
+            retry.click()
+            page.wait_for_function("document.getElementById('batch-status').textContent.includes('已重新排入导入队列')")
+            with db.get_connection() as c:
+                assert c.execute('SELECT status FROM workflow_jobs WHERE id=?',(failed,)).fetchone()[0] == 'queued'
             page.locator('#batch-panel').screenshot(path=str(tmp_path/f'batch-panel-{width}.png'))
             assert not errors
             with db.get_connection() as c:
