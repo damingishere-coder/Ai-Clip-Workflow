@@ -250,6 +250,7 @@ def _batch_all_output_clips(task_ids: list[str]) -> dict[str, list[dict]]:
 
 def get_dashboard_context(*, now: datetime | None = None) -> dict:
     """Dashboard 首页统计上下文"""
+    from app.services.production_workbench_service import dashboard
     tasks = list_tasks()
     task_ids = [task["id"] for task in tasks]
     weekly_summary = _dashboard_weekly_summary(tasks, now=now)
@@ -264,6 +265,7 @@ def get_dashboard_context(*, now: datetime | None = None) -> dict:
     )
 
     return {
+        "production": dashboard(now=now),
         "stats": [
             {
                 "label": "本周新增任务",

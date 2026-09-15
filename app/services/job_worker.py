@@ -283,6 +283,12 @@ class WorkflowJobRunner:
                     except Exception:
                         import logging
                         logging.getLogger(__name__).exception("视觉缓存维护失败，队列继续工作")
+                    try:
+                        from app.services.material_catalog_service import cleanup_expired_scans
+                        cleanup_expired_scans()
+                    except Exception:
+                        import logging
+                        logging.getLogger(__name__).exception("目录预览维护失败，队列继续工作")
                 self._stop_event.wait(self.poll_seconds)
                 continue
             try:

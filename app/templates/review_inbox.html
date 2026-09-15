@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}统一待办 · {{ settings.app_name }}{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', path='css/production-workbench.css') }}?v=20260915">{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">Review Inbox</p><h1>统一待办</h1><p>先处理需要你判断的内容。审核、内容准备与发布分别确认。</p></div><a class="secondary-button" href="/review-inbox?category={{ category }}&page={{ page }}">刷新待办</a></section>
+<nav class="production-filters" aria-label="待办分类">
+  <a href="/review-inbox" class="{{ 'selected' if category == 'all' else '' }}" {% if category == 'all' %}aria-current="page"{% endif %}>全部</a>
+  {% for key,value in counts.items() %}<a href="/review-inbox?category={{ key }}" class="{{ 'selected' if category == key else '' }}" {% if category == key %}aria-current="page"{% endif %}>{{ value.label }} {{ value.count }} <small>{{ value.unit }}</small></a>{% endfor %}
+</nav>
+<section class="panel production-inbox" aria-label="待处理事项">
+  <p>共 {{ total }} 项 · 第 {{ page }} / {{ pages }} 页。片段按任务集中展示；同一任务的处理异常只计一次。</p>
+  {% for item in items %}<article class="production-item" data-item-id="{{ item.id }}">
+    <div><span class="status-pill">{{ counts[item.category].label }} · {{ item.count }} {{ counts[item.category].unit }}</span><h2>{{ item.title }}</h2><p>{{ item.message }}</p></div>
+    <a class="secondary-button" href="{{ item.url }}">去处理</a>
+  </article>{% else %}<p class="production-empty">当前分类没有待办。后台处理完成后，可刷新查看。</p>{% endfor %}
+  <nav class="production-filters" aria-label="待办分页">{% if page > 1 %}<a href="/review-inbox?category={{ category }}&page={{ page-1 }}">上一页</a>{% endif %}{% if page < pages %}<a href="/review-inbox?category={{ category }}&page={{ page+1 }}">下一页</a>{% endif %}</nav>
+  <p class="production-footnote">这里汇总数据库中的当前状态。实际成片和文件会在审核、准备及发送前再次核对；刷新不会启动 AI 或发送。</p>
+</section>
+{% endblock %}

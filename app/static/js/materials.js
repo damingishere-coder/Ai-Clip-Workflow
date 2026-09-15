@@ -75,7 +75,8 @@
       const library = byId('material-library'); library.replaceChildren();
       for (const item of data.materials) {
         const card = node('article', ''); card.className = 'material-item';
-        card.append(node('strong', item.file_name), node('p', item.source_path), node('p', `${size(item.size_bytes)} · 已登记文件版本，等待复制校验`));
+        card.append(node('strong', item.file_name), node('p', item.source_path), node('p', `${size(item.size_bytes)} · ${item.content_verified ? '已完成复制与完整哈希校验' : '已登记文件版本，等待复制校验'}`));
+        if (item.duplicate_material_count) card.append(node('p', `与其他 ${item.duplicate_material_count} 份素材内容相同（完整哈希核对）。请自行决定是否再次生产。`));
         card.dataset.materialId = item.id; library.append(card);
       }
       if (!data.materials.length) library.append(node('p', '暂无素材。先选择文件夹并扫描预览。'));

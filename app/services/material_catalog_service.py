@@ -153,7 +153,38 @@ def list_materials(limit=50, offset=0):
     with get_connection() as c:
         total = c.execute("SELECT count(*) FROM source_materials").fetchone()[0]
         ids = c.execute("SELECT id FROM source_materials ORDER BY created_at DESC,id LIMIT ? OFFSET ?", (limit, offset)).fetchall()
-        return {"total": total, "materials": [_read_material(c, r[0]) for r in ids], "limit": limit, "offset": offset}
+        hints = content_hash_hints(c)
+        return {"total": total, "materials": [{**_read_material(c, r[0]), **hints.get(r[0], {})} for r in ids], "limit": limit, "offset": offset}
+
+
+def content_hash_hints(c):
+    """Full copy hashes give hints, never permission to delete or cancel work."""
+    rows = c.execute('''SELECT DISTINCT b.material_id,x.source_sha256 FROM material_batch_items b
+        JOIN material_imports x ON x.item_id=b.id''').fetchall()
+    by_hash, by_material = {}, {}
+    for row in rows:
+        by_hash.setdefault(row['source_sha256'],set()).add(row['material_id'])
+        by_material.setdefault(row['material_id'],set()).add(row['source_sha256'])
+    result = {}
+    for mid, hashes in by_material.items():
+        others = set().union(*(by_hash[h] for h in hashes)) - {mid}
+        result[mid] = dict(content_verified=True, duplicate_material_count=len(others))
+    return result
+
+
+def cleanup_expired_scans(*, now=None, limit=200):
+    """Bounded deletion of unconfirmed preview metadata only; registrations pin it."""
+    if not 1 <= limit <= 1000:
+        raise ValueError('预览清理批量范围无效')
+    cutoff = ((now or datetime.now(timezone.utc))-timedelta(days=7)).isoformat()
+    with get_connection() as c:
+        c.execute('BEGIN IMMEDIATE')
+        cursor = c.execute('''DELETE FROM material_scans WHERE id IN (
+            SELECT s.id FROM material_scans s WHERE s.expires_at<?
+            AND NOT EXISTS(SELECT 1 FROM material_registrations r WHERE r.scan_id=s.id)
+            ORDER BY s.expires_at,s.id LIMIT ?)''',(cutoff,limit))
+        c.commit()
+        return cursor.rowcount
 
 
 def register_materials(payload: MaterialRegistration):
