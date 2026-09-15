@@ -125,7 +125,8 @@
       </div>
       <span class="status-pill" id="ai-candidate-count-pill">{{ task.candidate_count }} 条候选</span>
     </div>
-    <form id="ai-analysis-form" class="settings-form ai-prompt-form" data-task-id="{{ task.id }}" data-selection-profile="{{ task.selection_profile }}">
+    <form id="ai-analysis-form" class="settings-form ai-prompt-form" data-task-id="{{ task.id }}" data-selection-profile="{{ task.selection_profile }}" {% if challenger_trial %}data-challenger-id="{{ challenger_trial.id }}"{% endif %}>
+      {% if challenger_trial %}<p class="empty-note">Challenger 试验：{{ challenger_trial.evidence.name }}。Profile 与 Prompt 已冻结；如需修改，请另建草稿和任务。<a href="/content-review/challengers?report_id={{ challenger_trial.report_id }}">查看假设与版本差异</a></p>{% endif %}
       {% if task.selection_profile == "long_live_talk" %}
       <input id="ai-highlight-density" type="hidden" value="{{ task.highlight_density_per_hour or 4 }}">
       <input id="ai-highlight-total-limit" type="hidden" value="{{ task.highlight_total_limit or 30 }}">
@@ -175,7 +176,7 @@
         </label>
         {% endfor %}
       </div>
-      {% if current_prompt_preset and current_prompt_preset.is_archived %}
+      {% if current_prompt_preset and current_prompt_preset.is_archived and not challenger_trial %}
       <details class="empty-note">
         <summary>当前任务保留 {{ current_prompt_preset.slot }} 号历史绑定（已归档）。切换方案请选 1 号；历史分析不会改写。</summary>
         <pre class="transcript-full-text">{{ current_prompt_preset.prompt_text }}</pre>
@@ -187,23 +188,25 @@
         <article class="prompt-preset-card {{ 'active' if is_selected else '' }}" data-prompt-preset-card data-preset-id="{{ preset.id }}" data-preset-slot="{{ preset.slot }}">
           <label>
             <span>方案名称</span>
-            <input type="text" name="preset_name_{{ preset.id }}" value="{{ preset.name }}" maxlength="80">
+            <input type="text" name="preset_name_{{ preset.id }}" value="{{ preset.name }}" maxlength="80" {% if challenger_trial %}readonly{% endif %}>
           </label>
           <label>
             <span>AI 分析 Prompt</span>
-            <textarea name="preset_prompt_{{ preset.id }}" rows="12" placeholder="把完整 AI 分析 Prompt 写在这里。可使用 {{ '{{MAX_CLIP_DURATION}}' }}、{{ '{{TARGET_CLIP_COUNT}}' }}、{{ '{{AI_PREFERENCE}}' }}、{{ '{{TRANSCRIPT_TEXT}}' }} 变量。">{{ preset.prompt_text }}</textarea>
+            <textarea name="preset_prompt_{{ preset.id }}" rows="12" {% if challenger_trial %}readonly{% endif %} placeholder="把完整 AI 分析 Prompt 写在这里。可使用 {{ '{{MAX_CLIP_DURATION}}' }}、{{ '{{TARGET_CLIP_COUNT}}' }}、{{ '{{AI_PREFERENCE}}' }}、{{ '{{TRANSCRIPT_TEXT}}' }} 变量。">{{ preset.prompt_text }}</textarea>
           </label>
         </article>
         {% endfor %}
       </div>
-      {% if task.selection_profile == "variety_comedy" %}
+      {% if challenger_trial %}
+      <p class="empty-note">试验不会自动修改正式方案。后续实验归属以实际 AI Run 的冻结策略为准。</p>
+      {% elif task.selection_profile == "variety_comedy" %}
       <p class="empty-note">康熙统一使用 1 号提示词；4 号旧方案已归档。内容修订是提示词修改记录，分析次数是任务运行记录，两者分别计数。综艺分析三个阶段均使用本任务冻结的规则，历史任务不会自动套用后来的修改。</p>
       {% else %}
       <p class="empty-note">按内容类型选择合适的 Prompt；保存方案不会改变已排队的分析。内容修订与分析次数分别记录，历史结果保留原版本。</p>
       {% endif %}
       <p class="form-hint">默认按钮沿用任务选择，未记录 Provider 的历史任务使用当前默认。其他按钮显式选择本轮 Provider；排队后冻结配置，模型变化时暂停。</p>
       <div class="button-row align-end">
-        <button class="secondary-button" id="save-ai-prompts-button" type="button">保存当前提示词方案</button>
+        <button class="secondary-button" id="save-ai-prompts-button" type="button">{{ "保存分析设置" if challenger_trial else "保存当前提示词方案" }}</button>
         <button class="primary-button js-ai-process-action" type="button" data-provider="">按任务默认 Provider 分析</button>
         <button class="primary-button js-ai-process-action" type="button" data-provider="codex">Codex CLI 分析 · {{ settings.ai_codex_model }}</button>
         <button class="secondary-button js-ai-process-action" type="button" data-provider="remote">远程 AI 分析 · {{ settings.ai_analysis_remote_model }}</button>

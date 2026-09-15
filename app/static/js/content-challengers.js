@@ -19,6 +19,10 @@
     detail.append(node('p', `Profile：${evidence.baseline.profile.name} · ${evidence.baseline.rules_version}。Profile 与评分未改变；仅 Prompt 正文不同。`));
     const diff = node('pre', evidence.diff); diff.className = 'challenger-evidence'; detail.append(diff);
     const link = node('a', '查看版本与来源证据'); link.href = `/api/content-review/challengers/${encodeURIComponent(draft.id)}`; link.target = '_blank'; link.rel = 'noopener'; detail.append(link);
+    if (['draft', 'trial'].includes(draft.status)) {
+      const trial = node('a', '使用此草稿创建试验任务'); trial.className = 'secondary-button';
+      trial.href = `/tasks/new?challenger_id=${encodeURIComponent(draft.id)}`; detail.append(trial);
+    }
   }
   async function history() {
     const data = await request(`/api/content-review/challengers?report_id=${encodeURIComponent(reportId)}`);

@@ -129,6 +129,7 @@ def analysis_profile_evidence(task: dict, snapshot: dict) -> dict:
         "content_profile_sha256": snapshot["content_profile_sha256"],
         "content_profile": json.loads(snapshot["content_profile_json"]),
         "effective_selection": {key: task.get(key) for key in SELECTION_FIELDS},
+        **({"challenger": snapshot["challenger"]} if snapshot.get("challenger") else {}),
     }
 
 
@@ -167,6 +168,8 @@ def freeze_new_job_payload(connection, task_id: str, job_type: str, payload: dic
     if not task:
         raise ValueError("任务不存在")
     prompt = get_task_ai_prompt_snapshot_with_connection(connection, task_id)
+    if prompt.get("challenger") and job_type == "auto_pipeline":
+        raise ValueError("Challenger 试验任务请逐步处理并人工审核，不能启动全自动流水线")
     if not prompt.get("content_profile_version_id"):
         # A new execution of an old task is known now. Do not backfill that
         # task's historical binding or any existing/queued/failed Job or Run.
@@ -201,6 +204,12 @@ def freeze_new_job_payload(connection, task_id: str, job_type: str, payload: dic
 def read_job_snapshot(job: dict, *, connection=None) -> dict | None:
     payload = job.get("payload_json") or {}
     if JOB_SNAPSHOT_KEY not in payload:
+        if job.get("task_id"):
+            from app.db.database import get_connection
+            from app.services.challenger_trial_service import task_binding
+            with (nullcontext(connection) if connection is not None else get_connection()) as trial_connection:
+                if task_binding(trial_connection, job["task_id"]):
+                    raise ValueError("试验 Job 缺少策略快照，不能作为历史 Job 回退")
         return None
     evidence = payload[JOB_SNAPSHOT_KEY]
     if not isinstance(evidence, dict) or not isinstance(evidence.get("snapshot"), dict):
@@ -234,4 +243,6 @@ def read_job_snapshot(job: dict, *, connection=None) -> dict | None:
         actual_hash = hashlib.sha256(str(prompt.get("prompt_text") or "").strip().encode("utf-8")).hexdigest()
         if not prompt_version or tuple(prompt_version) != (prompt.get("id"), actual_hash) or prompt.get("prompt_sha256") != actual_hash:
             raise ValueError("Job Prompt 版本引用不一致")
+        from app.services.challenger_trial_service import validate_trial_snapshot
+        validate_trial_snapshot(connection, job["task_id"], prompt)
     return snapshot

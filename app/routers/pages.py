@@ -71,9 +71,20 @@ async def tasks_page(request: Request):
 
 
 @router.get("/tasks/new")
-async def new_task_page(request: Request):
+async def new_task_page(request: Request, challenger_id: str = ""):
     from app.services.content_profile_service import list_content_profiles
     from app.services.ai_prompt_preset_service import list_ai_prompt_presets
+    trial = None
+    profiles, presets = list_content_profiles(), list_ai_prompt_presets()
+    if challenger_id:
+        from app.services.content_challenger_service import get_challenger
+        from app.services.content_review_service import ContentReviewError
+        try:
+            trial = get_challenger(challenger_id)
+        except ContentReviewError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        profiles = [p for p in profiles if p["id"] == trial["evidence"]["baseline"]["profile"]["id"]]
+        presets = [get_ai_prompt_preset(trial["challenger_preset_id"])]
     return templates.TemplateResponse(
         name="new_task.html",
         request=request,
@@ -84,8 +95,9 @@ async def new_task_page(request: Request):
             "candidate_count_options": [1, 3, 5, 8, 12, 20, 30, 50],
             "workflow_steps": get_workflow_steps(),
             "task_name_history": list_task_name_history(),
-            "content_profiles": list_content_profiles(),
-            "prompt_presets": list_ai_prompt_presets(),
+            "content_profiles": profiles,
+            "prompt_presets": presets,
+            "challenger_trial": trial,
         },
     )
 
@@ -95,6 +107,12 @@ async def task_detail_page(request: Request, task_id: str):
     task = get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
+
+    from app.services.challenger_trial_service import task_trial
+    try:
+        trial = task_trial(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return templates.TemplateResponse(
         name="task_detail.html",
@@ -108,7 +126,8 @@ async def task_detail_page(request: Request, task_id: str):
             "workflow_steps": get_task_workflow_steps(task),
             "transcript_lines": get_transcript_preview(task_id),
             "output_clips": list_output_clips(task_id),
-            "ai_prompt_presets": list_ai_prompt_presets(),
+            "ai_prompt_presets": [get_ai_prompt_preset(trial["challenger_preset_id"])] if trial else list_ai_prompt_presets(),
+            "challenger_trial": trial,
             "current_prompt_preset": get_ai_prompt_preset(task.get("ai_prompt_preset_id") or "preset_001"),
             "latest_ai_analysis_run": get_latest_ai_analysis_run(task_id),
             "ai_analysis_runs": list_ai_analysis_runs(task_id),

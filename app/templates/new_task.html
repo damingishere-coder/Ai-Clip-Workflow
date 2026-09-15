@@ -11,7 +11,14 @@
 </section>
 
 <section class="split-layout">
-  <form id="new-task-form" class="panel form-panel">
+  <form id="new-task-form" class="panel form-panel" {% if challenger_trial %}data-trial-preset="{{ challenger_trial.challenger_preset_id }}"{% endif %}>
+    {% if challenger_trial %}
+    <div class="empty-note"><strong>Challenger 试验：{{ challenger_trial.evidence.name }}</strong><p>使用已冻结的 Profile 和 Prompt 逐步处理素材，人工审片后再决定是否发布。此次创建不会替换正式方案或建立作品实验。</p></div>
+    <input type="hidden" name="challenger_id" value="{{ challenger_trial.id }}">
+    <input type="hidden" name="challenger_sha256" value="{{ challenger_trial.evidence_sha256 }}">
+    <details><summary>核对本次 Prompt 修改</summary><pre class="transcript-full-text">{{ challenger_trial.evidence.diff }}</pre></details>
+    <label class="checkbox-row"><input type="checkbox" name="confirm_challenger" value="true" required><span>已核对差异，确认本次任务使用未验证的 Challenger。</span></label>
+    {% endif %}
     <div class="panel-header">
       <div>
         <p class="eyebrow">Basic Info</p>
@@ -56,7 +63,7 @@
     <label>
       <span>内容类型 / Content Profile</span>
       <select id="selection-profile" name="selection_profile" required>
-        <option value="" selected disabled>请选择内容类型</option>
+        {% if not challenger_trial %}<option value="" selected disabled>请选择内容类型</option>{% endif %}
         {% for profile in content_profiles %}
         <option value="{{ profile.id }}">{{ "棚内综艺 · 笑点互动（康熙等）" if profile.id == "variety_comedy" else profile.name }}{{ " · 试用" if profile.id in ["interview_story", "knowledge_opinion"] else "" }}</option>
         {% endfor %}
@@ -137,6 +144,7 @@
       </label>
     </div>
 
+    {% if not challenger_trial %}
     <fieldset>
       <legend>全自动模式</legend>
       <label class="checkbox-row">
@@ -145,6 +153,7 @@
       </label>
       <p class="form-hint">按所选内容类型自动转写、分析和切片，随后进入现有人工审核流程。</p>
     </fieldset>
+    {% endif %}
 
     <div class="button-row align-end">
       <a class="secondary-button" href="/tasks">取消</a>

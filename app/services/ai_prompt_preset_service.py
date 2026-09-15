@@ -152,6 +152,11 @@ def update_task_ai_prompt_preset(task_id: str, preset_id: str) -> dict:
 
     now = _now_iso()
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        from app.services.challenger_trial_service import task_binding
+        if task_binding(connection, task_id):
+            from app.services.content_review_service import ContentReviewError
+            raise ContentReviewError("试验任务的 Prompt 已冻结；修改策略请另建草稿和任务", status_code=409)
         cursor = connection.execute(
             """
             UPDATE tasks
@@ -251,6 +256,10 @@ def get_task_ai_prompt_snapshot_with_connection(connection, task_id: str) -> dic
     preset["prompt_version_number"] = version["version_number"]
     preset["prompt_sha256"] = version["prompt_sha256"]
     preset.update(profile_snapshot)
+    from app.services.challenger_trial_service import validate_trial_snapshot
+    trial = validate_trial_snapshot(connection, task_id, preset, attaching=True)
+    if trial:
+        preset["challenger"] = trial
     return preset
 
 

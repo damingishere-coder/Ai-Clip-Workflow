@@ -31,7 +31,8 @@ def test_old_policy_upgrade_keeps_unknown_versions_and_all_old_fields(old_policy
         task = dict(connection.execute("SELECT * FROM tasks WHERE id='old'").fetchone())
         rules = dict(connection.execute("SELECT * FROM task_generation_rules WHERE task_id='old'").fetchone())
         assert task.pop("visual_enabled") == 0 and rules.pop("visual_policy_json") is None
-        assert task == before["task"] and rules == before["rules"]
+        assert task == before["task"] and {key: rules[key] for key in before["rules"]} == before["rules"]
+        assert rules["challenger_id"] is None and rules["challenger_sha256"] is None
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert not connection.execute("PRAGMA foreign_key_check").fetchall()
     backups = list((path.parent/"backups").glob("*visual-policy-v1*.sqlite3"))

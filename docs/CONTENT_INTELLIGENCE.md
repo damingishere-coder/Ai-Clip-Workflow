@@ -1,5 +1,17 @@
 # Content Intelligence：人工经验与受控实验
 
+## v2.5.5 PR3b：显式试验任务
+
+草稿详情提供 `/tasks/new?challenger_id=...`，复用原上传页面和任务服务。页面只显示草稿的 Profile/Prompt，展示修改差异，必须勾选“使用未验证 Challenger”后才提交。上传字段 `challenger_id/challenger_sha256/confirm_challenger` 是明确的试验选择，不是普通任务默认项。预设保持 archived，不开放到普通选择器，也不会改变原正式 Prompt。
+
+`challenger_trial_service.prepare_trial()` 在任务写事务内验证草稿/报告哈希、实际 Prompt 和当前受支持 Profile 版本，同时确认 Champion 正文仍与草稿基线一致。原任务创建、Prompt/Profile/Provider/视觉冻结继续执行，然后为 task_generation_rules 绑定 Challenger ID/证据哈希；同事务将草稿标为 trial。没有创建官方作品实验。未知/过期策略、未确认、错误 Prompt/Profile 和 auto_mode 直接拒绝；已存在试验任务仍保留自己的旧版本。
+
+新 Job 的 generation_snapshot_v1.prompt 增加 Challenger 标记；读取同时核对任务绑定、草稿、Prompt 版本与 Profile 版本。缺失整个新快照或标记不能当作旧 Job 回退；旧任务没有绑定时保持原恢复解释。AI Run 在原 analysis_meta 保存同一标记和原有实际策略字段，提交事务再次比较 Job/实际策略，Run 插入、已提交结果恢复和历史重建均验证标记与版本。损坏 Run 拒绝恢复且不重发模型；历史页面显示试验来源链接。继续使用既有 AI checkpoint 和原子提交。
+
+试验任务禁止改绑 Prompt/Profile，详情固定只读正文；手动分析不执行旧页面的自动保存 Prompt 操作。候选数量、目标、Provider/视觉仍由用户显式选择并随 Job 冻结，后续实验必须比较实际执行条件，不能仅靠试验标签。auto_pipeline Job 被拒绝；试验按原手动步骤处理，人工审片、内容准备和发布分别操作。此阶段不开放正式启用。
+
+迁移 18 `20260915_04_challenger_trials` 增加两个可空字段、外键、索引和绑定不可覆盖约束。旧任务/Job/Run 不回填。回退时撤下新试验入口并保留增量结构和历史证据；已创建试验保持可读，不能把它错误改绑康熙正式 Prompt。
+
 ## v2.5.5 PR3a：人工 Challenger 草稿
 
 冻结报告可打开 `/content-review/challengers?report_id=...`。用户明确选择当前 Profile 和基线 Prompt，载入正文后填写假设及改动，保存到独立的归档预设和既有 `ai_prompt_versions`。草稿不改变原 `ai_prompt_presets` 正文或默认标记，不修改 Profile 头指针，不创建 Workflow Job、作品实验或发布任务。

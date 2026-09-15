@@ -55,6 +55,9 @@ async def create_upload_task(
     selection_profile: str | None = Form(None),
     ai_prompt_preset_id: str | None = Form(None),
     ai_provider: str | None = Form(None),
+    challenger_id: str | None = Form(None),
+    challenger_sha256: str | None = Form(None),
+    confirm_challenger: bool = Form(False),
     visual_enabled: bool = Form(False),
     final_clip_target: int = Form(5),
     highlight_density_per_hour: int = Form(4),
@@ -94,6 +97,9 @@ async def create_upload_task(
             selection_profile=selection_profile,
             ai_prompt_preset_id=ai_prompt_preset_id,
             ai_provider=ai_provider,
+            challenger_id=challenger_id,
+            challenger_sha256=challenger_sha256,
+            confirm_challenger=confirm_challenger,
             visual_enabled=visual_enabled,
             final_clip_target=final_clip_target,
             highlight_density_per_hour=(highlight_density_per_hour if selection_profile == "long_live_talk" else 4),
@@ -197,7 +203,7 @@ async def patch_task_ai_prompt_preset(task_id: str, payload: TaskAIPromptPresetU
     try:
         return update_task_ai_prompt_preset(task_id, payload.ai_prompt_preset_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=getattr(exc, "status_code", 404), detail=str(exc)) from exc
 
 
 @router.patch("/{task_id}/candidate-clip-count")

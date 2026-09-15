@@ -214,8 +214,11 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
             "updated_at": now,
         }
 
+        from app.services.challenger_trial_service import prepare_trial, bind_trial
+        connection.execute("BEGIN IMMEDIATE")
+        trial = prepare_trial(connection, payload)
         selected_prompt = connection.execute("SELECT is_archived FROM ai_prompt_presets WHERE id=?", (insert_data["ai_prompt_preset_id"],)).fetchone()
-        if not selected_prompt or selected_prompt[0]:
+        if not selected_prompt or (selected_prompt[0] and trial is None):
             raise ValueError("所选 Prompt 不存在或已归档，请选择有效方案")
 
         if "title" in existing_columns:
@@ -240,6 +243,7 @@ def create_task_record(payload: TaskCreate, task_id: str | None = None, task_dir
         freeze_task_provider(connection, resolved_task_id, payload.ai_provider)
         from app.services.visual_policy_service import freeze_task_visual
         freeze_task_visual(connection, resolved_task_id, payload.visual_enabled)
+        bind_trial(connection, resolved_task_id, trial, now)
         connection.commit()
 
     append_task_log(resolved_task_id, "任务已创建")
@@ -506,6 +510,10 @@ def update_task_selection_settings(
     now = _now_iso()
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        from app.services.challenger_trial_service import task_binding
+        trial_binding = task_binding(connection, task_id)
+        if trial_binding and selection_profile != task["selection_profile"]:
+            raise ValueError("试验任务的 Content Profile 已冻结；修改策略请另建草稿和任务")
         active = connection.execute(
             "SELECT 1 FROM workflow_jobs WHERE task_id=? AND status IN ('queued','running') LIMIT 1", (task_id,),
         ).fetchone()
@@ -530,7 +538,8 @@ def update_task_selection_settings(
         from app.services.weekly_review_service import freeze_task
         from app.services.content_profile_service import freeze_task_profile
         freeze_task(connection, task_id)
-        freeze_task_profile(connection, task_id)
+        if not trial_binding:
+            freeze_task_profile(connection, task_id)
         connection.commit()
 
     profile_label = {

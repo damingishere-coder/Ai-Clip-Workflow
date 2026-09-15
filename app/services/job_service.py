@@ -978,7 +978,7 @@ def mark_job_completed_with_followup(
         from app.services.content_profile_service import JOB_SNAPSHOT_KEY, read_job_snapshot
         expected_followup_payload = followup_payload or {}
         if JOB_SNAPSHOT_KEY in existing_followup_payload:
-            read_job_snapshot({"payload_json": existing_followup_payload}, connection=connection)
+            read_job_snapshot({"task_id": followup_task_id, "payload_json": existing_followup_payload}, connection=connection)
             # This Job already owns its frozen strategy. Recovery must compare
             # caller parameters, not recapture newer feedback/models or add new
             # snapshot fields to an existing execution.
