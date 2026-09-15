@@ -4,6 +4,8 @@
   const status = byId('material-status');
   const form = byId('material-scan-form');
   const directory = byId('material-directory');
+  const recursive = byId('material-recursive');
+  const chooser = byId('material-directory-dialog');
   const preview = byId('material-preview');
   const confirm = byId('material-confirm');
   const register = byId('material-register');
@@ -23,33 +25,84 @@
     register.disabled = busy || !scan || !confirm.checked || !keys.length;
     byId('material-scan').disabled = busy;
     directory.disabled = busy;
+    recursive.disabled = busy;
+    byId('material-choose-directory').disabled = busy;
     preview.querySelectorAll('input').forEach(el => { el.disabled = busy; });
     all.checked = !!scan?.manifest.entries.length && keys.length === scan.manifest.entries.length;
     all.indeterminate = keys.length > 0 && !all.checked;
   }
   function reset() { scan = null; pending = null; preview.hidden = true; confirm.checked = false; controls(); }
   directory.addEventListener('input', reset);
+  recursive.addEventListener('change', reset);
+  let browseGeneration = 0, browseLocation = null;
+  async function browse(path) {
+    const token = ++browseGeneration;
+    browseLocation = null;
+    byId('material-directory-use').disabled = true;
+    byId('material-directory-parent').disabled = true;
+    byId('material-directory-list').replaceChildren();
+    byId('material-directory-current').textContent = '';
+    byId('material-directory-status').textContent = '正在读取文件夹…';
+    try {
+      const data = await api('/api/materials/directories', {directory: path});
+      if (token !== browseGeneration || !chooser.open) return;
+      browseLocation = data;
+      byId('material-browse-path').value = data.directory;
+      byId('material-directory-current').textContent = data.directory || '本机磁盘';
+      byId('material-directory-use').disabled = !data.directory;
+      byId('material-directory-parent').disabled = !data.directory;
+      for (const folder of data.folders) {
+        const button = node('button', `打开 ${folder.name}`);
+        button.type = 'button'; button.className = 'secondary-button';
+        button.addEventListener('click', () => browse(folder.path));
+        byId('material-directory-list').append(button);
+      }
+      byId('material-directory-status').textContent = data.truncated ? '目录项较多，只显示部分文件夹。可在上方输入更具体的路径。' :
+        data.folders.length ? '点击文件夹进入，或选择当前文件夹。' : data.directory ? '此处没有子文件夹，可以直接选择当前文件夹。' : '未找到可访问磁盘，请在上方输入完整路径。';
+    } catch (error) { if (token === browseGeneration && chooser.open) byId('material-directory-status').textContent = error.message; }
+  }
+  byId('material-choose-directory').addEventListener('click', () => {
+    if (busy) return;
+    chooser.showModal();
+    byId('material-browse-path').value = directory.value.trim();
+    browse(directory.value.trim());
+  });
+  byId('material-directory-close').addEventListener('click', () => chooser.close());
+  chooser.addEventListener('close', () => { ++browseGeneration; });
+  byId('material-directory-roots').addEventListener('click', () => browse(''));
+  byId('material-directory-parent').addEventListener('click', () => { if (browseLocation) browse(browseLocation.parent); });
+  byId('material-directory-browse-form').addEventListener('submit', event => {
+    event.preventDefault(); browse(byId('material-browse-path').value.trim());
+  });
+  byId('material-directory-use').addEventListener('click', () => {
+    if (!browseLocation?.directory) return;
+    directory.value = browseLocation.directory; reset(); chooser.close();
+    status.textContent = '已选择文件夹，点击“扫描预览”查看视频清单。';
+    byId('material-scan').focus();
+  });
   confirm.addEventListener('change', controls);
   all.addEventListener('change', () => { preview.querySelectorAll('[data-source]').forEach(el => { el.checked = all.checked; }); pending = null; controls(); });
   form.addEventListener('submit', async event => {
     event.preventDefault(); if (busy) return;
-    reset(); busy = true; controls(); status.textContent = '正在扫描当前文件夹…';
+    reset(); busy = true; controls(); status.textContent = recursive.checked ? '正在扫描文件夹及子文件夹…' : '正在扫描当前文件夹…';
     try {
-      scan = await api('/api/materials/scan', {directory: directory.value.trim()});
+      scan = await api('/api/materials/scan', {directory: directory.value.trim(), recursive: recursive.checked});
       const list = byId('material-preview-list'); list.replaceChildren();
       for (const item of scan.manifest.entries) {
         const card = node('article', ''); card.className = 'material-item';
         const label = node('label', ''); label.className = 'material-check';
         const check = document.createElement('input'); check.type = 'checkbox'; check.dataset.source = item.source_key; check.checked = true;
         check.addEventListener('change', () => { pending = null; controls(); });
-        label.append(check, node('span', `${item.source.file_name} · ${size(item.source.stamp.size)}`));
+        label.append(check, node('span', `${item.relative_path || item.source.file_name} · ${size(item.source.stamp.size)}`));
         card.append(label); list.append(card);
       }
       byId('material-preview-heading').textContent = `${scan.manifest.entries.length} 个可登记视频`;
       byId('material-excluded-summary').textContent = `未选入 ${scan.manifest.excluded.length} 项`;
       byId('material-excluded').replaceChildren(...scan.manifest.excluded.map(item => node('p', `${item.file_name}：${item.reason}`)));
       preview.hidden = false;
-      status.textContent = `已扫描 ${scan.manifest.directory.path}。请核对清单；预览在 30 分钟后失效。`;
+      const scope = scan.manifest.recursive ? '（包含子文件夹）' : '（仅当前文件夹）';
+      status.textContent = scan.manifest.entries.length ? `已扫描 ${scan.manifest.directory.path}${scope}。请核对清单；预览在 30 分钟后失效。` :
+        `此目录未找到可登记视频${scope}。${scan.manifest.recursive ? '请检查下方未选入原因，或选择其他文件夹。' : '如果视频放在月份等子文件夹中，请勾选“包含子文件夹”后重新扫描。'}`;
     } catch (error) { reset(); status.textContent = error.message; }
     finally { busy = false; controls(); }
   });

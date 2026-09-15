@@ -15,8 +15,10 @@ from app.db.database import get_connection
 from app.models.material import MaterialRegistration
 from app.services.storage_service import VIDEO_EXTENSIONS
 
-MAX_ENTRIES = 1000
-MAX_VIDEOS = 200
+MAX_ENTRIES = 10000
+MAX_VIDEOS = 1000
+MAX_DEPTH = 20
+MAX_BROWSE_ENTRIES = 10000
 
 
 class MaterialError(ValueError):
@@ -93,34 +95,88 @@ def validate_source(source):
     return Path(current["path"])
 
 
-def scan_directory(raw):
-    directory, identity = directory_identity(raw)
-    entries, excluded = [], []
+def browse_directories(raw=""):
+    """List local folders only, without granting file access or registering media."""
+    if not str(raw).strip():
+        roots = os.listdrives() if os.name == "nt" else ["/"]
+        folders = []
+        for root in roots:
+            try:
+                path, _ = directory_identity(root)
+                folders.append({"name": str(path), "path": str(path)})
+            except MaterialError:
+                continue
+        return {"directory": "", "parent": "", "folders": folders, "truncated": False}
+    directory, _ = directory_identity(raw)
+    folders, truncated = [], False
     try:
         with os.scandir(directory) as listing:
             for number, entry in enumerate(listing, start=1):
-                if number > MAX_ENTRIES:
-                    raise MaterialError(f"目录超过 {MAX_ENTRIES} 项，请选择更小的素材文件夹", 400)
-                path = Path(entry.path)
-                if path.suffix.lower() not in VIDEO_EXTENSIONS or not entry.is_file(follow_symlinks=False):
-                    excluded.append({"file_name": entry.name, "reason": "子目录或不支持的文件；不递归扫描"})
-                    continue
+                if number > MAX_BROWSE_ENTRIES:
+                    truncated = True
+                    break
                 try:
-                    source = _source(path, directory)
-                    source["directory_identity"] = identity
-                    key = digest(source)
-                    entries.append({"source_key": key, "source": source})
-                    if len(entries) > MAX_VIDEOS:
-                        raise MaterialError(f"单次最多 {MAX_VIDEOS} 个视频，请按集数拆分文件夹", 400)
-                except MaterialError as exc:
-                    if len(entries) > MAX_VIDEOS:
-                        raise
-                    excluded.append({"file_name": entry.name, "reason": str(exc)})
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    path, _ = directory_identity(entry.path)
+                    if path.parent == directory:
+                        folders.append({"name": path.name, "path": str(path)})
+                except (OSError, MaterialError):
+                    continue
     except OSError as exc:
-        raise MaterialError("扫描期间目录不可访问，请重试", 400) from exc
-    entries.sort(key=lambda item: (item["source"]["file_name"].casefold(), item["source_key"]))
+        raise MaterialError("无法打开这个文件夹，请确认有访问权限或选择其他目录", 400) from exc
+    folders.sort(key=lambda item: (item["name"].casefold(), item["name"]))
+    return {"directory": str(directory), "parent": str(directory.parent) if directory.parent != directory else "",
+            "folders": folders, "truncated": truncated}
+
+
+def scan_directory(raw, *, recursive=False):
+    directory, identity = directory_identity(raw)
+    entries, excluded = [], []
+    pending = [(directory, identity, 0)]
+    number = 0
+    while pending:
+        current, current_identity, depth = pending.pop()
+        # Recheck queued directories before opening; never follow a replaced link.
+        checked, checked_identity = directory_identity(current)
+        if checked != current or checked_identity != current_identity:
+            raise MaterialError("扫描期间目录已替换，请重新扫描")
+        try:
+            with os.scandir(current) as listing:
+                for entry in listing:
+                    number += 1
+                    if number > MAX_ENTRIES:
+                        raise MaterialError(f"目录超过 {MAX_ENTRIES} 项，请选择更小的素材文件夹", 400)
+                    path = Path(entry.path)
+                    relative = str(path.relative_to(directory))
+                    try:
+                        checked_path = _check_local_path(path)
+                        if not checked_path.is_relative_to(directory):
+                            raise MaterialError("素材已离开所选目录")
+                        if checked_path.is_dir():
+                            if not recursive:
+                                raise MaterialError("子文件夹未扫描；勾选包含子文件夹后重新扫描")
+                            if depth >= MAX_DEPTH:
+                                raise MaterialError(f"子目录超过 {MAX_DEPTH} 层，请直接选择更深的文件夹", 400)
+                            child, child_identity = directory_identity(checked_path)
+                            pending.append((child, child_identity, depth + 1))
+                            continue
+                        if path.suffix.lower() not in VIDEO_EXTENSIONS or not entry.is_file(follow_symlinks=False):
+                            raise MaterialError("不支持的视频格式或不是普通文件")
+                        source = _source(path, current)
+                        source["directory_identity"] = current_identity
+                    except (MaterialError, OSError) as exc:
+                        excluded.append({"file_name": relative, "reason": str(exc)})
+                        continue
+                    entries.append({"source_key": digest(source), "source": source, "relative_path": relative})
+                    if len(entries) > MAX_VIDEOS:
+                        raise MaterialError(f"单次最多 {MAX_VIDEOS} 个视频，请选择月份等更小的文件夹", 400)
+        except OSError as exc:
+            raise MaterialError("扫描期间目录不可访问，请重试", 400) from exc
+    entries.sort(key=lambda item: (item["relative_path"].casefold(), item["source_key"]))
     excluded.sort(key=lambda item: item["file_name"].casefold())
-    manifest = {"schema": "material-scan-v1", "directory": identity, "entries": entries, "excluded": excluded}
+    manifest = {"schema": "material-scan-v1", "directory": identity, "recursive": recursive,
+                "entries": entries, "excluded": excluded}
     now = datetime.now(timezone.utc)
     result = {"id": uuid4().hex, "manifest_sha256": digest(manifest), "manifest": manifest,
               "created_at": now.isoformat(), "expires_at": (now+timedelta(minutes=30)).isoformat()}
@@ -208,6 +264,9 @@ def register_materials(payload: MaterialRegistration):
             raise MaterialError("预览清单校验失败，请重新扫描")
         if datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):
             raise MaterialError("目录预览已超过 30 分钟，请重新扫描")
+        _, current_identity = directory_identity(manifest["directory"]["path"])
+        if current_identity != manifest["directory"]:
+            raise MaterialError("素材目录已替换，请重新扫描")
         entries = {item["source_key"]: item["source"] for item in manifest["entries"]}
         if not set(payload.source_keys).issubset(entries):
             raise MaterialError("选择中包含不属于此预览的文件")

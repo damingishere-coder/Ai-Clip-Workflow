@@ -1,14 +1,18 @@
 {% extends "base.html" %}
 {% block title %}素材池 · {{ settings.app_name }}{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', path='css/materials.css') }}?v=20260915-catalog">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', path='css/materials.css') }}?v=20260915-folders">{% endblock %}
 {% block content %}
 <section class="page-heading"><div><p class="eyebrow">Source Library</p><h1>素材池</h1><p>先核对本机文件夹中的视频，再登记素材。外部原片保留在原处。</p></div></section>
 <section class="panel material-panel">
   <h2>添加本机素材</h2>
   <form id="material-scan-form">
     <label for="material-directory">本机文件夹完整路径</label>
-    <input id="material-directory" class="control" type="text" placeholder="例如 E:\节目素材\康熙来了" required autocomplete="off">
-    <p class="material-note">在资源管理器打开素材文件夹，点击地址栏并复制路径。只扫描当前文件夹，不包含子目录；最多 200 个视频。预览 30 分钟有效，未确认预览过期七天后清理；已登记素材与原片保留。</p>
+    <div class="material-directory-row">
+      <input id="material-directory" class="control" type="text" placeholder="例如 E:\节目素材\康熙来了" required autocomplete="off">
+      <button id="material-choose-directory" class="secondary-button" type="button">选择文件夹</button>
+    </div>
+    <label class="material-check"><input id="material-recursive" type="checkbox" checked><span>包含子文件夹（例如年份下的各月份）</span></label>
+    <p class="material-note">点击“选择文件夹”浏览本机磁盘，或粘贴资源管理器地址栏的完整路径。单次最多扫描、登记 1000 个视频；批量创建任务仍每次最多 200 个。预览 30 分钟有效，未确认预览过期七天后清理；已登记素材与原片保留。</p>
     <button class="primary-button" id="material-scan" type="submit">扫描预览</button>
   </form>
   <p id="material-status" role="status">扫描只检查文件信息；登记不会启动 AI、排期或发布。</p>
@@ -21,6 +25,20 @@
     <button class="primary-button" id="material-register" type="button" disabled>确认登记素材</button>
   </div>
 </section>
+<dialog id="material-directory-dialog" class="material-directory-dialog" aria-labelledby="material-directory-title">
+  <div class="panel-header"><h2 id="material-directory-title">选择本机素材文件夹</h2><button id="material-directory-close" class="secondary-button" type="button" aria-label="关闭文件夹选择">关闭</button></div>
+  <p class="material-note">打开磁盘和文件夹，进入素材所在位置，再点击“选择此文件夹”。这里显示运行牛马片场的这台电脑上的目录。</p>
+  <form id="material-directory-browse-form" class="material-directory-row">
+    <label class="sr-only" for="material-browse-path">要打开的文件夹路径</label>
+    <input id="material-browse-path" class="control" type="text" placeholder="也可以粘贴完整路径" autocomplete="off">
+    <button class="secondary-button" type="submit">打开路径</button>
+  </form>
+  <div class="button-row material-directory-actions"><button id="material-directory-roots" class="secondary-button" type="button">磁盘列表</button><button id="material-directory-parent" class="secondary-button" type="button" disabled>上一级</button></div>
+  <p id="material-directory-current" class="material-note"></p>
+  <p id="material-directory-status" role="status"></p>
+  <div id="material-directory-list" class="material-directory-list"></div>
+  <button id="material-directory-use" class="primary-button" type="button" disabled>选择此文件夹</button>
+</dialog>
 <section class="panel material-panel">
   <div class="panel-header"><div><h2>已登记素材</h2><p id="material-total">正在加载…</p></div><button class="secondary-button" id="material-refresh" type="button">刷新</button></div>
   <p class="material-note">同一路径、同一文件版本重复登记会复用素材。这里保存的是文件信息，完整内容哈希在复制校验后才能确认。</p>
@@ -60,4 +78,4 @@
   <div id="batch-list" class="material-list"></div>
 </section>
 {% endblock %}
-{% block extra_scripts %}<script src="{{ url_for('static', path='js/materials.js') }}?v=20260915-batches"></script><script src="{{ url_for('static', path='js/material-batches.js') }}?v=20260915-batches"></script>{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/materials.js') }}?v=20260915-folders"></script><script src="{{ url_for('static', path='js/material-batches.js') }}?v=20260915-batches"></script>{% endblock %}

@@ -155,3 +155,102 @@ def test_material_api_uses_existing_local_admin_boundary(human_db, tmp_path):
     assert client.get('/api/materials/'+registered.json()['material_ids'][0]).status_code == 200
     assert client.get('/api/materials/missing').status_code == 404
     assert 'private-original' not in json.dumps(scan_response.json())
+
+
+def test_recursive_year_preview_registers_260_and_reuses_month_identity(human_db, tmp_path):
+    year = tmp_path/'2011'
+    for month in ('01月', '02月'):
+        folder = year/month
+        folder.mkdir(parents=True)
+        for number in range(130):
+            (folder/f'节目{number:03d}.mp4').write_bytes(b'original')
+    client = TestClient(app)
+    scan = client.post('/api/materials/scan', json={'directory':str(year),'recursive':True}).json()
+    assert len(scan['manifest']['entries']) == 260
+    assert scan['manifest']['recursive'] is True
+    assert scan['manifest']['entries'][0]['relative_path'] == str(Path('01月')/'节目000.mp4')
+    assert scan['manifest']['excluded'] == []
+    result = client.post('/api/materials/register', json=registration(scan).model_dump(mode='json'))
+    assert result.status_code == 200
+    assert len(result.json()['material_ids']) == 260
+    month_scan = catalog.scan_directory(str(year/'01月'))
+    month_result = catalog.register_materials(registration(month_scan))
+    assert len(month_result['material_ids']) == 130
+    assert catalog.list_materials()['total'] == 260
+    for entry in scan['manifest']['entries']:
+        assert catalog.validate_source(entry['source']).read_bytes() == b'original'
+    with db.get_connection() as c:
+        for table in ('tasks', 'workflow_jobs', 'publish_jobs'):
+            assert c.execute(f'SELECT count(*) FROM {table}').fetchone()[0] == 0
+
+
+def test_recursive_global_limits_and_replaced_child_are_checked(human_db, tmp_path, monkeypatch):
+    year = tmp_path/'2011'
+    month = year/'01月'
+    month.mkdir(parents=True)
+    (month/'episode.mp4').write_bytes(b'original')
+    (year/'root.mp4').write_bytes(b'root-original')
+    with monkeypatch.context() as scope:
+        scope.setattr(catalog, 'MAX_VIDEOS', 1)
+        with pytest.raises(catalog.MaterialError, match='最多'):
+            catalog.scan_directory(str(year), recursive=True)
+    with monkeypatch.context() as scope:
+        scope.setattr(catalog, 'MAX_ENTRIES', 2)
+        with pytest.raises(catalog.MaterialError, match='超过'):
+            catalog.scan_directory(str(year), recursive=True)
+    with monkeypatch.context() as scope:
+        scope.setattr(catalog, 'MAX_DEPTH', 0)
+        bounded = catalog.scan_directory(str(year), recursive=True)['manifest']
+        assert len(bounded['entries']) == 1
+        assert '超过 0 层' in bounded['excluded'][0]['reason']
+    scan = catalog.scan_directory(str(year), recursive=True)
+    month.rename(year/'original-month')
+    month.mkdir()
+    (month/'episode.mp4').write_bytes(b'replacement')
+    with pytest.raises(catalog.MaterialError, match='目录已替换'):
+        catalog.register_materials(registration(scan))
+    assert catalog.list_materials()['total'] == 0
+
+
+def test_directory_browser_is_local_bounded_and_never_creates_records(human_db, tmp_path, monkeypatch):
+    folder = source_folder(tmp_path, 1)
+    (folder/'01月').mkdir()
+    (folder/'02月').mkdir()
+    client = TestClient(app)
+    denied = client.post('/api/materials/directories', json={'directory':str(folder)}, headers={'Origin':'https://untrusted.invalid'})
+    assert denied.status_code == 403
+    for invalid in ('../escape', r'\\server\share', str(folder/'EP001.mp4'), str(folder/'missing')):
+        assert client.post('/api/materials/directories', json={'directory':invalid}).status_code == 400
+    result = client.post('/api/materials/directories', json={'directory':str(folder)})
+    assert result.status_code == 200
+    data = result.json()
+    assert [item['name'] for item in data['folders']] == ['01月', '02月']
+    assert data['parent'] == str(tmp_path)
+    assert data['directory'] == str(folder)
+    assert client.post('/api/materials/directories', json={}).status_code == 200
+    with monkeypatch.context() as scope:
+        scope.setattr(catalog, 'MAX_BROWSE_ENTRIES', 1)
+        assert catalog.browse_directories(str(folder))['truncated'] is True
+    with db.get_connection() as c:
+        for table in ('material_scans','source_materials','tasks','workflow_jobs','publish_jobs'):
+            assert c.execute(f'SELECT count(*) FROM {table}').fetchone()[0] == 0
+
+
+def test_recursive_scan_and_browser_never_follow_directory_links(human_db, tmp_path, monkeypatch):
+    folder = source_folder(tmp_path, 1)
+    linked = folder/'linked-month'
+    linked.mkdir()
+    (linked/'hidden.mp4').write_bytes(b'not authorized')
+    # Exercise the Windows reparse guard on every OS, including unprivileged CI.
+    original_lstat = Path.lstat
+    def reparse_lstat(path):
+        result = original_lstat(path)
+        if path == linked:
+            from types import SimpleNamespace
+            return SimpleNamespace(st_mode=result.st_mode, st_file_attributes=0x400)
+        return result
+    monkeypatch.setattr(Path, 'lstat', reparse_lstat)
+    assert catalog.browse_directories(str(folder))['folders'] == []
+    scan = catalog.scan_directory(str(folder), recursive=True)
+    assert len(scan['manifest']['entries']) == 1
+    assert '链接/重解析点' in scan['manifest']['excluded'][0]['reason']
