@@ -17,7 +17,7 @@ from app.services.content_review_service import (
 from app.services.human_review_service import _run_data, get_human_review_summary
 from app.services.review_observation_service import evidence_hash
 
-VERSION = "content-intelligence-v1"
+VERSION = "content-intelligence-v2"
 MAX_WORKS = 10000
 METRICS = ("play_count", "five_second_completion_rate", "two_second_bounce_rate",
            "completion_rate", "average_watch_seconds", "watch_ratio", "like_count",
@@ -92,6 +92,7 @@ def _runs(connection, rows):
             prompt_valid = bool(prompt_sha and prompt_sha == run.get("prompt_text_sha256") == run.get("version_prompt_sha"))
             run.update(profile_valid=profile_valid, prompt_valid=prompt_valid,
                        rules_version=version["rules_version"] if profile_valid else None)
+            run["verified_execution_controls"] = verified_execution_controls(connection, run)
             result[run["id"]] = run
     return result
 
@@ -149,7 +150,71 @@ def _features(row, run, duplicated_job):
         "quality_score": score, "score_band": "unknown" if score is None else "0–64" if score < 65 else "65–77" if score < 78 else "78–89" if score < 90 else "90–100",
         "attribution_valid": chain_valid, "strategy_evidence_valid": version_valid,
         "attribution_issue": "multiple_export_identities_for_job" if duplicated_job else None if chain_valid else "missing_or_invalid_chain",
+        "execution_controls": run.get("verified_execution_controls") if run_valid else None,
         "metrics": metrics}
+
+
+def execution_controls(run):
+    """Unknown execution settings never mean the current settings or disabled visual."""
+    if not run:
+        return None
+    try:
+        meta = json.loads(run.get("analysis_payload_json") or "{}")["analysis_meta"]
+        provider, selection = meta["provider_identity"], meta["effective_selection"]
+        signal = meta["visual_signal"]
+        visual = signal["policy"]
+        if (not isinstance(provider, dict) or not isinstance(provider.get("fields"), dict)
+                or provider.get("name") != run.get("provider") or not run.get("model")
+                or provider["fields"].get("model") != run["model"]
+                or not isinstance(selection, dict) or not selection.get("selection_profile")
+                or not isinstance(visual, dict) or type(visual.get("enabled")) is not bool
+                or signal.get("status") not in ("disabled", "completed", "partial", "unavailable")):
+            return None
+        feedback = meta.get("feedback_context")
+        from app.services.content_profile_service import SELECTION_FIELDS
+        if any(key not in selection for key in SELECTION_FIELDS):
+            return None
+        if selection["selection_profile"] == "variety_comedy" and (not isinstance(feedback, dict)
+                or not isinstance(feedback.get("items"), list) or not feedback.get("query_version")):
+            return None
+        value = {"schema_version": "trial-controls-v1", "provider": provider, "model": run["model"],
+                 "selection": selection, "visual_policy": visual,
+                 "visual_status": signal["status"],
+                 "feedback_sha256": evidence_hash(feedback) if feedback is not None else None}
+        return {"value": value, "sha256": evidence_hash(value)}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def verified_execution_controls(connection, run):
+    """Cross-check actual Run against its frozen Job, without reconstructing old jobs."""
+    try:
+        from app.services.content_profile_service import read_job_snapshot
+        meta = json.loads(run["analysis_payload_json"])["analysis_meta"]
+        job = connection.execute("SELECT * FROM workflow_jobs WHERE id=? AND task_id=?",
+                                 (meta.get("workflow_job_id"), run["task_id"])).fetchone()
+        if not job:
+            return None
+        job = dict(job)
+        job["payload_json"] = json.loads(job["payload_json"])
+        frozen = read_job_snapshot(job, connection=connection)
+        if not frozen:
+            return None
+        prompt = frozen["prompt"]
+        if (prompt["prompt_version_id"] != run["prompt_version_id"]
+                or prompt["prompt_sha256"] != run["prompt_text_sha256"]
+                or prompt["content_profile_version_id"] != run["content_profile_version_id"]
+                or prompt["content_profile_sha256"] != run["content_profile_sha256"]
+                or meta.get("prompt_version_id") != run["prompt_version_id"]
+                or meta.get("prompt_sha256") != run["prompt_text_sha256"]
+                or frozen["selection"] != meta.get("effective_selection")
+                or frozen.get("provider_identity") != meta.get("provider_identity")
+                or frozen.get("visual_policy") != meta.get("visual_signal", {}).get("policy")
+                or frozen.get("feedback_context") != meta.get("feedback_context")):
+            return None
+        return execution_controls(run)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
 
 
 def _group(rows, dimension, key, weeks, truncated):
@@ -191,7 +256,7 @@ def _performance(connection, account_id, start, cutoff):
     works = [_features(r, runs.get(r.get("source_analysis_run_id")), bool(r.get("publish_job_id") and r["batch_job_count"] > 1)) for r in rows]
     # Evidence weeks belong to the included works, not unrelated account exports.
     weeks_by_work = defaultdict(set)
-    week_rows = connection.execute("""SELECT i.aweme_id,i.publish_job_id,i.match_status,i.captured_at FROM douyin_item_metric_snapshots i
+    week_rows = connection.execute("""SELECT i.batch_id,i.aweme_id,i.publish_job_id,i.match_status,i.captured_at FROM douyin_item_metric_snapshots i
         JOIN content_metric_import_batches b ON b.id=i.batch_id WHERE i.account_id=? AND b.account_id=i.account_id
         AND b.status='committed' AND b.source_kind=? AND julianday(i.captured_at) BETWEEN julianday(?) AND julianday(?)
         AND julianday(b.committed_at)<=julianday(?) ORDER BY i.captured_at DESC,i.id LIMIT 200001""",
@@ -202,6 +267,21 @@ def _performance(connection, account_id, start, cutoff):
         if when:
             key = "job:" + row["publish_job_id"] if row["publish_job_id"] and row["match_status"] in MATCHED_STATUSES else "work:" + row["aweme_id"]
             weeks_by_work[key].add(when.astimezone(BEIJING_TIMEZONE).strftime("%G-W%V"))
+    batch_identities = defaultdict(set)
+    for row in week_rows[:200000]:
+        if row["publish_job_id"]:
+            batch_identities[(row["batch_id"], row["publish_job_id"])].add(row["aweme_id"])
+    verified_weeks = defaultdict(set)
+    works_by_job = {w["publish_job_id"]: w for w in works if w["attribution_valid"]}
+    for row in week_rows[:200000]:
+        work = works_by_job.get(row["publish_job_id"])
+        when = _parse_iso_datetime(row["captured_at"])
+        if (work and row["match_status"] in MATCHED_STATUSES and when
+                and when >= _parse_iso_datetime(work["published_at"])
+                and len(batch_identities[(row["batch_id"], row["publish_job_id"])]) == 1):
+            verified_weeks[work["publish_job_id"]].add(when.astimezone(BEIJING_TIMEZONE).strftime("%G-W%V"))
+    for work in works:
+        work["official_weeks"] = sorted(verified_weeks[work["publish_job_id"]]) if work["attribution_valid"] else []
     groups = {}
     for dimension in DIMENSIONS:
         grouped = defaultdict(list)

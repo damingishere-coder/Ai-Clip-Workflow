@@ -384,7 +384,7 @@ function renderExperiments(experiments) {
   if (heading) heading.hidden = !(experiments || []).length;
   list.hidden = !(experiments || []).length;
   if (!(experiments || []).length) {
-    list.append(textNode("p", "暂无历史手动实验。新的规则改进会在上方直接显示应用记录。", "empty-note"));
+    list.append(textNode("p", "暂无作品实验。可从经验报告创建 Challenger 草稿。", "empty-note"));
     return;
   }
   experiments.forEach((experiment) => {
@@ -437,6 +437,7 @@ function renderExperiments(experiments) {
       actions.append(cancel);
       item.append(actions);
     }
+    window.NiuMaExperiments?.policyActions(item, experiment);
     list.append(item);
   });
 }

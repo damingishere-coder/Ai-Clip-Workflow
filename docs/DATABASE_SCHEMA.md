@@ -1,5 +1,9 @@
 # 数据库结构说明
 
+## 开发中：v2.5.5 PR3c 增量
+
+第 19 项 `20260915_05_challenger_experiments` 为 content_improvement_experiments 增加可空 challenger_id 外键、strategy_json/sha256、decision_evidence_json/sha256；每个 Challenger 只允许一个实验，新绑定实验的策略/阈值及完成后的结论不可 UPDATE，旧 NULL 记录仍走兼容路径。新增 content_policy_events：实验与 Challenger 外键、activate/rollback、前后 Prompt 版本、唯一请求 UUID/哈希、完整预览 JSON/哈希、时间；记录不可 UPDATE，API 不提供删除。迁移使用原账本与自动备份，验证失败回滚、并发幂等、旧字段/NULL 保留及备份恢复。正式库尚未升级。
+
 ## 开发中：v2.5.5 PR3b 增量
 
 第 18 项 `20260915_04_challenger_trials` 为 task_generation_rules 增加可空 challenger_id（引用 content_strategy_challengers）及 challenger_sha256，两字段须同时为空或提供完整绑定，增加查询索引和已绑定不可覆盖触发器。旧行原字段与 NULL 保留，原 Prompt/Profile 冻结字段及 Workflow Job 表结构不变。复用现有迁移账本、备份、DDL 事务及恢复测试；正式库尚未执行。
