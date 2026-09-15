@@ -27,6 +27,8 @@ class CutResult:
     output_file_name: str
     status: str
     error_message: str | None = None
+    source_start_ms: int | None = None
+    source_end_ms: int | None = None
 
 
 def ensure_ffmpeg_available() -> str:
@@ -269,6 +271,8 @@ def cut_single_clip(
         output_file_path=str(plan.output_path),
         output_file_name=plan.output_path.name,
         status="completed",
+        source_start_ms=round(float(plan.start_time) * 1000),
+        source_end_ms=round((float(plan.start_time) + float(format_seconds_for_ffmpeg(plan.duration_seconds))) * 1000),
     )
 
 

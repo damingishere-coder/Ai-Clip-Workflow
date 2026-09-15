@@ -1,5 +1,11 @@
 # 数据库结构说明
 
+## v2.6 第 22 项迁移：成片证据
+
+20260915_08_cut_evidence 新增 cut_run_evidence，主键/外键 cut_run_id，另存 task_id、规范 JSON、SHA-256 和创建时间；UPDATE 禁止，Task 索引服务追溯查询。与原 cut_runs/output_clip 在同一事务提交，失败整体回滚。历史结果不回填，原库所有字段保留；迁移前备份标 cut-evidence-v1，覆盖旧库保留/故障回滚/并发幂等/备份恢复。原输出 snapshot_source 新值 cut_plan_v1 表示真实执行边界；旧 cut_commit 保持原值，legacy_inferred 不伪装为新证据。
+
+回退优先保留增量表并停用新入口。旧程序若不认识新增迁移不得直接打开新库；不删除账本或覆盖正式数据。正式库仍 19 项，整版 v2.6 验收后统一升级。
+
 ## v2.6 全局领取限制（PR3，无 DDL）
 
 PR3 使用已有 workflow_jobs.status / lease_expires_at / next_attempt_at / created_at 及原索引，在 BEGIN IMMEDIATE 事务内判断唯一有效执行槽位，不新增容量表、状态机或迁移条目。开发迁移账本仍为 21；formal 19 未变化。OS 互斥文件位于实际 SQLite 同目录，命名为 `<database-name>.workflow.lock`，只作本机执行互斥，不是数据库事实源，也不以删除它来回收租约。

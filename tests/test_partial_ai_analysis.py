@@ -17,6 +17,24 @@ from app.services.pipeline_engine import PipelineEngine
 from app.services.video_cut_workflow_service import process_task_video_cuts
 
 
+@pytest.fixture
+def persisted_cut_task():
+    """Quality-gate units still need the real task identity used by cut fencing."""
+    from app.db.database import get_connection
+    created = []
+    def seed(task_id, profile):
+        with get_connection() as c:
+            c.execute("INSERT INTO tasks(id,task_name,task_dir_name,selection_profile,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                      (task_id, task_id, task_id, profile, "now", "now"))
+            c.commit()
+        created.append(task_id)
+    yield seed
+    with get_connection() as c:
+        for task_id in created:
+            c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+        c.commit()
+
+
 @pytest.mark.parametrize("items,require_all,valid", [
     ([], False, True),
     ([{"source_id": "current"}], True, True),
@@ -219,7 +237,8 @@ def test_auto_pipeline_blocks_incomplete_analysis_for_every_profile(monkeypatch,
 
 
 @pytest.mark.parametrize("profile", ["general", "variety_comedy"])
-def test_manual_cut_blocks_incomplete_analysis_for_every_profile(monkeypatch, profile: str):
+def test_manual_cut_blocks_incomplete_analysis_for_every_profile(monkeypatch, profile: str, persisted_cut_task):
+    persisted_cut_task("test-partial-cut", profile)
     monkeypatch.setattr(
         "app.services.task_service.get_task",
         lambda *_args, **_kwargs: {"id": "test-partial-cut", "selection_profile": profile},
@@ -233,7 +252,8 @@ def test_manual_cut_blocks_incomplete_analysis_for_every_profile(monkeypatch, pr
         process_task_video_cuts("test-partial-cut")
 
 
-def test_quality_degraded_analysis_is_manual_review_only(monkeypatch):
+def test_quality_degraded_analysis_is_manual_review_only(monkeypatch, persisted_cut_task):
+    persisted_cut_task("test-quality-cut", "variety_comedy")
     engine = PipelineEngine()
     monkeypatch.setattr(engine, "_get_task", lambda _task_id: {"selection_profile": "variety_comedy"})
     degraded = {
@@ -281,7 +301,8 @@ def test_complete_long_live_analysis_meta_passes_cut_validation():
     assert validate_ai_analysis_meta_for_cut(meta, "long_live_talk") == meta
 
 
-def test_missing_analysis_meta_blocks_manual_and_auto_cut(monkeypatch):
+def test_missing_analysis_meta_blocks_manual_and_auto_cut(monkeypatch, persisted_cut_task):
+    persisted_cut_task("test-missing-meta-cut", "general")
     engine = PipelineEngine()
     monkeypatch.setattr(engine, "_get_task", lambda _task_id: {"selection_profile": "general"})
     monkeypatch.setattr(

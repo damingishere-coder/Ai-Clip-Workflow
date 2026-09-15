@@ -206,6 +206,9 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
+    from app.db import cut_evidence_migration
+    if cut_evidence_migration.needs_migration(settings.database_path):
+        create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "cut-evidence-v1")
     from app.db import material_batch_migration
     if material_batch_migration.needs_migration(settings.database_path):
         create_schema_migration_backup(settings.database_path, settings.data_dir / "backups", "material-batches-v1")
@@ -1918,7 +1921,7 @@ def _verify_ai_prompt_version_fk_migration(connection: sqlite3.Connection) -> No
 
 
 def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
-    from app.db import content_challenger_migration, challenger_trial_migration, challenger_experiment_migration, material_catalog_migration, material_batch_migration
+    from app.db import content_challenger_migration, challenger_trial_migration, challenger_experiment_migration, material_catalog_migration, material_batch_migration, cut_evidence_migration
     from app.db import intelligence_report_migration
     from app.db import human_review_migration
     from app.db import visual_evidence_migration, visual_policy_migration
@@ -2048,6 +2051,11 @@ def _registered_schema_migrations() -> tuple[SchemaMigration, ...]:
             version=material_batch_migration.VERSION, name=material_batch_migration.NAME,
             checksum=material_batch_migration.CHECKSUM,
             apply=material_batch_migration.apply, verify=material_batch_migration.verify,
+        ),
+        SchemaMigration(
+            version=cut_evidence_migration.VERSION, name=cut_evidence_migration.NAME,
+            checksum=cut_evidence_migration.CHECKSUM,
+            apply=cut_evidence_migration.apply, verify=cut_evidence_migration.verify,
         ),
     )
 

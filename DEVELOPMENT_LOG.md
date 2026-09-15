@@ -1,5 +1,15 @@
 # Development Log
 
+## 2026-09-15 v2.6 PR4a 实际成片证据
+
+- PR #115 首轮 CI 发现 test_partial_ai_analysis 四项仅 mock Task、未建立实际记录，新增准备快照先报告任务不存在。补上隔离 Task 夹具并保留原有缺失/不完整/质量降级门禁断言；不放宽生产校验。此前全量在准备快照补丁前收集，最终 CI 正确覆盖到了这一遗漏。
+
+- PR #114 最终 8750750 的 Linux/Windows/Docker CI 全部通过，合并 28c01c9。从最新 master 新建 codex/v2.6-cut-review-evidence。
+- 原计划人工凭据 PR 按实际风险拆出成片证据前置：此前 output_clip 在落库时重新读候选边界，无法证明 FFmpeg 实际执行范围。CutResult 现在携带实际毫秒边界；新结果标 cut_plan_v1，没有执行计划的旧内部调用仅标 legacy_inferred，历史 cut_commit 保持原样并继续可读。
+- 切片前冻结选集、候选来源 Run、活动 Run 正文哈希、原片路径/文件标识与实际策略；准备前后和原子提交时复核。变化、缺失/重复结果和未知状态拒绝激活，保留旧 active 成片。采样指纹明确标 size-head-tail-v1，不当作完整原片 SHA-256。
+- 第 22 项增量迁移新增不可变 cut_run_evidence，与输出和 cut_run 状态在原租约事务提交；旧 Run 不回填，不改变已应用迁移 checksum。正式库仍 19 项，尚未部署。
+- 基线完整回归 1301 passed（339.14 秒）；准备阶段补丁后的 89 项切片/迁移/统计/实验增量通过（82.99 秒），Ruff、编译、12 JS 通过。独立审查后将 Provider/模型/Prompt/Profile 列一并纳入 Run 快照，明确边界是 FFmpeg 已执行计划而非解码首尾帧；最后 52 项切片/迁移/媒体/字幕定向全部通过（8.71 秒），Ruff 通过。之后仍需人工凭据、批量自动预切、Inbox 和工作台，不提前启用生产。
+
 ## 2026-09-15 v2.6 PR3 全局重型容量与恢复
 
 - CI 等待期间复核发现测试夹具原 Popen 未创建独立 POSIX session，而清理使用 killpg；Windows 本地全量未覆盖此风险。改用已有 popen_process_group 隔离测试自有进程组，再进行定向检查和最终提交 CI，旧提交不合并。

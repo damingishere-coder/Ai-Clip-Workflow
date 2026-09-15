@@ -288,10 +288,15 @@ def _insert_output_clip_record_on_connection(
     source_start_ms = None
     source_end_ms = None
     snapshot_source = "legacy_inferred"
-    if candidate:
+    if result.source_start_ms is not None and result.source_end_ms is not None:
+        source_start_ms, source_end_ms = result.source_start_ms, result.source_end_ms
+        if source_start_ms < 0 or source_end_ms <= source_start_ms:
+            raise ValueError("实际切片边界无效")
+        snapshot_source = "cut_plan_v1"
+    elif candidate:
         source_start_ms = round(parse_time_to_seconds(candidate["start_time"]) * 1000)
         source_end_ms = round(parse_time_to_seconds(candidate["end_time"]) * 1000)
-        snapshot_source = "cut_commit"
+        # Legacy callers have no executed plan; do not label inference as proof.
     connection.execute(
         """
         INSERT INTO output_clip (
@@ -330,6 +335,7 @@ def _commit_cut_run_results(
     *,
     source_fingerprint: str,
     error_message: str = "",
+    cut_inputs: dict | None = None,
 ) -> dict[str, bool]:
     """原子写入一个批次的所有结果，并按 run_number 决定是否激活。"""
     from app.db.database import get_connection
@@ -375,6 +381,10 @@ def _commit_cut_run_results(
                 }
             if run["status"] != "processing":
                 raise RuntimeError(f"切片批次状态不是 processing：{run['status']}")
+
+            if cut_inputs is not None:
+                from app.services.cut_evidence_service import verify_and_commit
+                verify_and_commit(connection, task_id, cut_run_id, cut_inputs, results, now)
 
             for result in results:
                 _insert_output_clip_record(
@@ -527,6 +537,11 @@ def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> 
     if not task:
         raise ValueError("任务不存在")
 
+    from app.db.database import get_connection
+    from app.services.cut_evidence_service import selection_snapshot, source_stamp, planned_bounds
+    with get_connection() as connection:
+        selection_before = selection_snapshot(connection, task_id)
+
     from app.services.ai_analysis_workflow_service import (
         get_task_ai_analysis_meta,
         validate_ai_analysis_meta_for_cut,
@@ -576,6 +591,16 @@ def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> 
         append_task_log(task_id, f"视频切割失败：{error}")
         raise ValueError(error)
 
+    with get_connection() as connection:
+        selection = selection_snapshot(connection, task_id)
+    if selection != selection_before or selection["source_path"] != task.get("original_video_path"):
+        raise ValueError("分析或原片在准备切片时发生变化，请刷新后重试")
+    expected = {c["id"]: (c["start_ms"], c["end_ms"], c["title"], c["source_analysis_run_id"]) for c in selection["clips"]}
+    actual = {c["id"]: (*planned_bounds(c), c["title"], c.get("source_analysis_run_id")) for c in enabled_clips}
+    if expected != actual:
+        raise ValueError("候选在准备切片时发生变化，请刷新后重试")
+    cut_inputs = {"selection": selection, "source": source_stamp(source_path),
+                  "strategy": settings.default_cut_strategy}
     paths = get_artifact_paths(task_id)
     # === 版本化：创建新的 cut_run，不删除旧记录 ===
     cut_run = _create_cut_run(task_id)
@@ -587,6 +612,7 @@ def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> 
         from app.services.transcription_checkpoint_service import fingerprint_file
 
         source_fingerprint = fingerprint_file(source_path)
+        cut_inputs["source_fingerprint"] = {"kind": "size-head-tail-v1", "value": source_fingerprint}
         cut_output_dir = _cut_run_output_dir(paths["clips_dir"], cut_run)
         results = cut_clips(
             source_video=source_path,
@@ -610,6 +636,7 @@ def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> 
             results,
             source_fingerprint=source_fingerprint,
             error_message=final_error or "",
+            cut_inputs=cut_inputs,
         )
     except Exception as exc:
         error = f"切片文件已生成，但批次结果未能原子写入数据库：{exc}"
