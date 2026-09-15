@@ -39,17 +39,57 @@ def test_inbox_navigation_refresh_and_dashboard(width,output_batch,tmp_path):
             page.goto(f'http://127.0.0.1:{port}/',wait_until='networkidle')
             assert page.locator('.production-card').count() == 8
             page.get_by_role('link',name='打开统一待办',exact=True).click()
+            assert '/materials?view=inbox' in page.url
+            assert page.locator('.side-nav').get_by_role('link',name='统一待办').count() == 0
+            assert page.locator('#material-inbox-view').is_visible()
+            page.locator('.production-item').wait_for(state='visible')
+            page.get_by_role('link',name='素材与批次',exact=True).click()
+            assert page.locator('#material-library-view').is_visible()
+            page.locator('[data-batch-material]').first.check()
+            page.locator('[name=final_clip_target]').fill('3')
+            page.locator('.material-view-nav [data-material-view=inbox]').click()
+            page.wait_for_url('**/materials?view=inbox')
+            page.get_by_role('link',name='素材与批次',exact=True).click()
+            assert page.locator('[data-batch-material]').first.is_checked()
+            assert page.locator('[name=final_clip_target]').input_value() == '3'
+            page.go_back(wait_until='networkidle')
+            page.locator('#material-inbox-view').wait_for(state='visible')
+            page.wait_for_function("document.querySelector('#material-inbox-view').getAttribute('aria-busy') !== 'true'")
+            page.locator('.production-item').wait_for(state='visible')
             assert page.locator('.production-item').count() == 1
             page.locator('.production-item').get_by_role('link',name='去处理').click()
             page.wait_for_url(f'**/tasks/{task}/clips')
             page.go_back(wait_until='networkidle')
+            page.locator('.production-item').wait_for(state='visible')
             review.confirm(task,consent(task))  # Isolated service action, not a page side effect.
             page.get_by_role('link',name='刷新待办').click()
+            page.wait_for_function("document.querySelector('.production-item').textContent.includes('待内容准备')")
             assert page.locator('.production-item').count() == 1
             assert '待内容准备' in page.locator('.production-item').inner_text()
             page.locator('nav[aria-label="待办分类"]').get_by_role('link',name='待审片 0 片段').click()
+            page.locator('.production-empty').wait_for(state='visible')
             assert page.locator('.production-item').count() == 0
+            assert page.locator('#material-inbox-count').inner_text() == '1'
             assert page.locator('.production-empty').is_visible()
+            page.goto(f'http://127.0.0.1:{port}/review-inbox?category=prepare&page=1',wait_until='networkidle')
+            page.wait_for_url('**/materials?view=inbox&category=prepare&page=1')
+            page.locator('.production-item').wait_for(state='visible')
+            assert '待内容准备' in page.locator('.production-item').inner_text()
+            attempts = []
+            def fail_once(route):
+                attempts.append(route.request.url)
+                if len(attempts) == 1:
+                    route.fulfill(status=503,body='temporary failure')
+                else:
+                    route.continue_()
+            page.route('**/review-inbox?embedded=1*',fail_once)
+            page.get_by_role('link',name='刷新待办').click()
+            page.get_by_role('button',name='重新加载待办').wait_for(state='visible')
+            assert page.locator('.production-item').count() == 1
+            page.get_by_role('button',name='重新加载待办').click()
+            page.get_by_role('button',name='重新加载待办').wait_for(state='hidden')
+            page.wait_for_function("document.querySelector('#material-inbox-view').getAttribute('aria-busy') !== 'true'")
+            assert len(attempts) == 2
             assert not errors and not writes
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1')
             page.screenshot(path=str(tmp_path/f'inbox-{width}.png'),full_page=True)
