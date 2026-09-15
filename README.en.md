@@ -11,7 +11,7 @@ Transcribe, find highlights with AI, review clips, prepare content and schedule 
 [简体中文](README.md) · [Quick start](#quick-start) · [Documentation](docs/README.md) · [Changelog](CHANGELOG.md)
 
 [![CI](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/damingishere-coder/Ai-Clip-Workflow/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-2.5.0-2563eb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.5.5-2563eb)](CHANGELOG.md)
 ![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078d4)
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776ab)
 [![MIT](https://img.shields.io/badge/License-MIT-64748b)](LICENSE)
@@ -20,11 +20,13 @@ Transcribe, find highlights with AI, review clips, prepare content and schedule 
 
 ## Development status
 
-**2.5.0 Optional Visual Understanding** includes studio variety comedy, interviews, knowledge/opinion, long live talk, and general. Task creation supports Profile, Prompt, and AI Provider selection. Interview and knowledge profiles use separate prompts and scoring dimensions and are marked **trial**, pending real-content quality validation during normal use. General and long live talk retain their legacy default prompt, which users can override.
+**2.5.5 Content Intelligence and Controlled Experiments** includes studio variety comedy, interviews, knowledge/opinion, long live talk, and general. Task creation supports Profile, Prompt, and AI Provider selection. Interview and knowledge profiles use separate prompts and scoring dimensions and are marked **trial**, pending real-content quality validation during normal use. General and long live talk retain their legacy default prompt, which users can override.
+
+Content Review saves human-review and official-performance reports with sample sizes, time ranges, missing data, and version evidence. Human-authored Challenger drafts can create explicit trial tasks; formal experiments require a sufficient official baseline. Recording an experiment conclusion does not activate a strategy: enabling or reverting the production Prompt requires a separate confirmation. Existing tasks keep their frozen settings.
 
 Optional visual assistance is **trial and off by default**. Only recalled candidate ranges are sampled, then verified with the existing Codex provider. Ordinary visual failures fall back to text/audio; analysis history retains timestamps, model identity, limitations and failures. Images may be pinned or expire while structured evidence remains. Human review remains required.
 
-Under the user's updated acceptance policy, passing engineering, compatibility, and runtime checks permits continued development; real-content quality is evaluated during normal use. Users are not required to supply dedicated samples or complete a blind review first. Human clip review, scheduling, and publication boundaries remain. Work proceeds from v2.4 to v2.5 visual evidence, v2.5.5 content intelligence, and v2.6 batch production. See the actual release/deployment [status](PROJECT_STATUS.md), [implementation ledger](docs/CONTENT_PROFILE_ROLLOUT.md), and [acceptance requirements](docs/CONTENT_PROFILE_ACCEPTANCE.md).
+Under the user's updated acceptance policy, passing engineering, compatibility, and runtime checks permits continued development; real-content quality is evaluated during normal use. Users are not required to supply dedicated samples or complete a blind review first. Human clip review, scheduling, and publication boundaries remain. Batch production is the next v2.6 phase after v2.5.5 acceptance; current imports still use individual files. See the actual release/deployment [status](PROJECT_STATUS.md), [implementation ledger](docs/CONTENT_PROFILE_ROLLOUT.md), and [acceptance requirements](docs/CONTENT_PROFILE_ACCEPTANCE.md).
 
 ## One workspace for the whole process
 

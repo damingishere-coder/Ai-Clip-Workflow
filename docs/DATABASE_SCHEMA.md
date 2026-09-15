@@ -1,5 +1,9 @@
 # 数据库结构说明
 
+## v2.5.5 交付目标：19 项迁移
+
+当前代码包含 15–19 五项增量，正式服务尚为 v2.5.0 / 14 项。2026-09-15 使用真实 WAL-safe 备份的隔离副本验证全部升级：38 张原表的旧记录/字段保留，重复初始化幂等，integrity=ok、外键异常 0。每项迁移独立事务；若后项失败，已成功前项保留并前向续迁。旧程序无法识别新账本时会拒绝 readiness，不能单纯退旧代码或删除账本；实际切换证据以 PROJECT_STATUS 为准。
+
 ## 开发中：v2.5.5 PR3c 增量
 
 第 19 项 `20260915_05_challenger_experiments` 为 content_improvement_experiments 增加可空 challenger_id 外键、strategy_json/sha256、decision_evidence_json/sha256；每个 Challenger 只允许一个实验，新绑定实验的策略/阈值及完成后的结论不可 UPDATE，旧 NULL 记录仍走兼容路径。新增 content_policy_events：实验与 Challenger 外键、activate/rollback、前后 Prompt 版本、唯一请求 UUID/哈希、完整预览 JSON/哈希、时间；记录不可 UPDATE，API 不提供删除。迁移使用原账本与自动备份，验证失败回滚、并发幂等、旧字段/NULL 保留及备份恢复。正式库尚未升级。

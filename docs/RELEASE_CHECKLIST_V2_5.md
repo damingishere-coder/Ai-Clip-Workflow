@@ -1,14 +1,16 @@
-# v2.5.5 Release 检查清单
+# v2.5.0 Release 检查清单
+
+> 历史快照：保留 2026-09-14 v2.5.0 交付事实；文中的当前版本及 Latest 指当时状态。新版本门禁见 [当前清单](RELEASE_CHECKLIST.md)。
 
 本清单用于发布牛马片场正式版本。只有代码检查、Windows 实机验收、备份保护和文档核对均通过后，才创建 Git Tag 与 GitHub Release。
 
 ## 本次发布状态
 
-功能 PR #105–#109 已通过 CI 并合并。WAL-safe 备份、隔离恢复与真实备份副本的 14→19 升级验证已通过；38 张旧表记录/字段保留。当前版本提交尚待 CI、Windows 11 实机门禁、原服务部署和运行验收；正式服务仍为 v2.5.0 / `384db79`，迁移 14。详细交付事实维护在 PROJECT_STATUS.md，不能以版本号或本清单模板推断已部署。
+已通过：PR/主干 CI、WAL-safe 备份与隔离恢复、Windows 11 实机门禁、原服务部署及桌面/手机实际验收。发布提交 `384db79`，Release v2.5.0 为 Latest；原 Web/Worker 2.5.0、迁移 14。下文仍保留检查模板，详细事实见 PROJECT_STATUS.md。
 
-v2.5.5 为选片经验与人工策略实验工程交付，实际检查、发布和部署结果见 [项目当前进度](../PROJECT_STATUS.md)。用户于 2026-09-14 批准工程验收后继续迭代，访谈/知识/视觉标试用、真实质量日常补验；本清单中的 CI、备份、Windows 实机和运行门禁不因此跳过。以下未勾选项是核对模板，不能自动证明已通过。
+v2.5.0 为可选视觉理解工程交付，实际检查、发布和部署结果见 [项目当前进度](../PROJECT_STATUS.md)。用户于 2026-09-14 批准工程验收后继续迭代，访谈/知识标试用、真实质量日常补验；本清单中的 CI、备份、Windows 实机和运行门禁不因此跳过。以下未勾选项是核对模板，不能自动证明已通过。
 
-[v2.5.0 检查清单快照](RELEASE_CHECKLIST_V2_5.md) 保留此前发布事实，不作为 2.5.5 验收证据。
+[v2.4.0 检查清单快照](RELEASE_CHECKLIST_V2_4.md) 保留此前发布事实，不作为 2.5.0 验收证据。
 
 ## 1. 自动化检查
 
@@ -82,7 +84,7 @@ git pull --ff-only
 确认输出：
 
 ```text
-=== v2.5.5 发布门禁通过 ===
+=== v2.5.0 发布门禁通过 ===
 ```
 
 门禁会阻止以下情况发布：
@@ -95,7 +97,7 @@ git pull --ff-only
 - 当前分支不是 `master`
 - 验收报告对应旧 commit
 - Git 工作区不干净
-- 应用、README 或 Changelog 版本不是 `2.5.5`
+- 应用、README 或 Changelog 版本不是 `2.5.0`
 
 将经过人工检查的 `acceptance-results/latest.md` 正文粘贴到 Issue #23。不要上传整个目录、完整日志、`.env`、SQLite 或视频。
 
@@ -142,8 +144,8 @@ git pull --ff-only
 
 ## 6. 文档和版本一致性
 
-- [ ] `app/main.py` 版本为 `2.5.5`
-- [ ] README 中英文版本徽章为 `2.5.5`
+- [ ] `app/main.py` 版本为 `2.5.0`
+- [ ] README 中英文版本徽章为 `2.5.0`
 - [ ] `CHANGELOG.md` 包含本次版本的重要变化
 - [ ] `README.md` 快速开始命令可复制执行
 - [ ] `.env.example` 没有个人绝对路径和真实密钥
@@ -172,21 +174,21 @@ git pull --ff-only
 建议填写：
 
 ```text
-Tag: v2.5.5
+Tag: v2.5.0
 Target: master
-Title: NiuMa Studio v2.5.5 — Content Intelligence
+Title: NiuMa Studio v2.5.0 — Optional Visual Understanding
 Latest release: Yes
 Pre-release: No
 ```
 
-发布正文以 `CHANGELOG.md` 的 2.5.5 内容为基础，并明确：
+发布正文以 `CHANGELOG.md` 的 2.5.0 内容为基础，并明确：
 
 - Windows 本地单用户工具
 - Demo 不连接真实账号
 - 抖音与 B站发布需要逐账号灰度验证
 - 不绕过登录、验证码或平台风控
 - 升级前应使用 `pre_upgrade.ps1` 创建本地回滚包
-- v2.5.5 的 Windows 10/11 + Docker Desktop 验收日期和对应 commit
+- v2.5.0 的 Windows 10/11 + Docker Desktop 验收日期和对应 commit
 - 视觉默认关闭；图像/综合评审技术验收不代表节目质量提升
 - 访谈/知识模板及视觉功能为试用，真实内容质量未宣称通过；人工审片、字幕及发布边界保留
 
