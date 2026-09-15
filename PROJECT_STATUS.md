@@ -1,6 +1,17 @@
 # 项目当前进度
 
-## 当前：v2.5.5 版本交付验收（尚未部署）
+## 当前：v2.5.5 已发布与部署（2026-09-15 10:08）
+
+[PR #110](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/110) 版本提交 `c0d7962fe4ee23e81bc93669bb5ff1777502eb63` 已通过 PR 与最终主干三项 CI；[v2.5.5 Release](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.5.5) 已发布为 Latest，指向同一提交。下一阶段为 v2.6 目录素材与内容生产队列，尚未开发其业务功能。
+
+- Windows 11 / PowerShell 7.6.5 / Docker Desktop 4.40.0 的最终提交实机门禁 17 项通过；Demo 3 任务、6 候选、6 manual_export 草稿。有效证据位于忽略目录 `data/acceptance/v255-release-tests/windows-ps7-attempt2/`。
+- 10:08:04–10:08:46 沿用原 RunDock Web/Worker 完成维护。实际版本均为 2.5.5，监听进程父链对应原管理记录与 `Ai-Clip-Workflow-offline-runtime`；deep readiness=ready，实际数据库路径与启动参数一致。
+- 正式 SQLite 14→19，integrity=ok、FK=0。38 张旧表原字段原记录保留，只有旧迁移表新增 5 行；新报告、Challenger 与策略事件均为 0。根目录/运行副本配置哈希、E 盘 1322 文件（17,393,147,651 字节）元数据保持不变。
+- 1440/390 Chrome 共 12 次页面检查通过，6 个实际静态资源哈希匹配运行源码；旧任务、历史候选评价、五 Profile、视觉默认关闭正常。人工统计显示数据不足，默认 keep 未冒充人工接受。所有浏览器请求只读，未造正式报告/实验，未调用真实 AI、同步或发布。完整实验确认流程已在隔离夹具中验证。
+- 首次门禁脚本虽返回通过，但额外校验发现其数据库保护指向不存在的验收本地库，已拒绝部署并恢复旧服务。原因是正式 DB 路径由 RunDock CLI 注入；仅在隔离 `.env` 副本补齐实际绝对路径后重做完整门禁。首次证据保留于 `windows-ps7/`，不能作为本版发布证据。
+- 回退优先保留新版二进制及增量结构，关闭新入口或向前修复；旧程序会拒绝未知迁移，不删除账本、不自动覆盖旧备份。WAL-safe 备份及隔离恢复记录见下节。真实节目质量与策略表现继续日常补验，未宣称已有提升。
+
+## 历史：v2.5.5 版本交付预检
 
 版本/备份/启动入口预检完成：7 个测试文件 38 passed、0 failed/0 skipped（5.02 秒），Ruff、Python 编译、10 个 JS 和发布脚本 PowerShell 解析全部通过；证据在忽略目录 `data/acceptance/v255-release-preflight/`。此结果不替代最终 Windows 实机门禁。
 

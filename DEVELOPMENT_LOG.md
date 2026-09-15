@@ -1,5 +1,13 @@
 # Development Log
 
+## 2026-09-15 v2.5.5 正式运行与 Release
+
+- PR #110 最终 `28d1d31` 三项 CI 通过（Linux 1229 passed / 23 平台跳过 / 78.25 秒），squash `c0d7962`；最终 master 三项 CI 通过。干净 master 副本构建并验证本机镜像，原四份审计修改始终未提交。
+- 第一次维护因验收副本 `.env` 没有 RunDock 注入的实际 DB 路径，被附加 exists 断言拒绝；未切换生产代码或迁移，原服务恢复 2.5.0。仅在隔离配置追加绝对路径，第二次 17 项实机门禁及发布门禁通过，保留两次独立证据。
+- 10:08:04–10:08:46 升级原 RunDock 服务到 `c0d7962`，Web/Worker 2.5.5、监听父链/实际目录/DB 参数一致，readiness ready；14→19 迁移、integrity/FK 正常。38 表旧行旧字段全部保留，仅账本多 5 行；配置和 E 盘文件元数据不变。
+- 正式浏览器首次旧候选断言早于异步加载完成，仅修正本地核验脚本等待状态，无生产源码改动。最终 12 次桌面/手机页面及 6 个资源哈希通过；无非只读请求，报告/Challenger/事件仍空，统计没有把历史默认 keep 算作人工接受。
+- v2.5.5 Release 指向实际验收提交并为 Latest。此文档分支记录证据，不需重新部署或重跑实机。有效私有证据 `data/acceptance/v255-release-tests/windows-ps7-attempt2/`；备份与截图均不提交。后续进入 v2.6，真实质量继续日常补验。
+
 ## 2026-09-15 v2.5.5 交付预检通过
 
 - 7 个版本、备份、readiness、原生脚本和 Worker 测试文件：38 passed、0 failed/0 skipped、8 warnings，5.02 秒；Ruff、Python 编译、10 JS 与 release_gate.ps1 解析均通过。
