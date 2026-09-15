@@ -113,7 +113,7 @@ def test_copy_hash_commit_recovery_and_frozen_policy(batch_db, tmp_path, monkeyp
         profiles.read_job_snapshot({**ai, 'payload_json':{}})
     with pytest.raises(ValueError, match='批次冻结'):
         job_service.create_job(item['task_id'], 'ai_analysis', {'provider':'local'})
-    with pytest.raises(ValueError, match='审核门槛'):
+    with pytest.raises(ValueError, match='未确认自动生产'):
         job_service.create_job(item['task_id'], 'auto_pipeline')
     with pytest.raises(ValueError, match='已冻结'):
         lifecycle.update_task_candidate_clip_count(item['task_id'], 5)

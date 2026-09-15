@@ -7,6 +7,7 @@
   let current = null;
   let pending = null;
   let busy = false;
+  let initialChoice = true;
   async function request(url, body) {
     const response = await fetch(url, body === undefined ? {} : {
       method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
@@ -18,6 +19,11 @@
   async function refresh() {
     current = await request(base);
     byId("status").textContent = current.message;
+    if (initialChoice && current.can_confirm) {
+      const mode = current.delivery_mode || current.suggested_delivery_mode || "original";
+      panel.querySelector(`input[name="production-delivery"][value="${mode}"]`).checked = true;
+      initialChoice = false;
+    }
     byId("choice").disabled = !current.can_confirm;
     byId("checked").checked = false;
     byId("outputs").replaceChildren();

@@ -1,5 +1,9 @@
 # 系统架构
 
+## 批次自动预切的复用边界
+
+新增 batch_pipeline_service 是现有 Pipeline 的批次策略适配，不是第二个任务状态机。只允许冻结配置指定的自动任务通过 Workflow Job 运行，入队和实际执行双重检查允许步骤；成功预切后按 cut_run_evidence 验证完整版本并暂停。恢复仍使用原 AutoPipelineCheckpoint，不添加旧 Job 指纹字段或改旧恢复解释。后续字幕与内容准备由已合并的人工凭据服务控制。
+
 ## v2.6 批次人工审核边界
 
 批次原片导入 → 受租约保护的 Workflow Job 切片 → `cut_run_evidence` → 实际视频预览 → `production_review_service.confirm` → 可选字幕审核与验证 → 显式内容准备。只有批次任务进入新门槛；`reviewed` 与 AI 反馈不是成片确认。确认原子保存不可变 manifest 及字幕决定，不生成文案、不排期、不发布。

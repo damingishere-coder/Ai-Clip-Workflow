@@ -1,5 +1,9 @@
 # 数据库结构说明
 
+## 批次自动预切（无 DDL）
+
+本增量复用第 21 项 material_batches.config_json 的 auto_production/subtitle_strategy 和已有 tasks.auto_mode、workflow_jobs.payload/result/checkpoint；没有第 24 项迁移。原子完成导入并创建 followup 沿用现有 Job 事务。旧批次 config 中 false 或缺失表示不自动生产，不回填或改写旧配置。
+
 ## v2.6 第 23 项迁移：人工成片审核
 
 `20260915_09_production_review` 新增 `production_reviews` 不可覆盖确认记录（request_key 幂等、实际成片 manifest/哈希、cut_run、revision、字幕选择、人工来源与时间），以及 `production_review_epochs` 任务证据代际。代际仅用于识别版本失效，不是第二份队列或待办状态。候选、分析、原片路径、成片和新的重型 Job 变更自动递增代际；事务回滚也回滚代际。

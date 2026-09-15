@@ -52,7 +52,7 @@
         card.append(node('strong', `${batch.items.length} 个视频 · ${profile?.textContent || batch.config.selection_profile}`));
         for (const item of batch.items) {
           const row = node('p', ''), link = node('a', item.file_name); link.href = `/tasks/${encodeURIComponent(item.task_id)}`;
-          row.append(link, node('span', ` · ${item.job_status === 'completed' ? '已导入' : item.message || item.job_status}${item.error_message ? `：${item.error_message}` : ''}`)); card.append(row);
+          row.append(link, node('span', ` · ${item.is_deleted ? '任务已删除' : item.job_status === 'completed' ? `已导入 · ${item.task_status_label}` : item.message || item.job_status}${item.error_message ? `：${item.error_message}` : ''}`)); card.append(row);
         }
         list.append(card);
       }
@@ -77,7 +77,7 @@
     event.preventDefault(); if (busy || pending || !selected.size || !field('confirmed').checked || !form.reportValidity()) return;
     const settings = {selection_profile:field('selection_profile').value, ai_prompt_preset_id:field('ai_prompt_preset_id').value,
       ai_provider:field('ai_provider').value, subtitle_strategy:field('subtitle_strategy').value,
-      visual_enabled:field('visual_enabled').checked, auto_production:false};
+      visual_enabled:field('visual_enabled').checked, auto_production:field('auto_production').checked};
     for (const name of ['candidate_clip_count','final_clip_target','max_clip_duration','highlight_density_per_hour','highlight_total_limit']) settings[name] = Number(field(name).value);
     const request = {material_ids:Array.from(selected).sort(), settings, request_key:crypto.randomUUID(), confirmed:true, create_new_production:field('create_new_production').checked};
     try { localStorage.setItem(key, JSON.stringify(request)); pending = request; }
