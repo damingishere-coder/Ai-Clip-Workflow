@@ -39,7 +39,7 @@
     byId('batch-clear-selection').disabled = busy || !!pending || !selected.size;
     byId('batch-subtitle-help').textContent = field('subtitle_strategy').value === 'review' ?
       '审片后进入字幕审核，确认字幕后再生成带字幕成片。不会自动排期或发布。' :
-      '不新增或烧录字幕，已有字幕保留。AI 选片所需的语音转写仍会执行；成片仍需人工审核，审片时可改选字幕方式。';
+      '不新增或烧录字幕，已有字幕保留。AI 选片所需的语音转写仍会执行；成片仍需人工审核，字幕方式按此设置执行。';
     byId('batch-mode-help').textContent = field('auto_production').checked ?
       '自动制作至人工审片，不会自动排期或发布。' : '当前仅复制导入，后续可在任务中继续处理。';
   }

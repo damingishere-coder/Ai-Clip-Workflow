@@ -59,6 +59,8 @@ def test_profile_prompt_provider_creation_flow(width, tmp_path):
             assert not page.is_checked('[name="visual_enabled"]')
             page.check('[name="visual_enabled"]')
             page.fill('[name="task_name"]', "浏览器知识素材")
+            assert page.input_value('[name="subtitle_strategy"]') == 'original'
+            page.select_option('[name="subtitle_strategy"]', 'review')
             page.set_input_files("#video-file-input", {"name": "test.mp4", "mimeType": "video/mp4", "buffer": b"isolated-fake-video"})
 
             def submitted(route):
@@ -69,7 +71,7 @@ def test_profile_prompt_provider_creation_flow(width, tmp_path):
             page.wait_for_url(f"http://127.0.0.1:{port}/tasks/new")
             page.wait_for_function("document.querySelector('#selection-profile').value === ''")
             assert len(posts) == 1
-            for name, value in (("selection_profile", "knowledge_opinion"), ("ai_prompt_preset_id", "preset_002"), ("ai_provider", "remote"), ("visual_enabled", "true")):
+            for name, value in (("selection_profile", "knowledge_opinion"), ("ai_prompt_preset_id", "preset_002"), ("ai_provider", "remote"), ("visual_enabled", "true"), ("subtitle_strategy", "review")):
                 assert f'name="{name}"\r\n\r\n{value}\r\n' in posts[0]
             assert not errors
             browser.close()

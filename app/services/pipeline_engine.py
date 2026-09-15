@@ -156,6 +156,13 @@ class PipelineEngine:
 
         for step in steps:
             try:
+                if step == TaskStatus.SUBTITLE_DRAFTING and config.get("subtitle_strategy") in {"original", "review"}:
+                    if job_id:
+                        self._raise_if_cancelled(job_id)
+                        job_service.require_active_job_lease()
+                    task_service.update_task_status(task_id, TaskStatus.pending_review)
+                    return {"status": "pending_review", "message": "成片已生成，请检查后继续；字幕方式沿用创建设置。",
+                            "task": task_service.get_task(task_id, include_video_probe=False)}
                 if job_id:
                     self._raise_if_cancelled(job_id)
                     step_index = STEP_STATUSES.index(step)

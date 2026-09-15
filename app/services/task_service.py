@@ -509,6 +509,11 @@ def _probe_video(path: Path | None) -> dict[str, str]:
 
 def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
     task = dict(row)
+    try:
+        stored_config = json.loads(task.get("auto_config_json") or "{}")
+        subtitle_strategy = stored_config.get("subtitle_strategy") if isinstance(stored_config, dict) else None
+    except (ValueError, TypeError):
+        subtitle_strategy = None
     task_name = task.get("task_name") or "未命名任务"
     platform = task.get("platform") or "general"
     status = task.get("status") or TaskStatus.pending_video.value
@@ -558,6 +563,7 @@ def _row_to_task(row: Row, include_video_probe: bool = False) -> dict:
         "last_error": task.get("last_error") or task.get("error_message") or "",
         "auto_mode": bool(task.get("auto_mode")),
         "auto_config_json": task.get("auto_config_json") or "",
+        "subtitle_strategy": subtitle_strategy,
         "is_deleted": bool(task.get("is_deleted")),
         "deleted_at": _format_datetime(task.get("deleted_at")),
         "task_dir_name": task.get("task_dir_name") or task["id"],
@@ -859,20 +865,24 @@ def get_task_live_status(task_id: str) -> dict:
         }:
             primary_action = "publish"
         elif status in AUTO_PIPELINE_RESUMABLE_STATUSES:
-            primary_action = "resume"
+            primary_action = "review_outputs" if (task.get("subtitle_strategy") in {"original", "review"}
+                and status == TaskStatus.pending_review.value and output_clip_count > 0) else "resume"
         elif is_running:
             primary_action = "processing"
 
     from app.services.production_review_service import state as production_review_state
     production_review = production_review_state(task_id)
-    if production_review.get("required") and not is_running and output_clip_count > 0:
+    review_stages = {TaskStatus.pending_review.value, TaskStatus.completed.value,
+                    TaskStatus.PENDING_SUBTITLE_REVIEW.value, TaskStatus.READY_TO_PUBLISH.value,
+                    TaskStatus.COMPLETED.value}
+    if production_review.get("required") and not is_running and output_clip_count > 0 and status in review_stages:
         if not production_review.get("ready"):
-            primary_action = "production_review"
+            primary_action = "subtitle_review" if production_review.get("approved") else "review_outputs"
             display_status_label = "待确认实际成片" if not production_review.get("approved") else "待字幕审核"
             overall_progress = min(overall_progress, 90)
             runtime_status = "idle"
         elif not publish["total"]:
-            primary_action = "production_review"
+            primary_action = "review_outputs"
             display_status_label = "待进入内容准备"
 
     return {
@@ -900,6 +910,7 @@ def get_task_live_status(task_id: str) -> dict:
         },
         "actions": {
             "primary": primary_action,
+            **({"subtitle_skip": False} if task.get("subtitle_strategy") else {}),
             "review": candidate_count > 0,
             "publish": output_clip_count > 0
             and status

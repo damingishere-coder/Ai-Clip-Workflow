@@ -99,6 +99,7 @@ if (newTaskForm) {
       for (const key of [
         "task_name", "platform", "max_clip_duration", "candidate_clip_count",
         "selection_profile", "final_clip_target", "ai_prompt_preset_id", "ai_provider",
+        "subtitle_strategy",
       ]) uploadData.append(key, payload[key] || "");
       if (payload.challenger_id) {
         uploadData.append("challenger_id", payload.challenger_id);
@@ -1882,13 +1883,13 @@ function renderTaskLiveActions(data) {
   });
 
   const reviewAction = taskLiveActions.querySelector("[data-live-review-action]");
-  if (reviewAction) reviewAction.hidden = !actions.review;
+  if (reviewAction) reviewAction.hidden = !actions.review || primaryAction === "review_outputs";
   const syncAction = taskLiveActions.querySelector("[data-live-sync-action]");
   if (syncAction) {
-    syncAction.hidden = ["subtitle_review", "production_review"].includes(primaryAction) || Number(data.counts?.outputs || 0) <= 0;
+    syncAction.hidden = ["subtitle_review", "review_outputs"].includes(primaryAction) || Number(data.counts?.outputs || 0) <= 0;
   }
   const subtitleSkip = taskLiveActions.querySelector("[data-live-subtitle-skip]");
-  if (subtitleSkip) subtitleSkip.hidden = primaryAction !== "subtitle_review";
+  if (subtitleSkip) subtitleSkip.hidden = primaryAction !== "subtitle_review" || actions.subtitle_skip === false;
 }
 
 async function waitForAiAnalysisJob(jobId) {

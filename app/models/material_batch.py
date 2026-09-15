@@ -21,7 +21,7 @@ class BatchSettings(BaseModel):
     auto_production: bool = False
 
     def task_payload(self, name: str) -> TaskCreate:
-        return TaskCreate(task_name=name[:120], auto_mode=self.auto_production, **self.model_dump(exclude={"subtitle_strategy", "auto_production"}))
+        return TaskCreate(task_name=name[:120], auto_mode=self.auto_production, **self.model_dump(exclude={"auto_production"}))
 
 
 class MaterialBatchCreate(BaseModel):

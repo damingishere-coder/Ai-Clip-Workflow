@@ -90,6 +90,7 @@ class TaskCreate(BaseModel):
     highlight_total_limit: int = Field(default=30, ge=1, le=50)
     ai_preference: Optional[str] = None
     auto_mode: bool = False
+    subtitle_strategy: Optional[Literal["original", "review"]] = None
     auto_clip_count: str = Field(default="auto", max_length=10)
     auto_min_clip_seconds: int = Field(default=15, ge=1, le=3600)
     auto_max_clip_seconds: int = Field(default=300, ge=1, le=7200)

@@ -120,9 +120,9 @@ async def task_detail_page(request: Request, task_id: str):
         raise HTTPException(status_code=404, detail="任务不存在")
 
     from app.db.database import get_connection
-    from app.services.material_batch_service import task_item
+    from app.services.production_review_service import requires_review
     with get_connection() as connection:
-        is_batch = bool(task_item(connection, task_id))
+        is_batch = requires_review(connection, task_id)
 
     from app.services.challenger_trial_service import task_trial
     try:
@@ -209,9 +209,9 @@ async def _render_clip_review_page(
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
     from app.db.database import get_connection
-    from app.services.material_batch_service import task_item
+    from app.services.production_review_service import requires_review
     with get_connection() as connection:
-        is_batch = bool(task_item(connection, task_id))
+        review_required = requires_review(connection, task_id)
     all_clips = list_clip_candidates(task_id)
     visible_clips = _filter_and_sort_clips(all_clips, clip_filter, sort_by)
 
@@ -223,7 +223,7 @@ async def _render_clip_review_page(
             "active_page": "clips",
             "settings": settings,
             "task": task,
-            "production_review_required": is_batch,
+            "production_review_required": review_required,
             "clips": visible_clips,
             "clip_count": len(all_clips),
             "enabled_clip_count": sum(1 for clip in all_clips if clip["enabled"]),

@@ -708,7 +708,7 @@
     batch.cancel.hidden = !active;
     batch.retry.hidden = !(job.status === "failed" || job.status === "cancelled");
     batch.approve.disabled = active;
-    batch.skip.disabled = active;
+    if (batch.skip) batch.skip.disabled = active;
   }
 
   async function pollBatchJob(jobId) {
@@ -733,7 +733,7 @@
     if (state.dirty) return;
     if (!window.confirm("确认审核所有切片的当前字幕版本并批量烧录吗？全部验证通过后流水线会自动继续。")) return;
     batch.approve.disabled = true;
-    batch.skip.disabled = true;
+    if (batch.skip) batch.skip.disabled = true;
     try {
       const payload = await api(`/api/subtitles/tasks/${encodeURIComponent(state.taskId)}/approve-and-render`, {
         method: "POST",
@@ -746,20 +746,20 @@
       batch.message.textContent = `批量烧录未启动：${error.message}`;
       batch.panel.hidden = false;
       batch.approve.disabled = false;
-      batch.skip.disabled = false;
+      if (batch.skip) batch.skip.disabled = false;
     }
   });
 
   batch.skip?.addEventListener("click", async () => {
     if (!window.confirm("确认跳过字幕并进入片段审核吗？审核保存后才会同步发送中心。")) return;
-    batch.skip.disabled = true;
+    if (batch.skip) batch.skip.disabled = true;
     try {
       const payload = await api(`/api/subtitles/tasks/${encodeURIComponent(state.taskId)}/skip-to-review`, { method: "POST" });
       window.location.href = payload.review_url || `/tasks/${encodeURIComponent(state.taskId)}/clips/review`;
     } catch (error) {
       batch.message.textContent = `跳过字幕失败：${error.message}`;
       batch.panel.hidden = false;
-      batch.skip.disabled = false;
+      if (batch.skip) batch.skip.disabled = false;
     }
   });
 
