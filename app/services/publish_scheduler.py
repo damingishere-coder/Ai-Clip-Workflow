@@ -331,6 +331,9 @@ class PublishScheduler:
             validate_files=True,
         )
         if not readiness["ready"]:
+            if any(issue.get("code") == "production_review_required" for issue in readiness.get("issues", [])):
+                return self._mark_need_review(job_id, "production_review_required", readiness["message"],
+                                              expected_statuses=("SCHEDULED",))
             return {
                 "status": "skipped",
                 "job_id": job_id,

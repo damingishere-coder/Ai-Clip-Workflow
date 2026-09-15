@@ -44,6 +44,10 @@ def require_imported_source(connection, task_id):
 def require_task_source(task_id):
     with get_connection() as c:
         require_imported_source(c, task_id)
+        if task_item(c, task_id):
+            lease = job_service.require_active_job_lease()
+            if not lease or not c.execute("SELECT 1 FROM workflow_jobs WHERE id=? AND task_id=?", (lease[0], task_id)).fetchone():
+                raise MaterialError("批次素材请使用转写、AI 或切片队列处理，不通过旧同步入口执行")
 
 
 def frozen_job_payload(connection, task_id, job_type, payload):

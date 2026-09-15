@@ -1520,6 +1520,8 @@ class PipelineEngine:
         return prepare_task_subtitle_review(task_id)
 
     def _generate_metadata(self, task_id: str, context: dict) -> dict:
+        from app.services.production_review_service import check_preparation
+        check_preparation(task_id)
         task = self._get_task(task_id)
         config = context["config"]
         output_clips = [

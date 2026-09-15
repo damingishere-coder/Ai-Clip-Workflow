@@ -38,6 +38,8 @@ def create_auto_publish_jobs(
     本轮只创建任务记录，不调用平台 API，也不启动 opencli 发送。
     """
 
+    from app.services.production_review_service import check_preparation
+    check_preparation(task.get("id"), mode=subtitle_delivery_mode)
     if subtitle_delivery_mode not in {"subtitled", "original"}:
         raise ValueError("字幕交付模式必须是 subtitled 或 original")
     created_ids: list[str] = []

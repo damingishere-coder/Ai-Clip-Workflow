@@ -191,6 +191,10 @@ async def _render_clip_review_page(
     task = get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
+    from app.db.database import get_connection
+    from app.services.material_batch_service import task_item
+    with get_connection() as connection:
+        is_batch = bool(task_item(connection, task_id))
     all_clips = list_clip_candidates(task_id)
     visible_clips = _filter_and_sort_clips(all_clips, clip_filter, sort_by)
 
@@ -202,6 +206,7 @@ async def _render_clip_review_page(
             "active_page": "clips",
             "settings": settings,
             "task": task,
+            "production_review_required": is_batch,
             "clips": visible_clips,
             "clip_count": len(all_clips),
             "enabled_clip_count": sum(1 for clip in all_clips if clip["enabled"]),

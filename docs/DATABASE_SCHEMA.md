@@ -1,5 +1,13 @@
 # 数据库结构说明
 
+## v2.6 第 23 项迁移：人工成片审核
+
+`20260915_09_production_review` 新增 `production_reviews` 不可覆盖确认记录（request_key 幂等、实际成片 manifest/哈希、cut_run、revision、字幕选择、人工来源与时间），以及 `production_review_epochs` 任务证据代际。代际仅用于识别版本失效，不是第二份队列或待办状态。候选、分析、原片路径、成片和新的重型 Job 变更自动递增代际；事务回滚也回滚代际。
+
+批次发布 INSERT 及进入 DRAFT/WAITING/SCHEDULED/PUBLISHING 的 UPDATE 必须关联当前确认、有效成片与已决定的字幕来源。发布期间禁止更改生产输入、启动新 Job 或改字幕；终态结果仍可写回，保留外部投稿事实。仅 `review_boundary:` 触发器错误映射为业务冲突，不把数据库故障当作可忽略错误。
+
+迁移前 SQLite 备份标记 `production-review-v1`；故障整体回滚、重复/并发应用与旧任务保留有测试。历史确认不补猜。回退保留增量结构，停用新批次入口，不能删账本或以旧备份覆盖新增发布事实。正式库仍 19 项，整版 v2.6 统一升级。
+
 ## v2.6 第 22 项迁移：成片证据
 
 20260915_08_cut_evidence 新增 cut_run_evidence，主键/外键 cut_run_id，另存 task_id、规范 JSON、SHA-256 和创建时间；UPDATE 禁止，Task 索引服务追溯查询。与原 cut_runs/output_clip 在同一事务提交，失败整体回滚。历史结果不回填，原库所有字段保留；迁移前备份标 cut-evidence-v1，覆盖旧库保留/故障回滚/并发幂等/备份恢复。原输出 snapshot_source 新值 cut_plan_v1 表示真实执行边界；旧 cut_commit 保持原值，legacy_inferred 不伪装为新证据。

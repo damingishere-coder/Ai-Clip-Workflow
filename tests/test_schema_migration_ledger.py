@@ -108,6 +108,15 @@ def _seed_analysis_run(connection, *, prompt_version_id: str) -> None:
 def _rebuild_ai_runs_without_prompt_fk(connection) -> None:
     # Reconstruct the actual pre-Profile schema, not an impossible hybrid with
     # the new ledger/index but missing columns. This is an isolated test DB.
+    from app.db import production_review_migration
+    # A genuinely pre-Profile database cannot retain later review triggers
+    # referencing the Profile columns we are about to remove.
+    for statement in production_review_migration.STATEMENTS:
+        if statement.startswith("CREATE TRIGGER"):
+            connection.execute(f"DROP TRIGGER {statement.split()[2]}")
+    connection.execute("DROP TABLE production_reviews")
+    connection.execute("DROP TABLE production_review_epochs")
+    connection.execute("DELETE FROM schema_migrations WHERE version=?", (production_review_migration.VERSION,))
     from app.db import content_profile_migration
     from app.db import interview_profile_migration
     from app.db import knowledge_profile_migration
@@ -184,7 +193,7 @@ def test_init_records_migration_once_and_switches_unique_index(isolated_database
         ).fetchall()
         indexes = _index_names(connection)
 
-    assert len(migrations) == 22
+    assert len(migrations) == 23
     from app.services import weekly_review_schema
     weekly_migration = next(row for row in migrations if row["version"] == weekly_review_schema.VERSION)
     assert weekly_migration["checksum"] == weekly_review_schema.CHECKSUM

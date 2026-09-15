@@ -526,6 +526,11 @@ def _resolve_final_cut_status(results: list[CutResult]) -> tuple[TaskStatus, str
 def process_task_video_cuts(task_id: str, *, sync_publish_jobs: bool = True) -> dict:
     from app.services.material_batch_service import require_task_source
     require_task_source(task_id)
+    from app.db.database import get_connection
+    from app.services.material_batch_service import task_item
+    with get_connection() as connection:
+        if task_item(connection, task_id):
+            sync_publish_jobs = False  # Pre-cut is never human consent.
     from app.services.task_service import (
         get_status_label,
         get_task,

@@ -223,6 +223,10 @@ def build_send_readiness(
                     )
                 )
 
+    from app.services.production_review_service import readiness_issue
+    review_issue = readiness_issue(job)
+    if review_issue:
+        issues.append(_issue("production_review_required", review_issue, "review_clips"))
     issues.extend(_subtitle_delivery_issues(job))
     issues.extend(_content_issues(job, platform, resolved_mode))
 
