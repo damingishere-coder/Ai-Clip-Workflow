@@ -1,18 +1,36 @@
 # 项目当前进度
 
-## 2026-09-15 13:51 升级前核对纠正
+## 当前：v2.6.0 已发布并部署（2026-09-15 14:03）
+
+v2.4 → v2.5 → v2.5.5 → v2.6 已按独立 PR 顺序完成工程交付与原服务验收。[PR #119](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/119) 最终提交 0f0aedd 的三项 CI 34934531685 全通过，Squash 后主干 `75cdd9336c5f83ec04f14bcccf0e60e8daa2b201` 的 CI 34934873847 也全通过。[v2.6.0 Release](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.6.0) 为 Latest，指向同一提交。后续运行证据文档不需再次部署。
+
+- 最终完整离线回归 **1346 passed、0 failed/0 skipped**（401.66 秒，9 条既有弃用警告）；Ruff、编译、13 个 JS 和 pip check 通过。版本/原生/备份定向 25 项通过。证据：忽略目录 `data/acceptance/v26-release-regression/run-20260915-134034/`。
+- Windows 11 Build 26200、PowerShell 7.6.5、Docker Desktop 4.40.0、Engine 28.0.4、Compose 2.34.0 的最终提交实机门禁 **17 PASS**；Demo 3 任务、6 候选、6 manual_export 草稿。镜像 `sha256:e32c23280a511f89582a0f4efb6b1f9b42fabde5af543acf48e661c511c62b59`。完整证据位于 `data/acceptance/v26-release-tests/windows-final/`。
+- 14:00 原有排期由旧服务正常完成为 PUBLISHED；14:00:47 新备份已验证。维护 14:02:07–14:02:40，沿用原 RunDock Web/Worker 记录。8001/8765 实际版本均 **2.6.0**，监听父链及实际目录指向 `Ai-Clip-Workflow-offline-runtime` / `75cdd93`，deep readiness=ready、迁移 23 项。
+- 维护前 50 张表原字段/记录保留，integrity=ok、FK=0，新批次/素材/审核记录仍为 0。根目录与运行副本配置哈希不变，E 盘 **1322 文件、17,393,147,805 字节**及元数据指纹不变。此前 13:12 快照大小与本次不同，包含原排期完成前后的时间差，不把跨排期比较冒充维护变化。
+- 1440/390 Chrome 共 **18 次页面检查**，**7 个实际静态资源哈希**匹配运行源码；首页、素材池、Inbox、旧任务及历史评价、五 Profile、默认关闭视觉均正常，刷新不产生重复待办。所有验收浏览器请求只读。正式批次为空，十素材生产/复制/恢复及人工门槛在隔离夹具中验证；真实素材质量继续日常补验。
+
+### 提前迁移的纠正与限制
+
+13:26 临时诊断在 tests 目录外加载应用，隔离设置晚于应用配置缓存，与正式库四项迁移的时间高度吻合；首次命令日志未完整留存，不能声称已保留完整首轮复现。文件已改为先加载隔离，再导入应用；正式的全量 tests/conftest 路径正常。此前“正式库仍 19 项/未升级”的记录不准确，下文为历史过程。
+
+对 13:12 备份核对证实 41 张旧表原字段/记录全部保留、9 张新表为空，四份迁移前备份存在；未删除账本或恢复旧库。旧版 c0d7962 在当前空新表的隔离副本初始化通过，50 表无变化，所以此前“旧版必然拒绝未知迁移”的说法也不准确。这个结果不代表旧版支持新批次或可无损降级今后数据；生产回退仍需保存最新事实，优先停用新入口或向前修复。
+
+开始使用：打开素材池，登记本机目录中的视频，再选择 Profile 和批次配置；需要自动处理时明确勾选自动生产。预切后到统一待办确认实际成片和字幕方式，再进入内容准备及排期。无需额外准备专门验收素材。
+
+## 历史核对：2026-09-15 13:51 提前迁移
 
 正式程序仍为 v2.5.5，但数据库迁移记录显示 13:26:03 已应用 20–23。与 13:12 正式备份逐表核对：41 张旧表原字段/记录全部保留，9 张新表均为空，integrity=ok、FK=0。此前“正式库未升级/仍 19 项”的叙述不准确，以本次证据为准；不删除迁移账本或恢复旧库。当前调查指向放在 tests 目录外的临时诊断未在导入应用之前建立隔离，普通全量测试已确认使用 tests/conftest.py 临时库。正式程序更新仍须完成最终提交门禁、避开排期，并保存维护前最新快照。
 
 最终版本完整回归 1346 passed（401.66 秒，9 条既有弃用警告），Ruff、编译、13 JS 和 pip check 全部通过；PR #119 初次三项 CI 已通过，本次仅补充事实纠正后重新检查。
 
-## 当前交付：v2.6.0 版本验收
+## 历史阶段交付：v2.6.0 版本验收
 
 全部 v2.6 业务 PR #112–#118 已顺序合并。工作台最终提交 ea7fa7b 的 CI 34933231423 三项通过，合并 7633b41；旧复盘复制竞态已修复，最终关键浏览器/工作台 14 项通过。以下各“当前开发”段落为过程记录，以本节为最新状态。
 
 版本分支 codex/v2.6-release 统一 2.6.0，正在完成最终全量回归、CI 和 Windows 实机门禁。正式仍 v2.5.5 / c0d7962、19 项迁移；避开原 14:00 排期后，在空闲窗口更新原 RunDock 服务。备份隔离恢复及 19→23 幂等升级通过，41 张旧表原字段/记录完整保留；不以版本号代替部署证据。
 
-## 当前开发：v2.6 工作台收尾（尚未部署）
+## 历史阶段开发：v2.6 工作台收尾（尚未部署）
 
 批次自动预切 PR #117 三项 CI 通过并合并 d6d84a1，全量 1336 passed、静态检查通过。统一待办聚合待审片、待字幕、待内容准备、发布复核与去重异常；首页显示素材、处理/排队、审片/字幕、待发布、今日排期、真实可复盘作品与异常。实际处理入口继续核对原凭据。
 
@@ -24,7 +42,7 @@
 
 已定位旧复盘复制竞态：原生剪贴板正常完成（约 11ms），刷新替换按钮后异步结果可能写到已断开的节点。按报告 ID 保留复制状态并更新当前节点，追加未完成复制期间强制重绘测试，保留真实剪贴板与拒绝回退检查。较旧批次从 Inbox 携带批次 ID 直接打开，最近列表未包含时仍可恢复。前一次 Docker CI 在获取 Docker Hub token 时 connection reset by peer，未进入应用构建，最终提交重新检查。
 
-## 当前开发：v2.6 批次自动预切（尚未部署）
+## 历史阶段开发：v2.6 批次自动预切（尚未部署）
 
 人工成片确认 PR #116 已通过三项 CI 并合并 `fd5f1ca`。当前 `codex/v2.6-batch-precut-pipeline` 允许用户明确勾选自动生产，导入完成与后续 Pipeline Job 在一个事务提交；复用前五步和原 checkpoint，预切完成停在 pending_review。禁止从字幕/文案/排期步骤启动批次自动流程，未勾选的历史批次继续逐步处理。
 
@@ -34,19 +52,19 @@
 
 完整回归采样为 1322 passed / 1 failed（416.01 秒），唯一失败是旧周复盘浏览器复制报告超时；单独复跑 1 passed（6.95 秒），剪贴板写入/读取成功。测试期间另一个审核 Chrome 正在运行，存在剪贴板竞争可能，尚未据此认定根因。新审核浏览器桌面/窄屏 2 passed；正式数据和服务未改动。
 
-## 当前开发：v2.6 人工成片确认（尚未部署）
+## 历史阶段开发：v2.6 人工成片确认（尚未部署）
 
 切片证据 PR #115 已合并 `89ca2e0`，最终 Linux 1278 passed / 27 平台跳过、Windows host 与 Docker smoke 通过。当前 `codex/v2.6-production-review-gate` 将人工确认绑定实际成片、选集、分析及字幕交付选择；第 23 项兼容迁移只在隔离测试执行。正式保持 v2.5.5 / `c0d7962`、19 项迁移。
 
 已通过 17 项审核/发布边界测试、2 项迁移、19 项账本回归及 1440/390 Chrome 两项真实交互检查；全量回归和独立审查正在收口。模拟媒体与字幕渲染只验证工程边界，不代表真实内容质量验收。批量自动生产、Inbox 与首页仍待后续 PR。
 
-## 当前开发：v2.6 成片执行证据（尚未部署）
+## 历史阶段开发：v2.6 成片执行证据（尚未部署）
 
 PR #114 队列容量已合并 28c01c9，最终 Linux 1262 passed / 27 平台跳过、Windows host 和 Docker smoke 全部通过。当前分支 codex/v2.6-cut-review-evidence 修复切片落库重读可变候选边界的问题，并新增不可变执行快照。第 22 项迁移只作用于隔离测试，正式服务保持 2.5.5 / c0d7962、19 项迁移。
 
 先冻结实际成片证据，再绑定人工确认，避免确认了与预览不同的选片版本。基线完整回归 1301 passed、随后 89 项增量和全部静态检查通过；审查后的 Run 策略列冻结等最终 52 项定向检查通过（8.71 秒），Ruff 通过。批量自动生产、人工门槛和 Inbox 仍未交付。
 
-## 当前开发：v2.6 PR3 全局并发与恢复（尚未部署）
+## 历史阶段开发：v2.6 PR3 全局并发与恢复（尚未部署）
 
 PR #113 三项 CI 通过并合并 `528eba1`。当前 `codex/v2.6-queue-capacity` 将串行限制落实到 SQLite 的两个 claim 入口，并让实际执行子进程持有本机文件锁，防止旧进程存活时发生租约接管重叠。默认容量为一个 Workflow Job，Publisher 的独立 Scheduler 保持原行为。原排队/重试/取消状态机与 AI checkpoint 不变，无新表或迁移。
 
@@ -64,7 +82,7 @@ v2.5.5 证据 PR #111 最终 `d3fae7d` 三项 CI 通过，合并 `884af4d`；从
 
 新增功能/迁移/1440 与 390 Chrome 定向 14 项通过（11.79 秒）；完整回归 1266 passed、0 failed/0 skipped（348.90 秒），Ruff、编译、11 JS 通过，只读审查无本 PR 阻塞。全量后仅补目录输入框现有 control 样式，两宽度 Chrome 再测 2 passed（8.79 秒）。首轮迁移夹具遗漏旧 task_dir_name，被既有初始化补齐；修正为旧正常任务后严格比较通过。证据在忽略目录 `data/acceptance/v26-material-catalog-regression/`；准备独立 PR/CI。正式仍 v2.5.5 / `c0d7962`、19 项迁移，第 20 项尚未部署。
 
-## 当前：v2.5.5 已发布与部署（2026-09-15 10:08）
+## 历史阶段：v2.5.5 已发布与部署（2026-09-15 10:08）
 
 [PR #110](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/110) 版本提交 `c0d7962fe4ee23e81bc93669bb5ff1777502eb63` 已通过 PR 与最终主干三项 CI；[v2.5.5 Release](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.5.5) 已发布为 Latest，指向同一提交。v2.6 当前开发进度见本文顶部；正式服务仍保持本版本。
 
@@ -83,19 +101,19 @@ v2.5.5 证据 PR #111 最终 `d3fae7d` 三项 CI 通过，合并 `884af4d`；从
 
 2026-09-15 09:44 的 WAL-safe 升级备份已校验并恢复到隔离目录（环境不恢复、媒体不复制）：52 tasks、403 candidates、577 outputs、746 publish jobs。真实备份副本顺序升级 14→19、重复 init 均通过；38 张原表旧字段旧记录保留，integrity=ok/FK=0、新报告/Challenger/策略事件 0。私有备份在 `data/backups/v255-release/`，恢复/兼容证据在忽略目录 `data/acceptance/v255-backup-restore/`、`v255-upgrade-probe/`。版本检查进行中，后续先对最终干净 master 做 Windows 门禁，再更新原 RunDock 服务并验证旧任务与新页面；v2.6 尚未开始。
 
-## 当前开发：v2.5.5 PR3c 正式实验与人工启用（尚未部署）
+## 历史阶段开发：v2.5.5 PR3c 正式实验与人工启用（尚未部署）
 
 试验任务 PR [#108](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/108) 最终 `846ba66` 三项 CI 全通过（Linux 1219 passed / 21 平台跳过 / 80.50 秒），合并 `8be1195`。从最新 master 建立 `codex/v2.5.5-challenger-experiments`，复用 Content Review 实验与 Prompt 版本，补冻结官方基线、实际 Run/Job 策略核验、人工结论留证及独立启用/回退。
 
 基础完整回归 **1250 passed、0 failed/0 skipped、9 warnings（336.35 秒）**，Ruff、编译、10 JS 通过。审查收尾前置 Run 完整性/成片边界检查、保留旧实验时长口径及调整手机展示后，**59 项定向全部通过（67.83 秒）**，含两种入组 API 和 1440/390 Chrome；此前 21 项迁移/账本回归通过。没有把基础全量冒充收尾后的全量重跑，最终 CI 将检查提交。第 19 项迁移增加实验可空证据与策略操作记录，旧实验不回填；正式 Web/Worker 仍为 v2.5.0 / `384db79`，正式库仍 14 项，未执行新迁移、真实 AI、同步或投稿。版本完成后统一交付，再进入 v2.6。
 
-## 当前开发：v2.5.5 PR3b 显式试验任务（尚未部署）
+## 历史阶段开发：v2.5.5 PR3b 显式试验任务（尚未部署）
 
 草稿 PR [#107](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/107) 最终 `3439725` 三项 CI 通过（Linux 1205 passed / 19 平台跳过），合并 `3a7ecd0`。新分支 `codex/v2.5.5-challenger-trial-tasks` 接草稿 → 明确确认 → 原创建任务流程 → 冻结 Job/Run；草稿仍归档，普通选择器不可选，试验不能改绑 Profile/Prompt 或启动全自动流水线。
 
 最终冻结源码完整回归 **1240 passed、0 failed/0 skipped、9 warnings（312.30 秒）**，含桌面/手机 Chrome；Ruff、Python 编译、9 JS 检查通过。首轮发现的旧 followup 参数与迁移测试问题已修复，审查后补基线过期、冻结版本保留及 Run 提交/恢复篡改校验，最终全量涵盖全部修正。证据保存在忽略目录 `data/acceptance/v255-challenger-trials-final/`。第 18 项迁移仅扩展 task_generation_rules 的可空绑定及索引/约束，旧任务未知值不回填。后续独立 PR 再完成官方实验策略核验与单独人工启用；正式 Web/Worker 继续 v2.5.0 / `384db79`，正式库迁移仍 14。
 
-## 当前开发：v2.5.5 PR3a Challenger 草稿（尚未部署）
+## 历史阶段开发：v2.5.5 PR3a Challenger 草稿（尚未部署）
 
 报告 PR [#106](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/106) 最终 `9314aa4` 已通过 Linux、Windows、Docker 三项 CI（Linux 1199 passed、17 平台跳过），合并 `15a734d`。当前 `codex/v2.5.5-challenger-drafts` 保存人工假设、Prompt 差异、来源报告与完整 Profile/评分版本；草稿单独归档，不修改正式方案。服务/迁移 6 项、1440/390 Chrome 两项及全量 1224 项均通过（233.89 秒，0 failed/0 skipped、9 warnings），Ruff、编译、9 JS 通过，只读审查无阻塞问题。证据在忽略目录 `data/acceptance/v255-challenger-drafts-regression/`；准备独立 PR/CI。
 
@@ -143,7 +161,7 @@ PR #101 已通过最终 Linux/Windows/Docker CI 并合并 `52f1909`，正式 Web
 
 v2.4 交付账本 PR #99 已合并为 `d3f8054`。独立 `codex/v2.5-frame-sampling-baseline` 开发候选内抽帧，26 项定向测试通过；现有 Codex / gpt-6-astra 一次双图能力测试通过，另有 6 帧康熙候选本地采样通过。没有 Analyzer/API/数据库接入，正式 Web/Worker 仍是已验收的 v2.4.0 / `15f3838`。详细行为、限制和剩余 PR 见 [Visual Signal](docs/VISUAL_SIGNAL.md)，不能将基础模块视为视觉分析已经上线。
 
-## 当前交付：v2.4.0 已发布与部署（2026-09-14 20:04）
+## 历史阶段交付：v2.4.0 已发布与部署（2026-09-14 20:04）
 
 PR [#98](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/98) 已合并为 `15f38387b11c477f94d288dc9d4da4736d0226fe`，最终 PR 与合并后主干的 Linux、Windows、Docker CI 均通过。[v2.4.0 Release](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.4.0) 指向同一提交。1078 项本地回归、pip check、三套 Compose 配置及 21 个 PowerShell 脚本语法检查通过。
 
@@ -155,7 +173,7 @@ Windows 11 / PowerShell 7.6.5 / Docker Desktop 4.40.0 实机验收 17 项全部�
 
 工程验收已完成，允许按批准顺序进入 v2.5。三集康熙实际分析与确定性回放证据有效；人物访谈、知识观点继续标试用，真实内容质量与人工盲审保持待验，未补填人工通过。下方按时间保留历史阶段描述，以本节为当前状态。
 
-## 当前开发：v2.4 工程验收政策更新（2026-09-14）
+## 历史阶段开发：v2.4 工程验收政策更新（2026-09-14）
 
 用户明确同意：工程测试、兼容性及运行验收通过即可继续下一版本，真实质量在日常使用中补验，不再要求专门素材或逐条盲审。人物访谈、知识观点在创建页和任务页标“试用”；显示标记不改变冻结 Profile、Prompt、评分或历史哈希。人工审片、字幕、排期/发布边界保留。
 
@@ -163,7 +181,7 @@ Windows 11 / PowerShell 7.6.5 / Docker Desktop 4.40.0 实机验收 17 项全部�
 
 本轮完整本地回归 **1078 passed / 0 failed**，耗时 218.49 秒；版本与 Chrome 试用提示的 5 项定向检查也通过。Ruff、diff 检查通过。正式服务在这些检查期间仍为 `4eaff62` / 2.3.0；2.4.0 的合并、实机发布与部署尚待本轮后续交付。
 
-## 当前开发：v2.4 PR5 已交付，质量验收待完成（2026-09-14）
+## 历史阶段开发：v2.4 PR5 已交付，质量验收待完成（2026-09-14）
 
 PR [#97](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/97) 的 Linux、Windows、Docker CI 全部通过，合并为 `4eaff62`，17:45 更新既有 RunDock Web 8001。正式库迁移保持 12 条，integrity=ok、外键异常 0，37 表原行原字段保持一致、0 新增业务记录；Worker 8765 就绪，旧任务/审片/AI history 可读。备份及实际验收位于 `data/backups/feedback-evidence-deploy-20260914-174451/`。本补丁没有数据库结构变化，也没有改变既有排期。
 
@@ -171,7 +189,7 @@ PR [#97](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/97) 的 Lin
 
 18:05:38，三集真实分析全部结束：每集 18/18 单元、coverage=100%、12 条候选，共 54 个成功单元；failed_units/invalid_item_count 均为 0，analysis_incomplete/quality_degraded 均为 false，无 heartbeat 异常或不确定单元。三集旧响应回放与三集反馈桥接回放全部一致；后者使用同一隔离反馈比较 PR4 与 PR5，不发生模型调用。原片与转写哈希保持不变，隔离音频/转写副本一致；原片 Range GET 可读，不替代人工观看。[脱敏验收证据](docs/CONTENT_PROFILE_ACCEPTANCE_EVIDENCE.json) 已保存，本机完整审片包为 `data/acceptance/content-profile-v2.4/人工对比材料-完整批次.md`。PR6 保持质量证据草稿，正式版本仍为 2.3.0。
 
-## 当前开发：v2.4 反馈证据与验收收口（2026-09-14）
+## 历史阶段开发：v2.4 反馈证据与验收收口（2026-09-14）
 
 PR [#96](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/96) 的 Linux、Windows、Docker 检查全部通过，合并为 `a5ece66`，17:19 已部署至原 RunDock Web 8001。迁移 12 条、integrity=ok、外键异常 0，37 表原行原字段保持一致，只追加知识模板/Prompt/版本/账本；Worker 8765 就绪。既有服务进程链及实际 JS 响应哈希已核对；桌面与 390px 创建页五模板切换、旧任务/审片/复盘页均无脚本错误和页面级横向溢出。完整证据和 8 张截图位于 `data/backups/knowledge-profile-deploy-20260914-171848/`。
 
@@ -181,7 +199,7 @@ PR [#96](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/96) 的 Lin
 
 真实康熙对比已于 17:19 在隔离库启动，使用原 Codex CLI / gpt-6-astra / preset_001，逐集执行，不自动重试失败或不确定调用；正式任务、候选和发布数据不用于写入验收结果。完整实时证据保存在 `data/acceptance/content-profile-v2.4/real-model/`。三集历史响应回放在补丁后仍结果/请求指纹一致。真实分析、人工盲审及访谈/知识各两条素材的质量门禁尚未全部完成；不发布 v2.4、不进入 v2.5，VERSION 仍为 2.3.0。
 
-## 当前开发：v2.4 五模板创建入口（2026-09-14）
+## 历史阶段开发：v2.4 五模板创建入口（2026-09-14）
 
 PR [#95](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/95) 三项 CI 通过，合并为 `06d4d12`，16:46 已部署至原 RunDock Web 8001。Worker 8765 就绪，迁移 11 条、integrity=ok、外键异常 0；所有旧行原字段不变，仅追加访谈 Profile/Prompt/版本/账本。证据：`data/backups/interview-profile-deploy-20260914-164633/acceptance.json`。
 
@@ -189,25 +207,25 @@ PR [#95](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/95) 三项 
 
 PR4 完整回归 **1070 passed / 0 failed / 0 skipped**（含两种宽度的 Chrome 创建页与既有浏览器测试）；CI、合并和实际部署在交付后留证，正式版本仍为 **2.3.0**。正式库副本连续初始化至 12 条迁移，37 张现有表的所有原行原字段保持不变，历史 Provider 未回填，证据 `data/backups/knowledge-profile-preflight-20260914-170537/acceptance.json`。三集不同康熙原片完成哈希、历史响应校验及升级前后确定性回放：每集 18 单元、结果与请求指纹一致、0 次模型调用。此回放固定空反馈和已读任务参数，不代表重现了全部历史调用环境；真实人工盲审以及访谈、知识各两条素材检查仍待完成，不进入 v2.5。
 
-## 当前开发：v2.4 人物访谈共享流程（2026-09-14）
+## 历史阶段开发：v2.4 人物访谈共享流程（2026-09-14）
 
 PR [#94](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/94) 三项 CI 通过，合并为 `cc8ae63`。16:23 已部署到既有 RunDock Web 8001，Worker 8765 保持就绪；深度检查 ready，迁移 10 条，integrity=ok、外键异常 0。正式库升级前后 **34 张旧业务表所有原字段逐行哈希一致**，旧任务/审片页/分析历史正常返回。历史任务和 Run 的 Profile 关联均未回填。备份与验收：本机 `data/backups/profile-registry-deploy-20260914-162259/`。未触发真实 AI 或投稿。
 
 随后从最新 master 建立 `codex/v2.4-interview-shared-analyzer`：新增访谈独立模板/Prompt、共享召回/扩展/全局评审及通用评分证据。新模板先接 API，五模板创建页统一在 PR4 接入。完整回归 **1047 passed / 0 failed / 0 skipped**，随后两项补充与末尾修改由 **35 项定向测试**覆盖；Ruff/compileall 通过。正式库副本增量迁移至 11 条，所有旧行保持原样，仅追加新版本/预设/账本；证据 `data/backups/interview-profile-preflight-20260914-163632/acceptance.json`。PR3 尚待 CI、合并和运行验收；真实访谈质量仍待两条适合素材及人工检查，产品版本仍为 2.3.0。
 
-## 当前开发：v2.4 Profile Registry 与快照（2026-09-14）
+## 历史阶段开发：v2.4 Profile Registry 与快照（2026-09-14）
 
 PR [#93](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/93) 已通过 Linux、Windows、Docker 三项 CI，合并为 `4264e31`；纯领域基础无需部署。随后从最新 master 创建 `codex/v2.4-profile-registry-snapshots`。
 
 PR2 已接入三个旧模式 Registry、新任务/Job/Run 版本证据及康熙参数配置化。完整回归 **1033 passed / 0 failed / 0 skipped**（含浏览器），随后新增的执行快照用例单独通过；Ruff/compileall 通过。新迁移在隔离测试与正式库副本上验证，34 张既有表原字段不变、历史版本不回填；正式库目前仍为 9 条迁移、运行代码 `594bc60`，尚未部署。CI、合并及运行验收在交付后更新。访谈/知识尚未接入，正式产品版本继续 2.3.0。
 
-## 当前开发：v2.4 Content Profile 基础（2026-09-14）
+## 历史阶段开发：v2.4 Content Profile 基础（2026-09-14）
 
 已批准按 v2.4 → v2.5 → v2.5.5 → v2.6 分版本实施。首分支 `codex/v2.4-profile-domain-baseline` 基于 `ffdb77f`，新增纯不可变模型、三个旧模式描述与合成兼容测试；尚未接入生产路由，正式版本 2.3.0。
 
 本 PR 无数据库或正式 Prompt 变化、无真实 AI/发布调用，无需部署重启。本地完整回归 **1019 passed / 0 failed / 0 skipped**（包含浏览器用例），Ruff 与 Python 编译通过；CI/合并状态以本分支 PR 为准。真实质量验收尚未执行。16 个顺序 PR 及门禁见 [实施账本](docs/CONTENT_PROFILE_ROLLOUT.md)。四份已有本地审计修改保持原样，不纳入提交。
 
-## 当前修复：第 32 条任务扩展时间范围失败（2026-09-12）
+## 历史阶段修复：第 32 条任务扩展时间范围失败（2026-09-12）
 
 运行任务 `49229f4828f5` 的扩展批次 6 返回 38 秒片段，实际转写边界归一化失败，旧实现却提前记录批次成功。现已将边界校验前移到 checkpoint 写入/复用之前，并明确提示词时长硬边界与时间范围错误分类。正式版本保持 2.3.0。
 
@@ -215,7 +233,7 @@ PR2 已接入三个旧模式 Registry、新任务/Job/Run 版本证据及康熙�
 
 更新日期：2026-09-11。适用版本：**2.3.0**。本页汇总当前交付状态；操作待办见 [NEXT_STEPS.md](NEXT_STEPS.md)，历史过程见 [DEVELOPMENT_LOG.md](DEVELOPMENT_LOG.md)。旧记录里的“待合并、待部署”只代表记录当时的状态。
 
-## 当前修复：手动只读复盘
+## 历史阶段修复：手动只读复盘
 
 PR [#88](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/88) 已 squash 合并为 `657aabe`，并于 9 月 11 日部署到原 RunDock Web 8001 / Worker 8765，运行目录仍为 `Ai-Clip-Workflow-offline-runtime`。产品版本继续为 2.3.0，此修复没有新建 Release 或移动旧 Tag。
 

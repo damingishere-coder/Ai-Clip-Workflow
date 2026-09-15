@@ -1,5 +1,9 @@
 # 系统架构
 
+## v2.6.0 已运行验收
+
+2026-09-15 原 Web/Worker 已更新至 75cdd93，真实运行、18 次页面/7 个资源及数据保护通过。独立 Workflow Job 继续执行生产，发布 Scheduler 保持原链路；Inbox 是现有事实的只读投影。详见 PROJECT_STATUS 当前交付记录，下文各 PR 说明不代表仍待实施。
+
 ## v2.6.0 交付边界
 
 素材池 → 冻结批次 → 原 Workflow Job 串行导入与生产 → 不可变成片证据 → 人工统一审片及字幕决定 → 原内容准备/排期。production_workbench_service 只读聚合现有状态，Review Inbox 不持久化另一份状态机。复制、AI、切片失败及重启仍由原 Job/checkpoint 恢复；不确定 AI 不扩大重试权限。所有业务已顺序合并，实际版本与部署以 PROJECT_STATUS.md 为准。
