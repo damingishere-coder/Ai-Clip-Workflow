@@ -82,6 +82,9 @@
     await refresh();
     byId("status").textContent = [result.message, ...(result.errors || []), ...(result.warnings || []),
       "请在发送中心检查文案、封面，再单独决定排期。"].join(" ");
+    if (!(result.errors || []).length) {
+      window.location.assign(`/publish?task_id=${encodeURIComponent(task)}&tab=content`);
+    }
   });
   action(refresh);
 })();
