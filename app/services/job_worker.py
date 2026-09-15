@@ -56,27 +56,31 @@ def execute_job(
     task_id = job.get("task_id")
 
     with job_service.job_lease_context(job_id, owner, lease_token):
+        dispatched = False
         try:
-            if job_type == job_service.JOB_TYPE_MATERIAL_IMPORT:
-                from app.services.material_import_service import execute_import
-                result = execute_import(job_id, task_id, job.get("payload_json") or {})
-                job_service.mark_job_completed(job_id, result)
-            elif job_type == job_service.JOB_TYPE_VIDEO_CUT:
-                _execute_video_cut(job_id, task_id)
-            elif job_type == job_service.JOB_TYPE_TRANSCRIPT:
-                _execute_transcript(job_id, task_id, job.get("payload_json") or {})
-            elif job_type == job_service.JOB_TYPE_AI_ANALYSIS:
-                _execute_ai_analysis(job_id, task_id, job.get("payload_json") or {})
-            elif job_type == job_service.JOB_TYPE_AUTO_PIPELINE:
-                _execute_auto_pipeline(job_id, task_id, job.get("payload_json") or {})
-            elif job_type == job_service.JOB_TYPE_SUBTITLE:
-                _execute_subtitle(job_id, task_id, job.get("payload_json") or {})
-            else:
-                raise ValueError(f"暂不支持的 job 类型：{job_type}")
+            from app.services.workflow_capacity_service import execution_slot
+            with execution_slot(job_id):
+                dispatched = True
+                if job_type == job_service.JOB_TYPE_MATERIAL_IMPORT:
+                    from app.services.material_import_service import execute_import
+                    result = execute_import(job_id, task_id, job.get("payload_json") or {})
+                    job_service.mark_job_completed(job_id, result)
+                elif job_type == job_service.JOB_TYPE_VIDEO_CUT:
+                    _execute_video_cut(job_id, task_id)
+                elif job_type == job_service.JOB_TYPE_TRANSCRIPT:
+                    _execute_transcript(job_id, task_id, job.get("payload_json") or {})
+                elif job_type == job_service.JOB_TYPE_AI_ANALYSIS:
+                    _execute_ai_analysis(job_id, task_id, job.get("payload_json") or {})
+                elif job_type == job_service.JOB_TYPE_AUTO_PIPELINE:
+                    _execute_auto_pipeline(job_id, task_id, job.get("payload_json") or {})
+                elif job_type == job_service.JOB_TYPE_SUBTITLE:
+                    _execute_subtitle(job_id, task_id, job.get("payload_json") or {})
+                else:
+                    raise ValueError(f"暂不支持的 job 类型：{job_type}")
         except job_service.JobLeaseLostError:
             raise
         except Exception as exc:
-            if job_type == job_service.JOB_TYPE_SUBTITLE:
+            if dispatched and job_type == job_service.JOB_TYPE_SUBTITLE:
                 from app.services.subtitle_auto_workflow_service import cleanup_interrupted_subtitle_job
 
                 cleanup_interrupted_subtitle_job(

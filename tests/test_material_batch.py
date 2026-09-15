@@ -164,6 +164,11 @@ def test_lost_lease_cannot_promote_and_following_task_can_run(batch_db, tmp_path
             job_worker.execute_job(first['job_id'])
     with db.get_connection() as c:
         assert not c.execute('SELECT 1 FROM material_imports').fetchone()
+        # The replacement owner is still live: the serial queue must wait.
+    assert job_service.claim_job(items[1]['job_id'], 'other-runner') is None
+    with db.get_connection() as c:
+        c.execute("UPDATE workflow_jobs SET status='failed',lease_token=NULL,lease_owner=NULL,lease_expires_at=NULL WHERE id=?", (first['job_id'],))
+        c.commit()  # Simulate the replacement execution finishing with failure.
     stub_preflight(monkeypatch)
     assert job_worker.execute_job(items[1]['job_id'])['status'] == 'completed'
 

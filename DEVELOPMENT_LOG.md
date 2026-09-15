@@ -1,5 +1,14 @@
 # Development Log
 
+## 2026-09-15 v2.6 PR3 全局重型容量与恢复
+
+- PR #113 最终 `eda06af` 的 Linux/Windows/Docker CI 全过，Squash 合并 `528eba1`。从最新 master 建立 `codex/v2.6-queue-capacity`，本 PR 不改变数据库结构/账本，开发库仍 21 项、正式仍 19 项。
+- claim_job 与 claim_next_job 在各自 BEGIN IMMEDIATE 内检查全库未过期 running 租约，默认仅一个 Workflow Job 执行；取消请求仍占容量直到执行停止/租约过期。直接 claim 同样遵守 next_attempt_at，同秒任务按原插入顺序，批量素材按文件名入队。
+- 新 execution_slot 使用既有发布 Worker 已采用的 msvcrt/fcntl 原语，但不改 Publisher。锁由实际 Workflow 执行进程持有，以实际 SQLite 文件为作用域；锁文件不删除，PID 仅诊断，拒绝用陈旧 PID 推断可抢占。父 Web 崩溃不释放尚存子进程的锁。
+- 等待锁期间校验租约和取消，每五秒报告等待；最多 120 秒后明确失败并保留证据，尚未调用本任务处理函数。新租约即使已领取，也不能与旧物理执行重叠；AI checkpoint/计费不确定语义不变。
+- 首轮既有 94 项回归 92 通过、两项旧断言要求同时执行，按新容量要求改为先等待、待原执行终止后才能继续。新 OS 锁测试初次只终止 Windows venv 启动器，真实 Python 子进程未必同步退出；改用项目已有 terminate_process_tree 结束测试自有完整进程树再验证释放。
+- 最新 38 项定向通过（11.66 秒），包括 6 项新容量/真实子进程锁/取消/超时/FIFO/重启用例和原 fencing/批次复制；Ruff 通过。完整离线回归 1289 passed、0 failed/0 skipped（334.79 秒），Ruff、编译与 12 JS 全部通过。日志在 data/acceptance/v26-queue-capacity/full-*。独立只读审查无 Workflow 队列阻塞；旧同步 API 不经过 Job 容量锁，后续批次入口需限制为排队执行，不宣称全应用处理均已互斥。
+
 ## 2026-09-15 v2.6 PR2 批次任务与可恢复导入
 
 - 收口只读审查无确定性原子性/恢复/审核门槛阻塞。修正待导入 cuts-async 预期门禁被映射为 500 的错误，现返回 409 且不创建 Job；最终单项 API 回归和 Ruff 通过。全量之后还把旧残件清理移到空间检查之前，增量覆盖“残件占满磁盘后恢复”，并使浏览器刷新显示实际冻结配置。

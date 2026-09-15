@@ -1,5 +1,9 @@
 # 数据库结构说明
 
+## v2.6 全局领取限制（PR3，无 DDL）
+
+PR3 使用已有 workflow_jobs.status / lease_expires_at / next_attempt_at / created_at 及原索引，在 BEGIN IMMEDIATE 事务内判断唯一有效执行槽位，不新增容量表、状态机或迁移条目。开发迁移账本仍为 21；formal 19 未变化。OS 互斥文件位于实际 SQLite 同目录，命名为 `<database-name>.workflow.lock`，只作本机执行互斥，不是数据库事实源，也不以删除它来回收租约。
+
 ## v2.6 第 21 项迁移（开发中）
 
 `20260915_07_material_batches` 新增三表：`material_batches` 保存唯一 request_key、请求哈希、配置与配置哈希；`material_batch_items` 关联素材、实际 Task、material_import Job、冻结 generation_snapshot_v1，普通首生产通过部分唯一索引保护；`material_imports` 保存成功的完整视频 SHA-256、托管路径、大小、媒体预检及租约证据。三者 UPDATE 被拒绝，不覆盖原任务/Prompt/Run 数据。状态使用 Workflow Job 查询；没有复制状态机。
