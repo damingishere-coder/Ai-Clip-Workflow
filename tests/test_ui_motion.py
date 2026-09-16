@@ -70,9 +70,10 @@ def test_reduced_motion_also_disables_scripted_smooth_scrolling() -> None:
     app_script = APP_SCRIPT.read_text(encoding="utf-8")
     publish_script = PUBLISH_SCRIPT.read_text(encoding="utf-8")
 
-    assert "function preferredScrollBehavior()" in app_script
-    assert 'matchMedia("(prefers-reduced-motion: reduce)")' in app_script
-    assert "window.preferredScrollBehavior = preferredScrollBehavior" in app_script
+    helpers = (PROJECT_ROOT / "app/templates/partials/core_helpers.html").read_text(encoding="utf-8")
+    assert "function preferredScrollBehavior()" in helpers
+    assert 'matchMedia("(prefers-reduced-motion: reduce)")' in helpers
+    assert "window.preferredScrollBehavior = function preferredScrollBehavior" in helpers
     assert 'behavior: "smooth"' not in app_script
     assert 'behavior: "smooth"' not in publish_script
     assert publish_script.count("window.preferredScrollBehavior()") == 7

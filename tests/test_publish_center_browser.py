@@ -82,7 +82,76 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_path):
+def test_schedule_real_api_without_app_script(tmp_path):
+    """Missing optional JS must not break next-start, preview, or persisted scheduling."""
+    init_db()
+    _cleanup()
+    selected = [_seed_job(tmp_path, index) for index in range(1, 4)]
+    latest = _seed_job(tmp_path, 4)
+    start = (datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(days=2)).replace(
+        hour=19, minute=0, second=0, microsecond=0
+    )
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE publish_jobs SET status='SCHEDULED', scheduled_at=? WHERE id=?",
+            (start.isoformat(), latest),
+        )
+        connection.commit()
+    before = {job_id: publish_service.get_publish_job(job_id) for job_id in [*selected, latest]}
+    port = _free_port()
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.time() + 10
+    while not server.started and time.time() < deadline:
+        time.sleep(0.05)
+    try:
+        assert server.started
+        with playwright.sync_playwright() as runtime:
+            chrome_path = Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "Google/Chrome/Application/chrome.exe"
+            if not chrome_path.exists():
+                pytest.skip("浏览器级测试需要本机安装 Google Chrome")
+            browser = runtime.chromium.launch(headless=True, executable_path=str(chrome_path))
+            page = browser.new_page(timezone_id="Asia/Shanghai")
+            page.route("**/static/js/app.js*", lambda route: route.abort())
+            page.goto(f"http://127.0.0.1:{port}/publish?tab=schedule", wait_until="networkidle")
+            assert page.evaluate("typeof window.apiFetch") == "function"
+            for job_id in selected:
+                page.locator(f'[data-section="schedule"][data-job-id="{job_id}"] [data-publish-select]').check()
+            page.locator("[data-open-schedule-drawer]").click()
+            with page.expect_response("**/api/publish/schedules/next-start") as response:
+                page.locator("[data-use-latest-schedule]").click()
+            assert response.value.ok
+            expected_start = start.replace(hour=22).strftime("%Y-%m-%dT%H:%M")
+            playwright.expect(page.locator('[name="start_at_local"]')).to_have_value(expected_start)
+            page.locator("[data-preview-schedule]").click()
+            page.locator("[data-confirm-schedule]:not([disabled])").wait_for()
+            next_day = (start + timedelta(days=1)).strftime("%Y-%m-%d")
+            assert page.locator("[data-schedule-preview] time").all_inner_texts() == [
+                start.strftime("%Y-%m-%d 22:00"), f"{next_day} 07:00", f"{next_day} 10:00"
+            ]
+            assert {job_id: publish_service.get_publish_job(job_id) for job_id in before} == before
+            with page.expect_response("**/api/publish/jobs/schedule-batch") as saved:
+                page.locator("[data-confirm-schedule]").click()
+            assert saved.value.ok
+            assert publish_service.get_publish_job(latest) == before[latest]
+            for job_id in selected:
+                assert publish_service.get_publish_job(job_id)["status"] == "SCHEDULED"
+            page.reload(wait_until="networkidle")
+            expected_times = [start.strftime("%Y-%m-%d 22:00"), f"{next_day} 07:00", f"{next_day} 10:00"]
+            for job_id, expected_time in zip(selected, expected_times, strict=True):
+                row = page.locator(f'[data-section="schedule"][data-job-id="{job_id}"]')
+                playwright.expect(row).to_have_attribute("data-status", "SCHEDULED")
+                playwright.expect(row).to_contain_text(expected_time)
+            browser.close()
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+        _cleanup()
+
+
+@pytest.mark.parametrize("block_app_script", [False, True], ids=["normal", "missing-app-script"])
+def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_path, block_app_script):
     init_db()
     _cleanup()
     douyin_jobs = [
@@ -174,6 +243,8 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             browser = runtime.chromium.launch(headless=True, executable_path=str(chrome_path))
             context = browser.new_context(timezone_id="Asia/Shanghai")
             page = context.new_page()
+            if block_app_script:
+                page.route("**/static/js/app.js*", lambda route: route.abort())
             page.route(
                 "**/api/publish/schedules/next-start",
                 lambda route: route.fulfill(
