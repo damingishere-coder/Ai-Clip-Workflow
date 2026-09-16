@@ -1,5 +1,11 @@
 ## 当前：发送中心恢复已部署（2026-09-16 00:34）
 
+## 已发送状态显示修复（2026-09-16）
+
+针对已发送任务仍显示“待同步”，关联统计改为优先采用同一切片/平台的成功历史，较新的取消记录不能遮盖成功。已发送与已导出区分；混合任务保留未发送部分，例如“已发送 8 条 · 待发送 3 条”。只读显示计算，无数据库迁移或历史数据改写。
+
+开发分支 codex/correct-published-status，30 项定向测试通过。正式合并、CI 与既有 8001 服务部署事实以本次 PR 和忽略目录 data/acceptance/publish-status/DELIVERY.md 为准。
+
 [PR #126](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/126) 已合并，00:33:20 原 RunDock Web 8001 更新到 `4a4efc0ab35da2a60095e37f008b68cca81d8307`，运行目录仍 `Ai-Clip-Workflow-offline-runtime`，版本仍 2.6.0。Worker 8765 原进程 PID 146404 保持运行；Web 新监听 PID 147380，父链对应原 RunDock 记录。deep readiness=ready，迁移 23 项，integrity=ok、外键异常 0。
 
 维护前在线快照 `before-deploy.sqlite3` 及 SHA-256 已保存，51 张表更新前后完全一致，配置与外部原片/托管媒体元数据指纹未变。正式全局同步连续两次新增 0、错误 0；1045 条 publish_jobs 在两次同步前后逐条相同，318 条 PUBLISHED 与最初备份逐条相同；293 条误补草稿仅转 CANCELLED，原片、历史输出及历史凭据未删除。当前抖音 WAITING=3、SCHEDULED=6。

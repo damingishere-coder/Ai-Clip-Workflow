@@ -1891,6 +1891,7 @@ def get_publish_link_states(task_ids: list[str]) -> dict[str, dict]:
         active_outputs.setdefault(row["task_id"], []).append(row["id"])
 
     latest: dict[tuple[str, str], dict] = {}
+    completed: dict[tuple[str, str], str] = {}
     stale_counts = {task_id: 0 for task_id in normalized_ids}
     for raw in jobs:
         job = dict(raw)
@@ -1898,6 +1899,11 @@ def get_publish_link_states(task_ids: list[str]) -> dict[str, dict]:
             stale_counts[job["task_id"]] = stale_counts.get(job["task_id"], 0) + 1
         key = (str(job.get("output_clip_id") or ""), str(job.get("platform") or ""))
         latest.setdefault(key, job)
+        status = _normalize_publish_status(job.get("status"))
+        if status == PUBLISH_STATUS_PUBLISHED or (
+            status == PUBLISH_STATUS_EXPORTED and key not in completed
+        ):
+            completed[key] = status
 
     states: dict[str, dict] = {}
     for task_id in task_platforms:
@@ -1905,16 +1911,34 @@ def get_publish_link_states(task_ids: list[str]) -> dict[str, dict]:
         output_ids = active_outputs.get(task_id, [])
         per_platform = {}
         linked_total = removed_total = missing_total = 0
+        published_total = exported_total = 0
+        display_counts: dict[str, int] = {}
         per_output: dict[str, dict[str, str]] = {}
         for platform in platforms:
-            linked = removed = missing = 0
+            linked = removed = missing = published = exported = 0
             for output_id in output_ids:
                 job = latest.get((output_id, platform))
                 status = _normalize_publish_status(job.get("status")) if job else ""
                 error_code = str(job.get("error_code") or "") if job else ""
-                if job and status != PUBLISH_STATUS_CANCELLED:
+                # A later cancelled duplicate cannot erase successful history.
+                # Match the sync guard's exact output/platform boundary; a new
+                # cut version or another platform still needs its own record.
+                delivered = completed.get((output_id, platform))
+                if delivered:
                     linked += 1
-                    output_state = "已关联"
+                    published += int(delivered == PUBLISH_STATUS_PUBLISHED)
+                    exported += int(delivered == PUBLISH_STATUS_EXPORTED)
+                    output_state = "已发送" if delivered == PUBLISH_STATUS_PUBLISHED else "已导出"
+                elif job and status != PUBLISH_STATUS_CANCELLED:
+                    linked += 1
+                    output_state = {
+                        PUBLISH_STATUS_DRAFT: "待发送",
+                        PUBLISH_STATUS_WAITING: "待发送",
+                        PUBLISH_STATUS_SCHEDULED: "已排期",
+                        PUBLISH_STATUS_PUBLISHING: "发送中",
+                        PUBLISH_STATUS_FAILED: "发送失败",
+                        PUBLISH_STATUS_NEED_REVIEW: "待复核",
+                    }.get(status, "已关联")
                 elif job and error_code == USER_REMOVED_ERROR_CODE:
                     removed += 1
                     missing += 1
@@ -1923,16 +1947,21 @@ def get_publish_link_states(task_ids: list[str]) -> dict[str, dict]:
                     missing += 1
                     output_state = "待同步"
                 per_output.setdefault(output_id, {})[platform] = output_state
+                display_counts[output_state] = display_counts.get(output_state, 0) + 1
             per_platform[platform] = {
                 "label": PLATFORM_LABELS[platform],
                 "expected": len(output_ids),
                 "linked": linked,
                 "removed": removed,
                 "missing": missing,
+                "published": published,
+                "exported": exported,
             }
             linked_total += linked
             removed_total += removed
             missing_total += missing
+            published_total += published
+            exported_total += exported
         expected = len(output_ids) * len(platforms)
         stale = stale_counts.get(task_id, 0)
         if not output_ids:
@@ -1940,20 +1969,32 @@ def get_publish_link_states(task_ids: list[str]) -> dict[str, dict]:
             label = "等待生成切片"
         elif missing_total:
             state = "needs_sync"
-            label = f"待同步 {missing_total} 条"
         elif stale:
             state = "attention"
-            label = f"已关联 {linked_total}/{expected}，存在旧版记录"
         else:
             state = "linked"
-            label = f"已关联 {linked_total}/{expected}"
+        if output_ids:
+            label = " · ".join(
+                f"{name} {display_counts[name]} 条" for name in (
+                    "已发送", "已导出", "发送中", "已排期", "待发送",
+                    "待复核", "发送失败", "已移出", "待同步", "已关联",
+                ) if display_counts.get(name)
+            )
+            if stale:
+                label += " · 存在旧版记录"
+        tone = ("red" if display_counts.get("发送失败") else
+                "amber" if missing_total or stale or display_counts.get("待复核") else
+                "green" if expected and published_total == expected else "blue")
         states[task_id] = {
             "task_id": task_id,
             "state": state,
             "label": label,
+            "tone": tone,
             "active_clip_count": len(output_ids),
             "expected_count": expected,
             "linked_count": linked_total,
+            "published_count": published_total,
+            "exported_count": exported_total,
             "missing_count": missing_total,
             "removed_count": removed_total,
             "stale_pending_count": stale,
