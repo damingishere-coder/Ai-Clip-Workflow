@@ -487,3 +487,98 @@ def test_task_sync_routes_are_available() -> None:
     route_paths = set(app.openapi()["paths"])
     assert "/api/publish/tasks/{task_id}/link-state" in route_paths
     assert "/api/publish/tasks/{task_id}/sync" in route_paths
+
+
+@pytest.mark.parametrize('history_status,label,count_key,tone', [
+    ('PUBLISHED', '已发送', 'published_count', 'green'),
+    ('EXPORTED', '已导出', 'exported_count', 'blue'),
+])
+def test_link_state_uses_success_history_without_rewriting_jobs(tmp_path, history_status, label, count_key, tone):
+    task = _insert_task(tmp_path)
+    candidate = _insert_candidate(task, 'success')
+    output, _ = _insert_output(tmp_path, task, candidate, 'success', active=True)
+    history = _insert_job(task, output, 'douyin', history_status, created_at=_time(-30))
+    removed = _insert_job(task, output, 'douyin', 'CANCELLED', error_code=publish_service.USER_REMOVED_ERROR_CODE)
+    before = [_job(history), _job(removed)]
+    for _ in range(2):
+        state = publish_service.get_task_publish_link_state(task)
+        assert state['state'] == 'linked'
+        assert state['label'] == f'{label} 1 条'
+        assert state['tone'] == tone
+        assert state[count_key] == state['linked_count'] == 1
+        assert state['missing_count'] == state['removed_count'] == 0
+        assert state['per_output'][output]['douyin'] == label
+    assert [_job(history), _job(removed)] == before
+
+
+def test_published_history_wins_over_newer_export_and_is_counted_once(tmp_path):
+    task = _insert_task(tmp_path)
+    candidate = _insert_candidate(task, 'history')
+    output, _ = _insert_output(tmp_path, task, candidate, 'history', active=True)
+    for index, status in enumerate(['PUBLISHED', 'PUBLISHED', 'EXPORTED', 'CANCELLED']):
+        _insert_job(task, output, 'douyin', status, created_at=_time(-30+index))
+    state = publish_service.get_task_publish_link_state(task)
+    assert state['published_count'] == state['linked_count'] == 1
+    assert state['exported_count'] == state['missing_count'] == 0
+    assert state['label'] == '已发送 1 条'
+
+
+def test_recut_and_other_platform_do_not_inherit_success(tmp_path, monkeypatch):
+    monkeypatch.setattr(publish_service, 'AUTO_PUBLISH_PLATFORMS', ('douyin', 'bilibili'))
+    task = _insert_task(tmp_path)
+    candidate = _insert_candidate(task, 'recut')
+    old, _ = _insert_output(tmp_path, task, candidate, 'old', active=False)
+    current, _ = _insert_output(tmp_path, task, candidate, 'current', active=True)
+    _insert_job(task, old, 'douyin', 'PUBLISHED')
+    _insert_job(task, current, 'bilibili', 'PUBLISHED')
+    state = publish_service.get_task_publish_link_state(task)
+    assert state['published_count'] == state['missing_count'] == 1
+    assert state['per_output'][current] == {'douyin':'待同步', 'bilibili':'已发送'}
+    assert state['state'] == 'needs_sync'
+
+
+@pytest.mark.parametrize('status,label', [
+    ('DRAFT', '待发送'), ('WAITING', '待发送'), ('SCHEDULED', '已排期'),
+    ('PUBLISHING', '发送中'), ('FAILED', '发送失败'), ('NEED_REVIEW', '待复核'),
+    ('CANCELLED', '已移出'), (None, '待同步'),
+])
+def test_unsent_link_state_never_implies_success(tmp_path, status, label):
+    task = _insert_task(tmp_path)
+    candidate = _insert_candidate(task, 'unsent')
+    output, _ = _insert_output(tmp_path, task, candidate, 'unsent', active=True)
+    if status:
+        _insert_job(task, output, 'douyin', status, error_code=publish_service.USER_REMOVED_ERROR_CODE)
+    state = publish_service.get_task_publish_link_state(task)
+    assert state['label'] == f'{label} 1 条'
+    assert state['published_count'] == state['exported_count'] == 0
+    assert state['tone'] != 'green'
+    assert state['per_output'][output]['douyin'] == label
+
+
+@pytest.mark.parametrize('published,pending,label', [
+    (12, 0, '已发送 12 条'), (8, 3, '已发送 8 条 · 待发送 3 条'),
+])
+def test_tasks_page_and_link_api_show_correct_history_summary(tmp_path, published, pending, label):
+    import re
+    from fastapi.testclient import TestClient
+    task = _insert_task(tmp_path)
+    for index in range(published+pending):
+        candidate = _insert_candidate(task, str(index))
+        output, _ = _insert_output(tmp_path, task, candidate, str(index), active=True)
+        if index < published:
+            _insert_job(task, output, 'douyin', 'PUBLISHED', created_at=_time(-30))
+            _insert_job(task, output, 'douyin', 'CANCELLED', error_code=publish_service.USER_REMOVED_ERROR_CODE)
+        else:
+            _insert_job(task, output, 'douyin', 'WAITING')
+    with get_connection() as c:
+        before = [tuple(row) for row in c.execute('SELECT * FROM publish_jobs WHERE task_id=? ORDER BY id', (task,))]
+    client = TestClient(app)
+    for _ in range(2):
+        page = client.get('/tasks')
+        assert page.status_code == 200
+        row = next(row for row in re.findall(r'<tr\b[^>]*>.*?</tr>', page.text, re.S) if f'href="/tasks/{task}"' in row)
+        assert label in row and '待同步' not in row
+        api = client.get(f'/api/publish/tasks/{task}/link-state')
+        assert api.status_code == 200 and api.json()['label'] == label
+    with get_connection() as c:
+        assert [tuple(row) for row in c.execute('SELECT * FROM publish_jobs WHERE task_id=? ORDER BY id', (task,))] == before

@@ -66,7 +66,7 @@
             {% if task.output_clip_count > 0 %}
             <span class="status-pill tone-blue">{{ '保留原字幕' if task.subtitle_strategy == 'original' else ('新增字幕' if task.subtitle_strategy == 'review' else '字幕工作台') }}</span>
             {% set link = task.publish_link_state or {} %}
-            <span class="status-pill tone-{{ 'green' if link.state == 'linked' else ('amber' if link.state in ['needs_sync', 'attention'] else 'blue') }}">
+            <span class="status-pill tone-{{ link.tone or 'blue' }}">
               {{ link.label or "等待发送关联" }}
             </span>
             {% elif task.status in ["completed", "completed_with_errors"] %}
