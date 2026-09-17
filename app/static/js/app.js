@@ -1413,7 +1413,10 @@ clipReviewForm?.addEventListener("change", (event) => {
   }
   updateClipReviewActionState();
 });
-clipReviewForm?.addEventListener("input", updateClipReviewActionState);
+clipReviewForm?.addEventListener("input", (event) => {
+  // The bulk checkbox applies its selection in change; do not reset it before that event.
+  if (event.target.matches("[data-clip-card] input, [data-clip-card] textarea")) updateClipReviewActionState();
+});
 
 updateClipSelectAllUi();
 

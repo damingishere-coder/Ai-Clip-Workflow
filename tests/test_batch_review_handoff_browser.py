@@ -178,3 +178,38 @@ def test_task_focus_can_return_to_all_content(browser_flow, output_batch):
     page.locator('[data-clear-content-task]').click()
     expect(page.locator('[data-publish-task-group]:visible')).to_have_count(2)
     assert 'task_id=' not in page.url
+
+
+def test_bulk_selection_saves_actual_checkboxes_and_keeps_hidden_selection(browser_flow, output_batch):
+    page, expect, base = browser_flow
+    task, original, _ = output_batch
+    extra = uuid4().hex
+    _insert_candidate(task, extra)
+    with db.get_connection() as c:
+        c.execute('UPDATE clip_candidates SET enabled=0,quality_tier=? WHERE id=?', ('A', extra))
+        c.commit()
+    # Only the A candidate is shown; the original enabled clip stays outside this filter.
+    page.goto(f'{base}/tasks/{task}/clips/review?clip_filter=high', wait_until='networkidle')
+    expect(page.locator('[data-clip-card]')).to_have_count(1)
+    page.locator('[data-clip-select-all]').check()
+    expect(page.locator('#production-review-status')).to_contain_text('共选中 2 条')
+    page.locator('#save-clips-button').click()
+    expect(page.locator('#clip-review-message')).to_contain_text('已保存')
+    with db.get_connection() as c:
+        assert c.execute('SELECT count(*) FROM clip_candidates WHERE task_id=? AND enabled=1', (task,)).fetchone()[0] == 2
+    page.locator('[data-clip-select-all]').uncheck()
+    expect(page.locator('#production-review-status')).to_contain_text('共选中 1 条')
+    expect(page.locator('#production-review-generate')).to_be_enabled()
+    page.locator('#save-clips-button').click()
+    expect(page.locator('#clip-review-message')).to_contain_text('已保存')
+    with db.get_connection() as c:
+        selected = c.execute('SELECT id FROM clip_candidates WHERE task_id=? AND enabled=1', (task,)).fetchall()
+        assert [row[0] for row in selected] == [original]
+    page.goto(f'{base}/tasks/{task}/clips/review', wait_until='networkidle')
+    page.locator('[data-clip-select-all]').check()
+    page.locator('[data-clip-select-all]').uncheck()
+    expect(page.locator('#generate-clips-button')).to_be_disabled()
+    page.locator('#save-clips-button').click()
+    expect(page.locator('#clip-review-message')).to_contain_text('已保存')
+    with db.get_connection() as c:
+        assert c.execute('SELECT count(*) FROM clip_candidates WHERE task_id=? AND enabled=1', (task,)).fetchone()[0] == 0
