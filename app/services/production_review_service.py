@@ -21,8 +21,45 @@ def _idle(c, task_id):
         _fail("任务正在发布，请等待结果后再更改确认")
 
 
+def prepared_job_groups(c, task_id):
+    """Only untouched drafts for a proven retired output can follow a new review."""
+    rows = c.execute("""SELECT p.*, o.is_active AS output_is_active
+        FROM publish_jobs p LEFT JOIN output_clip o ON o.id=p.output_clip_id AND o.task_id=p.task_id
+        WHERE p.task_id=? AND p.status NOT IN ('PUBLISHED','EXPORTED','CANCELLED')""", (task_id,)).fetchall()
+    stale, blocking = [], []
+    for row in rows:
+        untouched = not any(row[key] for key in (
+            'scheduled_at', 'next_attempt_at', 'attempt_count', 'retry_count', 'claimed_at',
+            'started_at', 'finished_at', 'retry_of_job_id', 'worker_id', 'execution_id', 'execution_phase', 'needs_manual_review',
+            'remote_video_id', 'platform_item_id', 'platform_upload_id', 'platform_url', 'published_at',
+        ))
+        safe = row['output_is_active'] == 0 and row['status'] in ('DRAFT', 'WAITING') and untouched
+        (stale if safe else blocking).append(row)
+    return stale, blocking
+
+
 def prepared_jobs(c, task_id):
-    return bool(c.execute("SELECT 1 FROM publish_jobs WHERE task_id=? AND status NOT IN ('PUBLISHED','EXPORTED','CANCELLED') LIMIT 1", (task_id,)).fetchone())
+    return bool(prepared_job_groups(c, task_id)[1])
+
+
+def _retire_stale_drafts(c, task_id, review_id, now):
+    from app.services.publish_repository import PublishRepository
+    from app.services.publish_service import SUPERSEDED_BY_RECUT_ERROR_CODE
+
+    stale, blocking = prepared_job_groups(c, task_id)
+    if blocking:
+        _fail("请先在发送中心取消或处理已有发布任务，再重新确认成片")
+    for job in stale:
+        c.execute("""UPDATE publish_jobs SET status='CANCELLED', error_code=?, finished_at=?, updated_at=?
+            WHERE id=?""", (SUPERSEDED_BY_RECUT_ERROR_CODE, now, now, job['id']))
+        PublishRepository().add_event(
+            job['id'], 'superseded_by_recut', from_status=job['status'], to_status='CANCELLED',
+            error_code=SUPERSEDED_BY_RECUT_ERROR_CODE,
+            message="确认新版成片时，将未排期、未执行的旧版草稿转入历史；保留原文件",
+            payload={'task_id': task_id, 'output_clip_id': job['output_clip_id'],
+                     'production_review_id': review_id, 'files_deleted': False}, connection=c,
+        )
+    return len(stale)
 
 
 def _task_config(c, task_id):
@@ -174,9 +211,13 @@ def state(task_id):
                     ready, message = True, "成片已确认，可进入内容准备"
                 except (ValueError, OSError) as exc:
                     message = str(exc)
-            if prepared_jobs(c, task_id):
+            stale, blocking = prepared_job_groups(c, task_id)
+            if blocking:
                 message += "；重新确认成片前，请先在发送中心取消或处理已有发布任务"
-            return {**policy, "required": True, "can_confirm": not prepared_jobs(c, task_id), "approved": approved, "ready": ready,
+            elif stale:
+                message += f"；确认新版后，{len(stale)} 条未排期、未执行的旧版草稿将转入历史，视频文件保留"
+            return {**policy, "required": True, "can_confirm": not blocking, "approved": approved, "ready": ready,
+                    "stale_draft_count": len(stale), "blocking_publish_count": len(blocking),
                     "message": message, "manifest_sha256": cuts.digest(value),
                     "cut_run_id": value["cut_run_id"], "revision": value["revision"],
                     "delivery_mode": review["delivery_mode"] if approved else None,
@@ -226,6 +267,7 @@ def confirm(task_id, payload):
         if payload.delivery_mode is not None and payload.delivery_mode != mode:
             _fail("字幕方式已在创建任务时确定，审片确认不能更改；请刷新后重试")
         now, review_id = datetime.now(timezone.utc).isoformat(), uuid4().hex
+        retired_count = _retire_stale_drafts(c, task_id, review_id, now)
         c.execute("INSERT INTO production_review_epochs(task_id,revision) VALUES(?,?) ON CONFLICT(task_id) DO NOTHING", (task_id, value["revision"]))
         c.execute("""INSERT INTO production_reviews(id,task_id,cut_run_id,revision,request_key,request_sha256,
             manifest_json,manifest_sha256,delivery_mode,source,created_at) VALUES(?,?,?,?,?,?,?,?,?,'human_confirmation',?)""",
@@ -237,7 +279,7 @@ def confirm(task_id, payload):
         c.execute("UPDATE tasks SET auto_config_json=?,status=?,updated_at=? WHERE id=?",
                   (json.dumps(config, ensure_ascii=False), "PENDING_SUBTITLE_REVIEW" if mode == "subtitled" else "completed", now, task_id))
         c.commit()
-    return {"review_id": review_id, "reused": False}
+    return {"review_id": review_id, "reused": False, "retired_draft_count": retired_count}
 
 
 def prepare_subtitles(task_id):
