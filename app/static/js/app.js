@@ -875,6 +875,10 @@ let activePreviewEndSeconds = null;
 let activeSourceMonitor = null;
 let isSyncingSourceSlider = false;
 let isCutJobActive = false;
+let isClipSaveActive = false;
+let isReviewHandoffActive = false;
+let savedClipReviewPayload = clipReviewForm ? collectClipReviewPayload() : [];
+let savedEnabledClipCount = Number(clipReviewForm?.dataset.enabledCount || 0);
 
 const cutJobStatusLabels = {
   queued: "排队中",
@@ -990,11 +994,28 @@ function updateClipSelectAllUi() {
 
 function updateClipReviewActionState() {
   const hasCards = getClipReviewCards().length > 0;
-  if (saveClipsButton) saveClipsButton.disabled = !hasCards || isCutJobActive;
-  if (generateClipsButton) generateClipsButton.disabled = !hasCards || isCutJobActive;
-  if (syncReviewedClipsButton) syncReviewedClipsButton.disabled = !hasCards || isCutJobActive;
+  const busy = isCutJobActive || isClipSaveActive || isReviewHandoffActive;
+  const payload = clipReviewForm ? collectClipReviewPayload() : [];
+  const dirty = JSON.stringify(payload) !== JSON.stringify(savedClipReviewPayload);
+  const enabledCount = savedEnabledClipCount - savedClipReviewPayload.filter(item => item.enabled).length
+    + payload.filter(item => item.enabled).length;
+  if (saveClipsButton) saveClipsButton.disabled = !hasCards || busy;
+  if (generateClipsButton) generateClipsButton.disabled = !hasCards || busy || enabledCount === 0;
+  if (syncReviewedClipsButton) syncReviewedClipsButton.disabled = !hasCards || busy;
+  clipReviewForm?.querySelectorAll("input, textarea, [data-delete-trigger], [data-source-monitor-trigger], [data-reject-reason]").forEach(node => { node.disabled = busy; });
+  clipFilterForm?.querySelectorAll("select").forEach(node => { node.disabled = busy || dirty; });
   updateClipSelectAllUi();
+  if (clipSelectAll) clipSelectAll.disabled = !hasCards || busy;
+  if (clipReviewForm) {
+    Object.assign(clipReviewForm.dataset, {dirty: String(dirty), busy: String(busy), enabledCount: String(enabledCount)});
+    document.dispatchEvent(new CustomEvent("clip-review-state"));
+  }
 }
+
+document.addEventListener("production-review-busy", event => {
+  isReviewHandoffActive = event.detail.busy;
+  updateClipReviewActionState();
+});
 
 function collectClipReviewPayload() {
   const cards = getClipReviewCards();
@@ -1015,21 +1036,28 @@ function collectClipReviewPayload() {
 async function persistClipReviewChanges() {
   if (!clipReviewForm) throw new Error("当前页面没有可保存的候选片段");
   const taskId = clipReviewForm.dataset.taskId;
+  const payload = collectClipReviewPayload();
   const response = await fetch(`/api/tasks/${taskId}/clips/batch-update`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ clips: collectClipReviewPayload() }),
+    body: JSON.stringify({ clips: payload }),
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.detail || "保存失败");
+  savedClipReviewPayload = payload;
+  savedEnabledClipCount = data.clips.filter(item => item.enabled).length;
+  updateClipReviewActionState();
+  document.dispatchEvent(new CustomEvent("clip-review-saved"));
   return data;
 }
 
 async function deleteClipCard(card, button) {
-  if (!clipReviewForm || !card) return;
+  if (!clipReviewForm || !card || isCutJobActive || isClipSaveActive || isReviewHandoffActive) return;
   const taskId = clipReviewForm.dataset.taskId;
   const clipId = card.dataset.clipId;
   const originalText = button?.textContent || "";
+  isClipSaveActive = true;
+  updateClipReviewActionState();
   if (button) {
     button.disabled = true;
     button.textContent = "\u5220\u9664\u4e2d...";
@@ -1046,8 +1074,11 @@ async function deleteClipCard(card, button) {
     if (activeSourceMonitor?.card === card) {
       toggleSourceMonitor(false);
     }
+    savedEnabledClipCount -= Number(!!savedClipReviewPayload.find(item => item.id === clipId)?.enabled);
+    savedClipReviewPayload = savedClipReviewPayload.filter(item => item.id !== clipId);
     card.remove();
     updateClipReviewActionState();
+    document.dispatchEvent(new CustomEvent("clip-review-saved"));
     closeTranscriptDrawer();
     showClipReviewMessage(
       data.message || "\u5df2\u5220\u9664\u8be5\u5019\u9009\u7247\u6bb5\uff0c\u540e\u7eed\u751f\u6210\u5207\u7247\u4e0d\u4f1a\u518d\u4f7f\u7528\u5b83\u3002",
@@ -1060,6 +1091,9 @@ async function deleteClipCard(card, button) {
       button.textContent = originalText;
     }
     showClipReviewMessage(`\u5220\u9664\u5931\u8d25\uff1a${error.message}`, "error");
+  } finally {
+    isClipSaveActive = false;
+    updateClipReviewActionState();
   }
 }
 
@@ -1347,6 +1381,7 @@ function applySourceMonitorToCard() {
   const durationPill = card.querySelector(".status-pill");
   if (durationPill) durationPill.textContent = `${Math.round(activeSourceMonitor.endSeconds - activeSourceMonitor.startSeconds)} 秒`;
   showClipReviewMessage("已应用新的入点 / 出点。确认无误后，请点击右侧“保存修改”写入数据库。", "success");
+  updateClipReviewActionState();
   toggleSourceMonitor(false);
 }
 
@@ -1361,7 +1396,7 @@ if (clipSelectAll) {
       checkbox.checked = shouldEnable;
       syncRejectReasonVisibility(checkbox.closest("[data-clip-card]"));
     });
-    updateClipSelectAllUi();
+    updateClipReviewActionState();
     showClipReviewMessage(
       shouldEnable
         ? "已全选当前列表。确认无误后，请点击“保存修改”写入数据库。"
@@ -1376,15 +1411,22 @@ clipReviewForm?.addEventListener("change", (event) => {
     syncRejectReasonVisibility(event.target.closest("[data-clip-card]"));
     updateClipSelectAllUi();
   }
+  updateClipReviewActionState();
+});
+clipReviewForm?.addEventListener("input", (event) => {
+  // The bulk checkbox applies its selection in change; do not reset it before that event.
+  if (event.target.matches("[data-clip-card] input, [data-clip-card] textarea")) updateClipReviewActionState();
 });
 
 updateClipSelectAllUi();
 
 if (saveClipsButton && clipReviewForm) {
   saveClipsButton.addEventListener("click", async () => {
+    if (isCutJobActive || isClipSaveActive || isReviewHandoffActive) return;
     const taskId = clipReviewForm.dataset.taskId;
     const originalText = saveClipsButton.textContent;
-    saveClipsButton.disabled = true;
+    isClipSaveActive = true;
+    updateClipReviewActionState();
     saveClipsButton.textContent = "正在保存...";
     showClipReviewMessage("正在保存候选片段修改...", "info");
 
@@ -1394,7 +1436,8 @@ if (saveClipsButton && clipReviewForm) {
     } catch (error) {
       showClipReviewMessage(`保存失败：${error.message}`, "error");
     } finally {
-      saveClipsButton.disabled = false;
+      isClipSaveActive = false;
+      updateClipReviewActionState();
       saveClipsButton.textContent = originalText;
     }
   });
@@ -1532,6 +1575,7 @@ document.querySelectorAll("[data-reject-reason]").forEach((button) => {
       item.setAttribute("aria-pressed", active ? "true" : "false");
     });
     showClipReviewMessage("淘汰原因已暂存；点击“保存修改”后统一写入。", "info");
+    updateClipReviewActionState();
   });
 });
 
@@ -1623,7 +1667,7 @@ window.addEventListener("resize", () => {
 
 if (generateClipsButton) {
   generateClipsButton.addEventListener("click", async () => {
-    if (isCutJobActive) return;
+    if (isCutJobActive || isClipSaveActive || isReviewHandoffActive) return;
     const originalText = generateClipsButton.textContent;
     isCutJobActive = true;
     updateClipReviewActionState();

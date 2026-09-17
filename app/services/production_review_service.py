@@ -212,9 +212,9 @@ def state(task_id):
                 except (ValueError, OSError) as exc:
                     message = str(exc)
             stale, blocking = prepared_job_groups(c, task_id)
-            if blocking:
+            if blocking and not approved:
                 message += "；重新确认成片前，请先在发送中心取消或处理已有发布任务"
-            elif stale:
+            elif stale and not approved:
                 message += f"；确认新版后，{len(stale)} 条未排期、未执行的旧版草稿将转入历史，视频文件保留"
             return {**policy, "required": True, "can_confirm": not blocking, "approved": approved, "ready": ready,
                     "stale_draft_count": len(stale), "blocking_publish_count": len(blocking),

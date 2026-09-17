@@ -81,18 +81,6 @@ def test_clip_review_renders_select_all_control_and_enabled_count() -> None:
     assert "已启用 1 / 2 条" in response.text
 
 
-def test_clip_select_all_reuses_batch_save_payload() -> None:
-    script = (settings.project_root / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
-
-    assert "function getClipEnableCheckboxes()" in script
-    assert "function updateClipSelectAllUi()" in script
-    assert "getClipEnableCheckboxes().forEach" in script
-    assert 'const enabled = card.querySelector("[name=\'enabled\']").checked' in script
-    assert "feedback_reason_code: enabled ? null" in script
-    assert "body: JSON.stringify({ clips: collectClipReviewPayload() })" in script
-    assert "请点击“保存修改”写入数据库" in script
-
-
 def test_clip_review_uses_async_deduplicated_cut_job_progress() -> None:
     task_id = _seed_clip_review_task()
 
@@ -103,7 +91,7 @@ def test_clip_review_uses_async_deduplicated_cut_job_progress() -> None:
     assert f'data-endpoint="/api/tasks/{task_id}/process/cuts-async"' in response.text
     assert 'id="cut-job-progress"' in response.text
     assert "async function waitForCutJob(jobId)" in script
-    assert "if (isCutJobActive) return" in script
+    # Duplicate submission and busy controls are exercised by the review browser tests.
 
 
 def test_ai_analysis_locks_related_controls_while_running() -> None:

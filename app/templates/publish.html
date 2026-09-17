@@ -201,6 +201,15 @@
   <div class="panel-header publish-content-header">
     <div><h2>内容准备</h2><p>逐条编辑文案，或勾选多条后批量重写；内容、平台和账号完整后再加入排期。</p></div>
   </div>
+  {% if focus_task_id %}
+  <div class="inline-alert tone-blue" data-content-task-focus>
+    <strong>当前仅查看本任务的内容准备</strong>
+    <p>{% for group in publish_task_groups if group.task_id == focus_task_id %}{{ group.task_name }}{% else %}任务 {{ focus_task_id }}{% endfor %}</p>
+    <a class="text-button" href="/tasks/{{ focus_task_id }}/clips/review#production-review">返回成片验收 / 补选片段</a>
+    <button type="button" class="text-button" data-clear-content-task>查看全部任务</button>
+    <small>排期计划和执行记录仍显示全部任务。</small>
+  </div>
+  {% endif %}
   <aside class="publish-content-maintenance" aria-label="内容同步与封面维护">
     <div>
       <p class="eyebrow">Content Maintenance</p>
@@ -404,4 +413,4 @@
 </aside>
 {% endblock %}
 
-{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260911-manual-review"></script>{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260917-batch-flow"></script>{% endblock %}

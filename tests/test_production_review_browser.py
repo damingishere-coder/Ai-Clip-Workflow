@@ -26,6 +26,8 @@ def test_actual_output_confirmation_then_stale_version(width, output_batch, recu
     if not chrome.exists():
         pytest.skip('Chrome unavailable')
     task,candidate,_ = output_batch
+    from app.services import publish_service
+    monkeypatch.setattr(publish_service, '_generate_default_publish_cover', lambda *_: {})
     if recut:
         from tests.test_production_review import recut_with_old_draft
         recut_with_old_draft(output_batch, tmp_path)
@@ -62,19 +64,20 @@ def test_actual_output_confirmation_then_stale_version(width, output_batch, recu
             page.locator('#production-review-confirm').click()
             from app.services.production_review_service import state
             mode = state(task)['configured_delivery_mode']
-            page.locator('#production-review-prepare' if mode == 'original' else '#production-review-subtitles').wait_for()
-            assert len(writes) == 1 and writes[0].endswith('/confirm')
+            if mode == 'original':
+                page.wait_for_url(f'**/publish?task_id={task}&tab=content')
+                assert len(writes) == 2 and writes[1].endswith('/sync')
+            else:
+                page.locator('#production-review-subtitles').wait_for()
+                assert len(writes) == 1
+            assert writes[0].endswith('/confirm')
             with db.get_connection() as c:
                 assert c.execute('SELECT count(*) FROM production_reviews').fetchone()[0] == 1 + int(recut)
                 assert c.execute('SELECT delivery_mode FROM production_reviews').fetchone()[0] == mode
-                assert c.execute('SELECT count(*) FROM publish_jobs').fetchone()[0] == int(recut)
+                assert c.execute('SELECT count(*) FROM publish_jobs').fetchone()[0] == int(recut) + int(mode == 'original')
                 if recut:
                     assert c.execute('SELECT status FROM publish_jobs').fetchone()[0] == 'CANCELLED'
             if mode == 'original':
-                from app.services import publish_service
-                monkeypatch.setattr(publish_service, '_generate_default_publish_cover', lambda *_: {})
-                page.locator('#production-review-prepare').click()
-                page.wait_for_url(f'**/publish?task_id={task}&tab=content')
                 with db.get_connection() as c:
                     jobs = c.execute("SELECT status FROM publish_jobs WHERE task_id=? AND status!='CANCELLED'", (task,)).fetchall()
                     assert len(jobs) == 1 and jobs[0][0] == 'WAITING'
