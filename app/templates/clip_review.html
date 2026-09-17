@@ -48,6 +48,7 @@
         <button type="button" class="primary-button" id="production-review-confirm">确认成片</button>
       </fieldset>
       <div class="production-review-actions">
+        <a href="/publish?task_id={{ task.id }}" id="production-review-publish-link" hidden>查看并处理已有发送记录 →</a>
         <button type="button" class="primary-button" id="production-review-subtitles" hidden>继续字幕审核 →</button>
         <a href="/subtitles/{{ task.id }}" id="production-review-subtitle-link" hidden>打开已有字幕</a>
         <button type="button" class="primary-button" id="production-review-prepare" hidden>进入内容准备 →</button>
@@ -399,7 +400,7 @@
 </div>
 {% endblock %}
 {% block extra_scripts %}
-{% if production_review_required %}<script src="{{ url_for('static', path='js/production-review.js') }}?v=20260916-handoff"></script>{% endif %}
+{% if production_review_required %}<script src="{{ url_for('static', path='js/production-review.js') }}?v=20260917-recut"></script>{% endif %}
 <script src="{{ url_for('static', path='vendor/nouislider/nouislider.min.js') }}?v=15.8.1"></script>
 <script src="{{ url_for('static', path='js/human-review.js') }}?v=20260915-1"></script>
 {% endblock %}

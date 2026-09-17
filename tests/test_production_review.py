@@ -383,3 +383,116 @@ def test_invalid_scheduled_batch_moves_to_review_and_does_not_dispatch(output_ba
         row = c.execute('SELECT status,error_code FROM publish_jobs WHERE id=?',(key,)).fetchone()
         assert tuple(row) == ('NEED_REVIEW','production_review_required')
     assert scheduler.execute_job(key)['status'] == 'skipped'
+
+
+def recut_with_old_draft(output_batch, tmp_path, *, status='WAITING', platform='douyin', extra=None):
+    task, candidate, output = output_batch
+    review.confirm(task, consent(task))
+    key = insert_publish(task, output, status)
+    with db.get_connection() as c:
+        c.execute("UPDATE publish_jobs SET platform=?,publish_mode='local_browser',clip_id=output_clip_id,video_path=video_file_path WHERE id=?", (platform, key))
+        for column, value in (extra or {}).items():
+            c.execute(f'UPDATE publish_jobs SET {column}=? WHERE id=?', (value, key))
+        c.commit()
+    run = cuts._create_cut_run(task)
+    with db.get_connection() as c:
+        selection = evidence.selection_snapshot(c, task)
+    path = tmp_path/'new-reviewed-cut.mp4'
+    path.write_bytes(b'new-cut-needs-new-consent')
+    cuts._commit_cut_run_results(task, run['id'], [CutResult(candidate, str(path), path.name,
+        'completed', source_start_ms=1000, source_end_ms=3000)], source_fingerprint='test',
+        cut_inputs={'selection': selection, 'source': evidence.source_stamp(selection['source_path'])})
+    return key
+
+
+@pytest.mark.parametrize('platform', ['douyin', 'bilibili'])
+@pytest.mark.parametrize('status', ['DRAFT', 'WAITING'])
+def test_recut_can_confirm_and_sync_without_old_draft_deadlock(output_batch, tmp_path, monkeypatch, platform, status):
+    from app.services import publish_service
+    task, _, old_output = output_batch
+    key = recut_with_old_draft(output_batch, tmp_path, status=status, platform=platform)
+    state = review.state(task)
+    assert state['can_confirm'] and not state['approved']
+    assert state['stale_draft_count'] == 1 and state['blocking_publish_count'] == 0
+    assert '视频文件保留' in state['message']
+    with db.get_connection() as c:
+        assert c.execute('SELECT status FROM publish_jobs WHERE id=?', (key,)).fetchone()[0] == status
+    payload = consent(task)
+    result = review.confirm(task, payload)
+    assert result['retired_draft_count'] == 1 and review.state(task)['ready']
+    assert review.confirm(task, payload)['reused']
+    with db.get_connection() as c:
+        assert tuple(c.execute('SELECT status,error_code FROM publish_jobs WHERE id=?', (key,)).fetchone()) == (
+            'CANCELLED', 'superseded_by_recut')
+        assert c.execute("SELECT count(*) FROM publish_job_events WHERE job_id=? AND event_type='superseded_by_recut'", (key,)).fetchone()[0] == 1
+    assert Path(old_output['output_file_path']).is_file()
+    monkeypatch.setattr(publish_service, '_generate_default_publish_cover', lambda *_: {})
+    first = publish_service.sync_task_publish_jobs(task)
+    assert first['created_count'] == 1 and not first['errors']
+    second = publish_service.sync_task_publish_jobs(task)
+    assert second['created_count'] == 0 and not second['errors']
+    with db.get_connection() as c:
+        assert c.execute("SELECT count(*) FROM publish_jobs WHERE task_id=? AND status='WAITING'", (task,)).fetchone()[0] == 1
+        assert not c.execute("SELECT 1 FROM publish_jobs WHERE status IN ('SCHEDULED','PUBLISHING')").fetchone()
+
+
+@pytest.mark.parametrize('status,extra', [
+    ('SCHEDULED', {}), ('NEED_REVIEW', {}), ('FAILED', {}),
+    ('WAITING', {'scheduled_at': '2099-01-01T00:00:00+00:00'}),
+    ('WAITING', {'attempt_count': 1}), ('WAITING', {'needs_manual_review': 1}),
+    ('WAITING', {'remote_video_id': 'external-fact'}), ('WAITING', {'execution_id': 'claimed'}),
+    ('WAITING', {'finished_at': '2026-09-17T00:00:00+00:00'}),
+])
+def test_recut_does_not_retire_scheduled_or_attempted_jobs(output_batch, tmp_path, status, extra):
+    task, _, _ = output_batch
+    key = recut_with_old_draft(output_batch, tmp_path, status=status, extra=extra)
+    state = review.state(task)
+    assert not state['can_confirm'] and state['blocking_publish_count'] == 1
+    with pytest.raises(ValueError, match='取消或处理'):
+        review.confirm(task, consent(task))
+    with db.get_connection() as c:
+        assert c.execute('SELECT status FROM publish_jobs WHERE id=?', (key,)).fetchone()[0] == status
+
+
+def test_recut_retirement_is_validated_and_atomic(output_batch, tmp_path, monkeypatch):
+    from app.services.publish_repository import PublishRepository
+    task, _, _ = output_batch
+    key = recut_with_old_draft(output_batch, tmp_path)
+    payload = consent(task)
+    with pytest.raises(ValueError, match='已变化'):
+        review.confirm(task, payload.model_copy(update={'manifest_sha256': '0'*64}))
+    with pytest.raises(ValueError, match='创建任务时确定'):
+        review.confirm(task, payload.model_copy(update={'delivery_mode': 'subtitled'}))
+
+    def fail(*args, **kwargs):
+        raise RuntimeError('event-write-failed')
+
+    monkeypatch.setattr(PublishRepository, 'add_event', fail)
+    with pytest.raises(RuntimeError, match='event-write-failed'):
+        review.confirm(task, payload)
+    with db.get_connection() as c:
+        assert c.execute('SELECT status FROM publish_jobs WHERE id=?', (key,)).fetchone()[0] == 'WAITING'
+        assert c.execute('SELECT count(*) FROM production_reviews WHERE task_id=?', (task,)).fetchone()[0] == 1
+
+
+def test_recut_waiting_draft_does_not_break_startup_or_scheduler(output_batch, tmp_path):
+    from app.services.publish_scheduler import PublishScheduler
+    key = recut_with_old_draft(output_batch, tmp_path, extra={'provider_response': '{"cover_time_seconds": 1}'})
+    with db.get_connection() as c:
+        before = dict(c.execute('SELECT * FROM publish_jobs WHERE id=?', (key,)).fetchone())
+    db.init_db()
+    assert PublishScheduler().run_once()['status'] == 'ok'
+    with db.get_connection() as c:
+        assert dict(c.execute('SELECT * FROM publish_jobs WHERE id=?', (key,)).fetchone()) == before
+
+
+@pytest.mark.parametrize('status', ['PUBLISHED', 'EXPORTED'])
+def test_recut_confirmation_preserves_successful_history(output_batch, tmp_path, status):
+    task, _, _ = output_batch
+    key = recut_with_old_draft(output_batch, tmp_path, status=status, extra={'remote_video_id': 'known-result'})
+    with db.get_connection() as c:
+        before = dict(c.execute('SELECT * FROM publish_jobs WHERE id=?', (key,)).fetchone())
+    assert review.state(task)['can_confirm']
+    review.confirm(task, consent(task))
+    with db.get_connection() as c:
+        assert dict(c.execute('SELECT * FROM publish_jobs WHERE id=?', (key,)).fetchone()) == before

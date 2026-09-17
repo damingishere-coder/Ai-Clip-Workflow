@@ -21,6 +21,7 @@
     byId("prepare").hidden = true;
     byId("subtitles").hidden = true;
     byId("subtitle-link").hidden = true;
+    byId("publish-link").hidden = true;
     current = await request(base);
     byId("status").textContent = current.message;
     panel.dataset.state = current.approved ? "approved" : current.can_confirm ? "review" : "waiting";
@@ -29,6 +30,7 @@
     byId("policy-note").textContent = mode ?
       `${current.delivery_policy_source === "previous_review" ? "沿用此前已确认的字幕方式。" : "已在创建任务时确定，无需重复选择。"}${mode === "original" ? "已有字幕保留，不会新增或烧录字幕。" : "成片确认后继续核对字幕内容。"}` : "请刷新后重试，暂不能确认成片。";
     byId("choice").disabled = !current.can_confirm;
+    byId("publish-link").hidden = !current.blocking_publish_count;
     byId("choice").hidden = !!current.approved;
     byId("checked").checked = false;
     byId("empty").hidden = !!current.outputs?.length;

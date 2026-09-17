@@ -2644,25 +2644,27 @@ def _run_publish_jobs_data_migrations(
 ) -> None:
     _backup_publish_database_before_data_migration(connection)
     _migrate_publish_platform_and_mode_values(connection)
-    if {"clip_id", "output_clip_id"}.issubset(columns):
-        connection.execute("UPDATE publish_jobs SET clip_id = output_clip_id WHERE clip_id IS NULL OR clip_id = ''")
-    if {"video_path", "video_file_path"}.issubset(columns):
-        connection.execute("UPDATE publish_jobs SET video_path = video_file_path WHERE video_path IS NULL OR video_path = ''")
-    if {"caption", "description"}.issubset(columns):
-        connection.execute("UPDATE publish_jobs SET caption = description WHERE caption IS NULL OR caption = ''")
-    if {"hashtags", "tags"}.issubset(columns):
-        connection.execute("UPDATE publish_jobs SET hashtags = tags WHERE hashtags IS NULL OR hashtags = ''")
-    if {"remote_video_id", "platform_item_id"}.issubset(columns):
-        connection.execute(
-            "UPDATE publish_jobs SET remote_video_id = platform_item_id WHERE remote_video_id IS NULL OR remote_video_id = ''"
-        )
-    if {"publish_result", "provider_response"}.issubset(columns):
-        connection.execute(
-            "UPDATE publish_jobs SET publish_result = provider_response WHERE publish_result IS NULL OR publish_result = ''"
-        )
+    # Material batches are created by the current schema, not legacy imports.
+    # Do not backfill their delivery/result aliases while a recut awaits consent.
+    legacy_scope = ""
+    if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='material_batch_items'").fetchone():
+        legacy_scope = " AND NOT EXISTS (SELECT 1 FROM material_batch_items b WHERE b.task_id=publish_jobs.task_id)"
+    # Initialization also runs on every scheduler scan. Empty-to-empty writes still
+    # fire review fences on retired outputs, despite changing no business data.
+    for target, source in (
+        ("clip_id", "output_clip_id"), ("video_path", "video_file_path"),
+        ("caption", "description"), ("hashtags", "tags"),
+        ("remote_video_id", "platform_item_id"), ("publish_result", "provider_response"),
+    ):
+        if {target, source}.issubset(columns):
+            connection.execute(f"""UPDATE publish_jobs SET {target} = {source}
+                WHERE ({target} IS NULL OR {target} = '')
+                  AND {source} IS NOT NULL AND {source} != '' AND {target} IS NOT {source}{legacy_scope}""")
     if {"attempt_count", "retry_count"}.issubset(columns):
         connection.execute(
-            "UPDATE publish_jobs SET attempt_count = retry_count WHERE attempt_count IS NULL OR attempt_count = 0"
+            f"""UPDATE publish_jobs SET attempt_count = retry_count
+               WHERE (attempt_count IS NULL OR attempt_count = 0)
+                 AND retry_count IS NOT NULL AND retry_count != 0 AND attempt_count IS NOT retry_count{legacy_scope}"""
         )
     if "history_hidden" in columns:
         connection.execute("UPDATE publish_jobs SET history_hidden = 0 WHERE history_hidden IS NULL")

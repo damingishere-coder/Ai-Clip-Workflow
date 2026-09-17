@@ -16,13 +16,19 @@ output_batch, batch_db, human_db = _output_batch, _batch_db, _human_db
 
 
 @pytest.mark.parametrize('width',[1440,390])
-@pytest.mark.parametrize('output_batch', ['original', 'review', 'single-original', 'single-review'], indirect=True)
-def test_actual_output_confirmation_then_stale_version(width, output_batch, tmp_path, monkeypatch):
+@pytest.mark.parametrize('output_batch,recut', [
+    ('original', False), ('review', False), ('single-original', False), ('single-review', False),
+    ('original', True),
+], indirect=['output_batch'])
+def test_actual_output_confirmation_then_stale_version(width, output_batch, recut, tmp_path, monkeypatch):
     playwright = pytest.importorskip('playwright.sync_api')
     chrome = Path(os.environ.get('PROGRAMFILES','C:/Program Files'))/'Google/Chrome/Application/chrome.exe'
     if not chrome.exists():
         pytest.skip('Chrome unavailable')
     task,candidate,_ = output_batch
+    if recut:
+        from tests.test_production_review import recut_with_old_draft
+        recut_with_old_draft(output_batch, tmp_path)
     from tests.test_workflow_capacity import queued_jobs
     other = job_service.claim_job(queued_jobs(1, 'transcript')[0]['id'], 'other-task')
     port = _free_port()
@@ -46,6 +52,9 @@ def test_actual_output_confirmation_then_stale_version(width, output_batch, tmp_
             assert job_service.get_job(other['id'])['status'] == 'running'
             assert page.locator('input[name="production-delivery"]').count() == 0
             assert page.locator('#production-review-prepare').is_hidden()
+            if recut:
+                assert '1 条未排期、未执行的旧版草稿将转入历史' in page.locator('#production-review-status').inner_text()
+                assert page.locator('#production-review-confirm').is_enabled()
             page.locator('#production-review-confirm').click()
             page.get_by_text('请先逐条检查实际成片，再勾选确认',exact=True).wait_for()
             assert not writes
@@ -56,16 +65,18 @@ def test_actual_output_confirmation_then_stale_version(width, output_batch, tmp_
             page.locator('#production-review-prepare' if mode == 'original' else '#production-review-subtitles').wait_for()
             assert len(writes) == 1 and writes[0].endswith('/confirm')
             with db.get_connection() as c:
-                assert c.execute('SELECT count(*) FROM production_reviews').fetchone()[0] == 1
+                assert c.execute('SELECT count(*) FROM production_reviews').fetchone()[0] == 1 + int(recut)
                 assert c.execute('SELECT delivery_mode FROM production_reviews').fetchone()[0] == mode
-                assert c.execute('SELECT count(*) FROM publish_jobs').fetchone()[0] == 0
+                assert c.execute('SELECT count(*) FROM publish_jobs').fetchone()[0] == int(recut)
+                if recut:
+                    assert c.execute('SELECT status FROM publish_jobs').fetchone()[0] == 'CANCELLED'
             if mode == 'original':
                 from app.services import publish_service
                 monkeypatch.setattr(publish_service, '_generate_default_publish_cover', lambda *_: {})
                 page.locator('#production-review-prepare').click()
                 page.wait_for_url(f'**/publish?task_id={task}&tab=content')
                 with db.get_connection() as c:
-                    jobs = c.execute('SELECT status FROM publish_jobs WHERE task_id=?', (task,)).fetchall()
+                    jobs = c.execute("SELECT status FROM publish_jobs WHERE task_id=? AND status!='CANCELLED'", (task,)).fetchall()
                     assert len(jobs) == 1 and jobs[0][0] == 'WAITING'
                 page.goto(f'http://127.0.0.1:{port}/tasks/{task}/clips', wait_until='networkidle')
             with db.get_connection() as c:
