@@ -1,3 +1,13 @@
+## 当前：重切成片交接修复已部署（2026-09-17 21:57）
+
+[PR #131](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/131) 三项 CI 全通过并 Squash 合并为 `c3fc93482452d566224e963ce3ee85cce8a6fe8e`。21:55:45 更新原 RunDock Web 8001，运行目录仍 `Ai-Clip-Workflow-offline-runtime`；监听 PID 179016 的父链为 Python → PowerShell 151844 → alter → rundock。Worker 8765 原监听 PID 146404、托管 PID 154872 保持运行。
+
+正式 E1845 `cb27d5662bdd` 当前 5 条成片 `can_confirm=true`、旧草稿 1、阻塞记录 0。浏览器实测复选框和确认按钮可用；未勾选点击会提示先检查，刷新后显示旧草稿将在确认时转历史。没有替用户确认新版本、同步正式草稿、排期或发送。用户刷新审片页，检查当前成片后勾选确认，再点击“进入内容准备”。
+
+readiness=ready，23 项迁移、integrity=ok、外键异常 0；调度扫描持续推进，consecutive_failures=0，Worker 在线。维护前在线备份 `immediate-prestop.sqlite3` 与更新后 51 张表逐条一致，其中 1069 条发布记录完整保留；配置哈希与 E1845 原有成片文件大小/修改时间不变。正式 production-review.js 响应 SHA-256 与运行文件一致。
+
+本地完整回归 1433 passed（包含成片 Chrome 12 项），最后补强的成片回归 45 passed、迁移回归 48 passed，Ruff、compileall、全部 JS 语法通过。真实数据库隔离副本初始化两次不改变 1059 条原发布记录；E1845 副本完整确认/同步新增 5 条，重复同步新增 0，旧草稿 1 条安全转历史。私有证据保存在 `Ai-Clip-Workflow-recut-review/data/acceptance/recut-review/`，未提交数据库、媒体或配置。回滚保留原提交 `3e26253` 与在线备份；无新 DDL。
+
 ## 当前修复：重切成片被旧草稿阻断（2026-09-17）
 
 E1845 `cb27d5662bdd` 当前第 2 次切割 5 条成片已有完整执行证据，但第 1 次切割留有 1 条 WAITING 草稿；确认接口笼统阻止所有非终态记录，旧草稿清理又位于确认后的同步入口，造成死循环。
