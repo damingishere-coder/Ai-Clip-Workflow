@@ -7,6 +7,7 @@ if (publishCenterRoot) {
   const SERVICE_REFRESH_INTERVAL_MS = 30000;
   const POLL_REQUEST_TIMEOUT_MS = 10000;
   const selectedJobIds = new Set();
+  let contentTaskId = document.querySelector("[data-publish-focus]")?.dataset.taskId || "";
   const messageNode = document.querySelector("#send-center-message");
   const selectionBar = document.querySelector("[data-selection-bar]");
   const selectedCountNode = document.querySelector("[data-selected-count]");
@@ -475,6 +476,7 @@ if (publishCenterRoot) {
         row.dataset.outputActive === "false"
         || !sectionAllows("content", row.dataset.status || "")
         || row.dataset.platform !== activePlatform
+        || (contentTaskId && row.closest("[data-publish-task-group]")?.dataset.taskId !== contentTaskId)
       );
     });
     syncContentTaskGroups();
@@ -2458,6 +2460,14 @@ if (publishCenterRoot) {
     syncCopyCounters(form);
   });
   initializeTaskGroupExpansionState();
+  document.querySelector("[data-clear-content-task]")?.addEventListener("click", () => {
+    contentTaskId = "";
+    document.querySelector("[data-content-task-focus]").hidden = true;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("task_id");
+    window.history.replaceState(null, "", url);
+    renderPlatformSchedule();
+  });
   const focus = document.querySelector("[data-publish-focus]");
   if (focus?.dataset.platform) setActivePlatform(focus.dataset.platform);
   if (focus?.dataset.tab) switchTab(focus.dataset.tab);

@@ -1216,7 +1216,7 @@ def update_clip_candidates_batch(task_id: str, payloads: list[ClipCandidateBatch
 
     _append_task_log(task_id, f"已批量保存 {len(validated)} 条候选片段审核修改")
     return {
-        "message": f"已保存 {len(validated)} 条候选片段，任务状态仍保持 AI 结果待检查。",
+        "message": f"已保存 {len(validated)} 条候选片段。若改选或调整了片段，请生成最新切片，再检查实际成片。",
         "changed_count": changed_count,
         "feedback_count": feedback_count,
         "task": get_task(task_id, include_video_probe=False),

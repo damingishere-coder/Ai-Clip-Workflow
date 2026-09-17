@@ -3,6 +3,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import RedirectResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.models.task import (
     PublishAccountCreate,
@@ -224,7 +225,8 @@ async def sync_task_publish_jobs(
     prefer_subtitled: bool = Query(default=True),
 ) -> dict:
     try:
-        return publish_service.sync_task_publish_jobs(
+        return await run_in_threadpool(
+            publish_service.sync_task_publish_jobs,
             task_id,
             prefer_subtitled=prefer_subtitled,
             restore_removed=True,
