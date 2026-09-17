@@ -1,4 +1,10 @@
-## 当前：发送中心性能优化已部署（2026-09-17 23:28）
+## 当前运行补充：预览封面已验收（2026-09-17 23:38）
+
+[PR #136](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/136) 最终提交 `bb0d3b4` 的三项 CI 全通过，合并为 `b9ccf5cd326ce4e930800c035d069914612f1597`；原 RunDock 8001 于23:37:36更新，当前实际运行此版本。托管 PID22692，监听169400/父Python191656；Worker原进程未重启。该补充为内容卡片复用已有封面作为视频poster，避免停止预加载后显示黑块。
+
+正式浏览器32张卡片均有封面预览，完整加载0.971秒，视频文件请求0；32条排期完整、调度正常、无脚本错误或横向溢出。本地14项相关补测通过。第二次维护前后51表摘要、全部成片文件元数据、配置及备份SHA与下述结果一致，readiness ready。证据位于同目录`preview-final/`。本条只补记录，无需再次部署或重启；下面保留主修复的测量和交付证据。
+
+## 发送中心主修复部署（2026-09-17 23:28）
 
 [PR #135](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/135) 最终提交 `cf7133d` 的 Linux、Windows、Docker 检查全通过，Squash 为 `9496a731b4cf78287a31d3aadf39e67c4cc1455a`。本地完整回归 **1448 passed**（含真实 Chrome），Ruff、编译与全部 JS 语法通过；只读代码复审无阻塞意见。23:25:28 原 RunDock Web 8001 更新成功，监听 PID 44324 → Python 86200 → PowerShell 181888 → alter → rundock；运行目录仍 `Ai-Clip-Workflow-offline-runtime`。Worker 8765 PID 146404/154872 未重启。
 
