@@ -156,9 +156,14 @@ class PublishScheduler:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._background_task: asyncio.Task[None] | None = None
         self._shutdown_requested = False
+        self._database_initialized = False
 
     def run_once(self) -> dict[str, Any]:
-        init_db()
+        # Schema/data migrations belong to initialization, not every five-second scan.
+        # Set the flag only after success so a failed initialization is retried.
+        if not self._database_initialized:
+            init_db()
+            self._database_initialized = True
         _SCHEDULER_HEALTH["scanning"] = True
         try:
             from app.services.adaptive_schedule import process_pending

@@ -8,6 +8,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
+from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -399,7 +400,12 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
                 """
             )
             page.wait_for_timeout(1_000)
-            assert sum(url.endswith("/api/publish/jobs") for url in poll_requests) == 1
+            job_requests = [url for url in poll_requests if urlsplit(url).path == "/api/publish/jobs"]
+            assert len(job_requests) == 1
+            requested_ids = set(parse_qs(urlsplit(job_requests[0]).query)["job_ids"][0].split(","))
+            assert requested_ids == set(page.locator("[data-publish-row][data-job-id]").evaluate_all(
+                "rows => rows.map(row => row.dataset.jobId)"
+            ))
             assert sum(url.endswith("/api/publish/accounts") for url in poll_requests) == 1
             assert sum(url.endswith("/api/publish/scheduler/health") for url in poll_requests) == 1
             assert sum("/api/publish/history/calendar" in url for url in poll_requests) == 1

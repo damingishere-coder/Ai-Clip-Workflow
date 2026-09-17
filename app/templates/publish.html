@@ -15,8 +15,8 @@
 <article class="publish-content-card{% if job.status == 'SCHEDULED' %} is-scheduled{% endif %}" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.effective_account_id or job.account_id or '' }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-experiment-id="{{ job.content_experiment_id or '' }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-section="content" {% if not job.output_is_active or job.status not in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
   <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
   <div class="publish-content-media">
-    <video muted preload="metadata" src="{{ job.video_media_url }}"></video>
-    <img data-cover-preview src="{{ job.cover_media_url }}" alt="{{ job.title }} 的封面" {% if not job.cover_media_url %}hidden{% endif %}>
+    <video muted preload="none" src="{{ job.video_media_url }}"></video>
+    <img loading="lazy" decoding="async" data-cover-preview src="{{ job.cover_media_url }}" alt="{{ job.title }} 的封面" {% if not job.cover_media_url %}hidden{% endif %}>
   </div>
   <form class="publish-content-form" data-publish-editor>
     <div class="publish-card-heading">
@@ -89,7 +89,7 @@
 <article class="publish-plan-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.effective_account_id or job.account_id or '' }}" data-platform="{{ job.platform }}" data-visibility="{{ job.visibility or 'public' }}" data-status="{{ job.status }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-section="schedule" data-send-readiness="{{ readiness | tojson | forceescape }}" {% if not job.output_is_active or job.status not in ["WAITING", "SCHEDULED"] %}hidden{% endif %}>
   <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
   <time data-row-schedule data-utc="{{ job.scheduled_at_utc }}">{{ job.scheduled_at_display }}</time>
-  <div class="publish-plan-video"><video muted preload="metadata" src="{{ job.video_media_url }}"></video><strong data-row-title>{{ job.title }}</strong></div>
+  <div class="publish-plan-video"><video muted preload="none" poster="{{ job.cover_media_url }}" src="{{ job.video_media_url }}"></video><strong data-row-title>{{ job.title }}</strong></div>
   <span data-row-platform>{{ job.platform_label }}</span>
   <span data-row-account>{{ job.account_name }}</span>
   <span class="status-pill tone-{{ job.status_tone }}" data-row-status>{{ job.status_label }}</span>
@@ -413,4 +413,4 @@
 </aside>
 {% endblock %}
 
-{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260917-batch-flow"></script>{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260918-publish-performance"></script>{% endblock %}
