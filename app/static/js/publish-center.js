@@ -1542,11 +1542,16 @@ if (publishCenterRoot) {
     jobsRefreshController = controller;
     const promise = (async () => {
       try {
-        const data = await pollingApiFetch("/api/publish/jobs", controller);
-        if (!controller.signal.aborted && !document.hidden) {
+        const ids = Array.from(new Set(Array.from(document.querySelectorAll("[data-publish-row][data-job-id]"), (row) => row.dataset.jobId)));
+        // Refresh the rows on this page even after they reach a terminal status.
+        // A global latest-100 query can silently omit older scheduled jobs.
+        for (let offset = 0; offset < ids.length; offset += 200) {
+          const query = new URLSearchParams({ job_ids: ids.slice(offset, offset + 200).join(",") });
+          const data = await pollingApiFetch(`/api/publish/jobs?${query}`, controller);
+          if (controller.signal.aborted || document.hidden) return;
           (data.jobs || []).forEach((job) => updateRowFromJob(job, { syncTaskGroups: false }));
-          syncContentTaskGroups();
         }
+        if (!controller.signal.aborted && !document.hidden) syncContentTaskGroups();
       } catch (error) {
         if (pollingRequestWasAborted(error, controller)) return;
         // 后台轮询失败不遮挡用户正在编辑的内容。

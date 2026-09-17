@@ -306,7 +306,7 @@ async def subtitle_task_page(request: Request, task_id: str):
 
 
 @router.get("/publish")
-async def publish_center_page(request: Request):
+def publish_center_page(request: Request):
     focus_task_id = request.query_params.get("task_id", "")
     return templates.TemplateResponse(
         name="publish.html",

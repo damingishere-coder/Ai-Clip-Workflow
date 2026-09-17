@@ -2971,7 +2971,16 @@ def get_publish_job(job_id: str) -> dict | None:
     return _normalize_job(row) if row else None
 
 
-def list_publish_jobs(limit: int | None = 100, *, worker_state: dict | None = None) -> list[dict]:
+def list_publish_jobs(
+    limit: int | None = 100,
+    *,
+    worker_state: dict | None = None,
+    active_only: bool = False,
+    platform: str | None = None,
+    job_ids: list[str] | None = None,
+) -> list[dict]:
+    if job_ids is not None and not job_ids:
+        return []
     sql = """
         SELECT
             publish_jobs.*,
@@ -2996,12 +3005,23 @@ def list_publish_jobs(limit: int | None = 100, *, worker_state: dict | None = No
         LEFT JOIN tasks ON tasks.id = publish_jobs.task_id
         LEFT JOIN output_clip ON output_clip.id = publish_jobs.output_clip_id
         LEFT JOIN publish_accounts ON publish_accounts.id = publish_jobs.account_id
-        ORDER BY publish_jobs.created_at DESC
     """
-    params: tuple = ()
+    conditions = []
+    params: list[Any] = []
+    if active_only:
+        conditions.append("publish_jobs.status IN ('DRAFT', 'WAITING', 'SCHEDULED', 'PUBLISHING')")
+    if platform:
+        conditions.append("publish_jobs.platform = ?")
+        params.append(platform)
+    if job_ids is not None:
+        conditions.append(f"publish_jobs.id IN ({','.join('?' for _ in job_ids)})")
+        params.extend(job_ids)
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
+    sql += " ORDER BY publish_jobs.created_at DESC"
     if limit:
         sql += " LIMIT ?"
-        params = (limit,)
+        params.append(limit)
     with get_connection() as connection:
         rows = connection.execute(sql, params).fetchall()
     accounts = list_accounts()
@@ -3047,8 +3067,8 @@ def _query_publish_history_jobs(
     platform: str,
     deleted: bool,
     status: str = "all",
-    worker_state: dict | None = None,
 ) -> list[dict]:
+    """Private raw rows for date filtering; normalize only the displayed page."""
     normalized_platform = _validate_history_platform(platform)
     normalized_status = str(status or "all").strip().upper()
     if normalized_status != "ALL" and normalized_status not in PUBLISH_HISTORY_STATUSES:
@@ -3084,12 +3104,7 @@ def _query_publish_history_jobs(
             """,
             [*params[:2], *sorted(PUBLISH_HISTORY_STATUSES), *params[2:]],
         ).fetchall()
-    accounts = list_accounts()
-    if worker_state is None:
-        from app.services.publish_scheduler import scheduler_health
-
-        worker_state = scheduler_health()
-    jobs = [_normalize_job(row, accounts=accounts, worker_state=worker_state) for row in rows]
+    jobs = [dict(row) for row in rows]
     for job in jobs:
         anchor = _publish_history_anchor(job)
         job["history_date"] = anchor.date().isoformat() if anchor else ""
@@ -3158,8 +3173,13 @@ def list_publish_history_records(
     if total_pages and current_page > total_pages:
         current_page = total_pages
     offset = (current_page - 1) * size
+    from app.services.publish_scheduler import scheduler_health
+
+    page_jobs = jobs[offset:offset + size]
+    accounts = list_accounts() if page_jobs else []
+    worker_state = scheduler_health() if page_jobs else {}
     return {
-        "jobs": jobs[offset:offset + size],
+        "jobs": [_normalize_job(job, accounts=accounts, worker_state=worker_state) for job in page_jobs],
         "pagination": {
             "page": current_page,
             "page_size": size,
@@ -4733,167 +4753,32 @@ def _get_provider(platform: str, config: dict):
 
 
 def get_publish_center_context(*, focus_task_id: str = "") -> dict:
-    publish_items = []
-    queue_items = []
-    raw_items = _list_completed_publish_clips()
-    output_clip_ids = [item["output_clip_id"] for item in raw_items]
-    publish_jobs_map = _batch_find_publish_jobs(output_clip_ids)
-    for item in raw_items:
-        original_path = resolve_video_file_path(item.get("output_file_path") or "")
-        subtitled_path = resolve_video_file_path(item.get("subtitled_output_file_path") or "")
-        default_title = _sanitize_publish_title(
-            _default_title_for_clip(item, platform="douyin"),
-            platform="douyin",
-            generated=True,
-        )
-        original_available = bool(original_path and original_path.exists() and original_path.is_file())
-        subtitled_available = bool(
-            _subtitle_publish_ready(item)
-            and subtitled_path
-            and subtitled_path.exists()
-            and subtitled_path.is_file()
-        )
-        normalized_item = {
-            **item,
-            "default_title": default_title,
-            "default_tags": format_douyin_tags(_fallback_tags(item), generated=True),
-            "original_available": original_available,
-            "subtitled_available": subtitled_available,
-            "subtitle_status_label": "已审核并验证" if subtitled_available else "字幕未就绪",
-            "video_media_url": _video_media_url(item["task_id"], item["output_clip_id"], "original"),
-        }
-        publish_items.append(normalized_item)
-        jobs_for_oc = publish_jobs_map.get(item["output_clip_id"], {})
-        for platform in AUTO_PUBLISH_PLATFORMS:
-            job = jobs_for_oc.get(platform)
-            if job:
-                queue_items.append(
-                    {
-                        **normalized_item,
-                        "job": job,
-                        "job_id": job["id"],
-                        "platform": platform,
-                        "platform_label": PLATFORM_LABELS[platform],
-                        "title": _sanitize_publish_title(
-                            job.get("title") or default_title,
-                            default_title,
-                            platform="douyin",
-                        ),
-                        "description": _sanitize_publish_description(
-                            job.get("description") or "",
-                            platform="douyin",
-                        ),
-                        "tags": _hashtags(
-                            job.get("tags") or normalized_item["default_tags"],
-                            platform="douyin",
-                        ),
-                        "status": job.get("status"),
-                        "status_label": job.get("status_label"),
-                        "status_tone": job.get("status_tone"),
-                        "cover_media_url": job.get("cover_media_url"),
-                        "cover_file_path": job.get("cover_file_path") or "",
-                        "error_message": job.get("error_message") or "",
-                        "platform_url": job.get("platform_url") or "",
-                    }
-                )
-            else:
-                queue_items.append(
-                    {
-                        **normalized_item,
-                        "job": None,
-                        "job_id": "",
-                        "platform": platform,
-                        "platform_label": PLATFORM_LABELS[platform],
-                        "title": _sanitize_publish_title(default_title, platform="douyin", generated=True),
-                        "description": _compose_description(
-                            item,
-                            default_title,
-                            normalized_item["default_tags"],
-                            platform="douyin",
-                        ),
-                        "tags": _hashtags(normalized_item["default_tags"], platform="douyin"),
-                        "status": "not_queued",
-                        "status_label": "待入队",
-                        "status_tone": "amber",
-                        "cover_media_url": "",
-                        "cover_file_path": "",
-                        "error_message": "",
-                        "platform_url": "",
-                    }
-                )
-
+    # The preparation/schedule UI needs every active job, including older schedules.
+    # Historical records have their own paged API; never build hidden editors for them.
     from app.services.publish_scheduler import scheduler_health
+    from app.services.content_review_service import list_active_content_experiments_for_publish
 
     current_scheduler_health = scheduler_health()
     jobs = list_publish_jobs(
-        limit=None if focus_task_id else 200,
-        worker_state=current_scheduler_health,
+        limit=None, active_only=True, platform="douyin", worker_state=current_scheduler_health,
     )
-    jobs = [job for job in jobs if job.get("platform") == "douyin"]
-    pending_jobs = [
-        job for job in jobs
-        if job.get("status") in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_FAILED, PUBLISH_STATUS_NEED_REVIEW}
-    ]
-    scheduled_jobs = sorted(
-        [job for job in jobs if job.get("status") in {PUBLISH_STATUS_SCHEDULED, PUBLISH_STATUS_PUBLISHING}],
-        key=lambda job: (job.get("scheduled_at") or "", job.get("created_at") or ""),
-    )
-    history_jobs = [
-        job for job in jobs
-        if job.get("status") in {PUBLISH_STATUS_PUBLISHED, PUBLISH_STATUS_EXPORTED, PUBLISH_STATUS_FAILED, PUBLISH_STATUS_CANCELLED}
-    ]
-    jobs_by_platform = {
-        platform: [job for job in jobs if job["platform"] == platform]
-        for platform in AUTO_PUBLISH_PLATFORMS
-    }
-    ready_count = sum(1 for job in jobs if job.get("status") in {PUBLISH_STATUS_SCHEDULED, PUBLISH_STATUS_WAITING})
-    sending_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_PUBLISHING)
-    published_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_PUBLISHED)
-    failed_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_FAILED)
-    need_review_count = sum(1 for job in jobs if job.get("status") == PUBLISH_STATUS_NEED_REVIEW)
     missing_cover_counts = {
         platform: sum(
-            1
-            for job in jobs
+            1 for job in jobs
             if job.get("platform") == platform
-            and job.get("status") in {
-                PUBLISH_STATUS_DRAFT,
-                PUBLISH_STATUS_WAITING,
-                PUBLISH_STATUS_SCHEDULED,
-            }
+            and job.get("status") in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_SCHEDULED}
             and job.get("output_is_active") is not False
             and not str(job.get("cover_file_path") or "").strip()
         )
         for platform in AUTO_PUBLISH_PLATFORMS
     }
-    missing_cover_count = sum(missing_cover_counts.values())
-    opencli_status = _opencli_status()
-    from app.services.content_review_service import list_active_content_experiments_for_publish
-
     return {
-        "publish_items": publish_items,
-        "send_queue_items": queue_items,
         "publish_jobs": jobs,
         "publish_task_groups": _build_publish_task_groups(jobs),
-        "pending_jobs": pending_jobs,
-        "scheduled_jobs": scheduled_jobs,
-        "history_jobs": history_jobs,
-        "missing_cover_count": missing_cover_count,
+        "missing_cover_count": sum(missing_cover_counts.values()),
         "missing_cover_counts": missing_cover_counts,
-        "jobs_by_platform": jobs_by_platform,
-        "platforms": [{"id": platform, "label": PLATFORM_LABELS[platform]} for platform in AUTO_PUBLISH_PLATFORMS],
         "accounts": list_accounts(),
         "content_experiments": list_active_content_experiments_for_publish(),
         "app_timezone": settings.app_timezone,
-        "opencli_available": opencli_status["available"],
-        "opencli_status": opencli_status,
         "scheduler_health": current_scheduler_health,
-        "stats": [
-            {"label": "需复核", "value": need_review_count, "tone": "amber"},
-            {"label": "可入队切片", "value": len(publish_items), "tone": "green"},
-            {"label": "待发送", "value": ready_count, "tone": "blue"},
-            {"label": "发送中", "value": sending_count, "tone": "purple"},
-            {"label": "已发布", "value": published_count, "tone": "green"},
-            {"label": "发送失败", "value": failed_count, "tone": "red"},
-        ],
     }

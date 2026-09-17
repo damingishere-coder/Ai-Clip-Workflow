@@ -74,7 +74,7 @@ async def douyin_oauth_callback(code: str = "", state: str = ""):
 
 
 @router.get("/accounts")
-async def list_accounts(platform: str | None = None) -> dict:
+def list_accounts(platform: str | None = None) -> dict:
     return {"accounts": publish_service.list_accounts(platform)}
 
 
@@ -111,12 +111,17 @@ async def open_browser_creator_center(account_id: str) -> dict:
 
 
 @router.get("/jobs")
-async def list_publish_jobs() -> dict:
-    return {"jobs": publish_service.list_publish_jobs()}
+def list_publish_jobs(job_ids: str | None = Query(default=None, max_length=20000)) -> dict:
+    if job_ids is None:
+        return {"jobs": publish_service.list_publish_jobs()}
+    ids = list(dict.fromkeys(value.strip() for value in job_ids.split(",") if value.strip()))
+    if len(ids) > 200:
+        raise HTTPException(status_code=400, detail="每次最多刷新 200 条任务")
+    return {"jobs": publish_service.list_publish_jobs(limit=None, job_ids=ids)}
 
 
 @router.get("/history/calendar")
-async def get_publish_history_calendar(
+def get_publish_history_calendar(
     platform: str = Query(default="douyin"),
     month: str = Query(..., min_length=7, max_length=7),
 ) -> dict:
@@ -127,7 +132,7 @@ async def get_publish_history_calendar(
 
 
 @router.get("/history/records")
-async def list_publish_history_records(
+def list_publish_history_records(
     platform: str = Query(default="douyin"),
     date: str = Query(default="", max_length=10),
     status: str = Query(default="all", max_length=20),
@@ -179,12 +184,12 @@ async def list_publish_job_events(job_id: str) -> dict:
 
 
 @router.get("/queue")
-async def get_send_queue() -> dict:
+def get_send_queue() -> dict:
     return publish_service.get_publish_center_context()
 
 
 @router.get("/queue/snapshot")
-async def get_publish_queue_snapshot(task_id: str | None = None) -> dict:
+def get_publish_queue_snapshot(task_id: str | None = None) -> dict:
     return queue_snapshot(task_id=task_id)
 
 
@@ -196,7 +201,7 @@ async def run_publish_scheduler_once() -> dict:
 
 
 @router.get("/scheduler/health")
-async def get_publish_scheduler_health() -> dict:
+def get_publish_scheduler_health() -> dict:
     return scheduler_health()
 
 
