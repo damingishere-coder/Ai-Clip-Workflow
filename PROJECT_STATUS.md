@@ -1,3 +1,13 @@
+## 当前：批量审片交接修复已部署（2026-09-17 22:47）
+
+[PR #133](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/133) 最终提交 `d8ee205` 的 Linux、Windows、Docker 检查全部通过，Squash 合并为 `3546e26e2bc00879121500fbdc2a4601192a02f9`。22:44:47 更新原 RunDock Web 8001，运行目录仍 `Ai-Clip-Workflow-offline-runtime`；新监听 PID 134128 → Python 192872 → PowerShell 191236 → alter → rundock。Worker 8765 原监听 PID 146404、托管 PID 154872 保持运行。
+
+正式页面实测 E1848：内容准备仅显示本任务 3 条成片；临时勾选第 4 条时，上方立即提示未保存修改，隐藏旧版交接并提供生成新版；撤销该临时勾选后恢复已确认状态，再次进入内容准备仍为原 3 条 WAITING，无新增、无排期或发送。浏览器无脚本错误，页面无横向溢出，实际视频与封面可见；未保存这次临时试选，也未代用户验收任何新版本。
+
+维护前在线备份 `immediate-prestop.sqlite3`，部署前后 51 张表逐条摘要一致，配置哈希及 E1848/E1845 已有视频大小/修改时间不变。readiness=ready，23 项迁移、integrity=ok、外键异常 0，调度扫描继续推进且 consecutive_failures=0；三项正式 JS 响应哈希与运行源码相同。回滚保留 `c3fc934` 与在线备份；没有新迁移或运行配置变更。
+
+验证记录：本地全量首轮 1438 passed、3 个旧源码/缓存断言失败；替换脆弱断言并补上真实全选交互后，相关补测全部通过。最终 Chrome 审片 12 项、新交接 5 项、全选模板 3 项、排期静态 1 项通过；Ruff、compileall、全部 14 项 JS 语法通过，最终提交的两次 CI 运行均通过 Linux 全量、Windows 与 Docker。私有证据位于 `Ai-Clip-Workflow-batch-review-flow/data/acceptance/batch-review/`，不提交数据库、媒体、配置或截图。本条交付记录仅更新文档，无需再次重启服务。
+
 ## 当前修复：批量审片、补选与内容准备衔接（2026-09-17）
 
 E1848 的既有 3 条原视频成片已有人工作品凭据；正式页面点击“进入内容准备”后，确实创建 3 条 WAITING 并跳转。复现发现逐条提取封面的同步函数直接运行在 async 路由中，页面缺少忙碌提示；候选草稿、保存与上方确认状态没有联动。任务 URL 仅滚动定位，其他任务同时展示，进一步造成内容未进入的错觉。
