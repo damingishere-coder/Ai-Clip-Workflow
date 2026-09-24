@@ -52,6 +52,7 @@ if (publishCenterRoot) {
   const contentEmpty = document.querySelector("[data-content-empty]");
   const platformListTitle = document.querySelector("[data-platform-list-title]");
   const schedulerHealthNode = document.querySelector("[data-scheduler-health]");
+  const missedScheduleAlert = document.querySelector("[data-missed-schedule-alert]");
   const backfillCoversButton = document.querySelector("[data-backfill-covers]");
   let latestPreviewSignature = "";
   let latestPreviewItems = [];
@@ -1033,10 +1034,17 @@ if (publishCenterRoot) {
     button.removeAttribute("data-publish-now");
     button.removeAttribute("data-send-setup");
     button.removeAttribute("data-repair-job");
+    button.removeAttribute("data-reschedule-missed");
     button.hidden = false;
     button.disabled = false;
     const section = row.dataset.section;
     if (section === "schedule") {
+      if (row.dataset.errorCode === "schedule_missed") {
+        button.dataset.rescheduleMissed = "";
+        button.className = "primary-button";
+        button.textContent = "重新排期";
+        return;
+      }
       if (readiness.ready || readiness.can_auto_resolve) {
         button.dataset.publishNow = "";
         button.className = "primary-button";
@@ -1247,6 +1255,7 @@ if (publishCenterRoot) {
     document.querySelectorAll(`[data-publish-row][data-job-id="${CSS.escape(job.id)}"]`).forEach((row) => {
       const status = String(job.status || row.dataset.status || "").toUpperCase();
       row.dataset.status = status;
+      if (job.error_code !== undefined) row.dataset.errorCode = job.error_code || "";
       if (job.platform) row.dataset.platform = job.platform;
       if (job.account_id !== undefined || job.effective_account_id !== undefined) {
         row.dataset.accountId = job.effective_account_id || job.account_id || job.send_readiness?.resolved_account_id || "";
@@ -1260,7 +1269,16 @@ if (publishCenterRoot) {
         || (row.dataset.section !== "history" && row.dataset.outputActive === "false")
       );
       const statusNode = row.querySelector("[data-row-status]");
-      if (statusNode) statusNode.textContent = job.status_label || statusLabel(status);
+      if (statusNode) {
+        statusNode.textContent = job.status_label || statusLabel(status);
+        statusNode.classList.remove("tone-blue", "tone-amber", "tone-green", "tone-red", "tone-purple");
+        statusNode.classList.add(`tone-${job.status_tone || "blue"}`);
+      }
+      const missedNote = row.querySelector("[data-missed-schedule-note]");
+      if (missedNote) {
+        missedNote.hidden = row.dataset.errorCode !== "schedule_missed";
+        missedNote.textContent = missedNote.hidden ? "" : (job.error_message || "原排期已错过，请重新排期");
+      }
       const executionMessage = row.querySelector("[data-execution-message]");
       if (executionMessage) executionMessage.textContent = job.error_message || job.execution_phase_label || "";
       const titleNode = row.querySelector("[data-row-title]");
@@ -1600,6 +1618,12 @@ if (publishCenterRoot) {
     workerMessage = data.worker_message || "Windows 发布 Worker 未连接";
     const schedulerFailures = Number(data.consecutive_failures || 0);
     const schedulerHealthy = Boolean(data.running && schedulerFailures === 0);
+    if (missedScheduleAlert) {
+      const count = Number(data.missed_schedule_count || 0);
+      missedScheduleAlert.hidden = count === 0;
+      const countNode = missedScheduleAlert.querySelector("[data-missed-schedule-count]");
+      if (countNode) countNode.textContent = String(count);
+    }
     if (schedulerHealthNode) {
       schedulerHealthNode.dataset.workerAvailable = workerAvailable ? "true" : "false";
       schedulerHealthNode.dataset.schedulerFailures = String(schedulerFailures);
@@ -1712,6 +1736,10 @@ if (publishCenterRoot) {
 
   document.querySelectorAll("[data-center-tab]").forEach((button) => {
     button.addEventListener("click", () => switchTab(button.dataset.centerTab));
+  });
+  document.querySelector("[data-open-missed-schedules]")?.addEventListener("click", () => {
+    switchTab("schedule");
+    document.querySelector(".publish-plan-list")?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "start" });
   });
   document.querySelectorAll("[data-publish-platform]").forEach((button) => {
     button.addEventListener("click", () => setActivePlatform(button.dataset.publishPlatform));
@@ -1941,6 +1969,17 @@ if (publishCenterRoot) {
   });
 
   document.addEventListener("click", async (event) => {
+    const rescheduleMissed = event.target.closest("[data-reschedule-missed]");
+    if (rescheduleMissed) {
+      const jobId = rescheduleMissed.closest("[data-publish-row]")?.dataset.jobId;
+      if (!jobId) return;
+      switchTab("schedule");
+      selectedJobIds.clear();
+      selectedJobIds.add(jobId);
+      updateSelectionUi();
+      openDrawer();
+      return;
+    }
     const taskGroupToggle = event.target.closest("[data-task-group-toggle]");
     if (taskGroupToggle) {
       const group = taskGroupToggle.closest("[data-publish-task-group]");
@@ -2441,6 +2480,7 @@ if (publishCenterRoot) {
       const saved = (data.schedule || []).map((item, index) => `第 ${index + 1} 条：${item.scheduled_at_local_display}`).join("；");
       showMessage(`${data.message} ${saved}`, "success");
       selectedJobIds.clear(); updateSelectionUi(); closeDrawer(); invalidatePreview();
+      void refreshSchedulerHealth();
     } catch (error) {
       const row = document.querySelector(`[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(payload.job_ids[0] || "")}"]`);
       applyReadinessError(error, row);

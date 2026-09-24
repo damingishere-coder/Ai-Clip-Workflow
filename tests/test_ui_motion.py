@@ -76,4 +76,4 @@ def test_reduced_motion_also_disables_scripted_smooth_scrolling() -> None:
     assert "window.preferredScrollBehavior = function preferredScrollBehavior" in helpers
     assert 'behavior: "smooth"' not in app_script
     assert 'behavior: "smooth"' not in publish_script
-    assert publish_script.count("window.preferredScrollBehavior()") == 7
+    assert publish_script.count("window.preferredScrollBehavior()") == 8

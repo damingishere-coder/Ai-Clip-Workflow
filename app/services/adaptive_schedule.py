@@ -581,7 +581,8 @@ def _write_changes(connection, account_id, schedule, token, request_id=None):
             continue
         cursor = connection.execute(
             """UPDATE publish_jobs SET scheduled_at=?,schedule_timezone='Asia/Shanghai',
-            timezone='Asia/Shanghai',adaptive_managed=1,adaptive_fixed=0,status='SCHEDULED',next_attempt_at=NULL,updated_at=?
+            timezone='Asia/Shanghai',adaptive_managed=1,adaptive_fixed=0,status='SCHEDULED',next_attempt_at=NULL,
+            error_code='',error_message='',last_error='',updated_at=?
             WHERE id=? AND account_id=? AND status IN ('DRAFT','WAITING','SCHEDULED')
             AND claimed_at IS NULL AND COALESCE(needs_manual_review,0)=0 AND updated_at=?""",
             (new_time, now, row["id"], account_id, row["updated_at"]),
