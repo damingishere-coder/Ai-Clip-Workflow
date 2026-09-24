@@ -1,3 +1,9 @@
+## 当前运行：过期排期保护已部署（2026-09-24 17:55）
+
+[PR #142](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/142) 的 Linux 全量、Windows 与 Docker 三项 CI 均通过，Squash 合并为 `5f6e22e8015814f932424a9208f373c9ce58e31e`；本机完整回归 **1451 passed**，包含隔离数据中“过期不补发、后续任务照常处理”和真实 Chrome 重新排期流程。17:53 原 RunDock Web 8001 更新至该提交，监听 PID 68036 → Python 71272 → 托管 PowerShell 71036 → alter → rundock；Worker 8765 原托管 PID 35320 保持运行。没有修改数据库结构、发布配置或媒体。
+
+维护前 SQLite 在线备份 SHA256 `1bea33e9de4c676f262b733f5ebd157ec5e3e2a98a0c839f0c2b81f1ffdf0b7d`；部署前后 1105 条发送记录摘要及 9 条未来排期完全一致，0 条发送中。深度 readiness=ready、23 项迁移、integrity=ok、外键异常 0，配置哈希不变；调度扫描持续推进、失败计数 0、Worker 可用。正式返回的 JS/CSS 哈希等于运行源码，1440px 与 390px Chrome 页面均显示今天后续四条排期，无脚本错误或横向溢出。正式环境尚无新错过的任务，因此“错过后显示提醒”由隔离 Chrome 用例验证；后续真实投稿仍以执行记录核对。备份和验收报告位于本机忽略目录 `data/backups/missed-schedule-deploy-20260924-1752/`。
+
 ## 当前运行补充：预览封面已验收（2026-09-17 23:38）
 
 [PR #136](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/136) 最终提交 `bb0d3b4` 的三项 CI 全通过，合并为 `b9ccf5cd326ce4e930800c035d069914612f1597`；原 RunDock 8001 于23:37:36更新，当前实际运行此版本。托管 PID22692，监听169400/父Python191656；Worker原进程未重启。该补充为内容卡片复用已有封面作为视频poster，避免停止预加载后显示黑块。
