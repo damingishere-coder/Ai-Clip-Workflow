@@ -726,6 +726,8 @@ def _normalize_job(
             "status_label": (
                 execution_phase_label
                 if status == PUBLISH_STATUS_PUBLISHING and execution_phase_label
+                else "待重新排期"
+                if status == PUBLISH_STATUS_WAITING and job.get("error_code") == "schedule_missed"
                 else STATUS_LABELS.get(status, status)
             ),
             "execution_phase_label": execution_phase_label,

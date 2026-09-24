@@ -5547,6 +5547,10 @@ td a,
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.82);
 }
+.publish-missed-alert { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; border-color: #e9ca82; background: #fff7e7; color: #765000; }
+.publish-missed-alert[hidden], .publish-missed-note[hidden] { display: none; }
+.publish-missed-alert .secondary-button { margin-left: auto; }
+.publish-missed-note { flex: 1 0 100%; color: #8d6200; line-height: 1.4; }
 .publish-plan-video { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: 10px; min-width: 0; }
 .publish-plan-video video { width: 88px; height: 52px; border-radius: 9px; object-fit: cover; background: #111827; }
 .publish-plan-video strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

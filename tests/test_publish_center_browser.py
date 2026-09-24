@@ -83,6 +83,62 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def test_missed_schedule_prompts_for_replan_without_export(tmp_path):
+    init_db()
+    _cleanup()
+    job_id = _seed_job(tmp_path, 99)
+    old_time = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE publish_jobs SET status='SCHEDULED', scheduled_at=? WHERE id=?",
+            (old_time, job_id),
+        )
+        connection.commit()
+    assert PublishScheduler().run_once()["missed_count"] == 1
+    assert publish_service.get_publish_job(job_id)["attempt_count"] == 0
+
+    port = _free_port()
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.time() + 10
+    while not server.started and time.time() < deadline:
+        time.sleep(0.05)
+    try:
+        assert server.started
+        with playwright.sync_playwright() as runtime:
+            chrome_path = Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "Google/Chrome/Application/chrome.exe"
+            if not chrome_path.exists():
+                pytest.skip("浏览器级测试需要本机安装 Google Chrome")
+            browser = runtime.chromium.launch(headless=True, executable_path=str(chrome_path))
+            page = browser.new_page(viewport={"width": 390, "height": 844}, timezone_id="Asia/Shanghai")
+            page.goto(f"http://127.0.0.1:{port}/publish", wait_until="networkidle")
+            alert = page.locator("[data-missed-schedule-alert]")
+            playwright.expect(alert).to_be_visible()
+            playwright.expect(alert).to_contain_text("1 条排期已错过")
+            alert.locator("[data-open-missed-schedules]").click()
+            row = page.locator(f'[data-section="schedule"][data-job-id="{job_id}"]')
+            playwright.expect(row).to_have_attribute("data-status", "WAITING")
+            playwright.expect(row).to_contain_text("待重新排期")
+            row.locator("[data-reschedule-missed]").click()
+            playwright.expect(page.locator("[data-schedule-drawer]")).to_be_visible()
+            future = (datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(days=2)).strftime("%Y-%m-%dT19:00")
+            page.locator('[name="start_at_local"]').fill(future)
+            page.locator("[data-preview-schedule]").click()
+            page.locator("[data-confirm-schedule]:not([disabled])").click()
+            playwright.expect(alert).to_be_hidden(timeout=10000)
+            page.reload(wait_until="networkidle")
+            playwright.expect(page.locator("[data-missed-schedule-alert]")).to_be_hidden()
+            assert publish_service.get_publish_job(job_id)["error_code"] == ""
+            assert publish_service.get_publish_job(job_id)["status"] == "SCHEDULED"
+            assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+            browser.close()
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+        _cleanup()
+
+
 def test_schedule_real_api_without_app_script(tmp_path):
     """Missing optional JS must not break next-start, preview, or persisted scheduling."""
     init_db()

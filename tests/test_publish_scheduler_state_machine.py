@@ -19,6 +19,7 @@ from app.db.database import (
     init_db,
 )
 from app.services import publish_scheduler as scheduler_module
+from app.services import publish_service
 from app.services.publish_scheduler import PublishScheduler
 from app.services.publishers.base import PublishOutcome, PublishResult
 
@@ -174,6 +175,63 @@ def test_not_due_job_is_not_claimed(tmp_path):
     PublishScheduler(executor=_executor(PublishResult(PublishOutcome.PUBLISHED), calls)).run_once()
     assert calls == []
     assert _raw(job_id)["status"] == "SCHEDULED"
+
+
+def test_restarted_scheduler_skips_old_jobs_and_keeps_later_schedule(tmp_path):
+    calls: list[str] = []
+    missed = _job(tmp_path, scheduled_in=-3600)
+    due = _job(tmp_path, scheduled_in=-5)
+    later = _job(tmp_path, scheduled_in=3600)
+    with get_connection() as connection:
+        connection.execute("UPDATE publish_jobs SET adaptive_managed=1, adaptive_fixed=0 WHERE id=?", (missed,))
+        connection.commit()
+
+    scheduler = PublishScheduler(executor=_executor(PublishResult(PublishOutcome.EXPORTED), calls))
+    result = scheduler.run_once()
+
+    assert result["missed_count"] == 1
+    assert calls == [due]
+    old = _raw(missed)
+    assert old["status"] == "WAITING"
+    assert old["scheduled_at"] == ""
+    assert old["error_code"] == "schedule_missed"
+    assert old["attempt_count"] == 0 and old["claimed_at"] is None
+    assert (old["adaptive_managed"], old["adaptive_fixed"]) == (0, 1)
+    assert _raw(later)["status"] == "SCHEDULED"
+    assert publish_service.get_publish_job(missed)["status_label"] == "待重新排期"
+    assert scheduler_module.scheduler_health()["missed_schedule_count"] == 1
+    with get_connection() as connection:
+        events = connection.execute(
+            "SELECT event_type, payload FROM publish_job_events WHERE job_id=?", (missed,)
+        ).fetchall()
+    assert len(events) == 1 and events[0]["event_type"] == "schedule_missed"
+    assert json.loads(events[0]["payload"])["scheduled_at"]
+
+    scheduler.run_once()
+    assert calls == [due]
+    with get_connection() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM publish_job_events WHERE job_id=?", (missed,)).fetchone()[0] == 1
+
+
+def test_missed_job_waits_for_explicit_reschedule_then_clears_reminder(tmp_path):
+    missed = _job(tmp_path, scheduled_in=-3600)
+    with get_connection() as connection:
+        connection.execute("UPDATE publish_jobs SET publish_mode='local_browser' WHERE id=?", (missed,))
+        connection.commit()
+    result = PublishScheduler().run_once()
+    assert result["missed_count"] == 1
+    assert _raw(missed)["status"] == "WAITING"
+    assert _raw(missed)["attempt_count"] == 0
+
+    with get_connection() as connection:
+        connection.execute("UPDATE publish_jobs SET publish_mode='manual_export' WHERE id=?", (missed,))
+        connection.commit()
+    new_time = _iso(3600)
+    PublishScheduler().update_schedule(missed, new_time)
+    assert _raw(missed)["status"] == "SCHEDULED"
+    assert _raw(missed)["error_code"] == ""
+    assert scheduler_module.scheduler_health()["missed_schedule_count"] == 0
+    assert publish_service.get_publish_job(missed)["status_label"] == "待发送"
 
 
 def test_cancel_send_returns_job_to_preparation_and_clears_schedule(tmp_path):
