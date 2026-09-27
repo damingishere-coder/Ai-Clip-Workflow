@@ -1232,6 +1232,10 @@ def _analyze_with_profile(
         ))
 
     if route == "variety_comedy":
+        from app.models.content_profile import ContentProfile
+        from app.services.content_profile_service import registered_profile
+        profile = (ContentProfile.model_validate_json(prompt_preset["content_profile_json"])
+                   if prompt_preset.get("content_profile_json") else registered_profile("variety_comedy"))
         window_seconds = 180 if provider_name == "local" else 300
         overlap_seconds = 45 if provider_name == "local" else 60
         append_task_log(
@@ -1253,6 +1257,7 @@ def _analyze_with_profile(
                 provider_name=provider_name,
                 feedback_context=task.get("_analysis_feedback_context"),
                 visual_session=visual_session,
+                profile=profile,
             )
         )
 

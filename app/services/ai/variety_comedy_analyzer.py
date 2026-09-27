@@ -11,6 +11,12 @@ import re
 from typing import Any
 
 from app.models.task import AIClipAnalysisResult
+from app.models.content_profile import ContentProfile
+from app.services.ai.playback_comedy_policy import (
+    GATES as PLAYBACK_GATES, is_playback as _is_playback, playback_rules as _playback_rules,
+    recall_prompt as _playback_recall_prompt, expansion_prompt as _playback_expansion_prompt,
+    judge_prompt as _playback_judge_prompt, score_playback as _score_playback,
+)
 from app.services.content_profile_baselines import legacy_profile_baselines
 from app.services.ai.base import AIProvider, generate_json_with_safe_retry
 from app.services.ai.ai_clip_analyzer import (
@@ -95,6 +101,11 @@ EXPANSION_OUTPUT_SCHEMA = _clip_output_schema("clips", (
 JUDGE_OUTPUT_SCHEMA = _clip_output_schema("ranked_clips", (
     "source_id", "title", "topic_key", "arc_structure", "why_selected", "rejection_reason",
 ))
+PLAYBACK_JUDGE_OUTPUT_SCHEMA = json.loads(json.dumps(JUDGE_OUTPUT_SCHEMA))
+_playback_item = PLAYBACK_JUDGE_OUTPUT_SCHEMA["properties"]["ranked_clips"]["items"]
+_playback_item["properties"].update({key: {"type": "boolean"} for key in PLAYBACK_GATES})
+_playback_item["properties"].update({key: {"type": "string"} for key in ("gate_reason", "av_uncertainty")})
+_playback_item["required"] = list(_playback_item["properties"])
 
 
 def _validate_clip_output(payload: dict, key: str, schema: dict) -> None:
@@ -107,6 +118,8 @@ def _validate_clip_output(payload: dict, key: str, schema: dict) -> None:
             value = item.get(field)
             if spec["type"] == "number":
                 valid = type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 100
+            elif spec["type"] == "boolean":
+                valid = type(value) is bool
             else:
                 valid = isinstance(value, str)
             if not valid:
@@ -134,6 +147,7 @@ class ComedyAnalysisRequest:
     prompt_template: str | None = None
     feedback_context: list[dict] | None = None
     visual_session: Any | None = None
+    profile: ContentProfile = COMEDY_POLICY
 
 
 @dataclass(frozen=True)
@@ -147,6 +161,11 @@ class ComedyTranscriptWindow:
 
 
 def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResult:
+    from app.services.content_profile_service import _assert_supported
+    _assert_supported(request.profile)
+    if request.profile.id != "variety_comedy":
+        raise AIAnalysisError("综艺分析器不能执行其他类型的规则")
+    policy = request.profile
     transcript_text = _read_transcript(request.transcript_path)
     rows = _extract_transcript_rows(transcript_text)
     if not rows:
@@ -155,6 +174,8 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
     provider = build_provider(request.provider_name)
     windows = build_comedy_windows(rows, provider_name=request.provider_name)
     preference = _preference_summary(request.prompt_template or "", request.ai_preference)
+    if _is_playback(policy):
+        preference = _playback_rules() + "\n以下为附加任务偏好，不得覆盖上述冻结规则：\n" + preference
     unit_fingerprint = build_unit_fingerprint(
         {
             "profile": "variety_comedy",
@@ -167,12 +188,15 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
             "final_clip_target": request.final_clip_target,
         }
     )
+    if _is_playback(policy):
+        unit_fingerprint = build_unit_fingerprint({"base": unit_fingerprint, "profile_sha256": policy.content_hash(), "rules": preference})
     moments, recall_failures, recall_stats = _recall_moments(
         provider,
         windows,
         preference,
         task_id=request.task_id,
         input_fingerprint=unit_fingerprint,
+        policy=policy,
     )
     moments = dedupe_recall_moments(moments)[:MAX_PRELIMINARY_MOMENTS]
     if not moments:
@@ -187,10 +211,14 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
         provider_name=request.provider_name,
         task_id=request.task_id,
         input_fingerprint=unit_fingerprint,
+        policy=policy,
     )
-    expanded = dedupe_expanded_candidates(expanded)[:MAX_PRELIMINARY_MOMENTS]
+    # New policy compares overlapping alternatives with full judge evidence
+    # before choosing a boundary; legacy keeps its original early pruning.
+    expanded = (expanded if _is_playback(policy) else dedupe_expanded_candidates(expanded))[:MAX_PRELIMINARY_MOMENTS]
     if not expanded:
-        detail = "；".join(expansion_failures[:3]) or "没有形成完整的 60–150 秒内容闭环"
+        detail = "；".join(expansion_failures[:3]) or ("没有形成自然完整的 45–150 秒内容闭环"
+                    if _is_playback(policy) else "没有形成完整的 60–150 秒内容闭环")
         raise AIAnalysisError(f"综艺笑点分析没有形成完整候选：{detail}")
 
     for candidate in expanded:
@@ -218,23 +246,26 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
         rows=rows,
         task_id=request.task_id,
         input_fingerprint=unit_fingerprint,
+        policy=policy,
     )
     scored = [
-        score_comedy_candidate(candidate, judge_payload.get(candidate["source_id"]) or {})
+        (score_comedy_candidate(candidate, judge_payload.get(candidate["source_id"]) or {}, policy=policy)
+         if _is_playback(policy) else score_comedy_candidate(candidate, judge_payload.get(candidate["source_id"]) or {}))
         for candidate in expanded
     ]
-    if request.visual_session is not None:
+    if request.visual_session is not None and not _is_playback(policy):
         request.visual_session.judge(scored, provider, text_complete=not (recall_failures or expansion_failures or judge_warning or recall_stats["invalid_item_count"] or expansion_stats["invalid_item_count"]))
     all_scored = list(scored)
-    scored = dedupe_scored_candidates(scored)
-    candidate_pool_limit = max(1, min(COMEDY_POLICY.selection.candidate_pool_max, int(request.candidate_pool_limit or COMEDY_POLICY.selection.candidate_pool_default)))
+    scored = dedupe_scored_candidates(scored, policy=policy)
+    candidate_pool_limit = max(1, min(policy.selection.candidate_pool_max, int(request.candidate_pool_limit or policy.selection.candidate_pool_default)))
     kept = [item for item in scored if item["quality_tier"] in {"A", "B"}]
-    kept = sorted(kept, key=lambda item: item["quality_score"], reverse=True)[:candidate_pool_limit]
+    kept = sorted(kept, key=lambda item: ((item["quality_tier"] == "A", item["quality_score"])
+                  if _is_playback(policy) else (True, item["quality_score"])), reverse=True)[:candidate_pool_limit]
 
     a_ranked = [item for item in kept if item["quality_tier"] == "A"]
     selected_ids = {
         item["source_id"]
-        for item in a_ranked[: max(1, min(COMEDY_POLICY.selection.final_target_max, int(request.final_clip_target or COMEDY_POLICY.selection.final_target_default)))]
+        for item in a_ranked[: max(1, min(policy.selection.final_target_max, int(request.final_clip_target or policy.selection.final_target_default)))]
     }
     for item in kept:
         item["selected_by_default"] = item["source_id"] in selected_ids
@@ -255,6 +286,8 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
         f"扩展并全局复评 {len(expanded)} 条，保留 {len(clips)} 条候选，"
         f"其中 {selected_count} 条达到 A 级并默认启用。"
     )
+    if _is_playback(policy):
+        summary = summary.replace("达到 A 级并默认启用", "通过文本推荐门槛并默认选入成片预览，仍需人工验收")
     warnings = [*recall_failures, *expansion_failures]
     if judge_warning:
         warnings.append(judge_warning)
@@ -289,6 +322,9 @@ def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResu
         analysis_summary=summary,
         clips=clips,
         analysis_meta={
+            "scoring_rules_version": policy.rules_version,
+            "scoring_profile_sha256": policy.content_hash(),
+            "recommendation_mode": policy.selection.strategy,
             "schema_version": 2,
             "coverage_basis": "recall_and_expansion_units",
             "expected_units": expected_units,
@@ -388,11 +424,21 @@ def normalize_clip_bounds(
     end_seconds: int,
     key_seconds: int,
     context_rows: list[TranscriptRow],
+    *, policy: ContentProfile = COMEDY_POLICY,
 ) -> tuple[int, int] | None:
     if not context_rows:
         return None
     lower = context_rows[0].start_seconds
     upper = context_rows[-1].end_seconds
+    if _is_playback(policy):
+        # Keep natural boundaries. Never pad to 60s or arbitrarily cut 150s.
+        if not lower <= start_seconds <= key_seconds < end_seconds <= upper:
+            return None
+        start = _nearest_boundary(start_seconds, context_rows, use_start=True)
+        end = _nearest_boundary(end_seconds, context_rows, use_start=False)
+        if policy.duration.min_seconds <= end - start <= policy.duration.max_seconds and start <= key_seconds < end:
+            return start, end
+        return None
     start_seconds = max(lower, min(start_seconds, key_seconds))
     end_seconds = min(upper, max(end_seconds, key_seconds + 1))
 
@@ -429,10 +475,11 @@ def normalize_clip_bounds(
     return start_seconds, end_seconds
 
 
-def dedupe_expanded_candidates(candidates: list[dict]) -> list[dict]:
+def dedupe_expanded_candidates(candidates: list[dict], *, policy: ContentProfile = COMEDY_POLICY) -> list[dict]:
     ranked = sorted(
         candidates,
-        key=lambda item: float(item.get("humor_score") or 0) + float(item.get("completeness_score") or 0),
+        key=lambda item: (sum(float(item.get(d.id) or 0) * d.weight for d in policy.scoring.dimensions)
+                          if _is_playback(policy) else float(item.get("humor_score") or 0) + float(item.get("completeness_score") or 0)),
         reverse=True,
     )
     selected: list[dict] = []
@@ -443,7 +490,9 @@ def dedupe_expanded_candidates(candidates: list[dict]) -> list[dict]:
     return sorted(selected, key=lambda item: _time_to_seconds(item["start_time"]))
 
 
-def score_comedy_candidate(candidate: dict, judge: dict) -> dict:
+def score_comedy_candidate(candidate: dict, judge: dict, *, policy: ContentProfile = COMEDY_POLICY) -> dict:
+    if _is_playback(policy):
+        return _score_playback(candidate, judge, policy)
     humor = _score_value(judge.get("humor_score"), candidate.get("humor_score"), default=50)
     interaction = _score_value(
         judge.get("interaction_reaction_score"),
@@ -515,9 +564,10 @@ def score_comedy_candidate(candidate: dict, judge: dict) -> dict:
     }
 
 
-def dedupe_scored_candidates(candidates: list[dict]) -> list[dict]:
+def dedupe_scored_candidates(candidates: list[dict], *, policy: ContentProfile = COMEDY_POLICY) -> list[dict]:
     selected: list[dict] = []
-    for candidate in sorted(candidates, key=lambda item: item["quality_score"], reverse=True):
+    for candidate in sorted(candidates, key=lambda item: ((item["quality_tier"] == "A", item["quality_score"])
+                            if _is_playback(policy) else (True, item["quality_score"])), reverse=True):
         if any(_is_duplicate_candidate(candidate, existing, overlap_threshold=COMEDY_POLICY.dedupe.final_overlap) for existing in selected):
             continue
         selected.append(candidate)
@@ -531,6 +581,7 @@ def _recall_moments(
     *,
     task_id: str,
     input_fingerprint: str,
+    policy: ContentProfile = COMEDY_POLICY,
 ) -> tuple[list[dict], list[str], dict[str, int]]:
     moments: list[dict] = []
     failures = []
@@ -539,7 +590,7 @@ def _recall_moments(
     empty_units = 0
     invalid_item_count = 0
     for window in windows:
-        prompt = _recall_prompt(window, preference)
+        prompt = _recall_prompt(window, preference, policy=policy)
         execution = execute_checkpointed_ai_unit(
             task_id=task_id,
             namespace="variety_recall",
@@ -611,6 +662,7 @@ def _expand_moments(
     provider_name: str,
     task_id: str,
     input_fingerprint: str,
+    policy: ContentProfile = COMEDY_POLICY,
 ) -> tuple[list[dict], list[str], dict[str, int]]:
     expanded = []
     failures = []
@@ -640,7 +692,7 @@ def _expand_moments(
                     "transcript": "\n".join(_format_row(row) for row in context_rows),
                 }
             )
-        prompt = _expansion_prompt(contexts, preference)
+        prompt = _expansion_prompt(contexts, preference, policy=policy)
         batch_number = offset // batch_size + 1
         execution = execute_checkpointed_ai_unit(
             task_id=task_id,
@@ -653,7 +705,7 @@ def _expand_moments(
                 output_schema=EXPANSION_OUTPUT_SCHEMA,
             ),
             validate_payload=lambda payload, contexts=context_rows_by_id: _validate_expansion_payload(
-                payload, contexts,
+                payload, contexts, policy=policy,
             ),
         )
         if execution.status != "completed" or not isinstance(execution.payload, dict):
@@ -693,7 +745,7 @@ def _expand_moments(
                     _time_to_seconds(start_text),
                     _time_to_seconds(end_text),
                     _time_to_seconds(key_text),
-                    context_rows,
+                    context_rows, policy=policy,
                 )
                 if not bounds:
                     invalid_item_count += 1
@@ -736,6 +788,7 @@ def _expand_moments(
 
 def _validate_expansion_payload(
     payload: dict, context_rows_by_id: dict[str, list[TranscriptRow]],
+    *, policy: ContentProfile = COMEDY_POLICY,
 ) -> None:
     """新响应和缓存复用都必须通过实际转写边界校验，才能算成功单元。"""
     _validate_payload(payload, expected_key="clips", known_ids=set(context_rows_by_id))
@@ -743,12 +796,12 @@ def _validate_expansion_payload(
         rows = context_rows_by_id[item["source_id"]]
         bounds = normalize_clip_bounds(
             *(_time_to_seconds(item[field]) for field in ("start_time", "end_time", "key_moment_time")),
-            rows,
+            rows, policy=policy,
         )
         if bounds is None:
             raise AIAnalysisError(
                 f"clips 第 {index} 条 {item['source_id']} 时间范围无法按转写边界生成"
-                f" {MIN_ACCEPTED_CLIP_SECONDS}–{MAX_COMEDY_CLIP_SECONDS} 秒片段"
+                f" {policy.duration.min_seconds}–{policy.duration.max_seconds} 秒片段"
                 f"（{item['start_time']}–{item['end_time']}）；未记为成功，请确认后重试此单元"
             )
 
@@ -762,6 +815,7 @@ def _global_judge(
     rows: list[TranscriptRow],
     task_id: str,
     input_fingerprint: str,
+    policy: ContentProfile = COMEDY_POLICY,
 ) -> tuple[dict[str, dict], str]:
     prompt_candidates = []
     for item in candidates:
@@ -779,7 +833,7 @@ def _global_judge(
                 "transcript_evidence": _judge_transcript_evidence(item, rows),
             }
         )
-    prompt = _judge_prompt(prompt_candidates, preference, feedback)
+    prompt = _judge_prompt(prompt_candidates, preference, feedback, policy=policy)
     execution = execute_checkpointed_ai_unit(
         task_id=task_id,
         namespace="variety_global_judge",
@@ -789,11 +843,12 @@ def _global_judge(
         operation=lambda: _generate_payload(
             provider, prompt, expected_key="ranked_clips",
             known_ids={str(item["source_id"]) for item in candidates}, require_all=True,
-            output_schema=JUDGE_OUTPUT_SCHEMA,
+            output_schema=PLAYBACK_JUDGE_OUTPUT_SCHEMA if _is_playback(policy) else JUDGE_OUTPUT_SCHEMA,
         ),
         validate_payload=lambda payload: _validate_payload(
             payload, expected_key="ranked_clips",
             known_ids={str(item["source_id"]) for item in candidates}, require_all=True,
+            output_schema=PLAYBACK_JUDGE_OUTPUT_SCHEMA if _is_playback(policy) else JUDGE_OUTPUT_SCHEMA,
         ),
     )
     if execution.status != "completed" or not isinstance(execution.payload, dict):
@@ -883,20 +938,20 @@ def _generate_payload(
     raw = (generate_json_with_safe_retry(provider, prompt, output_schema=output_schema)
            if output_schema is not None else generate_json_with_safe_retry(provider, prompt))
     payload = _loads_ai_json(raw)
-    _validate_payload(payload, expected_key=expected_key, known_ids=known_ids, require_all=require_all)
+    _validate_payload(payload, expected_key=expected_key, known_ids=known_ids, require_all=require_all, output_schema=output_schema)
     return payload
 
 
 def _validate_payload(
     payload: dict, *, expected_key: str, known_ids: set[str] | None = None,
-    require_all: bool = False,
+    require_all: bool = False, output_schema: dict | None = None,
 ) -> None:
     if not isinstance(payload, dict):
         raise AIAnalysisError("AI 输出必须是 JSON 对象")
     if not isinstance(payload.get(expected_key), list):
         raise AIAnalysisError(f"AI 输出缺少 {expected_key} 数组")
     if expected_key in {"clips", "ranked_clips"}:
-        _validate_clip_output(payload, expected_key, EXPANSION_OUTPUT_SCHEMA if expected_key == "clips" else JUDGE_OUTPUT_SCHEMA)
+        _validate_clip_output(payload, expected_key, output_schema or (EXPANSION_OUTPUT_SCHEMA if expected_key == "clips" else JUDGE_OUTPUT_SCHEMA))
     if known_ids is not None:
         returned_ids = [str(item.get("source_id") or "") if isinstance(item, dict) else ""
                         for item in payload[expected_key]]
@@ -908,7 +963,9 @@ def _validate_payload(
             raise AIAnalysisError("AI 评审遗漏当前候选，结果未记为成功，请确认后重试此单元")
 
 
-def _recall_prompt(window: ComedyTranscriptWindow, preference: str) -> str:
+def _recall_prompt(window: ComedyTranscriptWindow, preference: str, *, policy: ContentProfile = COMEDY_POLICY) -> str:
+    if _is_playback(policy):
+        return _playback_recall_prompt(window, preference)
     return f"""你是《康熙来了》笑点召回编辑。现在只做宽召回，不做凑数，不输出完整切片。
 从这一个约 5 分钟且与相邻窗口重叠的逐句转写中，找出 0-{RECALL_LIMIT_PER_WINDOW} 个真正可能成立的笑点时刻。
 必须有反转、尴尬、意外回答、主持人补刀或明显现场反应；纯八卦、纯身体话题、平铺直叙不算好笑。
@@ -920,7 +977,9 @@ def _recall_prompt(window: ComedyTranscriptWindow, preference: str) -> str:
 {window.text}"""
 
 
-def _expansion_prompt(contexts: list[dict], preference: str) -> str:
+def _expansion_prompt(contexts: list[dict], preference: str, *, policy: ContentProfile = COMEDY_POLICY) -> str:
+    if _is_playback(policy):
+        return _playback_expansion_prompt(contexts, preference)
     return f"""你是综艺短视频剪辑导演。请围绕每个已召回笑点，从各自前后文中形成一条完整片段。
 默认 60-150 秒，必须包含必要铺垫、核心笑点/反转、笑点后的追问/补刀/解释/笑声和自然收尾。
 不要把同一笑点拆成多条，不要输出只有一句包袱或只有背景信息的片段。
@@ -935,7 +994,9 @@ def _expansion_prompt(contexts: list[dict], preference: str) -> str:
 {json.dumps(contexts, ensure_ascii=False)}"""
 
 
-def _judge_prompt(candidates: list[dict], preference: str, feedback: list[dict]) -> str:
+def _judge_prompt(candidates: list[dict], preference: str, feedback: list[dict], *, policy: ContentProfile = COMEDY_POLICY) -> str:
+    if _is_playback(policy):
+        return _playback_judge_prompt(candidates, preference, feedback)
     feedback_summary = [
         {
             "decision": item.get("decision"),
