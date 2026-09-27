@@ -39,6 +39,25 @@ def builtin_profiles() -> tuple[ContentProfile, ...]:
     return (*legacy_profile_baselines(), interview_profile(), knowledge_profile())
 
 
+def playback_comedy_profile() -> ContentProfile:
+    """Supported opt-in revision; do not rewrite the published legacy seed."""
+    data = next(p for p in legacy_profile_baselines() if p.id == "variety_comedy").model_dump(mode="json")
+    data.update(name="棚内综艺·播放目标", description="优先清楚的开头、具体处境、持续推进与结果兑现；评分不是播放量预测。",
+                rules_version="comedy-playback-v1", prompt_preset_id="profile_comedy_playback_v1",
+                prompt_template_key="playback_comedy_three_stage_v1",
+                title_strategy="真实片内信息支持标题，不用刺激标签代替内容",
+                selection_rules=["充分召回，证据门槛通过后按分排序，允许少选", "A代表通过文本推荐门槛，B代表待人工判断，不套用旧78分与笑点75分",
+                                 "45—150秒，60—90秒仅为偏好，不自动补时长", "分析不完整禁止自动切片；成片、排期和发布仍需人工审核"])
+    data["duration"]["recommended_max_seconds"] = 90
+    data["scoring"].update(dimensions=[{"id": key, "name": name, "weight": weight} for key, name, weight in (
+        ("humor_score", "幽默", .10), ("interaction_reaction_score", "持续推进", .20),
+        ("completeness_score", "结果与闭环", .20), ("hook_score", "原始开头", .25),
+        ("novelty_score", "具体处境与关系反差", .20), ("title_score", "标题兑现", .05),
+    )], hard_gates=[], a_threshold=None, b_threshold=None, audio_weight=0, visual_weight=0, signal_strategy="none")
+    data["selection"]["strategy"] = "evidence_ranked"
+    return ContentProfile.model_validate(data)
+
+
 def knowledge_profile() -> ContentProfile:
     data = interview_profile().model_dump(mode="json")
     data.update(id="knowledge_opinion", name="知识与观点", description="识别知识价值、论证完整的观点、金句与认知反差。",

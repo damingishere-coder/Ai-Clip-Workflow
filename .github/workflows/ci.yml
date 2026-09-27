@@ -36,7 +36,7 @@ jobs:
         run: ruff check app tests scripts/seed_demo_data.py scripts/backup_restore.py scripts/backup_restore_runtime.py scripts/replay_adaptive_schedule.py
 
       - name: 离线选片比较工具检查
-        run: ruff check --isolated --select E,F,W,B --ignore E501 scripts/compare_playback_candidate.py tests/test_playback_candidate_offline.py
+        run: ruff check --isolated --select E,F,W,B --ignore E501 scripts/compare_playback_candidate.py scripts/activate_playback_policy.py tests/test_playback_candidate_offline.py
 
       - name: JavaScript 语法检查
         run: find app/static/js -name '*.js' -print0 | xargs -0 -r -n1 node --check

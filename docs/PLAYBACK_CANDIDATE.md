@@ -1,3 +1,5 @@
+> 2026-09-27后续：用户已授权正式接入、启用和重启。正式执行版本见 [PLAYBACK_PRODUCTION.md](PLAYBACK_PRODUCTION.md)，实际部署状态见 PROJECT_STATUS.md。以下保留候选阶段记录，不代表正式运行现状。
+
 # 播放目标候选规则：离线使用说明
 
 状态：`playback-v1-draft`，仅候选，未启用。此交付不改变正式 Prompt、Content Profile、旧任务评分、排期或发布。没有新增模型调用，也没有重新召回或裁切媒体。
