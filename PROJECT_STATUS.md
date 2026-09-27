@@ -1,8 +1,14 @@
-## 播放目标正式接入工程（2026-09-27）
+## 当前运行：综艺播放目标已启用（2026-09-27 14:50）
 
-用户已明确授权启用和重启。新增 comedy-playback-v1 的正式三阶段分派、六维权重和独立证据门槛；专用Prompt/版本通过显式事务激活，不在启动时自动改策略。旧任务与Job冻结不变，无数据库结构迁移。新旧版本测试和正式部署验收随后记录；运行状态不能从工程完成推断。详见 docs/PLAYBACK_PRODUCTION.md。
+[PR #145](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/145) 最终提交的 Linux、Windows、Docker 三项 CI 全通过，Squash 合并为 `a9080f0eb271a2939d02a3981b58d51d747d8589`。原 RunDock 项目的 Web 8001 与发布 Worker 8765 均于14:49:42重启成功，实际运行目录仍为 `Ai-Clip-Workflow-offline-runtime`，干净 detached HEAD 为上述合并提交。Web 托管 PID88236 → Python90604 → 监听91084；Worker 托管89608 → 监听86544。没有另起服务。
 
-## 候选规则：播放目标离线比较（2026-09-27，未启用）
+正式数据库已通过显式事务启用 `comedy-playback-v1`，Profile SHA256 为 `7e17d532adf38fb84e1fbd2b5b1ef44e2b2041830ff72fb95373fece50bbb067`，专用 Prompt 为 `profile_comedy_playback_v1`。正式 Chrome 在1440px与390px下选择“棚内综艺·播放目标”均自动带入该 Prompt，实际返回六维权重与证据排序策略匹配，无脚本错误或横向溢出。本次浏览器只读验收零POST，不新建任务、调用AI或投稿；新任务冻结与三阶段执行由隔离数据库演练和模拟Provider回归验证。
+
+重启后深度 readiness=ready，23项迁移、integrity=ok、外键异常0；调度扫描持续推进、失败计数0、Worker可用。维护前SQLite备份 SHA256 `1c4130977289e85b5c7c34d3839be268e71b86e7c6b2bcb509c3562baf3beae5`。部署前后50表中仅4个预期策略表变化（新增专用Prompt、Prompt版本、Profile版本及切换正式指针），其余46表摘要完全一致；758个登记媒体路径的存在状态/大小/修改时间、配置哈希及9条排期完全一致。已有1条错过排期的提醒保持原状，未补发。
+
+旧任务与Job冻结不变，无数据库结构迁移。备份、激活回执、进程归属、浏览器截图与完整性比较位于本机忽略目录 `data/backups/playback-deploy-20260927/`。回退使用新代码的 `--target legacy`，仅影响后续任务，不用旧数据库覆盖用户操作。详见 docs/PLAYBACK_PRODUCTION.md；真实播放效果仍需后续新内容验证。
+
+## 历史阶段：播放目标离线比较（2026-09-27，当时未启用）
 
 已准备 playback-v1-draft Prompt、六维评分规则和纯文件对比工具。基于最新50条关联的8个完整分析任务，84条候选均完成当前 Astra 的非盲文本复评。只调权改变41条期内排名，按新定义复评改变66条，每期前五对照组共更换10条；不作为播放提升证据。实际明细仅保存在本机忽略目录，生产配置、数据库、媒体、排期与服务未改变。使用方式和边界见 docs/PLAYBACK_CANDIDATE.md。正式启用仍须另行确认并实现受支持的评分版本；当前交付无需部署或重启。
 
