@@ -190,7 +190,7 @@ def compare(envelope, review, rules, prompt_sha):
 def render(report):
     esc = html.escape
     chunks = ['<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
-              '<title>候选选片规则：离线对比</title><style>body{font:16px/1.7 system-ui;color:#202b38;background:#fff;max-width:1100px;margin:auto;padding:24px}h1{font-size:26px}h2{font-size:21px}table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;vertical-align:top;border-bottom:1px solid #ddd;padding:9px}.scroll{overflow-x:auto}details{padding:12px 0;border-bottom:1px solid #ddd}summary{cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere}small{color:#536271}a{color:#245aa6}</style>',
+              '<title>候选选片规则：离线对比</title><style>body{font:16px/1.7 system-ui;color:#202b38;background:#fff;max-width:1100px;margin:auto;padding:24px;overflow-wrap:anywhere}h1{font-size:26px}h2{font-size:21px}table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;vertical-align:top;border-bottom:1px solid #ddd;padding:9px}.scroll{overflow-x:auto}details{padding:12px 0;border-bottom:1px solid #ddd}summary{cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere}small{color:#536271}a{color:#245aa6}</style>',
               '<h1>候选选片规则：离线对比</h1><p><b>未启用 · 未改变正式Prompt、评分配置、任务或排期</b></p>',
               '<p>三列分别为：旧文本分；保持原维度分、仅改变权重；Astra按候选Prompt重新阅读固定区间转写后的分数。</p><ul>']
     chunks += ['<li>' + esc(x) + '</li>' for x in report['limitations']]

@@ -1,6 +1,6 @@
 ## 播放目标候选规则待审（2026-09-27）
 
-候选Prompt和评分配置已形成，完整84条的三组分数与理由可在本机 data/analysis/20260927-playback-candidate/results-v1/comparison.html 查看。先检查升降明显片段的实际成片，再确定新素材试验和发布观察窗口。当前未启用、不重跑历史任务；正式评分配置接入与策略启用需另行确认。具体文件及复现方式见 docs/PLAYBACK_CANDIDATE.md。
+候选Prompt和评分配置已形成，完整84条的三组分数与理由可在本机 data/analysis/20260927-playback-candidate/results-v2/comparison.html 查看。先检查升降明显片段的实际成片，再确定新素材试验和发布观察窗口。当前未启用、不重跑历史任务；正式评分配置接入与策略启用需另行确认。具体文件及复现方式见 docs/PLAYBACK_CANDIDATE.md。
 
 ## 发送中心性能修复已上线（2026-09-17 23:28）
 
