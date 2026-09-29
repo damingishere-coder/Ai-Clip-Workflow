@@ -141,6 +141,8 @@ def test_missed_schedule_prompts_for_replan_without_export(tmp_path, viewport_wi
             playwright.expect(row).to_have_attribute("data-status", "WAITING")
             playwright.expect(row).to_contain_text("待重新排期")
             playwright.expect(row.locator("[data-row-status]")).to_contain_text("已错过")
+            playwright.expect(row.locator("[data-reschedule-job]")).to_be_hidden()
+            assert row.locator("[data-row-title]").evaluate("node => getComputedStyle(node).whiteSpace") == "normal"
             row.locator("[data-reschedule-missed]").click()
             playwright.expect(page.locator("[data-schedule-drawer]")).to_be_visible()
             playwright.expect(page.locator("[data-reschedule-context]")).to_contain_text("已错过，系统未补发")
