@@ -5551,6 +5551,11 @@ td a,
 .publish-missed-alert[hidden], .publish-missed-note[hidden] { display: none; }
 .publish-missed-alert .secondary-button { margin-left: auto; }
 .publish-missed-note { flex: 1 0 100%; color: #8d6200; line-height: 1.4; }
+.publish-plan-row[data-status="WAITING"][data-error-code="schedule_missed"] { border: 2px solid #dba83e; background: #fff8e9; }
+.publish-plan-row[data-status="WAITING"][data-error-code="schedule_missed"] [data-row-status] { color: #765000; background: #ffe9b5; }
+.publish-plan-row[data-status="WAITING"][data-error-code="schedule_missed"] [data-readiness-message] { display: none; }
+.publish-schedule-filters { margin: 12px 0; flex-wrap: wrap; }
+.publish-schedule-filters [aria-pressed="true"] { border-color: #dba83e; background: #fff3d6; color: #765000; }
 .publish-plan-video { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: 10px; min-width: 0; }
 .publish-plan-video video { width: 88px; height: 52px; border-radius: 9px; object-fit: cover; background: #111827; }
 .publish-plan-video strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

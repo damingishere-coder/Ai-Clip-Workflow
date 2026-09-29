@@ -103,6 +103,7 @@
     {% else %}
       <button type="button" class="secondary-button" data-primary-send-action data-send-setup>{{ {"login_account": "打开登录窗口", "create_account": "新增账号", "select_account": "选择账号", "complete_content": "完善内容", "start_worker": "连接 Worker"}.get(readiness.action, "完善发送配置") }}</button>
     {% endif %}
+    <button type="button" class="secondary-button" data-reschedule-job {% if job.status != "SCHEDULED" or job.error_code == 'schedule_missed' %}hidden{% endif %}>重新排期</button>
     {% if job.status == "SCHEDULED" %}<button type="button" class="secondary-button" data-clear-schedule>清除排期</button>{% endif %}
     <button type="button" class="text-button" data-cancel-job>取消发送并返回准备</button>
   </div>
@@ -171,7 +172,7 @@
 <section class="inline-alert publish-missed-alert" data-missed-schedule-alert role="status" {% if not scheduler_health.missed_schedule_count %}hidden{% endif %}>
   <strong><span data-missed-schedule-count>{{ scheduler_health.missed_schedule_count }}</span> 条排期已错过，系统没有补发。</strong>
   <span>请核对内容并重新排期；后面的任务仍按各自时间执行。</span>
-  <button type="button" class="secondary-button" data-open-missed-schedules>去排期计划</button>
+  <button type="button" class="secondary-button" data-open-missed-schedules>查看待补发视频</button>
 </section>
 
 <section class="scheduler-health-card" data-scheduler-health data-worker-available="{{ 'true' if scheduler_health.worker_available else 'false' }}" data-scheduler-failures="{{ scheduler_health.consecutive_failures }}">
@@ -294,6 +295,10 @@
     </section>
   </section>
   <div class="publish-plan-section-heading"><div><p class="eyebrow">Tasks</p><h3 data-platform-list-title>抖音任务清单</h3></div><small>未排期任务也会保留在清单中，勾选后可批量设置时间。</small></div>
+  <div class="button-row publish-schedule-filters" role="group" aria-label="排期任务筛选">
+    <button type="button" class="secondary-button" data-schedule-filter="all" aria-pressed="true">全部任务</button>
+    <button type="button" class="secondary-button" data-schedule-filter="missed" aria-pressed="false">待补发（<span data-missed-list-count>0</span>）</button>
+  </div>
   <div class="publish-plan-header"><span></span><span>计划时间</span><span>视频</span><span>平台</span><span>账号</span><span>状态</span><span>操作</span></div>
   <div class="publish-plan-list">{% for job in publish_jobs %}{{ schedule_row(job) }}{% endfor %}</div>
   <div class="publish-plan-empty" data-schedule-empty hidden>当前平台没有待排期或已排期任务。</div>
@@ -383,6 +388,7 @@
 <div class="schedule-drawer-backdrop" data-schedule-backdrop hidden></div>
 <aside class="schedule-drawer" data-schedule-drawer hidden aria-label="设置排期">
   <div class="schedule-drawer-header"><div><p class="eyebrow">Schedule</p><h2>设置排期</h2><p>已选 <strong data-drawer-count>0</strong> 条</p></div><button type="button" class="icon-button" data-close-schedule-drawer aria-label="关闭">×</button></div>
+  <p class="form-hint" data-reschedule-context hidden></p>
   <form data-schedule-form>
     <label><span>排期方式</span><select name="schedule_mode"><option value="interval">固定间隔</option><option value="adaptive" data-adaptive-mode-option disabled>数据动态排期</option></select></label>
     <div data-adaptive-fields hidden>
@@ -421,4 +427,4 @@
 </aside>
 {% endblock %}
 
-{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260924-missed-schedule"></script>{% endblock %}
+{% block extra_scripts %}<script src="{{ url_for('static', path='js/publish-center.js') }}?v=20260929-missed-reschedule"></script>{% endblock %}
