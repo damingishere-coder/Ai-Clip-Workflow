@@ -198,7 +198,8 @@ def test_restarted_scheduler_skips_old_jobs_and_keeps_later_schedule(tmp_path):
     assert old["attempt_count"] == 0 and old["claimed_at"] is None
     assert (old["adaptive_managed"], old["adaptive_fixed"]) == (0, 1)
     assert _raw(later)["status"] == "SCHEDULED"
-    assert publish_service.get_publish_job(missed)["status_label"] == "待重新排期"
+    assert publish_service.get_publish_job(missed)["status_label"] == "已错过 · 待重新排期"
+    assert publish_service.get_publish_job(missed)["status_tone"] == "amber"
     assert scheduler_module.scheduler_health()["missed_schedule_count"] == 1
     with get_connection() as connection:
         events = connection.execute(

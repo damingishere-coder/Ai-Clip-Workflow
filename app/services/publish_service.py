@@ -726,12 +726,12 @@ def _normalize_job(
             "status_label": (
                 execution_phase_label
                 if status == PUBLISH_STATUS_PUBLISHING and execution_phase_label
-                else "待重新排期"
+                else "已错过 · 待重新排期"
                 if status == PUBLISH_STATUS_WAITING and job.get("error_code") == "schedule_missed"
                 else STATUS_LABELS.get(status, status)
             ),
             "execution_phase_label": execution_phase_label,
-            "status_tone": STATUS_TONES.get(status, "blue"),
+            "status_tone": "amber" if status == PUBLISH_STATUS_WAITING and job.get("error_code") == "schedule_missed" else STATUS_TONES.get(status, "blue"),
             "video_source_label": VIDEO_SOURCE_LABELS.get(job.get("video_source"), job.get("video_source")),
             "publish_mode_label": PUBLISH_MODE_LABELS.get(job.get("publish_mode"), job.get("publish_mode")),
             "schedule_timezone": schedule_timezone,

@@ -83,7 +83,8 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def test_missed_schedule_prompts_for_replan_without_export(tmp_path):
+@pytest.mark.parametrize("viewport_width", [390, 1440])
+def test_missed_schedule_prompts_for_replan_without_export(tmp_path, viewport_width):
     init_db()
     _cleanup()
     job_id = _seed_job(tmp_path, 99)
@@ -96,6 +97,14 @@ def test_missed_schedule_prompts_for_replan_without_export(tmp_path):
         connection.commit()
     assert PublishScheduler().run_once()["missed_count"] == 1
     assert publish_service.get_publish_job(job_id)["attempt_count"] == 0
+    future_ids = [_seed_job(tmp_path, index) for index in range(16)]
+    future_time = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    with get_connection() as connection:
+        connection.executemany(
+            "UPDATE publish_jobs SET status='SCHEDULED', scheduled_at=? WHERE id=?",
+            [(future_time, item) for item in future_ids],
+        )
+        connection.commit()
 
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off"))
@@ -111,27 +120,48 @@ def test_missed_schedule_prompts_for_replan_without_export(tmp_path):
             if not chrome_path.exists():
                 pytest.skip("浏览器级测试需要本机安装 Google Chrome")
             browser = runtime.chromium.launch(headless=True, executable_path=str(chrome_path))
-            page = browser.new_page(viewport={"width": 390, "height": 844}, timezone_id="Asia/Shanghai")
+            page = browser.new_page(viewport={"width": viewport_width, "height": 844}, timezone_id="Asia/Shanghai")
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{port}/publish", wait_until="networkidle")
             alert = page.locator("[data-missed-schedule-alert]")
             playwright.expect(alert).to_be_visible()
             playwright.expect(alert).to_contain_text("1 条排期已错过")
+            page.locator('[data-center-tab="schedule"]').click()
+            playwright.expect(page.locator('.publish-plan-list [data-publish-row]:visible').first).to_have_attribute("data-job-id", job_id)
+            normal_row = page.locator(f'[data-section="schedule"][data-job-id="{future_ids[0]}"]')
+            normal_row.locator("[data-reschedule-job]").click()
+            playwright.expect(page.locator("[data-drawer-count]")).to_have_text("1")
+            playwright.expect(page.locator("[data-reschedule-context]")).to_contain_text("原计划")
+            page.locator("[data-close-schedule-drawer]").click()
+            assert publish_service.get_publish_job(future_ids[0])["scheduled_at"] == future_time
             alert.locator("[data-open-missed-schedules]").click()
+            playwright.expect(page.locator('.publish-plan-list [data-publish-row]:visible')).to_have_count(1)
             row = page.locator(f'[data-section="schedule"][data-job-id="{job_id}"]')
             playwright.expect(row).to_have_attribute("data-status", "WAITING")
             playwright.expect(row).to_contain_text("待重新排期")
+            playwright.expect(row.locator("[data-row-status]")).to_contain_text("已错过")
             row.locator("[data-reschedule-missed]").click()
             playwright.expect(page.locator("[data-schedule-drawer]")).to_be_visible()
+            playwright.expect(page.locator("[data-reschedule-context]")).to_contain_text("已错过，系统未补发")
+            assert publish_service.get_publish_job(job_id)["status"] == "WAITING"
             future = (datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(days=2)).strftime("%Y-%m-%dT19:00")
             page.locator('[name="start_at_local"]').fill(future)
             page.locator("[data-preview-schedule]").click()
             page.locator("[data-confirm-schedule]:not([disabled])").click()
             playwright.expect(alert).to_be_hidden(timeout=10000)
+            playwright.expect(page.locator('[data-missed-list-count]')).to_have_text("0")
+            playwright.expect(row).to_be_hidden()
+            page.locator('[data-schedule-filter="all"]').click()
+            playwright.expect(row).to_be_visible()
+            playwright.expect(row.locator('[data-reschedule-job]')).to_be_visible()
             page.reload(wait_until="networkidle")
             playwright.expect(page.locator("[data-missed-schedule-alert]")).to_be_hidden()
             assert publish_service.get_publish_job(job_id)["error_code"] == ""
             assert publish_service.get_publish_job(job_id)["status"] == "SCHEDULED"
             assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+            assert not errors
+            assert all(publish_service.get_publish_job(item)["scheduled_at"] == future_time for item in future_ids)
             browser.close()
     finally:
         server.should_exit = True
