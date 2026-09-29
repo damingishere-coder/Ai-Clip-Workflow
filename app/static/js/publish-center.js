@@ -1444,7 +1444,10 @@ if (publishCenterRoot) {
     if (context) {
       context.hidden = selectedRows.length !== 1;
       const row = selectedRows[0];
-      context.textContent = row ? `${row.querySelector("[data-row-title]")?.textContent || ""} · ${isMissedSchedule(row) ? "已错过，系统未补发" : "原计划"}：${row.querySelector("[data-row-schedule]")?.textContent || "未排期"}。预览并确认后才会保存新时间。` : "";
+      const originalPlan = row && isMissedSchedule(row)
+        ? `已错过，系统未补发。${row.querySelector("[data-missed-schedule-note]")?.textContent || "请核对原排期"}`
+        : `原计划：${row?.querySelector("[data-row-schedule]")?.textContent || "未排期"}`;
+      context.textContent = row ? `${row.querySelector("[data-row-title]")?.textContent || ""} · ${originalPlan}。预览并确认后才会保存新时间。` : "";
     }
     drawer.hidden = false;
     drawerBackdrop.hidden = false;

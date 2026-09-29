@@ -144,6 +144,7 @@ def test_missed_schedule_prompts_for_replan_without_export(tmp_path, viewport_wi
             row.locator("[data-reschedule-missed]").click()
             playwright.expect(page.locator("[data-schedule-drawer]")).to_be_visible()
             playwright.expect(page.locator("[data-reschedule-context]")).to_contain_text("已错过，系统未补发")
+            playwright.expect(page.locator("[data-reschedule-context]")).to_contain_text(publish_service.get_publish_job(job_id)["error_message"])
             assert publish_service.get_publish_job(job_id)["status"] == "WAITING"
             future = (datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(days=2)).strftime("%Y-%m-%dT19:00")
             page.locator('[name="start_at_local"]').fill(future)
