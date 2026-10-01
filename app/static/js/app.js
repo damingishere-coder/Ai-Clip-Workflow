@@ -346,6 +346,7 @@ cancelTranscriptButtons.forEach((button) => {
 });
 
 const aiAnalysisForm = document.querySelector("#ai-analysis-form");
+const aiAnalysisProvider = document.querySelector("#ai-analysis-provider");
 const saveAiPromptsButton = document.querySelector("#save-ai-prompts-button");
 const aiProcessResult = document.querySelector("#ai-process-result");
 const aiAnalysisSummary = document.querySelector("#ai-analysis-summary");
@@ -533,7 +534,7 @@ function renderAiAnalysisHistory(runs) {
   if (!aiAnalysisRuns.length) {
     const empty = document.createElement("p");
     empty.className = "empty-note";
-    empty.textContent = "还没有历史分析结果。完成一次远程 AI 分析或本地 AI 分析后，这里会自动出现记录。";
+    empty.textContent = "还没有历史分析结果。完成一次 AI 分析后，这里会自动出现记录。";
     aiAnalysisHistoryList.append(empty);
     return;
   }
@@ -692,7 +693,7 @@ aiProcessButtons.forEach((button) => {
     if (!aiAnalysisForm || isAiAnalysisBusy) return;
     const originalText = button.textContent;
     const taskId = aiAnalysisForm.dataset.taskId;
-    const provider = button.dataset.provider || "";
+    const provider = aiAnalysisProvider?.value || "";
     const selectedCard = getSelectedPromptPresetCard();
     const selectedPrompt = selectedCard?.querySelector("textarea")?.value.trim() || "";
     const selectedName = selectedCard?.querySelector("input[type='text']")?.value.trim() || "当前方案";
@@ -701,7 +702,7 @@ aiProcessButtons.forEach((button) => {
       return;
     }
     if (!provider) {
-      const confirmed = window.confirm(`确认使用“${selectedName}”和任务默认 Provider 分析吗？\n\n未记录 Provider 的历史任务使用当前默认；失败任务恢复仍沿用原账本。将消耗对应模型额度，并重新生成候选片段。`);
+      const confirmed = window.confirm(`确认使用“${selectedName}”并沿用任务设置开始分析吗？\n\n历史任务未记录分析方式时使用当前默认设置；失败任务恢复仍沿用原记录。将消耗对应模型额度，并覆盖现有 AI 候选结果。`);
       if (!confirmed) return;
     } else if (provider === "codex") {
       const confirmed = window.confirm(`确认使用“${selectedName}”发起 Codex CLI 分析吗？\n\n这会消耗当前 Codex 套餐额度，并覆盖现有 AI 候选结果。`);

@@ -1581,7 +1581,7 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
             if provider_name == "remote":
                 raise AIAnalysisError(
                     "远程 AI 分析接口不可用，已暂停 AI 分析："
-                    f"{provider_error}。如需使用本地模型，请点击\"本地 AI 分析\"。"
+                    f"{provider_error}。如需使用本地模型，请在分析方式中选择“本地 AI”，再点击“开始分析”。"
                 ) from provider_exc
             raise
         long_live_meta = {}

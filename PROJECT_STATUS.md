@@ -1,3 +1,9 @@
+## AI 分析入口精简（2026-10-02）
+
+任务详情由四个并列分析按钮改为“分析方式”下拉框和唯一“开始分析”，独立保留“保存提示词”。三种 Provider 仍是受支持能力，移除的是重复入口；默认继续沿用任务冻结设置，旧任务缺记录时使用当前默认，显式切换仅用于本轮。开始分析保留自动保存、原确认、Job 冻结、恢复账本与运行中锁定。Challenger 不写正式 Prompt。
+
+本地相关 41 项测试通过，含真实 Chrome 1440/390 布局与四种请求路由；Ruff、JS 语法和差异检查通过。已有主工作区文档/架构图修改保留，本次独立 codex/simplify-analysis-actions 分支直接对 master。交付沿用原 RunDock 正式 Web/Worker，无数据库迁移或配置调整，不触发模型分析、人工确认、排期或投稿。最终 CI/合并见精简分析操作 PR；正式 HTTP、浏览器、进程和数据保护证据写入本机 data/acceptance/analysis-actions/，以验收回执判断生效，不按版本号推定部署。
+
 ## 运行验收：待补发视频定位与重新排期（2026-09-29 21:15）
 
 PR #147最终提交c0fecd8的Linux、Windows、Docker三项CI全部通过，Squash合并为85d54963be5c78711ab72145f8372b3e83060b71。21:14:46通过原RunDock管理记录重启Web 8001，运行目录仍为Ai-Clip-Workflow-offline-runtime；托管PID155704，监听72324。Worker监听86544保持运行。
