@@ -57,10 +57,37 @@ def test_trial_creation_confirmation_and_manual_ai_do_not_save_production_prompt
                                 ("confirm_challenger", "true"), ("auto_mode", "false")):
                 assert f'name="{name}"\r\n\r\n{value}\r\n' in uploads[0]
             assert page.locator("[data-prompt-preset-card] textarea").evaluate("el => el.readOnly")
-            page.route("**/process/ai?*", lambda route: route.fulfill(status=409, content_type="application/json", body='{"detail":"隔离测试已拦截模型请求"}'))
+            provider_select = page.locator("#ai-analysis-provider")
+            analyze_button = page.locator(".js-ai-process-action")
+            assert analyze_button.count() == 1
+            assert analyze_button.inner_text() == "开始分析"
+            assert provider_select.input_value() == ""
+            assert provider_select.locator("option").count() == 4
+            before_cancel = len(writes)
+            page.once("dialog", lambda dialog: dialog.dismiss())
+            analyze_button.click()
+            assert len(writes) == before_cancel  # Cancelling must not save or queue analysis.
+
+            analysis_requests = []
+
+            def reject_analysis(route):
+                assert provider_select.is_disabled() and analyze_button.is_disabled()
+                analysis_requests.append(route.request.url)
+                route.fulfill(status=409, content_type="application/json", body='{"detail":"隔离测试已拦截模型请求"}')
+
+            page.route("**/process/ai*", reject_analysis)
             page.on("dialog", lambda dialog: dialog.accept())
-            page.locator('.js-ai-process-action[data-provider="codex"]').click()
-            page.locator("#ai-process-result").filter(has_text="隔离测试已拦截模型请求").wait_for()
+            for provider in ("", "codex", "remote", "local"):
+                before_select = len(writes)
+                provider_select.select_option(provider)
+                assert len(writes) == before_select  # Choosing a provider has no write side effects.
+                analyze_button.click()
+                page.wait_for_function("!document.querySelector('#ai-analysis-provider').disabled")
+                assert "隔离测试已拦截模型请求" in page.locator("#ai-process-result").inner_text()
+                suffix = f"?provider={provider}" if provider else ""
+                assert analysis_requests[-1] == f"http://127.0.0.1:{port}/api/tasks/{task}/process/ai{suffix}"
+                assert analyze_button.inner_text() == "开始分析"
+            assert len(analysis_requests) == 4
             assert not any("/api/ai-prompt-presets/" in url or url.endswith("/ai-prompt-preset") for url in writes)
             assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
             page.screenshot(path=str(tmp_path / f"trial-{width}.png"), full_page=True)
