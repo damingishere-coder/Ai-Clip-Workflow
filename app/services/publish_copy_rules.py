@@ -9,17 +9,17 @@ import re
 from collections.abc import Iterable
 
 
-PUBLISH_COPY_RULE_VERSION = 2
+PUBLISH_COPY_RULE_VERSION = 3
 
 DOUYIN_TITLE_TARGET_MIN = 18
 DOUYIN_TITLE_TARGET_MAX = 26
 DOUYIN_TITLE_MAX = 30
-DOUYIN_DESCRIPTION_MIN = 15
+DOUYIN_DESCRIPTION_MIN = 1
 DOUYIN_DESCRIPTION_MAX = 35
-DOUYIN_TAG_COUNT_MIN = 4
-DOUYIN_TAG_COUNT_MAX = 6
+DOUYIN_TAG_COUNT_MIN = 3
+DOUYIN_TAG_COUNT_MAX = 3
 DOUYIN_TAG_LENGTH_MIN = 2
-DOUYIN_TAG_LENGTH_MAX = 3
+DOUYIN_TAG_LENGTH_MAX = 12
 BILIBILI_TITLE_MAX = 80
 
 DOUYIN_FALLBACK_TAGS = ("综艺", "高光", "笑点", "看点", "趣事", "反转")
@@ -82,11 +82,6 @@ def normalize_douyin_description(
             text = window[:cut_at]
         else:
             text = text[:DOUYIN_DESCRIPTION_MAX]
-    if len(text) < DOUYIN_DESCRIPTION_MIN:
-        supplement = normalize_douyin_title(title, generated=True)
-        text = f"{text}，{supplement}".strip("，") if text else supplement
-    if len(text) < DOUYIN_DESCRIPTION_MIN:
-        text = f"{text}，这一刻的反应很有看点".strip("，")
     return text[:DOUYIN_DESCRIPTION_MAX].strip(" #＃，,。.!！?？")
 
 
@@ -99,6 +94,8 @@ def normalize_douyin_tags(
     for raw_tag in split_publish_tags(tags):
         value = re.sub(r"[^\w\u4e00-\u9fff]+", "", raw_tag.lstrip("#＃"))
         if not value or any(phrase in value for phrase in _EMPTY_TAG_PHRASES):
+            continue
+        if value.isdigit() or re.fullmatch(r"\d+(秒|分|分钟)", value):
             continue
         if not DOUYIN_TAG_LENGTH_MIN <= len(value) <= DOUYIN_TAG_LENGTH_MAX:
             continue
@@ -135,9 +132,9 @@ def validate_douyin_publish_copy(title: str, description: str, tags: list[str] |
             f"当前为 {len(normalized_description)} 字"
         )
     if len(raw_tags) != len(normalized_tags):
-        raise ValueError("抖音标签必须去重，且每个标签严格为 2～3 字")
+        raise ValueError("抖音话题必须去重，每个 2～12 字，不能使用时长或纯数字")
     if not DOUYIN_TAG_COUNT_MIN <= len(normalized_tags) <= DOUYIN_TAG_COUNT_MAX:
-        raise ValueError(f"抖音标签需填写 {DOUYIN_TAG_COUNT_MIN}～{DOUYIN_TAG_COUNT_MAX} 个")
+        raise ValueError("抖音话题需恰好填写 3 个")
 
 
 def build_douyin_publish_copy(

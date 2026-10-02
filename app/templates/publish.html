@@ -44,17 +44,17 @@
       <label>
         <span class="publish-copy-label"><span>标题</span><small data-copy-count="title">{{ job.title|length }}/30</small></span>
         <input name="title" value="{{ job.title }}" maxlength="30" required data-copy-field="title">
-        <small class="form-hint">AI 目标 18～26 字，抖音硬上限 30 字</small>
+        <small class="form-hint">用具体反差、妙语或悬念吸引人；抖音最多 30 字</small>
       </label>
       <label>
-        <span class="publish-copy-label"><span>话题 / 标签</span><small data-copy-count="tags">4～6 个</small></span>
-        <input name="tags" value="{{ job.tags }}" maxlength="40" placeholder="4～6 个，每个 2～3 字" data-copy-field="tags">
-        <small class="form-hint">用逗号分隔；每个标签严格 2～3 字</small>
+        <span class="publish-copy-label"><span>话题 / 标签</span><small data-copy-count="tags">3 个</small></span>
+        <input name="tags" value="{{ job.tags }}" maxlength="40" placeholder="恰好 3 个，例如：康熙来了, 小S, 造型师" data-copy-field="tags">
+        <small class="form-hint">用逗号分隔；每个 2～12 字，选择相关节目、人物或主题</small>
       </label>
       <label class="span-2">
         <span class="publish-copy-label"><span>正文 / 简介</span><small data-copy-count="description">{{ job.description|length }}/35</small></span>
-        <textarea name="description" minlength="15" maxlength="35" required data-copy-field="description">{{ job.description }}</textarea>
-        <small class="form-hint">15～35 字，只保留一个最强冲突、笑点或悬念</small>
+        <textarea name="description" maxlength="35" required data-copy-field="description">{{ job.description }}</textarea>
+        <small class="form-hint">接一句有趣的梗或问题，别重复标题；最多 35 字，不凑字数</small>
       </label>
       <label><span>发布平台（创建后不可更改）</span><strong class="publish-locked-value" data-row-platform>{{ job.platform_label }}</strong><input type="hidden" name="platform" value="{{ job.platform }}"></label>
       <label><span>发布账号</span><select name="account_id" data-account-select>{{ account_options(job) }}</select></label>

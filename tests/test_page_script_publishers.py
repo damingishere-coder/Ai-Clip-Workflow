@@ -122,8 +122,8 @@ def make_job(tmp_path: Path, platform: str) -> dict:
         "title": "测试标题",
         "description": "测试正文用于验证真实发布完整流程",
         "caption": "测试正文用于验证真实发布完整流程",
-        "tags": "测试,视频,发布,流程",
-        "hashtags": "测试,视频,发布,流程",
+        "tags": "测试,视频,发布",
+        "hashtags": "测试,视频,发布",
         "cover_file_path": str(cover),
         "visibility": "private",
     }

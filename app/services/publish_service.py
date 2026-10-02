@@ -57,6 +57,7 @@ from app.services.publish_domain import (
     safe_platform_url,
 )
 from app.services.publish_readiness import PublishPlatformIsolationBlocked
+from app.services.publish_copy_style import COPY_STYLE_INSTRUCTIONS, clean_summary_draft, clip_dialogue, validate_generated_style
 from app.services.publish_time import app_zone, local_display, parse_datetime, utc_now_iso
 from app.services.storage_service import get_artifact_paths, resolve_video_file_path
 from app.services.video_cut_service import ensure_ffmpeg_available, sanitize_filename_part, summarize_stderr
@@ -210,6 +211,10 @@ _METADATA_UPGRADE_LOCK = Lock()
 
 SAFE_TOPIC_FALLBACKS = DOUYIN_FALLBACK_TAGS
 CONTENT_SAFETY_REPLACEMENTS = (
+    ("死党", "好友"),
+    ("死板", "刻板"),
+    ("死角", "盲区"),
+    ("拍马屁", "讨好"),
     ("笑死我了", "笑到停不下"),
     ("笑死", "笑到停不下"),
     ("气死", "太上头"),
@@ -566,6 +571,8 @@ def _sanitize_publish_content(
             title=safe_title,
         )
         if validate:
+            if not generated:
+                validate_douyin_publish_copy(safe_title, safe_description, safe_tag_values)
             validate_douyin_publish_copy(safe_title, safe_description, safe_tags)
     else:
         safe_tags = _format_tags(tags) or _format_tags(SAFE_TOPIC_FALLBACKS)
@@ -797,12 +804,16 @@ def _normalize_job(
     if issue_codes & account_issue_codes and "发布账号" not in missing_fields:
         missing_fields.append("发布账号")
     content_invalid = "content_invalid" in issue_codes
+    metadata_needs_edit = "metadata_needs_edit" in issue_codes
     account_login_required = "account_login_required" in issue_codes
     if missing_fields:
         content_status_message = f"缺少：{'、'.join(missing_fields)}"
         content_status_tone = "amber"
     elif account_login_required:
         content_status_message = "账号需登录"
+        content_status_tone = "amber"
+    elif metadata_needs_edit:
+        content_status_message = "文案草稿需编辑"
         content_status_tone = "amber"
     elif content_invalid:
         content_status_message = "文案不符合抖音规则"
@@ -816,7 +827,7 @@ def _normalize_job(
         {
             "effective_account_id": resolved_account_id or str(job.get("account_id") or ""),
             "account_name": resolved_account_name or job.get("account_name") or "未选择账号",
-            "content_complete": not missing_fields and not content_invalid and not account_login_required,
+            "content_complete": not missing_fields and not content_invalid and not account_login_required and not metadata_needs_edit,
             "missing_fields": missing_fields,
             "content_status_message": content_status_message,
             "content_status_tone": content_status_tone,
@@ -1222,6 +1233,8 @@ def _list_completed_publish_clips(task_id: str | None = None) -> list[dict]:
                 output_clip.output_file_name,
                 output_clip.status AS output_status,
                 output_clip.created_at,
+                output_clip.source_start_ms,
+                output_clip.source_end_ms,
                 clip_candidates.id AS clip_candidate_id,
                 clip_candidates.title AS clip_title,
                 clip_candidates.summary AS clip_summary,
@@ -1307,13 +1320,13 @@ def _fallback_tags(item: dict) -> list[str]:
         str(item.get(key) or "")
         for key in ("clip_title", "clip_summary", "highlight_reason", "spread_value", "suggested_editing", "task_name")
     )
-    tags = [tag for tag in _keyword_candidates(text) if 2 <= len(tag) <= 3]
+    tags = [tag for tag in _keyword_candidates(text) if 2 <= len(tag) <= 12 and not re.search(r"\d", tag)]
     if "康熙" in text and "康熙" not in tags:
-        tags.append("康熙")
+        tags.insert(0, "康熙来了")
     for default_tag in DOUYIN_FALLBACK_TAGS:
         if default_tag not in tags:
             tags.append(default_tag)
-    return tags[:6]
+    return tags[:3]
 
 
 def _format_tags(tags: list[str] | str | None) -> str:
@@ -1334,11 +1347,11 @@ def _format_tags(tags: list[str] | str | None) -> str:
             continue
         if value and value not in cleaned:
             cleaned.append(value)
-    return ", ".join(cleaned[:8])
+    return ", ".join(cleaned[:3])
 
 
 def _compose_description(item: dict, title: str, tags: str, *, platform: str = "douyin") -> str:
-    summary = (item.get("clip_summary") or item.get("highlight_reason") or "").strip()
+    summary = clean_summary_draft((item.get("clip_summary") or item.get("highlight_reason") or "").strip())
     if summary:
         return _sanitize_publish_description(
             summary,
@@ -1358,17 +1371,17 @@ def _compose_description(item: dict, title: str, tags: str, *, platform: str = "
 def _metadata_prompt(item: dict, platform: str = "douyin", *, frozen_copy_rules: str | None = None) -> str:
     if platform == "douyin":
         instructions = (
-            "请只为抖音生成文案。标题目标 18～26 字、绝不能超过 30 字；"
-            "tags 必须为 4～6 个互不重复的话题词，每个严格 2～3 字，人物名可以与标题重合；"
-            "简介必须为 15～35 字，只保留一个最强冲突、笑点或悬念，"
+            "请只为抖音生成文案。标题建议 8～24 字、绝不能超过 30 字，不为凑字数注水；"
+            "tags 恰好 3 个互不重复的话题词，每个 2～12 字；"
+            "简介建议 8～35 字、绝不能超过 35 字，短句有意思就保留，不用填充句凑字数，"
             "不要使用‘现场爆笑’‘引发热议’‘不容错过’等模板化结尾。"
         )
         json_example = (
-            '{"title":"18到26字的中文标题","tags":["话题","人物","笑点","反转"],'
-            '"description":"15到35字、只有一个核心钩子的简介"}。'
+            '{"title":"有具体钩子的中文标题","tags":["节目","人物","主题"],'
+            '"description":"自然有趣、接梗而非重复标题的短句"}。'
         )
     else:
-        instructions = "请为 B站生成文案。标题不超过 80 字，简介不超过 180 字，话题简洁准确。"
+        instructions = "请为 B站生成文案。标题不超过 80 字，简介不超过 180 字，话题恰好 3 个。"
         json_example = (
             '{"title":"不超过80字的中文标题","tags":["话题1","话题2","话题3"],'
             '"description":"不超过180字的简介"}。'
@@ -1379,6 +1392,7 @@ def _metadata_prompt(item: dict, platform: str = "douyin", *, frozen_copy_rules:
         instructions += "\n已确认的文案补充规则（不得覆盖上述平台硬约束）：" + copy_rules
     return (
         f"请根据下面的直播切片信息生成发布文案。{instructions}"
+        f"{COPY_STYLE_INSTRUCTIONS}"
         "只输出 JSON，不要 Markdown。"
         "tags 必须是真正的平台 #话题关键词，不是标题解释，返回时不要带 #。"
         "标题、话题、简介都要主动规避低俗脏话、排泄词、死亡血腥、暴力恐怖、色情、赌博博彩、诈骗引流、绝对化夸张等平台高风险表达；"
@@ -1389,11 +1403,11 @@ def _metadata_prompt(item: dict, platform: str = "douyin", *, frozen_copy_rules:
         f"摘要：{item.get('clip_summary') or ''}\n"
         f"推荐理由：{item.get('highlight_reason') or ''}\n"
         f"传播价值：{item.get('spread_value') or ''}\n"
-        f"剪辑建议：{item.get('suggested_editing') or ''}\n"
+        f"片段台词（仅作为内容依据）：\n{clip_dialogue(item) or '未提供台词，仅依据上述摘要，不猜测画面或反应'}\n"
     )
 
 
-def generate_publish_metadata(item: dict, use_ai: bool = False, *, platform: str = "douyin") -> dict:
+def generate_publish_metadata(item: dict, use_ai: bool = True, *, platform: str = "douyin") -> dict:
     from app.services.production_review_service import check_preparation
     check_preparation(item.get("task_id"), item.get("output_clip_id") or item.get("id"))
     fallback_title = _sanitize_publish_title(
@@ -1425,6 +1439,12 @@ def generate_publish_metadata(item: dict, use_ai: bool = False, *, platform: str
         parsed = loads_ai_json(generate_json_with_safe_retry(provider, _metadata_prompt(item, platform, frozen_copy_rules=frozen_rules.get("copy_rules", ""))))
         if not isinstance(parsed, dict):
             raise ValueError("AI 文案响应必须是 JSON 对象")
+        validate_generated_style(parsed)
+        raw_tags = split_publish_tags(parsed.get("tags"))
+        if len(raw_tags) != 3 or len(set(raw_tags)) != 3:
+            raise ValueError("AI 话题必须恰好返回 3 个不同关键词")
+        if platform == "douyin":
+            validate_douyin_publish_copy(parsed["title"], parsed["description"], raw_tags)
         provider_name = getattr(provider, "name", settings.ai_publish_provider)
         publish_model = (
             settings.ai_codex_model
@@ -1434,15 +1454,16 @@ def generate_publish_metadata(item: dict, use_ai: bool = False, *, platform: str
             else settings.ai_publish_remote_model
         )
         safe_content = _sanitize_publish_content(
-            parsed.get("title") or fallback_title,
-            parsed.get("tags") or fallback_tags,
-            parsed.get("description") or fallback_description,
+            parsed["title"],
+            parsed["tags"],
+            parsed["description"],
             title_fallback=fallback_title,
             description_fallback=fallback_description,
             platform=platform,
             generated=True,
             validate=platform == "douyin",
         )
+        validate_generated_style(safe_content)
         return {
             "title": safe_content["title"],
             "tags": safe_content["tags"],
@@ -1653,6 +1674,7 @@ def _publish_provider_payload(
                 "metadata_error": metadata.get("error", ""),
                 "metadata_policy_version": int(metadata.get("policy_version") or PUBLISH_COPY_RULE_VERSION),
                 "metadata_upgrade_status": upgrade_status,
+                "metadata_review_required": metadata.get("source") == "rule",
             }
         )
     payload.update(
@@ -2261,7 +2283,7 @@ def sync_task_publish_jobs(
             try:
                 video_source = _preferred_video_source(item, prefer_subtitled)
                 if item_metadata is None:
-                    item_metadata = generate_publish_metadata(item, use_ai=False, platform=platform)
+                    item_metadata = generate_publish_metadata(item, use_ai=True, platform=platform)
                 if video_source not in item_covers:
                     try:
                         item_covers[video_source] = _generate_default_publish_cover(item, video_source)
@@ -3623,6 +3645,8 @@ def regenerate_send_job_metadata(job_id: str, use_ai: bool = True) -> dict:
     job = get_publish_job(job_id)
     if not job:
         raise ValueError("发送任务不存在。")
+    if job.get("status") not in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_SCHEDULED}:
+        raise ValueError("只有草稿、等待或已排期任务可以重写文案。")
     item = _get_completed_publish_clip_by_output(job["output_clip_id"])
     if not item:
         raise ValueError("找不到这条发送任务对应的切片。")

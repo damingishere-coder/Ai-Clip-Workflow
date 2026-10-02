@@ -21,7 +21,7 @@ from app.services.publish_copy_rules import (
 PREFIX = "test-publish-copy-rules-"
 VALID_TITLE = "小S当场追问陈汉典到底在模仿谁"
 VALID_DESCRIPTION = "陈汉典刚说自己像潘玮柏，小S立刻给出另一答案"
-VALID_TAGS = "综艺,高光,小S,反转"
+VALID_TAGS = "康熙来了,小S,反转"
 
 
 @pytest.fixture(autouse=True)
@@ -139,12 +139,12 @@ def test_generated_douyin_copy_obeys_all_limits_and_removes_cliches() -> None:
     )
 
     assert len(copy["title"]) <= 30
-    assert 15 <= len(copy["description"]) <= 35
+    assert 1 <= len(copy["description"]) <= 35
     assert not any(phrase in copy["description"] for phrase in ("现场爆笑", "引发热议", "不容错过"))
     tags = split_publish_tags(copy["tags"])
-    assert 4 <= len(tags) <= 6
+    assert len(tags) == 3
     assert len(tags) == len(set(tags))
-    assert all(2 <= len(tag) <= 3 for tag in tags)
+    assert all(2 <= len(tag) <= 12 for tag in tags)
     validate_douyin_publish_copy(copy["title"], copy["description"], copy["tags"])
 
 
@@ -187,7 +187,7 @@ def test_ai_failure_does_not_overwrite_existing_copy(monkeypatch) -> None:
         lambda *_args, **_kwargs: {
             "title": "失败回退标题",
             "description": "失败回退简介不应写入数据库",
-            "tags": "综艺,高光,笑点,反转",
+            "tags": "康熙来了,小S,反转",
             "source": "rule",
             "error": "模拟 AI 网络失败",
         },
@@ -203,6 +203,23 @@ def test_ai_failure_does_not_overwrite_existing_copy(monkeypatch) -> None:
         before["tags"],
         before["hashtags"],
     )
+
+
+def test_rule_draft_badge_requires_edit_and_manual_save_clears_it() -> None:
+    _seed_account()
+    job_id = _seed_job(
+        title=VALID_TITLE, description=VALID_DESCRIPTION, tags=VALID_TAGS,
+        provider_response=json.dumps({"metadata_review_required": True}),
+    )
+    draft = publish_service.get_publish_job(job_id)
+    assert draft["content_complete"] is False
+    assert draft["content_status_message"] == "文案草稿需编辑"
+    assert draft["content_status_tone"] == "amber"
+    saved = publish_service.update_send_job(job_id, PublishSendJobUpdate(
+        title=VALID_TITLE, description=VALID_DESCRIPTION, tags=VALID_TAGS, cover_file_path="cover.jpg",
+    ))["job"]
+    assert saved["content_complete"] is True
+    assert saved["content_status_message"] == "内容完整"
 
 
 def test_metadata_regeneration_does_not_overwrite_concurrent_publish(monkeypatch) -> None:
@@ -254,7 +271,7 @@ def test_manual_save_binds_unique_account_and_synchronizes_alias_fields() -> Non
     saved = _raw_job(job_id)
     assert saved["account_id"] == account_id
     assert saved["description"] == saved["caption"] == VALID_DESCRIPTION
-    assert saved["tags"] == saved["hashtags"] == "综艺, 高光, 小S, 反转"
+    assert saved["tags"] == saved["hashtags"] == "康熙来了, 小S, 反转"
     assert json.loads(saved["provider_response"])["metadata_upgrade_status"] == "manual_saved"
 
     with pytest.raises(ValueError, match="不能超过 30 字"):

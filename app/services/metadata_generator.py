@@ -26,7 +26,7 @@ _RISK_KEYWORDS = {
 class MetadataGenerator:
     """把切片信息整理成发布中心可使用的结构化文案。"""
 
-    use_ai: bool = False
+    use_ai: bool = True
 
     def generate(self, item: dict, platform: str) -> dict:
         metadata = generate_publish_metadata(item, use_ai=self.use_ai, platform=platform)
@@ -42,7 +42,9 @@ class MetadataGenerator:
         risk_flags = self._risk_flags(item, title, caption, hashtags)
         metadata_error = str(metadata.get("error") or "")
         if metadata_error:
-            risk_flags.append("AI 文案生成失败，已使用规则文案")
+            risk_flags.append("AI 文案生成失败，草稿需编辑后再发布")
+        elif metadata.get("source") == "rule":
+            risk_flags.append("规则草稿需编辑后再发布")
         return {
             "clip_id": item.get("output_clip_id") or item.get("id") or "",
             "clip_candidate_id": item.get("clip_candidate_id") or "",
@@ -61,12 +63,6 @@ class MetadataGenerator:
 
     def _polish_title(self, title: str, item: dict, platform: str) -> str:
         text = re.sub(r"\s+", " ", title or "").strip(" #＃")
-        context = " ".join(
-            str(item.get(key) or "")
-            for key in ("task_name", "clip_title", "clip_summary", "highlight_reason")
-        )
-        if "康熙" in context and "康熙" not in text:
-            text = f"康熙名场面：{text}" if text else "康熙来了经典名场面"
         text = re.sub(r"(震惊|不看后悔|全网第一|必看)", "", text)
         text = re.sub(r"\s+", " ", text).strip(" ：:，,。.!！?？")
         max_length = 30 if platform == "douyin" else BILIBILI_TITLE_MAX
@@ -82,8 +78,7 @@ class MetadataGenerator:
         raw_tags = re.split(r"[,，#＃\s]+", tags or "")
         context = " ".join(str(item.get(key) or "") for key in ("task_name", "clip_title", "clip_summary"))
         if "康熙" in context:
-            raw_tags = [*raw_tags, "康熙", "综艺"]
-        raw_tags = [*raw_tags, "高光", "看点"]
+            raw_tags = [*raw_tags, "康熙来了", "综艺"]
         if platform == "douyin":
             return normalize_douyin_tags(raw_tags, generated=True)
         cleaned: list[str] = []
@@ -93,9 +88,14 @@ class MetadataGenerator:
                 continue
             if value not in cleaned:
                 cleaned.append(value)
-            if len(cleaned) >= 8:
+            if len(cleaned) >= 3:
                 break
-        return cleaned or ["精彩片段", "高光片段"]
+        for tag in ("综艺", "访谈", "生活"):
+            if len(cleaned) >= 3:
+                break
+            if tag not in cleaned:
+                cleaned.append(tag)
+        return cleaned
 
     def _cover_text(self, title: str) -> str:
         return title[:24] or "精彩片段"

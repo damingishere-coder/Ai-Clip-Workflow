@@ -366,7 +366,7 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
                                 "status": "WAITING",
                                 "title": "小S追问陈汉典到底在模仿谁",
                                 "description": "陈汉典刚说自己像潘玮柏，小S立刻给出另一答案",
-                                "tags": "综艺,高光,小S,反转",
+                                "tags": "康熙来了,小S,反转",
                                 "content_complete": True,
                                 "content_status_message": "内容完整",
                                 "content_status_tone": "green",
@@ -419,7 +419,7 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             page.locator("[data-batch-ai]").click()
             page.locator("#send-center-message").filter(has_text="已选文案 AI 重写完成：成功 2 条").wait_for()
             assert first_content.locator('[name="description"]').input_value() == "陈汉典刚说自己像潘玮柏，小S立刻给出另一答案"
-            assert second_content.locator('[name="tags"]').input_value() == "综艺,高光,小S,反转"
+            assert second_content.locator('[name="tags"]').input_value() == "康熙来了,小S,反转"
             first_content.locator("[data-publish-select]").uncheck()
             assert group_select.evaluate("element => element.indeterminate") is True
             group_select.check()

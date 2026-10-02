@@ -1201,7 +1201,7 @@ if (publishCenterRoot) {
     const tagsCount = form.querySelector('[data-copy-count="tags"]');
     if (titleCount) titleCount.textContent = `${title.length}/30`;
     if (descriptionCount) descriptionCount.textContent = `${description.length}/35`;
-    if (tagsCount) tagsCount.textContent = `${tags.length}/4～6 个`;
+    if (tagsCount) tagsCount.textContent = `${tags.length}/3 个`;
   }
 
   function validateCopyForm(form) {
@@ -1210,10 +1210,10 @@ if (publishCenterRoot) {
     const tags = splitCopyTags(form.elements.tags?.value || "");
     if (!title) return "抖音标题不能为空";
     if (title.length > 30) return `抖音标题不能超过 30 字，当前为 ${title.length} 字`;
-    if (description.length < 15 || description.length > 35) return `抖音简介需为 15～35 字，当前为 ${description.length} 字`;
-    if (tags.length < 4 || tags.length > 6) return "抖音标签需填写 4～6 个";
-    if (new Set(tags).size !== tags.length || tags.some((tag) => tag.length < 2 || tag.length > 3)) {
-      return "抖音标签必须去重，且每个标签严格为 2～3 字";
+    if (!description.length || description.length > 35) return `抖音简介不能为空且最多 35 字，当前为 ${description.length} 字`;
+    if (tags.length !== 3) return "抖音话题需恰好填写 3 个";
+    if (new Set(tags).size !== tags.length || tags.some((tag) => tag.length < 2 || tag.length > 12 || /^\d+(秒|分|分钟)?$/.test(tag))) {
+      return "抖音话题必须去重，每个 2～12 字，不能使用时长或纯数字";
     }
     return "";
   }
