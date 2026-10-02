@@ -804,12 +804,16 @@ def _normalize_job(
     if issue_codes & account_issue_codes and "发布账号" not in missing_fields:
         missing_fields.append("发布账号")
     content_invalid = "content_invalid" in issue_codes
+    metadata_needs_edit = "metadata_needs_edit" in issue_codes
     account_login_required = "account_login_required" in issue_codes
     if missing_fields:
         content_status_message = f"缺少：{'、'.join(missing_fields)}"
         content_status_tone = "amber"
     elif account_login_required:
         content_status_message = "账号需登录"
+        content_status_tone = "amber"
+    elif metadata_needs_edit:
+        content_status_message = "文案草稿需编辑"
         content_status_tone = "amber"
     elif content_invalid:
         content_status_message = "文案不符合抖音规则"
@@ -823,7 +827,7 @@ def _normalize_job(
         {
             "effective_account_id": resolved_account_id or str(job.get("account_id") or ""),
             "account_name": resolved_account_name or job.get("account_name") or "未选择账号",
-            "content_complete": not missing_fields and not content_invalid and not account_login_required,
+            "content_complete": not missing_fields and not content_invalid and not account_login_required and not metadata_needs_edit,
             "missing_fields": missing_fields,
             "content_status_message": content_status_message,
             "content_status_tone": content_status_tone,

@@ -205,6 +205,23 @@ def test_ai_failure_does_not_overwrite_existing_copy(monkeypatch) -> None:
     )
 
 
+def test_rule_draft_badge_requires_edit_and_manual_save_clears_it() -> None:
+    _seed_account()
+    job_id = _seed_job(
+        title=VALID_TITLE, description=VALID_DESCRIPTION, tags=VALID_TAGS,
+        provider_response=json.dumps({"metadata_review_required": True}),
+    )
+    draft = publish_service.get_publish_job(job_id)
+    assert draft["content_complete"] is False
+    assert draft["content_status_message"] == "文案草稿需编辑"
+    assert draft["content_status_tone"] == "amber"
+    saved = publish_service.update_send_job(job_id, PublishSendJobUpdate(
+        title=VALID_TITLE, description=VALID_DESCRIPTION, tags=VALID_TAGS, cover_file_path="cover.jpg",
+    ))["job"]
+    assert saved["content_complete"] is True
+    assert saved["content_status_message"] == "内容完整"
+
+
 def test_metadata_regeneration_does_not_overwrite_concurrent_publish(monkeypatch) -> None:
     job_id = _seed_job(title=VALID_TITLE, description=VALID_DESCRIPTION, tags=VALID_TAGS)
 
