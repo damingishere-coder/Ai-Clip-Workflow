@@ -45,9 +45,10 @@ def initialize_isolated_test_database():
 
 
 @pytest.fixture(autouse=True)
-def offline_publish_copy_provider(monkeypatch):
+def offline_publish_copy_provider():
     """新成片默认生成 AI 文案，离线回归不得使用真实账号或模型调用。"""
     from app.services import publish_service
+    from unittest.mock import patch
 
     class OfflineProvider:
         name = "offline-test"
@@ -55,4 +56,6 @@ def offline_publish_copy_provider(monkeypatch):
         def generate_json(self, prompt, retry_instruction=None):
             return '{"title":"测试片段里的意外回答","description":"这个回答，把话题带到了意料之外","tags":["测试","片段","访谈"]}'
 
-    monkeypatch.setattr(publish_service, "build_provider", lambda *a, **k: OfflineProvider())
+    # 不提前请求 pytest monkeypatch fixture，避免改变已有临时数据库补丁的恢复顺序。
+    with patch.object(publish_service, "build_provider", lambda *a, **k: OfflineProvider()):
+        yield
