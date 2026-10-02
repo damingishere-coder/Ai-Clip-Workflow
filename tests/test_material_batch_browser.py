@@ -16,11 +16,18 @@ batch_db, human_db = _batch_db_fixture, _human_db_fixture
 
 
 @pytest.mark.parametrize('width',[1440,390])
-def test_batch_confirmation_survives_lost_response_and_reload(width, batch_db, tmp_path):
+@pytest.mark.parametrize('analysis_mode',['staged_v1','codex_full_transcript_v1'])
+def test_batch_confirmation_survives_lost_response_and_reload(width, analysis_mode, batch_db, tmp_path):
     playwright = pytest.importorskip('playwright.sync_api')
     chrome = Path(os.environ.get('PROGRAMFILES','C:/Program Files'))/'Google/Chrome/Application/chrome.exe'
     if not chrome.exists():
         pytest.skip('Chrome unavailable')
+    if analysis_mode == 'codex_full_transcript_v1':
+        from app.services import playback_activation_service as activation
+        with db.get_connection() as c:
+            c.execute('BEGIN IMMEDIATE')
+            activation.apply(c, expected_sha256=activation.preview(c)['current_sha256'])
+            c.commit()
     batch_input(tmp_path)
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1',port=port,log_level='warning',lifespan='off'))
@@ -57,10 +64,14 @@ def test_batch_confirmation_survives_lost_response_and_reload(width, batch_db, t
             page.locator('#batch-select-page').check()
             form = page.locator('#material-batch-form')
             form.locator('[name=selection_profile]').select_option('variety_comedy')
-            assert form.locator('[name=ai_prompt_preset_id]').input_value() == 'preset_001'
+            assert form.locator('[name=ai_prompt_preset_id]').input_value() == ('profile_comedy_playback_v1' if analysis_mode == 'codex_full_transcript_v1' else 'preset_001')
             assert page.locator('#batch-create').is_disabled()
             assert form.locator('[name=highlight_total_limit]').count() == 0
             assert not form.locator('[name=ai_provider]').is_visible()
+            if analysis_mode == 'codex_full_transcript_v1':
+                form.locator('.material-advanced summary').click()
+                form.locator('[name=ai_provider]').select_option('codex')
+                form.locator('[name=analysis_mode]').select_option(analysis_mode)
             form.locator('[name=subtitle_strategy]').select_option('original' if width == 1440 else 'review')
             assert ('不新增或烧录字幕' if width == 1440 else '审片后进入字幕审核') in page.locator('#batch-subtitle-help').inner_text()
             form.locator('[name=auto_production]').set_checked(width == 390)
@@ -73,6 +84,7 @@ def test_batch_confirmation_survives_lost_response_and_reload(width, batch_db, t
             assert json.loads(saved) == submitted[0]
             assert submitted[0]['settings']['auto_production'] == (width == 390)
             assert submitted[0]['settings']['subtitle_strategy'] == ('original' if width == 1440 else 'review')
+            assert submitted[0]['settings'].get('analysis_mode','staged_v1') == analysis_mode
             assert 'highlight_total_limit' not in submitted[0]['settings']
             page.reload(wait_until='networkidle')
             assert page.locator('#batch-pending').is_visible()
@@ -81,6 +93,7 @@ def test_batch_confirmation_survives_lost_response_and_reload(width, batch_db, t
             assert form.locator('[name=subtitle_strategy]').input_value() == submitted[0]['settings']['subtitle_strategy']
             assert form.locator('[name=selection_profile]').is_disabled()
             assert form.locator('[name=selection_profile]').input_value() == submitted[0]['settings']['selection_profile']
+            assert form.locator('[name=analysis_mode]').input_value() == analysis_mode
             page.locator('#batch-retry').click()
             page.get_by_text('已创建 10 个任务，等待逐个导入。重复请求已安全核对。',exact=True).wait_for()
             assert len(submitted) == 2 and submitted[0] == submitted[1]

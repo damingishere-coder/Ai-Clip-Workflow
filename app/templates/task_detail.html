@@ -207,7 +207,7 @@
       {% if challenger_trial %}
       <p class="empty-note">试验不会自动修改正式方案。后续实验归属以实际 AI Run 的冻结策略为准。</p>
       {% elif task.selection_profile == "variety_comedy" %}
-      <p class="empty-note">康熙统一使用 1 号提示词；4 号旧方案已归档。内容修订是提示词修改记录，分析次数是任务运行记录，两者分别计数。综艺分析三个阶段均使用本任务冻结的规则，历史任务不会自动套用后来的修改。</p>
+      <p class="empty-note">内容修订是提示词修改记录，分析次数是任务运行记录，两者分别计数。综艺分析使用本任务冻结的规则与分析流程，历史任务不会自动套用后来的修改。</p>
       {% else %}
       <p class="empty-note">按内容类型选择合适的 Prompt；保存方案不会改变已排队的分析。内容修订与分析次数分别记录，历史结果保留原版本。</p>
       {% endif %}

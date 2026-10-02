@@ -206,6 +206,13 @@ def freeze_new_job_payload(connection, task_id: str, job_type: str, payload: dic
     }
     from app.services.visual_policy_service import task_visual_policy
     snapshot["visual_policy"] = task_visual_policy(connection, task_id)
+    from app.services.ai.analysis_modes import STAGED_MODE, validate_analysis_mode
+    mode = result.pop("analysis_mode", STAGED_MODE)
+    validate_analysis_mode(mode, provider=identity["name"], profile_id=task["selection_profile"],
+                           visual_enabled=snapshot["visual_policy"]["enabled"],
+                           rules_version=json.loads(prompt["content_profile_json"])["rules_version"])
+    if mode != STAGED_MODE:
+        snapshot["analysis_mode"] = mode
     if task["selection_profile"] == "variety_comedy":
         from app.services.clip_feedback_service import list_recent_feedback_context_with_connection
         snapshot["feedback_context"] = {
@@ -252,6 +259,11 @@ def read_job_snapshot(job: dict, *, connection=None) -> dict | None:
                 or any(not isinstance(item, dict) for item in feedback["items"])):
             raise ValueError("Job 审片反馈快照损坏，不能替换为当前反馈")
     analyzer_key(snapshot["selection"], snapshot["prompt"])
+    from app.services.ai.analysis_modes import STAGED_MODE, validate_analysis_mode
+    validate_analysis_mode(snapshot.get("analysis_mode", STAGED_MODE), provider=snapshot["provider"],
+                           profile_id=snapshot["selection"].get("selection_profile"),
+                           visual_enabled=snapshot.get("visual_policy", {}).get("enabled", False),
+                           rules_version=json.loads(snapshot["prompt"]["content_profile_json"])["rules_version"])
     from app.db.database import get_connection
     with (nullcontext(connection) if connection is not None else get_connection()) as connection:
         prompt = snapshot["prompt"]

@@ -19,6 +19,11 @@
     field('confirmed').checked = true;
   }
   function controls() {
+    const fullSupported = field('selection_profile').value === 'variety_comedy' &&
+      field('selection_profile').selectedOptions[0]?.dataset.rules === 'comedy-playback-v1' &&
+      field('ai_provider').value === 'codex' && !field('visual_enabled').checked;
+    field('analysis_mode').querySelector('[value="codex_full_transcript_v1"]').disabled = !fullSupported;
+    if (!pending && !fullSupported) field('analysis_mode').value = 'staged_v1';
     form.querySelectorAll('input,select').forEach(el => { el.disabled = busy || !!pending; });
     document.querySelectorAll('[data-batch-material]').forEach(el => { el.disabled = busy || !!pending; });
     byId('batch-create').disabled = busy || !!pending || !selected.size || !field('confirmed').checked;
@@ -104,7 +109,7 @@
         metadata.className = 'material-note';
         const progress = document.createElement('progress'); progress.max = active || 1; progress.value = imported;
         progress.setAttribute('aria-label', '视频导入进度');
-        const summary = node('p', `已导入 ${imported} / ${active}${deleted ? ` · 已删除 ${deleted}` : ''} · ${batch.config.subtitle_strategy === 'review' ? '新增字幕' : '跳过字幕'}`);
+        const summary = node('p', `已导入 ${imported} / ${active}${deleted ? ` · 已删除 ${deleted}` : ''} · ${batch.config.subtitle_strategy === 'review' ? '新增字幕' : '跳过字幕'} · ${batch.config.analysis_mode === 'codex_full_transcript_v1' ? 'Codex 全文一次分析' : '原有分段流程'}`);
         summary.className = 'material-note';
         const stages = node('div', ''); stages.className = 'material-batch-stages';
         const counts = new Map();
@@ -169,6 +174,7 @@
     const settings = {selection_profile:field('selection_profile').value, ai_prompt_preset_id:field('ai_prompt_preset_id').value,
       ai_provider:field('ai_provider').value, subtitle_strategy:field('subtitle_strategy').value,
       visual_enabled:field('visual_enabled').checked, auto_production:field('auto_production').checked};
+    if (field('analysis_mode').value === 'codex_full_transcript_v1') settings.analysis_mode = field('analysis_mode').value;
     for (const name of ['candidate_clip_count','final_clip_target','max_clip_duration','highlight_density_per_hour']) settings[name] = Number(field(name).value);
     const request = {material_ids:Array.from(selected).sort(), settings, request_key:crypto.randomUUID(), confirmed:true, create_new_production:field('create_new_production').checked};
     try { localStorage.setItem(key, JSON.stringify(request)); pending = request; }
