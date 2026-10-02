@@ -148,6 +148,7 @@ class ComedyAnalysisRequest:
     feedback_context: list[dict] | None = None
     visual_session: Any | None = None
     profile: ContentProfile = COMEDY_POLICY
+    analysis_mode: str = "staged_v1"
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,9 @@ class ComedyTranscriptWindow:
 
 
 def analyze_variety_comedy(request: ComedyAnalysisRequest) -> AIClipAnalysisResult:
+    if request.analysis_mode != "staged_v1":
+        from app.services.ai.variety_full_analyzer import analyze_full_variety
+        return analyze_full_variety(request)
     from app.services.content_profile_service import _assert_supported
     _assert_supported(request.profile)
     if request.profile.id != "variety_comedy":

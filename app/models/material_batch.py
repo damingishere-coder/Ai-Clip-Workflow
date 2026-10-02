@@ -19,9 +19,18 @@ class BatchSettings(BaseModel):
     visual_enabled: bool = False
     subtitle_strategy: Literal["original", "review"] = "original"
     auto_production: bool = False
+    analysis_mode: Literal["staged_v1", "codex_full_transcript_v1"] = "staged_v1"
+
+    @model_validator(mode="after")
+    def validate_analysis(self):
+        from app.services.ai.analysis_modes import validate_analysis_mode
+        validate_analysis_mode(self.analysis_mode, provider=self.ai_provider,
+                               profile_id=self.selection_profile, visual_enabled=self.visual_enabled)
+        return self
 
     def task_payload(self, name: str) -> TaskCreate:
-        return TaskCreate(task_name=name[:120], auto_mode=self.auto_production, **self.model_dump(exclude={"auto_production"}))
+        return TaskCreate(task_name=name[:120], auto_mode=self.auto_production,
+                          **self.model_dump(exclude={"auto_production", "analysis_mode"}))
 
 
 class MaterialBatchCreate(BaseModel):

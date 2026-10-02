@@ -6,6 +6,7 @@
 import json
 import math
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from sqlite3 import Row
 from uuid import uuid4
@@ -150,6 +151,11 @@ def validate_ai_analysis_meta_for_cut(meta: dict, expected_profile: str) -> dict
             ):
                 reason = "analysis_coverage_invalid"
     if not reason and not resolved["analysis_incomplete"] and not resolved["quality_degraded"]:
+        if resolved.get("analysis_mode") == "codex_full_transcript_v1" and (
+                expected_profile != "variety_comedy" or resolved.get("scoring_rules_version") != "comedy-playback-v1"
+                or resolved.get("expected_units") != 1 or type(resolved.get("model_call_count")) is not int or resolved["model_call_count"] != 1
+                or type(resolved.get("submitted_row_count")) is not int or resolved["submitted_row_count"] <= 0):
+            reason = "full_analysis_evidence_invalid"
         profile = str(expected_profile or "general")
         invalid_item_count = resolved.get("invalid_item_count")
         if type(invalid_item_count) is not int or invalid_item_count != 0:
@@ -252,6 +258,12 @@ def get_task_ai_analysis_status(task_id: str) -> dict:
         except OSError:
             pass
     meta = _read_analysis_meta(task_id) if has_analysis else {}
+    from app.services.material_batch_service import task_item
+    with get_connection() as connection:
+        batch_item = task_item(connection, task_id)
+        running_job = connection.execute("SELECT checkpoint_json,checkpoint_updated_at FROM workflow_jobs WHERE task_id=? AND status='running' AND job_type IN ('ai_analysis','auto_pipeline') ORDER BY created_at DESC LIMIT 1", (task_id,)).fetchone()
+    analysis_mode = (batch_item["generation"]["snapshot"].get("analysis_mode", "staged_v1")
+                     if batch_item else meta.get("analysis_mode", "staged_v1"))
     window_status = (
         get_latest_long_live_window_status(task_id)
         if task.get("selection_profile") == "long_live_talk"
@@ -300,10 +312,25 @@ def get_task_ai_analysis_status(task_id: str) -> dict:
         percent = 100
         message = "已找到 AI 分析结果文件。"
 
+    wait_seconds = 0
+    if analysis_mode == "codex_full_transcript_v1":
+        if is_running:
+            message = "Codex 全文一次分析：正在准备或等待完整原文请求完成；返回后进行本地校验。"
+            if running_job and running_job["checkpoint_updated_at"]:
+                checkpoint = json.loads(running_job["checkpoint_json"] or "{}")
+                unit = checkpoint.get("_ai_analysis_units_v1", {}).get("namespaces", {}).get(analysis_mode, {}).get("units", {}).get("full_001", {})
+                if unit.get("status") == "running":
+                    started = datetime.fromisoformat(running_job["checkpoint_updated_at"])
+                    wait_seconds = max(0, int((datetime.now(timezone.utc) - started.replace(tzinfo=started.tzinfo or timezone.utc)).total_seconds()))
+                    message += f" 当前请求已等待 {wait_seconds} 秒。"
+        elif status == "completed":
+            message = "Codex 全文一次分析已完成并通过本地校验；成片仍需人工审核。"
     return {
         "task_id": task_id,
         "status": status,
         "message": message,
+        "analysis_mode": analysis_mode,
+        "wait_seconds": wait_seconds,
         "percent": percent,
         "is_running": is_running,
         "task_status": task.get("status"),
@@ -1240,7 +1267,8 @@ def _analyze_with_profile(
         overlap_seconds = 45 if provider_name == "local" else 60
         append_task_log(
             task_id,
-            "综艺三阶段分析："
+            "Codex 全文一次分析：准备完整逐句原文，等待模型比较并返回候选；仍需人工审片。"
+            if task.get("_analysis_mode") == "codex_full_transcript_v1" else "综艺三阶段分析："
             f"{window_seconds // 60} 分钟重叠召回窗口，重叠 {overlap_seconds} 秒；"
             f"候选池最多 {min(12, int(task['candidate_clip_count']))} 条，"
             f"最终最多启用 {int(task.get('final_clip_target') or 5)} 条 A 级片段",
@@ -1258,6 +1286,7 @@ def _analyze_with_profile(
                 feedback_context=task.get("_analysis_feedback_context"),
                 visual_session=visual_session,
                 profile=profile,
+                analysis_mode=task.get("_analysis_mode", "staged_v1"),
             )
         )
 
@@ -1363,6 +1392,11 @@ def _commit_ai_analysis_result(
                 task_id=task_id,
                 allowed_job_types={job_service.JOB_TYPE_AI_ANALYSIS, job_service.JOB_TYPE_AUTO_PIPELINE},
             )
+            from app.services.content_profile_service import read_job_snapshot
+            frozen_mode = (read_job_snapshot(job, connection=connection) or {}).get("analysis_mode", "staged_v1")
+            result_mode = (analysis_payload.get("analysis_meta") or {}).get("analysis_mode", "staged_v1")
+            if (frozen_mode == "codex_full_transcript_v1" or result_mode == "codex_full_transcript_v1") and frozen_mode != result_mode:
+                raise ValueError("实际分析模式与当前 Job 冻结配置不一致，旧结果保留")
             from app.services.challenger_trial_service import task_binding
             if task_binding(connection, task_id):
                 from app.services.content_profile_service import read_job_snapshot
@@ -1549,6 +1583,7 @@ def process_task_ai_analysis(task_id: str, provider: str | None = None) -> dict:
         frozen_job = read_job_snapshot(job)
         if frozen_job is not None:
             task = {**task, **frozen_job["selection"]}
+            task["_analysis_mode"] = frozen_job.get("analysis_mode", "staged_v1")
             task["_visual_policy"] = frozen_job.get("visual_policy") or {"enabled": False}
             if "feedback_context" in frozen_job:
                 task["_analysis_feedback_context"] = frozen_job["feedback_context"]["items"]
