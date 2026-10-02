@@ -99,7 +99,7 @@ class TaskCreate(BaseModel):
     auto_schedule_interval_hours: int = Field(default=3, ge=1, le=168)
     auto_schedule_daily_start_time: str = Field(default="07:00", max_length=5)
     auto_schedule_daily_end_time: str = Field(default="00:00", max_length=5)
-    auto_metadata_use_ai: bool = False
+    auto_metadata_use_ai: bool = True
 
     @validator("auto_clip_count")
     def validate_auto_clip_count(cls, value: str) -> str:
