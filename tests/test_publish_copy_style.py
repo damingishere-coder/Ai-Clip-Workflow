@@ -104,6 +104,11 @@ def test_summary_cleanup_keeps_real_content():
     assert clean_summary_draft("53秒。00:01:10原始开头介绍。老师开口就夸她。文字无法确认笑声。") == "老师开口就夸她"
 
 
+def test_word_safety_rewrites_a_whole_phrase_without_broken_chinese():
+    assert publish_service._apply_content_safety("死党说话不死板") == "好友说话不刻板"
+    assert publish_service._apply_content_safety("拍马屁也有死角") == "讨好也有盲区"
+
+
 @pytest.mark.parametrize("status", ["PUBLISHING", "PUBLISHED", "NEED_REVIEW", "CANCELLED"])
 def test_regeneration_does_not_touch_execution_or_history(status, monkeypatch):
     monkeypatch.setattr(publish_service, "get_publish_job", lambda _: {"status": status})

@@ -211,6 +211,10 @@ _METADATA_UPGRADE_LOCK = Lock()
 
 SAFE_TOPIC_FALLBACKS = DOUYIN_FALLBACK_TAGS
 CONTENT_SAFETY_REPLACEMENTS = (
+    ("死党", "好友"),
+    ("死板", "刻板"),
+    ("死角", "盲区"),
+    ("拍马屁", "讨好"),
     ("笑死我了", "笑到停不下"),
     ("笑死", "笑到停不下"),
     ("气死", "太上头"),
