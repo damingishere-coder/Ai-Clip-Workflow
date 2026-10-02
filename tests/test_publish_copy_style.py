@@ -47,6 +47,8 @@ def test_ai_default_writes_a_hook_and_gets_dialogue_instead_of_editor_notes(prov
     {"description": "53秒。现场介绍刘珍担任国标评审"},
     {"description": "00:25:10原始开头介绍国标评审"},
     {"description": "据转写，舞蹈效果待核实"},
+    {"description": "现场介绍老师的舞蹈经历"},
+    {"description": "一段聊天引发热议，现场爆笑"},
     {"description": COPY["title"]},
     {"tags": ["康熙来了", "国标"]},
     {"tags": ["康熙来了", "国标", "刘真", "综艺"]},
