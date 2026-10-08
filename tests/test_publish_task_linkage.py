@@ -576,7 +576,7 @@ def test_tasks_page_and_link_api_show_correct_history_summary(tmp_path, publishe
     for _ in range(2):
         page = client.get('/tasks')
         assert page.status_code == 200
-        row = next(row for row in re.findall(r'<tr\b[^>]*>.*?</tr>', page.text, re.S) if f'data-task-id="{task}"' in row)
+        row = next(row for row in re.findall(r'<tr\b[^>]*>.*?</tr>', page.text, re.S) if f'href="/tasks/{task}"' in row)
         assert label in row and '待同步' not in row
         api = client.get(f'/api/publish/tasks/{task}/link-state')
         assert api.status_code == 200 and api.json()['label'] == label

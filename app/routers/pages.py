@@ -1,10 +1,7 @@
 from pathlib import Path
-import re
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException, Request, Query
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import RedirectResponse
 
 from app.core.config import settings
 from app.services.ai_prompt_preset_service import list_ai_prompt_presets, get_ai_prompt_preset
@@ -20,19 +17,19 @@ from app.services.task_query_service import (
     get_subtitle_task_context,
     get_subtitle_workflow_context,
     get_system_status_context,
-    get_tasks_page_context,
 )
-from app.services.ui_projection_service import task_projections
 from app.services.task_service import (
     get_artifact_paths,
     get_latest_ai_analysis_run,
     get_task,
+    get_task_workflow_steps,
     get_transcript_preview,
     get_workflow_steps,
     list_clip_candidates,
     list_ai_analysis_runs,
     list_output_clips,
     list_task_name_history,
+    list_tasks,
 )
 
 
@@ -40,45 +37,9 @@ router = APIRouter(tags=["pages"])
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
 
 
-def _safe_return_to(value):
-    """Only a local task-list location can be carried between workspaces."""
-    value = str(value or '')
-    if len(value) > 1500 or any(ord(char) < 32 for char in value):
-        return '/tasks'
-    try:
-        parsed = urlsplit(value)
-    except ValueError:
-        return '/tasks'
-    if parsed.scheme or parsed.netloc or parsed.path != '/tasks' or parsed.fragment:
-        return '/tasks'
-    params = [(key, val) for key, val in parse_qsl(parsed.query) if key in {'q', 'platform', 'stage', 'sort', 'page'}]
-    return '/tasks' + ('?' + urlencode(params) if params else '')
-
-
-def _with_return_to(url, return_to):
-    parsed = urlsplit(url)
-    query = [(key, val) for key, val in parse_qsl(parsed.query) if key != 'return_to']
-    query.append(('return_to', return_to))
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
-
-
-def _task_navigation(request, task_id):
-    return_to = _safe_return_to(request.query_params.get('return_to'))
-    return dict(return_to=return_to, task_detail_url=_with_return_to(f'/tasks/{task_id}', return_to),
-        review_url=_with_return_to(f'/tasks/{task_id}/clips/review', return_to),
-        subtitle_url=_with_return_to(f'/subtitles/{task_id}', return_to),
-        publish_url=_with_return_to(f'/publish?task_id={task_id}&tab=content', return_to),
-        transcript_url=_with_return_to(f'/tasks/{task_id}/transcript', return_to),
-        visual_url=_with_return_to(f'/tasks/{task_id}/visual-evidence', return_to))
-
-
 @router.get("/review-inbox")
 async def review_inbox_page(request: Request, category: str = 'all', page: int = Query(1, ge=1)):
-    from app.services.production_workbench_service import CATEGORIES, inbox
-    if category not in {'all', *CATEGORIES}:
-        raise HTTPException(status_code=400, detail='待办分类无效')
-    if request.query_params.get('embedded') != '1':
-        return RedirectResponse('/materials?' + urlencode(dict(view='inbox', category=category, page=page)), status_code=303)
+    from app.services.production_workbench_service import inbox
     try:
         context = inbox(category, page)
     except ValueError as exc:
@@ -103,23 +64,11 @@ async def dashboard(request: Request):
 
 
 @router.get("/tasks")
-def tasks_page(request: Request, q: str = Query('', max_length=300), platform: str = 'all',
-               stage: str = 'all', sort: str = 'created_desc', page: int = Query(1, ge=1)):
-    try:
-        context = get_tasks_page_context(q=q, platform=platform, stage=stage, sort=sort, page=page)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    tasks = context['tasks']
-    return_to = '/tasks?' + urlencode({**context['filters'], 'page':context['pagination']['page']})
-    context['return_to'] = return_to
+async def tasks_page(request: Request):
+    tasks = list_tasks()
     link_states = get_publish_link_states([task["id"] for task in tasks])
     for task in tasks:
         task["publish_link_state"] = link_states.get(task["id"], {})
-        task['navigation'] = dict(detail=_with_return_to(f"/tasks/{task['id']}", return_to),
-            primary=_with_return_to(task['ui']['primary_action']['url'], return_to),
-            review=_with_return_to(f"/tasks/{task['id']}/clips/review", return_to),
-            subtitle=_with_return_to(f"/subtitles/{task['id']}", return_to),
-            publish=_with_return_to(f"/publish?task_id={task['id']}&tab=content", return_to))
     return templates.TemplateResponse(
         name="tasks.html",
         request=request,
@@ -127,21 +76,9 @@ def tasks_page(request: Request, q: str = Query('', max_length=300), platform: s
             "request": request,
             "active_page": "tasks",
             "settings": settings,
-            **context,
+            "tasks": tasks,
         },
     )
-
-
-@router.get('/api/ui/tasks')
-def ui_tasks(q: str = Query('', max_length=300), platform: str = 'all', stage: str = 'all',
-             sort: str = 'created_desc', page: int = Query(1, ge=1)):
-    try:
-        context = get_tasks_page_context(q=q, platform=platform, stage=stage, sort=sort, page=page)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    context['tasks'] = [{key: task[key] for key in ('id', 'title', 'platform', 'platform_label', 'created_at', 'ui')}
-                        for task in context['tasks']]
-    return context
 
 
 @router.get("/tasks/new")
@@ -181,10 +118,6 @@ async def task_detail_page(request: Request, task_id: str):
     task = get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    task['ui'] = task_projections([task_id])[task_id]
-    navigation = _task_navigation(request, task_id)
-    task['ui']['primary_action'] = {**task['ui']['primary_action'],
-        'url':_with_return_to(task['ui']['primary_action']['url'], navigation['return_to'])}
 
     from app.db.database import get_connection
     from app.services.production_review_service import requires_review
@@ -196,18 +129,6 @@ async def task_detail_page(request: Request, task_id: str):
         trial = task_trial(task_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    with get_connection() as connection:
-        frozen_row = connection.execute('''
-            SELECT v.preset_id,v.preset_name_snapshot AS name,v.prompt_text,v.version_number,v.prompt_sha256
-            FROM ai_analysis_runs r JOIN ai_prompt_versions v ON v.id=r.prompt_version_id
-            WHERE r.task_id=? ORDER BY r.run_number DESC LIMIT 1
-        ''', (task_id,)).fetchone()
-        if frozen_row is None:
-            frozen_row = connection.execute('''
-                SELECT f.preset_id,p.name,f.prompt_text,NULL AS version_number
-                FROM task_generation_rules f LEFT JOIN ai_prompt_presets p ON p.id=f.preset_id WHERE f.task_id=?
-            ''', (task_id,)).fetchone()
-        frozen_prompt = dict(frozen_row) if frozen_row else None
 
     return templates.TemplateResponse(
         name="task_detail.html",
@@ -217,15 +138,13 @@ async def task_detail_page(request: Request, task_id: str):
             "active_page": "tasks",
             "settings": settings,
             "task": task,
-            **navigation,
             "production_review_required": is_batch,
             "publish_link_state": get_task_publish_link_state(task_id),
-            "workflow_steps": task['ui']['workflow_steps'],
+            "workflow_steps": get_task_workflow_steps(task),
             "transcript_lines": get_transcript_preview(task_id),
             "output_clips": list_output_clips(task_id),
             "ai_prompt_presets": [get_ai_prompt_preset(trial["challenger_preset_id"])] if trial else list_ai_prompt_presets(),
             "challenger_trial": trial,
-            "frozen_prompt": frozen_prompt,
             "current_prompt_preset": get_ai_prompt_preset(task.get("ai_prompt_preset_id") or "preset_001"),
             "latest_ai_analysis_run": get_latest_ai_analysis_run(task_id),
             "ai_analysis_runs": list_ai_analysis_runs(task_id),
@@ -252,7 +171,6 @@ async def task_transcript_page(request: Request, task_id: str):
             "active_page": "tasks",
             "settings": settings,
             "task": task,
-            **_task_navigation(request, task_id),
             "transcript_path": str(transcript_path),
             "transcript_text": transcript_text,
             "transcript_exists": transcript_path.exists(),
@@ -306,7 +224,6 @@ async def _render_clip_review_page(
             "settings": settings,
             "task": task,
             "production_review_required": review_required,
-            **_task_navigation(request, task_id),
             "clips": visible_clips,
             "clip_count": len(all_clips),
             "enabled_clip_count": sum(1 for clip in all_clips if clip["enabled"]),
@@ -382,7 +299,6 @@ async def subtitle_task_page(request: Request, task_id: str):
             "active_page": "subtitles",
             "settings": settings,
             "subtitle_task_mode": True,
-            **_task_navigation(request, task_id),
             "publish_link_state": get_task_publish_link_state(task_id),
             **context,
         },
@@ -392,9 +308,6 @@ async def subtitle_task_page(request: Request, task_id: str):
 @router.get("/publish")
 def publish_center_page(request: Request):
     focus_task_id = request.query_params.get("task_id", "")
-    focus_job_id = request.query_params.get('job_id', '')
-    if focus_job_id and not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', focus_job_id):
-        raise HTTPException(status_code=400, detail='发布记录定位参数无效')
     return templates.TemplateResponse(
         name="publish.html",
         request=request,
@@ -404,7 +317,6 @@ def publish_center_page(request: Request):
             "settings": settings,
             "publish_message": request.query_params.get("publish_message", ""),
             "focus_task_id": focus_task_id,
-            "focus_job_id": focus_job_id,
             "focus_platform": "douyin",
             "focus_tab": request.query_params.get("tab", ""),
             **get_publish_center_context(focus_task_id=focus_task_id),
@@ -477,5 +389,4 @@ async def visual_evidence_page(request: Request, task_id: str, run_id: str | Non
     summary["global_reason"] = (meta.get("global_judge") or {}).get("reason")
     summary["unavailable"] = [{"source_id": key, "reason": value.get("failure_reason")} for key, value in (meta.get("candidates") or {}).items() if value.get("status") == "unavailable"]
     return templates.TemplateResponse(name="visual_evidence.html", request=request,
-        context={"request": request, "active_page": "tasks", "settings": settings, "task": task, "run_id": run_id or "", "visual_summary": summary,
-                 **_task_navigation(request, task_id)})
+        context={"request": request, "active_page": "tasks", "settings": settings, "task": task, "run_id": run_id or "", "visual_summary": summary})

@@ -2160,3 +2160,10 @@ PR #156最终3b26f2b的CI run37726936338三项全部success，独立只读审查
 12:47电脑发生重启，既有服务进程创建时间为13:34，随后复核已恢复；当前RunDock桌面app18376托管Web监听10548/父11728/祖父29500与Worker监听5332/父22532，CLI2999未起，没有新建服务或为前端更新重启进程。13:48只读final-patch-runtime.json确认运行fea1e2a/clean、health ok、deepreadiness ready及HTTP样式/JS SHA与运行文件一致；正式工作台截图为未纳入Git的output/playwright/live-workbench-final-1440.png，控制台0错误/0警告。补充更新前后51表/schema/两份.env摘要相同，quick_check ok、FK0，证据为忽略目录prepatch-recovered-fingerprint.json/postpatch-recovered-fingerprint.json。原主目录codemap、文档、PROJECT_REAUDIT与agent任务已有修改保留。
 
 主仓库.git/config发现11622字节全NUL、写入时间12:19，先备份recovery/git-config-corrupt-20261008.bin，随后仅恢复核实的core/origin/master/worktreeConfig；没有回退索引、分支或文件，未知丢失个人设置无法还原，也不推断损坏原因。13:39调度142未来、发送中0、漏期1，12:30记录b6ab17243eac已由schedule_missed保护转WAITING；当时下一条14:00。未代用户补发、改期或执行任何人工审批。此段为实际产品交付回执，后续仅按Git流程交付文档，不提前填写未完成PR。
+
+
+## 2026-10-08：按用户要求恢复重构前页面
+
+用户不喜欢已上线的全站UI并明确要求回溯。基于最新master建立codex/restore-previous-ui，恢复cbd55c1的templates/static和页面上下文，删除新增工作区入口/资源/投影及对应结构测试；既有UI测试恢复旧契约。保留字幕编辑器可靠保存、当前字幕凭据校验和向后兼容的后台文案/版本/动态策略保护。原开发目录dirty修改不触及，无DB迁移、业务记录写入或配置变更。
+
+任务查询、工作台、自动流程、发布API/文案、动态策略、字幕七模块128项定向通过；真实Chrome17项通过（字幕慢保存/立即切轨/冲突/审核锁4、发送中心5、动态策略1、工作台2、审片交接5），模拟无Chrome16通过/9跳过，无外键清理失败。Ruff、Python编译、14份JS语法和旧模板/样式快照核对通过，独立审查无阻塞。正式回退待最终必要CI、合并及原Web更新后追加回执；不以本地回退代表运行版已恢复。

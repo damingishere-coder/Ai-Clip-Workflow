@@ -110,9 +110,10 @@ def test_legacy_auto_review_flag_pagination_escaping_and_readonly(human_db, monk
     for page in (1,2):
         response = client.get('/review-inbox',params={'category':'clips','page':page,'embedded':'1'})
         assert response.status_code == 200 and '<script>alert(1)</script>' not in response.text
-    old_link = client.get('/review-inbox?category=clips&page=2', follow_redirects=False)
-    assert old_link.status_code == 303
-    assert old_link.headers['location'] == '/materials?view=inbox&category=clips&page=2'
+    old_link = client.get('/review-inbox?category=clips&page=2')
+    assert 'http-equiv="refresh"' in old_link.text
+    assert '/materials?view=inbox&amp;category=clips&amp;page=2' in old_link.text
+    assert '<main' not in old_link.text
     materials = client.get('/materials?view=inbox')
     assert 'id="material-inbox-view"' in materials.text
     assert 'href="/review-inbox"' not in materials.text
@@ -152,7 +153,7 @@ def test_manual_import_waiting_for_explicit_processing_is_visible(batch_db,tmp_p
     assert work.inbox('start')['items'][0]['task_id'] == item['task_id']
     assert work.inbox('start')['counts']['start']['count'] == 1
     cards = {x['label']:x for x in work.dashboard()['cards']}
-    assert '1 个待继续处理' in cards['制作中']['note']
+    assert '1 个待继续处理' in cards['处理中']['note']
     with db.get_connection() as c:
         c.execute("UPDATE workflow_jobs SET status='failed' WHERE id=?",(item['job_id'],))
         c.commit()

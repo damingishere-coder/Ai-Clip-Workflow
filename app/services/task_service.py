@@ -814,8 +814,6 @@ def get_task_live_status(task_id: str) -> dict:
     task = get_task(task_id, include_video_probe=False)
     if not task:
         raise ValueError("任务不存在")
-    from app.services.ui_projection_service import task_projections
-    ui = task_projections([task_id])[task_id]
 
     status = task["status"]
     auto_mode = bool(task.get("auto_mode"))
@@ -889,7 +887,6 @@ def get_task_live_status(task_id: str) -> dict:
 
     return {
         "task_id": task_id,
-        "ui": ui,
         "snapshot_at": _now_iso(),
         "status": status,
         "status_label": display_status_label,

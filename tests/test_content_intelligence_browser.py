@@ -37,7 +37,7 @@ def test_freeze_and_reopen_report_without_official_account(width, human_db, tmp_
             errors, writes = [], []
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.on("request", lambda r: writes.append(r.url) if r.method not in {"GET", "HEAD"} else None)
-            page.goto(f"http://127.0.0.1:{port}/content-review?tab=experience", wait_until="networkidle")
+            page.goto(f"http://127.0.0.1:{port}/content-review", wait_until="networkidle")
             assert not writes
             page.locator("#intelligence-create").click()
             page.get_by_text("报告已保存。生产策略和排期保持不变。", exact=True).wait_for()

@@ -85,7 +85,7 @@ def test_clip_review_uses_async_deduplicated_cut_job_progress() -> None:
     task_id = _seed_clip_review_task()
 
     response = TestClient(app).get(f"/tasks/{task_id}/clips/review")
-    script = (settings.project_root / "app" / "static" / "js" / "clip-workspace.js").read_text(encoding="utf-8")
+    script = (settings.project_root / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
 
     assert response.status_code == 200
     assert f'data-endpoint="/api/tasks/{task_id}/process/cuts-async"' in response.text
@@ -95,7 +95,7 @@ def test_clip_review_uses_async_deduplicated_cut_job_progress() -> None:
 
 
 def test_ai_analysis_locks_related_controls_while_running() -> None:
-    script = (settings.project_root / "app" / "static" / "js" / "task-progress.js").read_text(encoding="utf-8")
+    script = (settings.project_root / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
 
     assert "function setAiAnalysisControlsDisabled(disabled)" in script
     assert "if (!aiAnalysisForm || isAiAnalysisBusy) return" in script

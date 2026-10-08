@@ -824,7 +824,7 @@ def test_live_status_endpoint_returns_404_for_missing_task():
 
 def test_task_detail_live_status_frontend_uses_partial_refresh():
     template = (settings.project_root / "app" / "templates" / "task_detail.html").read_text(encoding="utf-8")
-    script = (settings.project_root / "app" / "static" / "js" / "task-progress.js").read_text(encoding="utf-8")
+    script = (settings.project_root / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
     live_script = script[
         script.index("function renderTaskLiveStatus"):
         script.index("async function pollAiAnalysisStatus")

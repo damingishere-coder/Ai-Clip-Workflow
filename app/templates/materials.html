@@ -1,10 +1,9 @@
 {% extends "base.html" %}
-{% from "partials/production_config.html" import production_config %}
 {% block title %}素材池 · {{ settings.app_name }}{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', path='css/production-workbench.css') }}?v=20260915-inbox"><link rel="stylesheet" href="{{ url_for('static', path='css/materials.css') }}?v=20261008-workspace">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', path='css/production-workbench.css') }}?v=20260915-inbox"><link rel="stylesheet" href="{{ url_for('static', path='css/materials.css') }}?v=20260915-inbox">{% endblock %}
 {% block content %}
 {% set material_view = request.query_params.get("view", "library") %}
-<section class="page-heading material-heading"><div><p class="eyebrow">素材与制作</p><h1>素材库</h1><p>登记本机视频，选择素材开始制作。</p></div><a class="secondary-button" href="/materials#material-scan-form" data-material-view="library">＋ 添加素材</a></section>
+<section class="page-heading material-heading"><div><p class="eyebrow">SOURCE LIBRARY</p><h1>把素材，变成下一条作品。</h1><p>选择视频 · 配置批次 · 集中处理待办</p></div><a class="secondary-button" href="/materials#material-scan-form" data-material-view="library">＋ 添加素材</a></section>
 <nav class="material-view-nav" aria-label="素材池工作区">
   <a href="/materials" data-material-view="library" {% if material_view != 'inbox' %}aria-current="page"{% endif %}>素材与批次</a>
   <a href="/materials?view=inbox" data-material-view="inbox" {% if material_view == 'inbox' %}aria-current="page"{% endif %}>统一待办 <span id="material-inbox-count">…</span></a>
@@ -50,14 +49,27 @@
 <section class="panel material-panel material-library-panel" aria-labelledby="library-title">
   <div class="panel-header"><div><p class="eyebrow">01 / 选择素材</p><h2 id="library-title">已登记素材</h2><p id="material-total">正在加载…</p></div><button class="secondary-button" id="material-refresh" type="button">刷新</button></div>
   <div class="material-library-tools"><label class="material-check"><input id="batch-select-page" type="checkbox"><span>全选本页</span></label><button id="batch-clear-selection" class="material-text-button" type="button">清空选择</button><span id="material-selected-summary" aria-live="polite">已选 0 个</span></div>
-  <div id="material-library" class="material-library-grid material-library-list"></div>
+  <div id="material-library" class="material-library-grid"></div>
   <div class="material-pagination"><button class="secondary-button" id="material-previous" type="button">上一页</button><span class="material-note">同一文件版本重复登记会自动复用</span><button class="secondary-button" id="material-next" type="button">下一页</button></div>
 </section>
 <section class="panel material-panel material-config-panel" id="batch-panel" aria-labelledby="batch-title">
-  <div class="material-config-heading"><p class="eyebrow">02 / 制作设置</p><h2 id="batch-title">开始一批制作</h2><p class="material-note">为选中的视频统一配置，原片保留。</p></div>
+  <div class="material-config-heading"><p class="eyebrow">02 / 制作设置</p><h2 id="batch-title">批量创建任务</h2><p class="material-note">为选中的视频统一配置，原片保留。</p></div>
   <form id="material-batch-form">
-    {{ production_config(content_profiles, prompt_presets, settings, "batch") }}
-    <label class="material-option material-check"><input type="checkbox" name="auto_production"><span><strong>创建后自动制作</strong><small>自动转写、AI 选片和预切，完成后等待你审片。</small></span></label>
+    <label>内容类型<select class="control" name="selection_profile" required><option value="">请选择内容类型</option>{% for profile in content_profiles %}<option value="{{ profile.id }}" data-prompt="{{ profile.prompt_preset_id }}" data-rules="{{ profile.rules_version }}">{{ profile.name }}{{ ' · 试用' if profile.id in ['interview_story','knowledge_opinion'] else '' }}</option>{% endfor %}</select></label>
+    <div class="form-row material-target-fields">
+      <label>目标成片数<input class="control" name="final_clip_target" type="number" min="1" max="12" value="5" required></label>
+      <label>单条最长（分钟）<input class="control" name="max_clip_duration" type="number" min="1" max="60" value="10" required></label>
+    </div>
+    <label class="material-option material-check"><input type="checkbox" name="auto_production"><span><strong>导入后自动制作</strong><small>自动转写、AI 选片和预切，完成后等待你审片。</small></span></label>
+    <div class="material-subtitle-setting"><label>字幕处理<select class="control" name="subtitle_strategy" aria-describedby="batch-subtitle-help"><option value="original">跳过字幕 · 保留原视频画面</option><option value="review">新增字幕 · 进入字幕审核</option></select></label><p id="batch-subtitle-help" class="material-note">不新增或烧录字幕，已有字幕保留。AI 选片所需的语音转写仍会执行；成片仍需人工审核，字幕方式按此设置执行。</p></div>
+    <details class="material-advanced"><summary>更多制作设置 <span>AI 方案与选片参数</span></summary><div class="material-advanced-fields">
+      <label>Prompt 方案<select class="control" name="ai_prompt_preset_id" required>{% for preset in prompt_presets %}<option value="{{ preset.id }}">{{ preset.name }}</option>{% endfor %}</select></label>
+      <label>AI 服务<select class="control" name="ai_provider">{% for provider,label in [('codex','Codex CLI'),('remote','远程 AI'),('local','本地 AI')] %}<option value="{{ provider }}" {{ 'selected' if settings.ai_default_provider == provider else '' }}>{{ label }}</option>{% endfor %}</select></label>
+      <label>AI 分析流程<select class="control" name="analysis_mode"><option value="staged_v1">原有分段流程</option><option value="codex_full_transcript_v1">Codex 全文一次分析</option></select><small class="material-note">全文模式适用于 Codex 棚内综艺播放目标 v1，须关闭视觉分析；成片仍需你审核。</small></label>
+      <label>候选池上限<input class="control" name="candidate_clip_count" type="number" min="1" max="50" value="12" required></label>
+      <label>长直播每小时密度<input class="control" name="highlight_density_per_hour" type="number" min="1" max="10" value="4" required></label>
+      <label class="material-check"><input name="visual_enabled" type="checkbox"><span>候选画面辅助验证 · 试用</span></label>
+    </div></details>
     <label class="material-option material-check"><input name="create_new_production" type="checkbox" aria-describedby="batch-repeat-help"><span><strong>重新制作已用素材</strong><small id="batch-repeat-help">默认防止同一素材重复建任务。需要换方案再做一版时勾选，旧任务和成片保留。</small></span></label>
     <div class="material-submit-area">
       <label class="material-check"><input name="confirmed" type="checkbox"><span>已核对素材与配置，确认复制并创建任务</span></label>

@@ -1,32 +1,2586 @@
-// Compatibility entry point: load only the behavior needed by this page.
-(() => {
-  const entry = document.currentScript;
-  const root = new URL(".", entry.src);
-  const version = new URL(entry.src).search;
-  const scripts = ["workspace-helpers.js"];
-  if (document.querySelector("#new-task-form")) scripts.push("new-task.js");
-  if (document.querySelector("#ai-analysis-form, #transcript-panel, [data-auto-pipeline-monitor], .js-process-action")) scripts.push("task-progress.js");
-  if (document.querySelector("#clip-review-form")) scripts.push("clip-workspace.js", "review-workspace.js");
-  if (document.querySelector("#subtitle-style-form, #subtitle-editor, [data-subtitle-output-card]")) scripts.push("subtitle-workflow.js");
-  if (document.querySelector("#ai-config-form")) scripts.push("system-settings.js");
-  scripts.push("task-actions.js");
-  for (const file of scripts) {
-    const preload = document.createElement("link");
-    preload.rel = "preload"; preload.as = "script";
-    preload.href = new URL(file, root).href + version;
-    document.head.append(preload);
-  }
-  window.studioPageReady = scripts.reduce((ready, file) => ready.then(() => new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = new URL(file, root).href + version;
-    script.onload = resolve;
-    script.onerror = () => reject(new Error("页面交互加载失败：" + file));
-    document.body.append(script);
-  })), Promise.resolve()).catch(error => {
-    const alert = document.createElement("p");
-    alert.className = "page-alert";
-    alert.setAttribute("role", "alert");
-    alert.textContent = error.message + "，请刷新页面重试。";
-    document.querySelector("main")?.prepend(alert);
+// Shared helpers are initialized by base.html, independently of this bundle.
+
+const newTaskForm = document.querySelector("#new-task-form");
+const newTaskAutoMode = newTaskForm?.querySelector("input[name='auto_mode']");
+const newTaskSubmitButton = document.querySelector("#new-task-submit-button");
+const selectionProfileInput = document.querySelector("#selection-profile");
+const longLiveSettings = document.querySelector("#long-live-settings");
+
+function updateNewTaskSubmitLabel() {
+  if (!newTaskSubmitButton) return;
+  newTaskSubmitButton.textContent = newTaskAutoMode?.checked ? "创建并自动处理" : "创建任务";
+}
+
+if (newTaskAutoMode) {
+  newTaskAutoMode.addEventListener("change", updateNewTaskSubmitLabel);
+  updateNewTaskSubmitLabel();
+}
+
+if (selectionProfileInput && longLiveSettings) {
+  const profiles = JSON.parse(document.querySelector("#content-profile-options")?.textContent || "[]");
+  const updateLongLiveSettings = () => {
+    longLiveSettings.hidden = selectionProfileInput.value !== "long_live_talk";
+    const profile = profiles.find(item => item.id === selectionProfileInput.value);
+    if (!profile) return;
+    const promptInput = document.querySelector("#new-task-prompt");
+    if (promptInput) promptInput.value = newTaskForm.dataset.trialPreset || profile.prompt_preset_id;
+    const durationInput = newTaskForm.querySelector('[name="max_clip_duration"]');
+    const poolInput = newTaskForm.querySelector('[name="candidate_clip_count"]');
+    const targetInput = newTaskForm.querySelector('[name="final_clip_target"]');
+    const isContent = profile.analyzer_key === "content";
+    durationInput.max = isContent ? String(Math.floor(profile.duration.max_seconds / 60)) : "60";
+    durationInput.value = isContent ? durationInput.max : "10";
+    for (const option of poolInput.options) option.disabled = Number(option.value) > profile.selection.candidate_pool_max;
+    poolInput.value = String(profile.selection.candidate_pool_default);
+    if (!poolInput.value) poolInput.value = "12";
+    targetInput.value = String(Math.min(12, profile.selection.final_target_default));
+    const trialNotice = ["interview_story", "knowledge_opinion"].includes(profile.id)
+      ? "试用模板：真实内容质量待日常使用验证，请审核后再使用成片。" : "";
+    document.querySelector("#selection-profile-hint").textContent = `${trialNotice}${profile.description} 推荐场景：${profile.recommended_scenes.join("、")}。`;
+    const lo = profile.duration.recommended_min_seconds;
+    const hi = profile.duration.recommended_max_seconds;
+    document.querySelector("#profile-duration-hint").textContent = lo
+      ? `推荐 ${lo}–${hi} 秒；模板硬边界 ${profile.duration.min_seconds}–${profile.duration.max_seconds} 秒。`
+      : "通用模式按任务时长上限选片，保留完整表达。";
+  };
+  selectionProfileInput.addEventListener("change", updateLongLiveSettings);
+  updateLongLiveSettings();
+}
+
+if (newTaskForm) {
+  newTaskForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const result = document.querySelector("#new-task-result");
+    const submitButton = newTaskForm.querySelector("button[type='submit']");
+    const formData = new FormData(newTaskForm);
+    const payload = Object.fromEntries(formData.entries());
+    const videoFileInput = document.querySelector("#video-file-input");
+
+    submitButton.disabled = true;
+    result.textContent = "正在创建任务...";
+
+    try {
+      if (!payload.selection_profile) throw new Error("请选择选片模式");
+      if (!videoFileInput.files.length) throw new Error("请选择要上传的视频文件");
+      const uploadData = new FormData();
+      for (const key of [
+        "task_name", "platform", "max_clip_duration", "candidate_clip_count",
+        "selection_profile", "final_clip_target", "ai_prompt_preset_id", "ai_provider",
+        "subtitle_strategy",
+      ]) uploadData.append(key, payload[key] || "");
+      if (payload.challenger_id) {
+        uploadData.append("challenger_id", payload.challenger_id);
+        uploadData.append("challenger_sha256", payload.challenger_sha256 || "");
+        uploadData.append("confirm_challenger", payload.confirm_challenger === "true" ? "true" : "false");
+      }
+      if (payload.selection_profile === "long_live_talk") {
+        uploadData.append("highlight_density_per_hour", payload.highlight_density_per_hour || "4");
+        uploadData.append("highlight_total_limit", payload.highlight_total_limit || "30");
+      }
+      uploadData.append("ai_preference", "");
+      uploadData.append("auto_mode", payload.auto_mode === "true" ? "true" : "false");
+      uploadData.append("visual_enabled", payload.visual_enabled === "true" ? "true" : "false");
+      uploadData.append("auto_metadata_use_ai", "false");
+      uploadData.append("video_file", videoFileInput.files[0]);
+      const data = await apiFetch("/api/tasks/upload", { method: "POST", body: uploadData });
+      result.textContent = `${data.message}${payload.auto_mode === "true" ? " 全自动流水线已启动。" : ""} 正在进入详情页...`;
+      window.location.href = data.detail_url;
+    } catch (error) {
+      result.textContent = `任务创建失败：${error.message}`;
+    } finally {
+      submitButton.disabled = false;
+    }
   });
-})();
+}
+
+const videoFileInput = document.querySelector("#video-file-input");
+const videoFileName = document.querySelector("#video-file-name");
+
+if (videoFileInput && videoFileName) {
+  videoFileInput.addEventListener("change", () => {
+    const file = videoFileInput.files[0];
+    videoFileName.textContent = file ? `已选择：${file.name}` : "尚未选择视频文件。";
+  });
+}
+
+async function handleProcessAction(button) {
+    if (button.dataset.confirm && !window.confirm(button.dataset.confirm)) {
+      return;
+    }
+    const result = document.querySelector("#process-result");
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "处理中...";
+    if (result) result.textContent = "正在执行，请稍等...";
+
+    try {
+      let endpoint = button.dataset.endpoint;
+      let data;
+      try {
+        data = await apiFetch(endpoint, { method: "POST" });
+      } catch (error) {
+        const needsAIConfirmation = error.status === 409
+          && error.details?.code === "ai_retry_confirmation_required";
+        if (!needsAIConfirmation) throw error;
+        const confirmed = window.confirm(
+          `${error.details.message}\n\n这一步可能产生新的 AI 调用费用，是否确认继续？`,
+        );
+        if (!confirmed) {
+          if (result) result.textContent = "已取消 AI 重试，原失败 Job 和证据保持不变。";
+          return;
+        }
+        const separator = endpoint.includes("?") ? "&" : "?";
+        endpoint = `${endpoint}${separator}confirm_uncertain_ai=true`;
+        if (result) result.textContent = "已确认，正在安全创建或恢复 AI 分析 Job...";
+        data = await apiFetch(endpoint, { method: "POST" });
+      }
+      if (result) result.textContent = data.message || "处理完成，正在刷新页面...";
+      if (button.dataset.endpoint.includes("/process/transcript")) {
+        startTranscriptPolling(true);
+        startTaskLiveStatusPolling(true);
+        if (data.status === "completed") {
+          window.setTimeout(() => window.location.reload(), 600);
+        }
+        return;
+      }
+      if (button.dataset.endpoint.includes("/process/auto-")) {
+        if (result) result.textContent = data.message || "全自动流程已启动，状态会在当前页面自动更新。";
+        startTaskLiveStatusPolling(true);
+        return;
+      }
+      window.location.reload();
+    } catch (error) {
+      if (result) result.textContent = `处理失败：${error.message}`;
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+}
+
+function bindProcessActionButton(button) {
+  if (!button || button.dataset.processActionBound === "true") return;
+  button.dataset.processActionBound = "true";
+  button.addEventListener("click", () => handleProcessAction(button));
+}
+
+document.querySelectorAll(".js-process-action").forEach((button) => {
+  bindProcessActionButton(button);
+});
+
+const transcriptPanel = document.querySelector("#transcript-panel");
+const transcriptProgress = document.querySelector("#transcript-progress");
+const transcriptProgressMessage = document.querySelector("#transcript-progress-message");
+const transcriptProgressPercent = document.querySelector("#transcript-progress-percent");
+const transcriptProgressBar = document.querySelector("#transcript-progress-bar");
+const transcriptProgressDetail = document.querySelector("#transcript-progress-detail");
+const transcriptProgressRuntime = document.querySelector("#transcript-progress-runtime");
+const transcriptPreviewBox = document.querySelector("#transcript-preview-box");
+const cancelTranscriptButtons = document.querySelectorAll(".js-cancel-transcript");
+const localTranscriptButton = document.querySelector("#local-transcript-button");
+let transcriptPollingTimer = null;
+let transcriptPollingStartedFromRunning = false;
+
+function renderTranscriptPreview(preview, transcriptExists) {
+  if (!transcriptPreviewBox) return;
+  transcriptPreviewBox.replaceChildren();
+  if (preview.length) {
+    preview.forEach((line) => {
+      const paragraph = document.createElement("p");
+      const time = document.createElement("time");
+      time.textContent = line.time;
+      paragraph.append(time, document.createTextNode(line.text));
+      transcriptPreviewBox.append(paragraph);
+    });
+    return;
+  }
+
+  const empty = document.createElement("p");
+  empty.className = "empty-note";
+  empty.textContent = transcriptExists
+    ? "已生成转写文件，但当前文件里还没有真实语音转写内容。请查看上方进度或日志。"
+    : "尚未生成转写文件。请先点击“提取音频”，再点击“生成转写 MD”。";
+  transcriptPreviewBox.append(empty);
+}
+
+function renderTranscriptStatus(data) {
+  if (!transcriptProgress || !data.progress || !Object.keys(data.progress).length) return;
+  const progress = data.progress;
+  const percent = Number(progress.percent || 0);
+  transcriptProgress.hidden = false;
+  transcriptProgress.dataset.status = progress.status || "running";
+  transcriptProgressMessage.textContent = progress.message || "转写进度";
+  transcriptProgressPercent.textContent = `${percent}%`;
+  transcriptProgressBar.style.width = `${percent}%`;
+
+  if (progress.total_chunks) {
+    transcriptProgressDetail.textContent = `转写进度：${progress.current_chunk || 0}/${progress.total_chunks}，约 ${percent}%`;
+  } else {
+    transcriptProgressDetail.textContent = "转写进度：正在准备分段";
+  }
+
+  const runtimeParts = [progress.provider_label, progress.model, progress.device, progress.compute_type].filter(Boolean);
+  transcriptProgressRuntime.textContent = runtimeParts.length
+    ? `当前转写配置：${runtimeParts.join(" / ")}`
+    : "";
+
+  updateCancelTranscriptButtons(progress.status || data.task_status);
+  renderTranscriptPreview(data.preview || [], data.transcript_exists);
+  updateWorkflowButtons(data);
+}
+
+async function pollTranscriptStatus() {
+  if (!transcriptPanel) return;
+  const taskId = transcriptPanel.dataset.taskId;
+  const response = await fetch(`/api/tasks/${taskId}/transcript-status`);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "读取转写进度失败");
+  }
+  renderTranscriptStatus(data);
+  const status = data.progress?.status;
+  if (status === "running" || status === "cancelling") {
+    transcriptPollingStartedFromRunning = true;
+    transcriptPollingTimer = window.setTimeout(pollTranscriptStatus, 5000);
+  } else if (status === "completed") {
+    transcriptPollingTimer = null;
+    transcriptPollingStartedFromRunning = false;
+  } else {
+    transcriptPollingTimer = null;
+  }
+}
+
+function startTranscriptPolling(runImmediately = false) {
+  if (!transcriptPanel) return;
+  if (transcriptPollingTimer) {
+    window.clearTimeout(transcriptPollingTimer);
+    transcriptPollingTimer = null;
+  }
+  transcriptPollingStartedFromRunning = true;
+  if (runImmediately) {
+    pollTranscriptStatus().catch(() => {});
+    return;
+  }
+  transcriptPollingTimer = window.setTimeout(pollTranscriptStatus, 5000);
+}
+
+if (transcriptPanel) {
+  pollTranscriptStatus().catch(() => {});
+}
+
+function updateWorkflowButtons(data) {
+  const startButton = document.querySelector("#start-workflow-button");
+  if (!startButton) return;
+  const progressStatus = data.progress?.status || "";
+  const canRetryWithLocal = Boolean(data.local_retry_available);
+  const retryLabel = data.offline_only ? "重新本地转写" : "重新远程转写";
+  if (localTranscriptButton) {
+    localTranscriptButton.hidden = !canRetryWithLocal;
+  }
+  if (data.transcript_exists) {
+    startButton.textContent = "转写已完成";
+    startButton.disabled = true;
+    if (localTranscriptButton) localTranscriptButton.hidden = true;
+    return;
+  }
+  if (progressStatus === "running" || data.task_status === "transcribing") {
+    startButton.textContent = "转写处理中";
+    startButton.disabled = true;
+    if (localTranscriptButton) localTranscriptButton.hidden = true;
+    updateCancelTranscriptButtons(progressStatus || "running");
+    return;
+  }
+  if (progressStatus === "failed") {
+    startButton.textContent = retryLabel;
+    startButton.disabled = false;
+    startButton.classList.add("js-process-action");
+    startButton.dataset.endpoint = `/api/tasks/${transcriptPanel?.dataset.taskId}/process/transcript-workflow?force=true`;
+    bindProcessActionButton(startButton);
+    updateCancelTranscriptButtons("failed");
+    return;
+  }
+  if (progressStatus === "cancelled" || progressStatus === "stale") {
+    startButton.textContent = progressStatus === "stale" ? retryLabel : "重新生成转写";
+    startButton.disabled = false;
+    startButton.classList.add("js-process-action");
+    startButton.dataset.endpoint = `/api/tasks/${transcriptPanel?.dataset.taskId}/process/transcript-workflow?force=true`;
+    bindProcessActionButton(startButton);
+    updateCancelTranscriptButtons(progressStatus);
+  }
+}
+
+function updateCancelTranscriptButtons(status) {
+  const shouldShow = status === "running" || status === "cancelling" || status === "transcribing";
+  cancelTranscriptButtons.forEach((button) => {
+    button.hidden = !shouldShow;
+    button.disabled = status === "cancelling";
+    button.textContent = status === "cancelling" ? "正在停止..." : "停止转写";
+  });
+}
+
+cancelTranscriptButtons.forEach((button) => {
+  button.addEventListener("click", async () => {
+    if (!window.confirm("停止后不会删除已生成的旧转写文件。确认停止当前转写吗？")) {
+      return;
+    }
+    const result = document.querySelector("#process-result");
+    const taskId = button.dataset.taskId || transcriptPanel?.dataset.taskId;
+    cancelTranscriptButtons.forEach((item) => {
+      item.disabled = true;
+      item.textContent = "正在停止...";
+    });
+    if (result) result.textContent = "正在请求停止转写...";
+
+    try {
+      const response = await fetch(`/api/tasks/${taskId}/process/transcript-cancel`, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "停止转写失败");
+      }
+      if (result) result.textContent = data.message || "已请求停止转写。";
+      startTranscriptPolling(true);
+    } catch (error) {
+      if (result) result.textContent = `停止转写失败：${error.message}`;
+      updateCancelTranscriptButtons("running");
+    }
+  });
+});
+
+const aiAnalysisForm = document.querySelector("#ai-analysis-form");
+const aiAnalysisProvider = document.querySelector("#ai-analysis-provider");
+const saveAiPromptsButton = document.querySelector("#save-ai-prompts-button");
+const aiProcessResult = document.querySelector("#ai-process-result");
+const aiAnalysisSummary = document.querySelector("#ai-analysis-summary");
+const aiCandidateCountPill = document.querySelector("#ai-candidate-count-pill");
+const aiCandidateCountInput = document.querySelector("#ai-candidate-count-input");
+const aiSelectionProfile = aiAnalysisForm
+  ? aiAnalysisForm.dataset.selectionProfile || "general"
+  : "general";
+const aiFinalClipTarget = document.querySelector("#ai-final-clip-target");
+const aiHighlightDensity = document.querySelector("#ai-highlight-density");
+const aiHighlightTotalLimit = document.querySelector("#ai-highlight-total-limit");
+const showAiHistoryButton = document.querySelector("#show-ai-history-button");
+const refreshAiHistoryButton = document.querySelector("#refresh-ai-history-button");
+const aiAnalysisHistory = document.querySelector("#ai-analysis-history");
+const aiAnalysisHistoryList = document.querySelector("#ai-analysis-history-list");
+const aiAnalysisProgress = document.querySelector("#ai-analysis-progress");
+const aiAnalysisProgressMessage = document.querySelector("#ai-analysis-progress-message");
+const aiAnalysisProgressPercent = document.querySelector("#ai-analysis-progress-percent");
+const aiAnalysisProgressBar = document.querySelector("#ai-analysis-progress-bar");
+const runtimeLogState = document.querySelector("#runtime-log-state");
+const runtimeLogLines = document.querySelector("#runtime-log-lines");
+const aiProcessButtons = Array.from(document.querySelectorAll(".js-ai-process-action"));
+const aiAnalysisControls = Array.from(new Set([
+  ...(aiAnalysisForm ? aiAnalysisForm.querySelectorAll("button, input, textarea, select") : []),
+  ...aiProcessButtons,
+  saveAiPromptsButton,
+  aiCandidateCountInput,
+  aiFinalClipTarget,
+].filter(Boolean)));
+const autoPipelineMonitor = document.querySelector("[data-auto-pipeline-monitor]");
+const taskLiveOverview = document.querySelector("[data-task-live-overview]");
+const taskLiveProgressBar = document.querySelector("[data-task-live-progress-bar]");
+const taskLiveProgressNumber = document.querySelector("[data-task-live-progress-number]");
+const taskLiveNote = document.querySelector("[data-task-live-note]");
+const taskLiveUpdatedAt = document.querySelector("[data-task-live-updated-at]");
+const taskLiveCandidateCount = document.querySelector("[data-task-live-candidate-count]");
+const taskLiveOutputCount = document.querySelector("[data-task-live-output-count]");
+const taskLiveActions = document.querySelector("[data-live-task-actions]");
+const taskLiveOperation = document.querySelector("[data-task-live-operation]");
+const taskLiveOperationLabel = document.querySelector("[data-task-live-operation-label]");
+const taskLiveOperationProgress = document.querySelector("[data-task-live-operation-progress]");
+const taskLiveOperationMessage = document.querySelector("[data-task-live-operation-message]");
+let aiStatusPollingTimer = null;
+let isAiAnalysisBusy = false;
+let aiAnalysisControlStates = new Map();
+let taskLiveStatusTimer = null;
+let taskLiveForcedPollingUntil = 0;
+let taskLiveStatusRequestInFlight = false;
+const TASK_LIVE_STATUS_INTERVAL_MS = 3000;
+
+function setAiAnalysisControlsDisabled(disabled) {
+  if (disabled) {
+    aiAnalysisControlStates = new Map(
+      aiAnalysisControls.map((control) => [control, control.disabled]),
+    );
+    aiAnalysisControls.forEach((control) => { control.disabled = true; });
+    return;
+  }
+  aiAnalysisControls.forEach((control) => {
+    control.disabled = aiAnalysisControlStates.get(control) ?? false;
+  });
+  aiAnalysisControlStates.clear();
+}
+
+function summarizeErrorMessage(message, maxLength = 220) {
+  const text = String(message || "").replace(/\s+/g, " ").trim();
+  if (!text) return "操作失败，请查看任务日志。";
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...（详细原因请查看任务日志）`;
+}
+let aiAnalysisRuns = [];
+
+function readJsonScript(id, fallback) {
+  const node = document.querySelector(`#${id}`);
+  if (!node?.textContent?.trim()) return fallback;
+  try {
+    return JSON.parse(node.textContent);
+  } catch {
+    return fallback;
+  }
+}
+
+function getSelectedPromptPresetCard() {
+  if (!aiAnalysisForm) return null;
+  const selected = aiAnalysisForm.querySelector("input[name='ai_prompt_preset_id']:checked");
+  if (!selected) return null;
+  return aiAnalysisForm.querySelector(`[data-prompt-preset-card][data-preset-id='${selected.value}']`);
+}
+
+function updatePromptPresetCards() {
+  const selected = aiAnalysisForm?.querySelector("input[name='ai_prompt_preset_id']:checked");
+  const selectedPresetId = selected?.value || "";
+  document.querySelectorAll("[data-prompt-preset-tab]").forEach((tab) => {
+    const radio = tab.querySelector("input[name='ai_prompt_preset_id']");
+    const isActive = radio?.value === selectedPresetId;
+    tab.classList.toggle("active", isActive);
+    tab.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+  document.querySelectorAll("[data-prompt-preset-card]").forEach((card) => {
+    const isActive = card.dataset.presetId === selectedPresetId;
+    card.classList.toggle("active", isActive);
+    card.hidden = !isActive;
+  });
+}
+
+function formatClipDuration(seconds) {
+  const totalSeconds = Number(seconds) || 0;
+  const minutes = Math.floor(totalSeconds / 60);
+  const restSeconds = totalSeconds % 60;
+  if (minutes <= 0) return `${restSeconds} 秒`;
+  return `${minutes} 分 ${String(restSeconds).padStart(2, "0")} 秒`;
+}
+
+function analysisPromptSource(data) {
+  const slot = /^preset_0*(\d+)$/.exec(data.ai_prompt_preset_id || "")?.[1];
+  const name = data.ai_prompt_preset_name || "来源未记录";
+  const revision = data.prompt_version_number ? `第 ${data.prompt_version_number} 次` : "未记录";
+  return `提示词方案：${slot ? `${slot} 号 · ` : ""}${name} · 内容修订：${revision}`;
+}
+
+function renderAiAnalysisSummary(data) {
+  if (!aiAnalysisSummary) return;
+  const clips = Array.isArray(data.clips) && data.clips.length ? data.clips : (data.clip_summaries || []);
+  aiAnalysisSummary.hidden = false;
+  aiAnalysisSummary.replaceChildren();
+
+  const header = document.createElement("div");
+  header.className = "ai-analysis-result-header";
+  const titleWrap = document.createElement("div");
+  const eyebrow = document.createElement("p");
+  eyebrow.className = "eyebrow";
+  eyebrow.textContent = "Analysis Result";
+  const title = document.createElement("h3");
+  title.textContent = data.run_number ? `${data.title || `第 ${data.run_number} 次分析`} · AI 选取结果` : "本次 AI 选取结果";
+  const promptSource = document.createElement("p");
+  promptSource.className = "form-hint";
+  promptSource.textContent = analysisPromptSource(data);
+  titleWrap.append(eyebrow, title, promptSource);
+  const source = document.createElement("span");
+  source.className = "status-pill";
+  source.textContent = data.provider_label && data.model ? `${data.provider_label} · 模型 ${data.model}` : "AI 分析完成";
+  header.append(titleWrap, source);
+
+  const message = document.createElement("p");
+  message.className = "ai-analysis-result-message";
+  message.textContent = data.failure_message || data.fallback_notice || data.analysis_summary || data.message || "AI 分析已完成。";
+
+  const meta = document.createElement("div");
+  meta.className = "ai-analysis-result-meta";
+  const count = document.createElement("strong");
+  count.textContent = `${clips.length} 条候选片段`;
+  const provider = document.createElement("span");
+  provider.textContent = data.fallback_notice ? "远程失败后已自动改用本地 AI" : `目标 ${data.requested_clip_count || clips.length || 0} 条`;
+  meta.append(count, provider);
+
+  const list = document.createElement("div");
+  list.className = "ai-analysis-result-list";
+  clips.forEach((clip, index) => {
+    const item = document.createElement("article");
+    item.className = "ai-analysis-result-item";
+    const itemTitle = document.createElement("strong");
+    itemTitle.textContent = `${String(index + 1).padStart(2, "0")} · ${clip.title || "未命名片段"}`;
+    const itemMeta = document.createElement("span");
+    itemMeta.textContent = `视频长度 ${formatClipDuration(clip.duration_seconds)} · ${clip.start_time || "--"} - ${clip.end_time || "--"}`;
+    item.append(itemTitle, itemMeta);
+    list.append(item);
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "button-row align-end";
+  const reviewLink = document.createElement("a");
+  reviewLink.className = "primary-button";
+  reviewLink.href = data.review_url || `/tasks/${aiAnalysisForm?.dataset.taskId || ""}/clips/review`;
+  reviewLink.textContent = data.analysis_incomplete ? "查看已保留的候选（待补齐分析）" : "去检查并生成切片";
+  actions.append(reviewLink);
+
+  aiAnalysisSummary.append(header, message, meta, list, actions);
+}
+
+function renderAiAnalysisHistory(runs) {
+  if (!aiAnalysisHistoryList) return;
+  aiAnalysisRuns = Array.isArray(runs) ? runs : [];
+  aiAnalysisHistoryList.replaceChildren();
+
+  if (!aiAnalysisRuns.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-note";
+    empty.textContent = "还没有历史分析结果。完成一次 AI 分析后，这里会自动出现记录。";
+    aiAnalysisHistoryList.append(empty);
+    return;
+  }
+
+  aiAnalysisRuns.forEach((run) => {
+    const item = document.createElement("article");
+    item.className = "ai-history-item";
+    const main = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = `${run.title || `第 ${run.run_number} 次分析`} · ${run.clip_count || 0} 条`;
+    const meta = document.createElement("span");
+    meta.textContent = `${run.provider_label || "AI"} · ${run.model || "未知模型"} · ${analysisPromptSource(run)} · ${run.created_at || "未知时间"}`;
+    const summary = document.createElement("p");
+    summary.textContent = run.failure_message || run.fallback_notice || run.analysis_summary || "暂无整体总结。";
+    main.append(title, meta, summary);
+    if (run.challenger?.id) {
+      const trialLink = document.createElement("a");
+      trialLink.href = `/api/content-review/challengers/${encodeURIComponent(run.challenger.id)}`;
+      trialLink.textContent = "Challenger 试验 · 查看来源版本";
+      main.append(trialLink);
+    }
+    const visual = run.visual_signal || run.analysis_meta?.visual_signal;
+    if (visual) {
+      const link = document.createElement("a");
+      link.href = `/tasks/${encodeURIComponent(aiAnalysisForm.dataset.taskId)}/visual-evidence?run_id=${encodeURIComponent(run.id)}`;
+      const labels = { disabled: "关闭", completed: "完成", partial: "部分可用", unavailable: "不可用" };
+      link.textContent = `视觉 ${labels[visual.status] || visual.status} · ${visual.verified_count || 0}/${visual.candidate_count || 0} 候选 · 查看证据`;
+      main.append(link);
+    }
+
+    const restoreButton = document.createElement("button");
+    restoreButton.className = "secondary-button compact-button";
+    restoreButton.type = "button";
+    restoreButton.dataset.restoreRunId = run.id;
+    restoreButton.textContent = "恢复这次结果";
+    item.append(main, restoreButton);
+    aiAnalysisHistoryList.append(item);
+  });
+}
+
+async function refreshAiAnalysisHistory() {
+  if (!aiAnalysisForm) return;
+  const taskId = aiAnalysisForm.dataset.taskId;
+  const response = await fetch(`/api/tasks/${taskId}/ai-analysis-runs`);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "读取历史分析失败");
+  }
+  renderAiAnalysisHistory(data.runs || []);
+  if (data.latest) {
+    renderAiAnalysisSummary(data.latest);
+  }
+}
+
+async function saveTaskCandidateClipCount() {
+  if (!aiAnalysisForm || !aiCandidateCountInput) return null;
+  const taskId = aiAnalysisForm.dataset.taskId;
+  const count = Number(aiCandidateCountInput.value || 12);
+  if (!Number.isInteger(count) || count < 1 || count > 50) {
+    throw new Error("候选片段数量必须是 1 到 50 之间的整数。");
+  }
+  const response = await fetch(`/api/tasks/${taskId}/candidate-clip-count`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ candidate_clip_count: count }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "候选片段数量保存失败");
+  }
+  return data;
+}
+
+async function saveTaskAiPromptSettings() {
+  if (!aiAnalysisForm) return null;
+  if (aiAnalysisForm.dataset.challengerId) return {message: "Challenger 的 Profile 与 Prompt 已冻结；已保存其他分析设置。"};
+  const taskId = aiAnalysisForm.dataset.taskId;
+  const selected = aiAnalysisForm.querySelector("input[name='ai_prompt_preset_id']:checked");
+  if (!selected) {
+    throw new Error("请选择一个 AI Prompt 方案");
+  }
+
+  const cards = Array.from(aiAnalysisForm.querySelectorAll("[data-prompt-preset-card]"))
+    .filter(card => card.dataset.presetId === selected.value);
+  await Promise.all(
+    cards.map(async (card) => {
+      const presetId = card.dataset.presetId;
+      const nameInput = card.querySelector(`[name='preset_name_${presetId}']`);
+      const promptInput = card.querySelector(`[name='preset_prompt_${presetId}']`);
+      const presetResponse = await fetch(`/api/ai-prompt-presets/${presetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: nameInput?.value || `${card.dataset.presetSlot || ""}号方案`,
+          prompt_text: promptInput?.value || "",
+        }),
+      });
+      const presetData = await presetResponse.json();
+      if (!presetResponse.ok) {
+        throw new Error(presetData.detail || "AI Prompt 方案保存失败");
+      }
+      return presetData;
+    })
+  );
+
+  const response = await fetch(`/api/tasks/${taskId}/ai-prompt-preset`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ai_prompt_preset_id: selected.value,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "AI Prompt 方案选择保存失败");
+  }
+  return data;
+}
+
+if (aiAnalysisForm) {
+  aiAnalysisForm.querySelectorAll("input[name='ai_prompt_preset_id']").forEach((radio) => {
+    radio.addEventListener("change", updatePromptPresetCards);
+  });
+  aiAnalysisForm.querySelectorAll("[data-prompt-preset-card] input[type='text']").forEach((input) => {
+    input.addEventListener("input", () => {
+      if (aiProcessResult) aiProcessResult.textContent = "Prompt 方案内容已修改，分析前会自动保存。";
+    });
+  });
+  updatePromptPresetCards();
+}
+
+if (saveAiPromptsButton && aiAnalysisForm) {
+  saveAiPromptsButton.addEventListener("click", async () => {
+    if (isAiAnalysisBusy) return;
+    const originalText = saveAiPromptsButton.textContent;
+    saveAiPromptsButton.disabled = true;
+    saveAiPromptsButton.textContent = "保存中...";
+    if (aiProcessResult) aiProcessResult.textContent = "正在保存 AI Prompt 方案...";
+
+    try {
+      const data = await saveTaskAiPromptSettings();
+      await saveTaskCandidateClipCount();
+      await saveTaskSelectionSettings();
+      if (aiProcessResult) aiProcessResult.textContent = data.message || "AI Prompt 方案已保存。";
+    } catch (error) {
+      if (aiProcessResult) aiProcessResult.textContent = `保存失败：${error.message}`;
+    } finally {
+      saveAiPromptsButton.disabled = isAiAnalysisBusy;
+      saveAiPromptsButton.textContent = originalText;
+    }
+  });
+}
+
+aiProcessButtons.forEach((button) => {
+  button.addEventListener("click", async () => {
+    if (!aiAnalysisForm || isAiAnalysisBusy) return;
+    const originalText = button.textContent;
+    const taskId = aiAnalysisForm.dataset.taskId;
+    const provider = aiAnalysisProvider?.value || "";
+    const selectedCard = getSelectedPromptPresetCard();
+    const selectedPrompt = selectedCard?.querySelector("textarea")?.value.trim() || "";
+    const selectedName = selectedCard?.querySelector("input[type='text']")?.value.trim() || "当前方案";
+    if (!selectedPrompt) {
+      if (aiProcessResult) aiProcessResult.textContent = "请先填写当前选中的 AI Prompt 方案。";
+      return;
+    }
+    if (!provider) {
+      const confirmed = window.confirm(`确认使用“${selectedName}”并沿用任务设置开始分析吗？\n\n历史任务未记录分析方式时使用当前默认设置；失败任务恢复仍沿用原记录。将消耗对应模型额度，并覆盖现有 AI 候选结果。`);
+      if (!confirmed) return;
+    } else if (provider === "codex") {
+      const confirmed = window.confirm(`确认使用“${selectedName}”发起 Codex CLI 分析吗？\n\n这会消耗当前 Codex 套餐额度，并覆盖现有 AI 候选结果。`);
+      if (!confirmed) return;
+    } else if (provider === "remote") {
+      const confirmed = window.confirm(`确认使用“${selectedName}”发起远程 AI 分析吗？\n\n这会重新生成候选片段，并覆盖当前已有的 AI 候选结果。`);
+      if (!confirmed) return;
+    }
+    isAiAnalysisBusy = true;
+    setAiAnalysisControlsDisabled(true);
+    button.textContent = "分析中...";
+    if (aiProcessResult) aiProcessResult.textContent = "正在保存 Prompt 方案并启动 AI 分析...";
+    renderAiAnalysisProgress({
+      status: "running",
+      percent: 18,
+      message: "正在保存 Prompt 方案并启动 AI 分析...",
+    });
+    startTaskLiveStatusPolling(true);
+
+    try {
+      await saveTaskAiPromptSettings();
+      await saveTaskCandidateClipCount();
+      await saveTaskSelectionSettings();
+      pollAiAnalysisStatus(true).catch(() => {});
+      const response = await fetch(`/api/tasks/${taskId}/process/ai${provider ? `?provider=${provider}` : ""}`, {
+        method: "POST",
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "AI 分析失败");
+      }
+      if (!data.job_id) throw new Error("AI 分析队列没有返回 job_id");
+      if (aiProcessResult) aiProcessResult.textContent = data.message || "AI 分析已加入队列。";
+      const completedJob = await waitForAiAnalysisJob(data.job_id);
+      const result = completedJob.result_json || {};
+      if (aiProcessResult) aiProcessResult.textContent = result.message || completedJob.message || "AI 分析完成。";
+      await pollAiAnalysisStatus(false).catch(() => {});
+      if (aiCandidateCountPill && Number.isFinite(Number(result.clip_count))) {
+        aiCandidateCountPill.textContent = `${Number(result.clip_count)} 条候选`;
+      }
+      const historyResponse = await fetch(`/api/tasks/${taskId}/ai-analysis-runs`);
+      const historyData = await historyResponse.json();
+      if (!historyResponse.ok) throw new Error(historyData.detail || "读取 AI 分析历史失败");
+      renderAiAnalysisSummary(historyData.latest || result);
+      renderAiAnalysisHistory(historyData.runs || aiAnalysisRuns);
+    } catch (error) {
+      if (aiProcessResult) aiProcessResult.textContent = `AI 分析失败：${summarizeErrorMessage(error.message)}`;
+      await pollAiAnalysisStatus(false).catch(() => {});
+    } finally {
+      stopAiAnalysisStatusPolling();
+      isAiAnalysisBusy = false;
+      setAiAnalysisControlsDisabled(false);
+      button.textContent = originalText;
+    }
+  });
+});
+
+if (aiAnalysisForm) {
+  const latestAiAnalysis = readJsonScript("latest-ai-analysis-data", null);
+  const initialAiAnalysisRuns = readJsonScript("ai-analysis-runs-data", []);
+  renderAiAnalysisHistory(initialAiAnalysisRuns);
+  if (latestAiAnalysis) {
+    renderAiAnalysisSummary(latestAiAnalysis);
+  }
+  pollAiAnalysisStatus(false).catch(() => {});
+}
+
+if (showAiHistoryButton && aiAnalysisHistory) {
+  showAiHistoryButton.addEventListener("click", () => {
+    aiAnalysisHistory.hidden = !aiAnalysisHistory.hidden;
+  });
+}
+
+if (refreshAiHistoryButton) {
+  refreshAiHistoryButton.addEventListener("click", async () => {
+    const originalText = refreshAiHistoryButton.textContent;
+    refreshAiHistoryButton.disabled = true;
+    refreshAiHistoryButton.textContent = "刷新中...";
+    try {
+      await refreshAiAnalysisHistory();
+      if (aiProcessResult) aiProcessResult.textContent = "历史分析结果已刷新。";
+    } catch (error) {
+      if (aiProcessResult) aiProcessResult.textContent = `刷新历史失败：${error.message}`;
+    } finally {
+      refreshAiHistoryButton.disabled = false;
+      refreshAiHistoryButton.textContent = originalText;
+    }
+  });
+}
+
+if (aiAnalysisHistoryList) {
+  aiAnalysisHistoryList.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-restore-run-id]");
+    if (!button || !aiAnalysisForm) return;
+    const runId = button.dataset.restoreRunId;
+    const confirmed = window.confirm("确认恢复这次 AI 分析结果吗？\n\n当前片段审核页的候选片段会被这次历史结果覆盖。");
+    if (!confirmed) return;
+
+    const taskId = aiAnalysisForm.dataset.taskId;
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "恢复中...";
+    try {
+      const response = await fetch(`/api/tasks/${taskId}/ai-analysis-runs/${runId}/restore`, {
+        method: "POST",
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "恢复失败");
+      }
+      if (aiProcessResult) aiProcessResult.textContent = data.message || "历史结果已恢复。";
+      if (aiCandidateCountPill && Array.isArray(data.clips)) {
+        aiCandidateCountPill.textContent = `${data.clips.length} 条候选`;
+      }
+      renderAiAnalysisSummary(data.restored_run || data.latest);
+      renderAiAnalysisHistory(data.runs || aiAnalysisRuns);
+    } catch (error) {
+      if (aiProcessResult) aiProcessResult.textContent = `恢复失败：${error.message}`;
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
+}
+
+const clipFilterForm = document.querySelector("#clip-filter-form");
+if (clipFilterForm) {
+  clipFilterForm.querySelectorAll("select").forEach((select) => {
+    select.addEventListener("change", () => clipFilterForm.submit());
+  });
+}
+
+const clipReviewForm = document.querySelector("#clip-review-form");
+const saveClipsButton = document.querySelector("#save-clips-button");
+const generateClipsButton = document.querySelector("#generate-clips-button");
+const clipReviewMessage = document.querySelector("#clip-review-message");
+const clipSelectAll = document.querySelector("[data-clip-select-all]");
+const clipSelectAllLabel = document.querySelector("[data-clip-select-all-label]");
+const clipSelectCount = document.querySelector("[data-clip-select-count]");
+const syncReviewedClipsButton = document.querySelector("[data-sync-reviewed-clips='true']");
+const cutJobProgress = document.querySelector("#cut-job-progress");
+const cutJobStatus = document.querySelector("#cut-job-status");
+const cutJobPercent = document.querySelector("#cut-job-percent");
+const cutJobProgressBar = document.querySelector("#cut-job-progress-bar");
+const cutJobMessage = document.querySelector("#cut-job-message");
+const clipPreviewVideo = document.querySelector("#clip-preview-video");
+const clipPreviewDock = document.querySelector("#clip-preview-dock");
+const clipPreviewCaption = document.querySelector("#clip-preview-caption");
+const clipTranscriptDrawer = document.querySelector("#clip-transcript-drawer");
+const clipTranscriptTitle = document.querySelector("#clip-transcript-title");
+const clipTranscriptTime = document.querySelector("#clip-transcript-time");
+const clipTranscriptBody = document.querySelector("#clip-transcript-body");
+const closeTranscriptDrawerButton = document.querySelector("#close-transcript-drawer");
+const sourceMonitorModal = document.querySelector("#source-monitor-modal");
+const closeSourceMonitorButton = document.querySelector("#close-source-monitor");
+const cancelSourceMonitorButton = document.querySelector("#cancel-source-monitor");
+const applySourceMonitorButton = document.querySelector("#apply-source-monitor");
+const sourceMonitorVideo = document.querySelector("#source-monitor-video");
+const sourceMonitorTrack = document.querySelector("#source-monitor-track");
+const sourceMonitorSlider = document.querySelector("#source-monitor-slider");
+const sourceMonitorPlayhead = document.querySelector("#source-monitor-playhead");
+const sourceMonitorCurrent = document.querySelector("#source-monitor-current");
+const sourceMonitorDuration = document.querySelector("#source-monitor-duration");
+const sourceMonitorZoom = document.querySelector("#source-monitor-zoom");
+const sourceMonitorWindowStart = document.querySelector("#source-monitor-window-start");
+const sourceMonitorWindowEnd = document.querySelector("#source-monitor-window-end");
+const sourceMonitorInTime = document.querySelector("#source-monitor-in-time");
+const sourceMonitorOutTime = document.querySelector("#source-monitor-out-time");
+const sourceMonitorMessage = document.querySelector("#source-monitor-message");
+let activePreviewEndSeconds = null;
+let activeSourceMonitor = null;
+let isSyncingSourceSlider = false;
+let isCutJobActive = false;
+let isClipSaveActive = false;
+let isReviewHandoffActive = false;
+let savedClipReviewPayload = clipReviewForm ? collectClipReviewPayload() : [];
+let savedEnabledClipCount = Number(clipReviewForm?.dataset.enabledCount || 0);
+
+const cutJobStatusLabels = {
+  queued: "排队中",
+  running: "运行中",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
+
+function showClipReviewMessage(message, tone = "info") {
+  if (!clipReviewMessage) return;
+  clipReviewMessage.hidden = false;
+  clipReviewMessage.textContent = message;
+  clipReviewMessage.dataset.tone = tone;
+}
+
+function renderCutJobProgress(job, fallbackMessage = "") {
+  if (!cutJobProgress || !job) return;
+  const status = job.status || "queued";
+  const progress = Math.max(0, Math.min(100, Number(job.progress || 0)));
+  cutJobProgress.hidden = false;
+  cutJobProgress.dataset.status = status;
+  if (cutJobStatus) {
+    cutJobStatus.textContent = `${status}（${cutJobStatusLabels[status] || "处理中"}）`;
+  }
+  if (cutJobPercent) cutJobPercent.textContent = `${progress}%`;
+  if (cutJobProgressBar) cutJobProgressBar.style.width = `${progress}%`;
+  if (cutJobMessage) {
+    cutJobMessage.textContent = status === "failed"
+      ? (job.error_message || job.message || "切片任务失败")
+      : (job.queue_hint || job.message || fallbackMessage || "正在等待切片任务更新...");
+  }
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+async function waitForCutJob(jobId) {
+  while (true) {
+    const response = await fetch(`/api/tasks/jobs/${jobId}`);
+    const job = await response.json();
+    if (!response.ok) {
+      throw new Error(job.detail || "查询切片任务进度失败");
+    }
+    renderCutJobProgress(job);
+    if (job.status === "completed") return job;
+    if (job.status === "failed" || job.status === "cancelled") {
+      throw new Error(job.error_message || job.message || "切片任务未完成");
+    }
+    await wait(1000);
+  }
+}
+
+async function showCompletedCut(jobId) {
+  const completedJob = await waitForCutJob(jobId);
+  const syncMessage = completedJob.result_json?.publish_sync?.message
+    ? ` ${completedJob.result_json.publish_sync.message}` : "";
+  showClipReviewMessage(
+    `${completedJob.result_json?.message || completedJob.message || "切片生成完成。"}${syncMessage} 正在刷新切片结果...`,
+    completedJob.result_json?.publish_sync?.status === "partial" ? "error" : "success",
+  );
+  window.setTimeout(() => window.location.reload(), 700);
+}
+
+async function restoreCutProgress() {
+  if (!generateClipsButton || !clipReviewForm) return;
+  isCutJobActive = true;
+  updateClipReviewActionState();
+  const originalText = generateClipsButton.textContent;
+  try {
+    const response = await fetch(`/api/tasks/${clipReviewForm.dataset.taskId}/jobs`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "读取切片进度失败");
+    const job = (data.jobs || []).find(item => item.job_type === "video_cut" && ["queued", "running"].includes(item.status));
+    if (job) {
+      generateClipsButton.textContent = "切片处理中...";
+      renderCutJobProgress(job);
+      showClipReviewMessage("切片正在后台继续，可以离开页面处理其他任务。", "info");
+      await showCompletedCut(job.id);
+    }
+  } catch (error) {
+    showClipReviewMessage(`读取切片进度失败：${error.message}`, "error");
+  } finally {
+    isCutJobActive = false;
+    updateClipReviewActionState();
+    generateClipsButton.textContent = originalText;
+  }
+}
+
+function getClipReviewCards() {
+  return Array.from(document.querySelectorAll("[data-clip-card]"));
+}
+
+function getClipEnableCheckboxes() {
+  return getClipReviewCards()
+    .map((card) => card.querySelector("[name='enabled']"))
+    .filter(Boolean);
+}
+
+function updateClipSelectAllUi() {
+  const checkboxes = getClipEnableCheckboxes();
+  const enabledCount = checkboxes.filter((checkbox) => checkbox.checked).length;
+  const allEnabled = checkboxes.length > 0 && enabledCount === checkboxes.length;
+  if (clipSelectAll) {
+    clipSelectAll.disabled = checkboxes.length === 0 || isCutJobActive;
+    clipSelectAll.checked = allEnabled;
+    clipSelectAll.indeterminate = enabledCount > 0 && !allEnabled;
+  }
+  if (clipSelectAllLabel) clipSelectAllLabel.textContent = allEnabled ? "取消全选" : "全选当前列表";
+  if (clipSelectCount) clipSelectCount.textContent = `已启用 ${enabledCount} / ${checkboxes.length} 条`;
+}
+
+function updateClipReviewActionState() {
+  const hasCards = getClipReviewCards().length > 0;
+  const busy = isCutJobActive || isClipSaveActive || isReviewHandoffActive;
+  const payload = clipReviewForm ? collectClipReviewPayload() : [];
+  const dirty = JSON.stringify(payload) !== JSON.stringify(savedClipReviewPayload);
+  const enabledCount = savedEnabledClipCount - savedClipReviewPayload.filter(item => item.enabled).length
+    + payload.filter(item => item.enabled).length;
+  if (saveClipsButton) saveClipsButton.disabled = !hasCards || busy;
+  if (generateClipsButton) generateClipsButton.disabled = !hasCards || busy || enabledCount === 0;
+  if (syncReviewedClipsButton) syncReviewedClipsButton.disabled = !hasCards || busy;
+  clipReviewForm?.querySelectorAll("input, textarea, [data-delete-trigger], [data-source-monitor-trigger], [data-reject-reason]").forEach(node => { node.disabled = busy; });
+  clipFilterForm?.querySelectorAll("select").forEach(node => { node.disabled = busy || dirty; });
+  updateClipSelectAllUi();
+  if (clipSelectAll) clipSelectAll.disabled = !hasCards || busy;
+  if (clipReviewForm) {
+    Object.assign(clipReviewForm.dataset, {dirty: String(dirty), busy: String(busy), enabledCount: String(enabledCount)});
+    document.dispatchEvent(new CustomEvent("clip-review-state"));
+  }
+}
+
+document.addEventListener("production-review-busy", event => {
+  isReviewHandoffActive = event.detail.busy;
+  updateClipReviewActionState();
+});
+
+function collectClipReviewPayload() {
+  const cards = getClipReviewCards();
+  return cards.map((card) => {
+    const enabled = card.querySelector("[name='enabled']").checked;
+    return {
+      id: card.dataset.clipId,
+      title: card.querySelector("[name='title']").value.trim(),
+      start_time: card.querySelector("[name='start_time']").value.trim(),
+      end_time: card.querySelector("[name='end_time']").value.trim(),
+      enabled,
+      summary: card.querySelector("[name='summary']").value.trim(),
+      feedback_reason_code: enabled ? null : (card.dataset.feedbackReason || null),
+    };
+  });
+}
+
+async function persistClipReviewChanges() {
+  if (!clipReviewForm) throw new Error("当前页面没有可保存的候选片段");
+  const taskId = clipReviewForm.dataset.taskId;
+  const payload = collectClipReviewPayload();
+  const response = await fetch(`/api/tasks/${taskId}/clips/batch-update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clips: payload }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "保存失败");
+  savedClipReviewPayload = payload;
+  savedEnabledClipCount = data.clips.filter(item => item.enabled).length;
+  updateClipReviewActionState();
+  document.dispatchEvent(new CustomEvent("clip-review-saved"));
+  return data;
+}
+
+async function deleteClipCard(card, button) {
+  if (!clipReviewForm || !card || isCutJobActive || isClipSaveActive || isReviewHandoffActive) return;
+  const taskId = clipReviewForm.dataset.taskId;
+  const clipId = card.dataset.clipId;
+  const originalText = button?.textContent || "";
+  isClipSaveActive = true;
+  updateClipReviewActionState();
+  if (button) {
+    button.disabled = true;
+    button.textContent = "\u5220\u9664\u4e2d...";
+  }
+  card.classList.add("is-removing");
+  showClipReviewMessage("\u6b63\u5728\u5220\u9664\u8fd9\u6761\u5019\u9009\u7247\u6bb5...", "info");
+
+  try {
+    const response = await fetch(`/api/tasks/${taskId}/clips/${clipId}`, { method: "DELETE" });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "\u5220\u9664\u5931\u8d25");
+    }
+    if (activeSourceMonitor?.card === card) {
+      toggleSourceMonitor(false);
+    }
+    savedEnabledClipCount -= Number(!!savedClipReviewPayload.find(item => item.id === clipId)?.enabled);
+    savedClipReviewPayload = savedClipReviewPayload.filter(item => item.id !== clipId);
+    card.remove();
+    updateClipReviewActionState();
+    document.dispatchEvent(new CustomEvent("clip-review-saved"));
+    closeTranscriptDrawer();
+    showClipReviewMessage(
+      data.message || "\u5df2\u5220\u9664\u8be5\u5019\u9009\u7247\u6bb5\uff0c\u540e\u7eed\u751f\u6210\u5207\u7247\u4e0d\u4f1a\u518d\u4f7f\u7528\u5b83\u3002",
+      "success",
+    );
+  } catch (error) {
+    card.classList.remove("is-removing");
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+    showClipReviewMessage(`\u5220\u9664\u5931\u8d25\uff1a${error.message}`, "error");
+  } finally {
+    isClipSaveActive = false;
+    updateClipReviewActionState();
+  }
+}
+
+function syncRejectReasonVisibility(card) {
+  if (!card) return;
+  const enabledInput = card.querySelector("[name='enabled']");
+  const rejectFeedback = card.querySelector("[data-reject-feedback]");
+  if (rejectFeedback && enabledInput) rejectFeedback.hidden = enabledInput.checked;
+}
+
+function timeTextToSeconds(value) {
+  const parts = String(value || "")
+    .trim()
+    .split(":")
+    .map((part) => Number(part));
+  if (![2, 3].includes(parts.length) || parts.some((part) => !Number.isFinite(part))) {
+    return 0;
+  }
+  if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
+  }
+  return parts[0] * 3600 + parts[1] * 60 + parts[2];
+}
+
+function secondsToTimeText(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const restSeconds = total % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(restSeconds).padStart(2, "0")}`;
+}
+
+function formatTimecode(seconds) {
+  return `${secondsToTimeText(seconds)}:00`;
+}
+
+function updateCardTimeDataset(card) {
+  if (!card) return;
+  card.dataset.startSeconds = String(timeTextToSeconds(card.querySelector("[name='start_time']")?.value));
+  card.dataset.endSeconds = String(timeTextToSeconds(card.querySelector("[name='end_time']")?.value));
+}
+
+function setSourceMonitorMessage(message, tone = "info") {
+  if (!sourceMonitorMessage) return;
+  sourceMonitorMessage.textContent = message;
+  sourceMonitorMessage.dataset.tone = tone;
+}
+
+function setSourceMonitorControlsDisabled(disabled) {
+  document.querySelectorAll("[data-source-action], [data-source-step]").forEach((button) => {
+    button.disabled = disabled;
+  });
+  if (applySourceMonitorButton) applySourceMonitorButton.disabled = disabled;
+}
+
+function getReviewMaxClipSeconds() {
+  const value = Number(clipReviewForm?.dataset.maxClipSeconds || 0);
+  return Number.isFinite(value) && value > 0 ? value : 300;
+}
+
+function getSourceVideoDuration() {
+  const videoDuration = Number(sourceMonitorVideo?.duration || 0);
+  if (Number.isFinite(videoDuration) && videoDuration > 0) return videoDuration;
+  if (!activeSourceMonitor) return 1;
+  return Math.max(activeSourceMonitor.endSeconds + 60, activeSourceMonitor.startSeconds + 61);
+}
+
+function clampSeconds(value, min, max) {
+  return Math.max(min, Math.min(Number(value) || 0, max));
+}
+
+function getSourceWindowRange() {
+  if (!activeSourceMonitor) return { start: 0, end: 1, span: 1 };
+  const duration = getSourceVideoDuration();
+  const selected = Math.max(1, activeSourceMonitor.endSeconds - activeSourceMonitor.startSeconds);
+  const midpoint = (activeSourceMonitor.startSeconds + activeSourceMonitor.endSeconds) / 2;
+  const zoom = sourceMonitorZoom?.value || "fit";
+  const spanMap = {
+    fit: Math.max(120, selected * 4),
+    half: Math.max(60, selected * 2),
+    quarter: Math.max(30, selected * 1.25),
+  };
+  const span = Math.min(duration, spanMap[zoom] || spanMap.fit);
+  const start = clampSeconds(midpoint - span / 2, 0, Math.max(0, duration - span));
+  return { start, end: start + span, span };
+}
+
+function normalizeSourceRange(startSeconds, endSeconds, anchor = "end") {
+  const duration = getSourceVideoDuration();
+  const maxClipSeconds = getReviewMaxClipSeconds();
+  const minGap = 1;
+  let start = clampSeconds(startSeconds, 0, Math.max(0, duration - minGap));
+  let end = clampSeconds(endSeconds, start + minGap, duration);
+  let adjusted = false;
+
+  if (end - start > maxClipSeconds) {
+    adjusted = true;
+    if (anchor === "start") {
+      end = Math.min(duration, start + maxClipSeconds);
+    } else if (anchor === "end") {
+      start = Math.max(0, end - maxClipSeconds);
+    } else {
+      end = Math.min(duration, start + maxClipSeconds);
+    }
+  }
+
+  if (end <= start) {
+    adjusted = true;
+    if (anchor === "end") {
+      start = Math.max(0, end - minGap);
+    } else {
+      end = Math.min(duration, start + minGap);
+    }
+  }
+
+  return { start, end, adjusted };
+}
+
+function updateSourceMonitorReadout(view = getSourceWindowRange()) {
+  if (!activeSourceMonitor) return;
+  const duration = getSourceVideoDuration();
+  const currentSeconds = Number(sourceMonitorVideo?.currentTime || activeSourceMonitor.startSeconds);
+  if (sourceMonitorCurrent) sourceMonitorCurrent.textContent = formatTimecode(currentSeconds);
+  if (sourceMonitorDuration) sourceMonitorDuration.textContent = `片段 ${secondsToTimeText(activeSourceMonitor.endSeconds - activeSourceMonitor.startSeconds)}`;
+  if (sourceMonitorWindowStart) sourceMonitorWindowStart.textContent = secondsToTimeText(view.start);
+  if (sourceMonitorWindowEnd) sourceMonitorWindowEnd.textContent = secondsToTimeText(Math.min(duration, view.end));
+  if (sourceMonitorInTime) sourceMonitorInTime.textContent = `入点 ${secondsToTimeText(activeSourceMonitor.startSeconds)}`;
+  if (sourceMonitorOutTime) sourceMonitorOutTime.textContent = `出点 ${secondsToTimeText(activeSourceMonitor.endSeconds)}`;
+}
+
+function updateSourceMonitorPlayhead(view = getSourceWindowRange()) {
+  if (!activeSourceMonitor || !sourceMonitorPlayhead) return;
+  const currentSeconds = Number(sourceMonitorVideo?.currentTime || activeSourceMonitor.startSeconds);
+  const ratio = (clampSeconds(currentSeconds, view.start, view.end) - view.start) / Math.max(1, view.span);
+  const leftPadding = 18;
+  const rightPadding = 18;
+  const trackWidth = sourceMonitorTrack?.clientWidth || 1;
+  const usableWidth = Math.max(1, trackWidth - leftPadding - rightPadding);
+  sourceMonitorPlayhead.style.left = `${leftPadding + ratio * usableWidth}px`;
+}
+
+function handleSourceSliderUpdate(values, handle, unencoded) {
+  if (!activeSourceMonitor || isSyncingSourceSlider) return;
+  const start = Number(unencoded?.[0] ?? values?.[0]);
+  const end = Number(unencoded?.[1] ?? values?.[1]);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+  activeSourceMonitor.startSeconds = Math.round(start);
+  activeSourceMonitor.endSeconds = Math.round(end);
+  updateSourceMonitorReadout();
+  updateSourceMonitorPlayhead();
+}
+
+function syncSourceSliderOptions(view = getSourceWindowRange()) {
+  if (!activeSourceMonitor || !sourceMonitorSlider) return false;
+  if (!window.noUiSlider) {
+    sourceMonitorSlider.dataset.disabled = "true";
+    setSourceMonitorMessage("剪辑滑块组件加载失败，请刷新页面后再试。", "error");
+    setSourceMonitorControlsDisabled(true);
+    return false;
+  }
+  sourceMonitorSlider.dataset.disabled = "false";
+  setSourceMonitorControlsDisabled(false);
+
+  const options = {
+    start: [activeSourceMonitor.startSeconds, activeSourceMonitor.endSeconds],
+    connect: [false, true, false],
+    behaviour: "tap-drag",
+    step: Number(activeSourceMonitor.stepSeconds || 1),
+    margin: 1,
+    limit: getReviewMaxClipSeconds(),
+    range: {
+      min: view.start,
+      max: Math.max(view.start + 1, view.end),
+    },
+    pips: {
+      mode: "count",
+      values: 9,
+      density: 4,
+    },
+  };
+
+  isSyncingSourceSlider = true;
+  if (sourceMonitorSlider.noUiSlider) {
+    sourceMonitorSlider.noUiSlider.updateOptions(options, false);
+  } else {
+    window.noUiSlider.create(sourceMonitorSlider, options);
+    sourceMonitorSlider.noUiSlider.on("update", handleSourceSliderUpdate);
+    sourceMonitorSlider.noUiSlider.on("slide", (values, handle, unencoded) => {
+      if (!sourceMonitorVideo || !activeSourceMonitor) return;
+      const nextTime = Number(unencoded?.[handle] ?? values?.[handle]);
+      if (Number.isFinite(nextTime)) sourceMonitorVideo.currentTime = clampSeconds(nextTime, 0, getSourceVideoDuration());
+    });
+    sourceMonitorSlider.noUiSlider.on("change", () => {
+      setSourceMonitorMessage("已更新入点 / 出点。点击“应用到片段”后，再保存修改。", "success");
+    });
+  }
+  sourceMonitorSlider.noUiSlider.set([activeSourceMonitor.startSeconds, activeSourceMonitor.endSeconds]);
+  isSyncingSourceSlider = false;
+  return true;
+}
+
+function renderSourceMonitor() {
+  if (!activeSourceMonitor) return;
+  const view = getSourceWindowRange();
+  syncSourceSliderOptions(view);
+  updateSourceMonitorReadout(view);
+  updateSourceMonitorPlayhead(view);
+}
+
+function updateSourceMonitorRange(startSeconds, endSeconds, anchor = "end", seekTo = null) {
+  if (!activeSourceMonitor) return;
+  const normalized = normalizeSourceRange(startSeconds, endSeconds, anchor);
+  activeSourceMonitor.startSeconds = normalized.start;
+  activeSourceMonitor.endSeconds = normalized.end;
+  renderSourceMonitor();
+  if (sourceMonitorVideo && seekTo) {
+    sourceMonitorVideo.currentTime = seekTo === "out" ? activeSourceMonitor.endSeconds : activeSourceMonitor.startSeconds;
+  }
+  if (normalized.adjusted) {
+    setSourceMonitorMessage(`已按任务限制自动收紧范围，单条最长 ${Math.round(getReviewMaxClipSeconds() / 60)} 分钟。`, "info");
+  }
+}
+
+function setSourceMonitorTime(seconds) {
+  if (!sourceMonitorVideo) return;
+  sourceMonitorVideo.currentTime = clampSeconds(seconds, 0, getSourceVideoDuration());
+  renderSourceMonitor();
+}
+
+function toggleSourceMonitor(show) {
+  if (!sourceMonitorModal) return;
+  if (show) {
+    sourceMonitorModal.removeAttribute("hidden");
+    document.body.style.overflow = "hidden";
+    return;
+  }
+  sourceMonitorModal.setAttribute("hidden", "");
+  document.body.style.overflow = "";
+  activeSourceMonitor = null;
+  isSyncingSourceSlider = false;
+  if (sourceMonitorVideo) sourceMonitorVideo.pause();
+}
+
+function openSourceMonitor(card) {
+  if (!card || !sourceMonitorVideo) {
+    showClipReviewMessage("没有找到源视频，暂时无法打开源监视器。", "error");
+    return;
+  }
+  updateCardTimeDataset(card);
+  const startSeconds = Number(card.dataset.startSeconds || 0);
+  const endSeconds = Number(card.dataset.endSeconds || startSeconds + 1);
+  activeSourceMonitor = {
+    card,
+    startSeconds,
+    endSeconds,
+    isPreviewing: false,
+    stepSeconds: 1,
+  };
+  const normalized = normalizeSourceRange(startSeconds, endSeconds, "end");
+  activeSourceMonitor = {
+    card,
+    startSeconds: normalized.start,
+    endSeconds: normalized.end,
+    isPreviewing: false,
+    stepSeconds: 1,
+  };
+  sourceMonitorVideo.currentTime = activeSourceMonitor.startSeconds;
+  if (sourceMonitorZoom) sourceMonitorZoom.value = "fit";
+  document.querySelectorAll("[data-source-step]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.sourceStep === "1");
+  });
+  setSourceMonitorMessage("拖动蓝色范围左右手柄，或播放到合适位置后设置入点 / 出点。");
+  toggleSourceMonitor(true);
+  renderSourceMonitor();
+}
+
+function applySourceMonitorToCard() {
+  if (!activeSourceMonitor?.card) return;
+  const card = activeSourceMonitor.card;
+  const startInput = card.querySelector("[name='start_time']");
+  const endInput = card.querySelector("[name='end_time']");
+  if (startInput) startInput.value = secondsToTimeText(activeSourceMonitor.startSeconds);
+  if (endInput) endInput.value = secondsToTimeText(activeSourceMonitor.endSeconds);
+  updateCardTimeDataset(card);
+  const durationPill = card.querySelector(".status-pill");
+  if (durationPill) durationPill.textContent = `${Math.round(activeSourceMonitor.endSeconds - activeSourceMonitor.startSeconds)} 秒`;
+  showClipReviewMessage("已应用新的入点 / 出点。确认无误后，请点击右侧“保存修改”写入数据库。", "success");
+  updateClipReviewActionState();
+  toggleSourceMonitor(false);
+}
+
+document.querySelectorAll("[data-clip-card] input[name='start_time'], [data-clip-card] input[name='end_time']").forEach((input) => {
+  input.addEventListener("change", () => updateCardTimeDataset(input.closest("[data-clip-card]")));
+});
+
+if (clipSelectAll) {
+  clipSelectAll.addEventListener("change", () => {
+    const shouldEnable = clipSelectAll.checked;
+    getClipEnableCheckboxes().forEach((checkbox) => {
+      checkbox.checked = shouldEnable;
+      syncRejectReasonVisibility(checkbox.closest("[data-clip-card]"));
+    });
+    updateClipReviewActionState();
+    showClipReviewMessage(
+      shouldEnable
+        ? "已全选当前列表。确认无误后，请点击“保存修改”写入数据库。"
+        : "已取消当前列表的全部选择。确认无误后，请点击“保存修改”写入数据库。",
+      "info",
+    );
+  });
+}
+
+clipReviewForm?.addEventListener("change", (event) => {
+  if (event.target.matches("[data-clip-card] input[name='enabled']")) {
+    syncRejectReasonVisibility(event.target.closest("[data-clip-card]"));
+    updateClipSelectAllUi();
+  }
+  updateClipReviewActionState();
+});
+clipReviewForm?.addEventListener("input", (event) => {
+  // The bulk checkbox applies its selection in change; do not reset it before that event.
+  if (event.target.matches("[data-clip-card] input, [data-clip-card] textarea")) updateClipReviewActionState();
+});
+
+updateClipSelectAllUi();
+
+if (saveClipsButton && clipReviewForm) {
+  saveClipsButton.addEventListener("click", async () => {
+    if (isCutJobActive || isClipSaveActive || isReviewHandoffActive) return;
+    const taskId = clipReviewForm.dataset.taskId;
+    const originalText = saveClipsButton.textContent;
+    isClipSaveActive = true;
+    updateClipReviewActionState();
+    saveClipsButton.textContent = "正在保存...";
+    showClipReviewMessage("正在保存候选片段修改...", "info");
+
+    try {
+      const data = await persistClipReviewChanges();
+      showClipReviewMessage(data.message || "保存成功。", "success");
+    } catch (error) {
+      showClipReviewMessage(`保存失败：${error.message}`, "error");
+    } finally {
+      isClipSaveActive = false;
+      updateClipReviewActionState();
+      saveClipsButton.textContent = originalText;
+    }
+  });
+}
+
+function playClipPreview(card) {
+  if (!clipPreviewVideo || !card) return;
+  updateCardTimeDataset(card);
+  const startSeconds = Number(card.dataset.startSeconds || 0);
+  const endSeconds = Number(card.dataset.endSeconds || 0);
+  activePreviewEndSeconds = Number.isFinite(endSeconds) && endSeconds > startSeconds ? endSeconds : null;
+  clipPreviewVideo.currentTime = Math.max(0, startSeconds);
+  clipPreviewVideo.play().catch(() => {});
+  if (clipPreviewCaption) {
+    const title = card.dataset.title || "当前片段";
+    clipPreviewCaption.textContent = `${title}：从 ${card.querySelector("[name='start_time']")?.value || ""} 播放到 ${card.querySelector("[name='end_time']")?.value || ""}`;
+  }
+  ensureClipPreviewVisible();
+}
+
+function ensureClipPreviewVisible() {
+  const previewTarget = clipPreviewDock || clipPreviewVideo;
+  if (!previewTarget) return;
+  const rect = previewTarget.getBoundingClientRect();
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  const isVisible = rect.top >= 0 && rect.top < viewportHeight * 0.72 && rect.bottom > Math.min(120, viewportHeight);
+  if (isVisible) return;
+  previewTarget.scrollIntoView({ behavior: preferredScrollBehavior(), block: "start", inline: "nearest" });
+}
+
+function closeTranscriptDrawer() {
+  if (!clipTranscriptDrawer) return;
+  clipTranscriptDrawer.hidden = true;
+  document.body.classList.remove("transcript-drawer-open");
+}
+
+function renderTranscriptRows(rows) {
+  if (!clipTranscriptBody) return;
+  clipTranscriptBody.replaceChildren();
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-note";
+    empty.textContent = "这一段暂时没有匹配到逐句转写。可以先查看完整转写，或重新生成转写后再试。";
+    clipTranscriptBody.append(empty);
+    return;
+  }
+  rows.forEach((row) => {
+    const item = document.createElement("article");
+    item.className = "transcript-line";
+    const time = document.createElement("time");
+    time.textContent = `${row.start_time} - ${row.end_time}`;
+    const text = document.createElement("p");
+    text.textContent = row.text;
+    item.append(time, text);
+    clipTranscriptBody.append(item);
+  });
+}
+
+async function openTranscriptDrawer(card) {
+  if (!clipTranscriptDrawer || !clipReviewForm || !card) return;
+  updateCardTimeDataset(card);
+  const taskId = clipReviewForm.dataset.taskId;
+  const clipId = card.dataset.clipId;
+  clipTranscriptDrawer.hidden = false;
+  document.body.classList.add("transcript-drawer-open");
+  if (clipTranscriptTitle) clipTranscriptTitle.textContent = card.dataset.title || "片段转写";
+  if (clipTranscriptTime) {
+    const startTime = card.querySelector("[name='start_time']")?.value || "";
+    const endTime = card.querySelector("[name='end_time']")?.value || "";
+    clipTranscriptTime.textContent = `${startTime} - ${endTime}`;
+  }
+  if (clipTranscriptBody) {
+    clipTranscriptBody.replaceChildren();
+    const loading = document.createElement("p");
+    loading.className = "empty-note";
+    loading.textContent = "正在读取这一段转写...";
+    clipTranscriptBody.append(loading);
+  }
+  try {
+    const startTime = card.querySelector("[name='start_time']")?.value || "";
+    const endTime = card.querySelector("[name='end_time']")?.value || "";
+    const params = new URLSearchParams({ start_time: startTime, end_time: endTime });
+    const response = await fetch(`/api/tasks/${taskId}/clips/${clipId}/transcript-excerpt?${params.toString()}`);
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "读取转写失败");
+    }
+    if (clipTranscriptTitle) clipTranscriptTitle.textContent = data.title || "片段转写";
+    if (clipTranscriptTime) clipTranscriptTime.textContent = `${data.start_time} - ${data.end_time}`;
+    renderTranscriptRows(data.rows || []);
+  } catch (error) {
+    if (clipTranscriptBody) {
+      clipTranscriptBody.replaceChildren();
+      const failed = document.createElement("p");
+      failed.className = "empty-note";
+      failed.textContent = `读取失败：${error.message}`;
+      clipTranscriptBody.append(failed);
+    }
+  }
+}
+
+document.querySelectorAll("[data-preview-trigger]").forEach((button) => {
+  button.addEventListener("click", () => {
+    playClipPreview(button.closest("[data-clip-card]"));
+  });
+});
+
+document.querySelectorAll("[data-transcript-trigger]").forEach((button) => {
+  button.addEventListener("click", () => {
+    openTranscriptDrawer(button.closest("[data-clip-card]"));
+  });
+});
+
+document.querySelectorAll("[data-source-monitor-trigger]").forEach((button) => {
+  button.addEventListener("click", () => {
+    openSourceMonitor(button.closest("[data-clip-card]"));
+  });
+});
+
+document.querySelectorAll("[data-delete-trigger]").forEach((button) => {
+  button.addEventListener("click", () => {
+    deleteClipCard(button.closest("[data-clip-card]"), button);
+  });
+});
+
+document.querySelectorAll("[data-reject-reason]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const card = button.closest("[data-clip-card]");
+    if (!card) return;
+    const selected = card.dataset.feedbackReason === button.dataset.rejectReason;
+    card.dataset.feedbackReason = selected ? "" : button.dataset.rejectReason;
+    card.querySelectorAll("[data-reject-reason]").forEach((item) => {
+      const active = !selected && item === button;
+      item.classList.toggle("is-active", active);
+      item.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    showClipReviewMessage("淘汰原因已暂存；点击“保存修改”后统一写入。", "info");
+    updateClipReviewActionState();
+  });
+});
+
+if (closeTranscriptDrawerButton) {
+  closeTranscriptDrawerButton.addEventListener("click", closeTranscriptDrawer);
+}
+
+if (clipPreviewVideo) {
+  clipPreviewVideo.addEventListener("timeupdate", () => {
+    if (activePreviewEndSeconds !== null && clipPreviewVideo.currentTime >= activePreviewEndSeconds) {
+      clipPreviewVideo.pause();
+      activePreviewEndSeconds = null;
+    }
+  });
+}
+
+if (closeSourceMonitorButton) {
+  closeSourceMonitorButton.addEventListener("click", () => toggleSourceMonitor(false));
+}
+
+if (cancelSourceMonitorButton) {
+  cancelSourceMonitorButton.addEventListener("click", () => toggleSourceMonitor(false));
+}
+
+if (applySourceMonitorButton) {
+  applySourceMonitorButton.addEventListener("click", applySourceMonitorToCard);
+}
+
+if (sourceMonitorModal) {
+  sourceMonitorModal.addEventListener("click", (event) => {
+    if (event.target === sourceMonitorModal) toggleSourceMonitor(false);
+  });
+}
+
+if (sourceMonitorZoom) {
+  sourceMonitorZoom.addEventListener("change", renderSourceMonitor);
+}
+
+document.querySelectorAll("[data-source-step]").forEach((button) => {
+  button.addEventListener("click", () => {
+    if (!activeSourceMonitor) return;
+    document.querySelectorAll("[data-source-step]").forEach((item) => item.classList.remove("active"));
+    button.classList.add("active");
+    activeSourceMonitor.stepSeconds = Number(button.dataset.sourceStep || 1);
+    renderSourceMonitor();
+  });
+});
+
+document.querySelectorAll("[data-source-action]").forEach((button) => {
+  button.addEventListener("click", () => {
+    if (!activeSourceMonitor || !sourceMonitorVideo) return;
+    const action = button.dataset.sourceAction;
+    const current = Number(sourceMonitorVideo.currentTime || activeSourceMonitor.startSeconds);
+    const step = Number(activeSourceMonitor.stepSeconds || 1);
+    if (action === "mark-in") updateSourceMonitorRange(current, activeSourceMonitor.endSeconds, "start", "in");
+    if (action === "mark-out") updateSourceMonitorRange(activeSourceMonitor.startSeconds, current, "end", "out");
+    if (action === "jump-in") setSourceMonitorTime(activeSourceMonitor.startSeconds);
+    if (action === "jump-out") setSourceMonitorTime(activeSourceMonitor.endSeconds);
+    if (action === "preview") {
+      activeSourceMonitor.isPreviewing = true;
+      setSourceMonitorTime(activeSourceMonitor.startSeconds);
+      sourceMonitorVideo.play().catch(() => {});
+    }
+    if (action === "in-back") updateSourceMonitorRange(activeSourceMonitor.startSeconds - step, activeSourceMonitor.endSeconds, "start", "in");
+    if (action === "in-forward") updateSourceMonitorRange(activeSourceMonitor.startSeconds + step, activeSourceMonitor.endSeconds, "start", "in");
+    if (action === "out-back") updateSourceMonitorRange(activeSourceMonitor.startSeconds, activeSourceMonitor.endSeconds - step, "end", "out");
+    if (action === "out-forward") updateSourceMonitorRange(activeSourceMonitor.startSeconds, activeSourceMonitor.endSeconds + step, "end", "out");
+  });
+});
+
+if (sourceMonitorVideo) {
+  sourceMonitorVideo.addEventListener("loadedmetadata", renderSourceMonitor);
+  sourceMonitorVideo.addEventListener("timeupdate", () => {
+    if (!activeSourceMonitor) return;
+    if (activeSourceMonitor.isPreviewing && sourceMonitorVideo.currentTime >= activeSourceMonitor.endSeconds) {
+      sourceMonitorVideo.pause();
+      activeSourceMonitor.isPreviewing = false;
+      setSourceMonitorTime(activeSourceMonitor.endSeconds);
+      setSourceMonitorMessage("当前片段预览已到出点。", "success");
+      return;
+    }
+    renderSourceMonitor();
+  });
+}
+
+window.addEventListener("resize", () => {
+  if (activeSourceMonitor) renderSourceMonitor();
+});
+
+if (generateClipsButton) {
+  generateClipsButton.addEventListener("click", async () => {
+    if (isCutJobActive || isClipSaveActive || isReviewHandoffActive) return;
+    const originalText = generateClipsButton.textContent;
+    isCutJobActive = true;
+    updateClipReviewActionState();
+    generateClipsButton.textContent = "正在确认...";
+    showClipReviewMessage("正在保存当前审核选择...", "info");
+
+    try {
+      await persistClipReviewChanges();
+      generateClipsButton.textContent = "切片处理中...";
+      showClipReviewMessage("审核选择已保存，正在创建切片后台任务...", "info");
+      const response = await fetch(generateClipsButton.dataset.endpoint, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "生成切片请求失败");
+      }
+      renderCutJobProgress(data.job, data.message);
+      showClipReviewMessage(data.message || "切片任务已加入后台队列。", "info");
+      await showCompletedCut(data.job_id);
+    } catch (error) {
+      showClipReviewMessage(`生成切片失败：${error.message}`, "error");
+    } finally {
+      isCutJobActive = false;
+      updateClipReviewActionState();
+      generateClipsButton.textContent = originalText;
+    }
+  });
+  restoreCutProgress();
+}
+
+async function saveTaskSelectionSettings() {
+  if (!aiAnalysisForm || !aiSelectionProfile || !aiFinalClipTarget) return null;
+  const finalTarget = Number(aiFinalClipTarget.value || 5);
+  if (!Number.isInteger(finalTarget) || finalTarget < 1 || finalTarget > 12) {
+    throw new Error("最终启用目标必须是 1 到 12 之间的整数。");
+  }
+  const settingsPayload = {
+    selection_profile: aiSelectionProfile,
+    final_clip_target: finalTarget,
+  };
+  if (aiSelectionProfile === "long_live_talk") {
+    settingsPayload.highlight_density_per_hour = Number(aiHighlightDensity?.value || 4);
+    settingsPayload.highlight_total_limit = Number(aiHighlightTotalLimit?.value || 30);
+  }
+  const response = await fetch(`/api/tasks/${aiAnalysisForm.dataset.taskId}/selection-settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settingsPayload),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "选片设置保存失败");
+  const visual = document.querySelector("#task-visual-enabled");
+  if (visual) {
+    const visualResponse = await fetch(`/api/tasks/${aiAnalysisForm.dataset.taskId}/visual-settings`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visual_enabled: visual.checked }),
+    });
+    const visualData = await visualResponse.json();
+    if (!visualResponse.ok) throw new Error(visualData.detail || "视觉设置保存失败");
+  }
+  return data;
+}
+
+document.querySelectorAll("[data-sync-publish-task]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const taskId = button.dataset.taskId;
+    if (!taskId) return;
+    const originalText = button.textContent;
+    const preferSubtitled = button.dataset.preferSubtitled === "true";
+    button.disabled = true;
+    button.textContent = "正在同步...";
+    try {
+      const syncReviewedClips = button.dataset.syncReviewedClips === "true";
+      let data;
+      if (syncReviewedClips) {
+        const clips = collectClipReviewPayload();
+        if (!clips.some((clip) => clip.enabled)) {
+          throw new Error("请至少启用一条候选片段后再同步发送中心");
+        }
+        button.textContent = "正在保存并生成...";
+        showClipReviewMessage("正在保存审核选择；如选择有变化，将自动生成最新切片并同步...", "info");
+        data = await window.apiFetch(
+          `/api/tasks/${encodeURIComponent(taskId)}/clips/sync-publish`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clips }),
+          },
+        );
+      } else {
+        data = await window.apiFetch(
+          `/api/publish/tasks/${encodeURIComponent(taskId)}/sync?prefer_subtitled=${preferSubtitled ? "true" : "false"}`,
+          { method: "POST" },
+        );
+      }
+      const summary = document.querySelector("[data-publish-link-summary]");
+      if (summary) {
+        const heading = document.createElement("strong");
+        const detail = document.createElement("span");
+        heading.textContent = `发送中心关联：${data.link_state?.label || "同步完成"}`;
+        detail.textContent = data.message || "";
+        summary.replaceChildren(heading, detail);
+      }
+      showClipReviewMessage(data.message || "发送中心同步完成。", data.status === "partial" ? "error" : "success");
+      if (!document.querySelector("#process-result")) {
+        window.alert(data.message || "发送中心同步完成。");
+      }
+      if (syncReviewedClips && data.status !== "partial") {
+        const params = new URLSearchParams({
+          task_id: taskId,
+          tab: "content",
+          publish_message: data.message || "发送中心同步完成。",
+        });
+        window.location.assign(`/publish?${params.toString()}`);
+      }
+    } catch (error) {
+      const message = `同步发送中心失败：${error.message}`;
+      showClipReviewMessage(message, "error");
+      if (!document.querySelector("#process-result")) window.alert(message);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
+});
+
+document.querySelectorAll(".js-hide-task").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const taskTitle = button.dataset.taskTitle || "这条任务";
+    const confirmed = window.confirm(`确认永久删除“${taskTitle}”吗？\n\n系统会永久删除 E 盘任务目录内的原片副本、音频、转写、切片、字幕、封面和发布包，删除后无法恢复。\n\n任务目录外的原始视频不会被删除。`);
+    if (!confirmed) return;
+
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "删除中...";
+
+    try {
+      const response = await fetch(`/api/tasks/${button.dataset.taskId}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "永久删除失败");
+      }
+      const externalNotice = data.external_source_preserved ? "\n\n任务目录外的原始视频已保留。" : "";
+      window.alert(`${data.message || "任务已永久删除。"}${externalNotice}`);
+      window.location.reload();
+    } catch (error) {
+      window.alert(`永久删除失败：${error.message}`);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
+});
+
+const subtitleStyleForm = document.querySelector("#subtitle-style-form");
+const subtitleStyleResult = document.querySelector("#subtitle-style-result");
+
+if (subtitleStyleForm) {
+  subtitleStyleForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitButton = subtitleStyleForm.querySelector("button[type='submit']");
+    const formData = new FormData(subtitleStyleForm);
+    const payload = Object.fromEntries(formData.entries());
+    payload.font_size = Number(payload.font_size || 42);
+    payload.outline_width = Number(payload.outline_width || 3);
+    payload.shadow_depth = Number(payload.shadow_depth || 1);
+    payload.safe_area_percent = Number(payload.safe_area_percent || 5);
+    payload.speaker_styles = {
+      主播: { font_color: payload.speaker_host_color || "#ffffff" },
+      嘉宾: { font_color: payload.speaker_guest_color || "#ffd60a" },
+    };
+    delete payload.speaker_host_color;
+    delete payload.speaker_guest_color;
+    payload.shadow_enabled = Boolean(subtitleStyleForm.elements.shadow_enabled?.checked);
+    if (submitButton) submitButton.disabled = true;
+    if (subtitleStyleResult) subtitleStyleResult.textContent = "正在保存字幕样式...";
+
+    try {
+      const response = await fetch("/api/tasks/subtitle-style", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "字幕样式保存失败");
+      }
+      if (subtitleStyleResult) subtitleStyleResult.textContent = data.message || "字幕样式已保存。";
+    } catch (error) {
+      if (subtitleStyleResult) subtitleStyleResult.textContent = `保存失败：${error.message}`;
+    } finally {
+      if (submitButton) submitButton.disabled = false;
+    }
+  });
+}
+
+function renderAiAnalysisProgress(status) {
+  if (!aiAnalysisProgress) return;
+  const percent = Math.max(0, Math.min(100, Number(status.percent || 0)));
+  aiAnalysisProgress.hidden = false;
+  aiAnalysisProgress.dataset.status = status.status || "idle";
+  if (aiAnalysisProgressMessage) {
+    aiAnalysisProgressMessage.textContent = status.message || "AI 分析进度";
+  }
+  if (aiAnalysisProgressPercent) {
+    aiAnalysisProgressPercent.textContent = `${percent}%`;
+  }
+  if (aiAnalysisProgressBar) {
+    aiAnalysisProgressBar.style.width = `${percent}%`;
+  }
+}
+
+function renderRuntimeLog(status) {
+  if (runtimeLogState) {
+    const labelMap = {
+      idle: "待开始",
+      running: "分析中",
+      completed: "已完成",
+      failed: "失败",
+    };
+    const runtimeStatus = status.runtime_status || status.status || "idle";
+    runtimeLogState.textContent = status.runtime_status_label
+      || labelMap[runtimeStatus]
+      || status.status_label
+      || status.task_status_label
+      || "已刷新";
+    runtimeLogState.dataset.status = runtimeStatus;
+  }
+  if (!runtimeLogLines) return;
+  const lines = Array.isArray(status.log_lines) ? status.log_lines : [];
+  runtimeLogLines.textContent = lines.length ? lines.join("\n") : "暂无运行日志。任务开始后，这里会自动刷新。";
+  runtimeLogLines.scrollTop = runtimeLogLines.scrollHeight;
+}
+
+function formatTaskLiveRefreshTime() {
+  return new Date().toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function renderTaskLiveActions(data) {
+  if (!taskLiveActions) return;
+  const actions = data.actions || {};
+  let primaryAction = actions.primary || "none";
+  if (primaryAction === "publish" && !actions.publish) {
+    primaryAction = "none";
+  }
+
+  taskLiveActions.querySelectorAll("[data-live-primary-action]").forEach((node) => {
+    node.hidden = node.dataset.livePrimaryAction !== primaryAction;
+  });
+
+  const reviewAction = taskLiveActions.querySelector("[data-live-review-action]");
+  if (reviewAction) reviewAction.hidden = !actions.review || primaryAction === "review_outputs";
+  const syncAction = taskLiveActions.querySelector("[data-live-sync-action]");
+  if (syncAction) {
+    syncAction.hidden = ["subtitle_review", "review_outputs"].includes(primaryAction) || Number(data.counts?.outputs || 0) <= 0;
+  }
+  const subtitleSkip = taskLiveActions.querySelector("[data-live-subtitle-skip]");
+  if (subtitleSkip) subtitleSkip.hidden = primaryAction !== "subtitle_review" || actions.subtitle_skip === false;
+}
+
+async function waitForAiAnalysisJob(jobId) {
+  while (true) {
+    const response = await fetch(`/api/tasks/jobs/${jobId}`);
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.detail || "查询 AI 分析任务进度失败");
+    renderAiAnalysisProgress({
+      status: job.status,
+      percent: Number(job.progress || 0),
+      message: job.status === "failed"
+        ? (job.error_message || job.message || "AI 分析失败")
+        : (job.message || "AI 分析正在排队..."),
+    });
+    if (job.status === "completed") return job;
+    if (job.status === "failed" || job.status === "cancelled") {
+      throw new Error(job.error_message || job.message || "AI 分析任务未完成");
+    }
+    await wait(1000);
+  }
+}
+
+function renderTaskLiveStatus(data) {
+  const progress = Math.max(0, Math.min(100, Number(data.progress || 0)));
+  document.querySelectorAll("[data-task-live-status-label]").forEach((node) => {
+    node.textContent = data.status_label || data.status || "状态未知";
+    node.dataset.status = data.runtime_status || (data.should_poll ? "running" : "completed");
+  });
+  const headerStatus = document.querySelector("[data-task-live-header-status]");
+  if (headerStatus) headerStatus.textContent = data.status_label || data.status || "状态未知";
+  if (taskLiveProgressBar) taskLiveProgressBar.style.width = `${progress}%`;
+  if (taskLiveProgressNumber) taskLiveProgressNumber.textContent = `${progress}%`;
+  if (taskLiveUpdatedAt) taskLiveUpdatedAt.textContent = data.updated_at || "未知";
+
+  const candidateCount = Number(data.counts?.candidates || 0);
+  const outputCount = Number(data.counts?.outputs || 0);
+  if (taskLiveCandidateCount) taskLiveCandidateCount.textContent = `${candidateCount} 条`;
+  if (taskLiveOutputCount) taskLiveOutputCount.textContent = `${outputCount} 条`;
+  if (aiCandidateCountPill) aiCandidateCountPill.textContent = `${candidateCount} 条候选`;
+
+  const operation = data.active_operation || {};
+  const operationProgress = Math.max(0, Math.min(100, Number(operation.progress || 0)));
+  if (taskLiveOperation) taskLiveOperation.dataset.status = operation.status || "idle";
+  if (taskLiveOperationLabel) {
+    taskLiveOperationLabel.textContent = operation.label || data.task_status_label || "当前任务";
+  }
+  if (taskLiveOperationProgress) taskLiveOperationProgress.textContent = `${operationProgress}%`;
+  if (taskLiveOperationMessage) {
+    taskLiveOperationMessage.textContent = operation.message
+      || `当前阶段：${data.task_status_label || data.status_label || "状态未知"}`;
+  }
+
+  const allowedStepStates = new Set(["done", "current", "pending", "warning"]);
+  (Array.isArray(data.workflow_steps) ? data.workflow_steps : []).forEach((step) => {
+    const node = taskLiveOverview?.querySelector(`[data-task-live-step="${step.index}"]`);
+    if (!node) return;
+    node.classList.remove("done", "current", "pending", "warning");
+    node.classList.add(allowedStepStates.has(step.state) ? step.state : "pending");
+    const number = node.querySelector("span");
+    const label = node.querySelector("strong");
+    if (number) number.textContent = step.index;
+    if (label) label.textContent = step.name;
+  });
+
+  renderRuntimeLog(data);
+  renderTaskLiveActions(data);
+  if (autoPipelineMonitor) {
+    autoPipelineMonitor.dataset.status = data.status || "";
+    autoPipelineMonitor.dataset.running = data.should_poll ? "true" : "false";
+  }
+  if (taskLiveNote) {
+    taskLiveNote.dataset.snapshotAt = data.snapshot_at || "";
+    if (data.error_message) {
+      taskLiveNote.dataset.state = "error";
+      taskLiveNote.textContent = `流程已暂停：${summarizeErrorMessage(data.error_message)}`;
+    } else if (data.should_poll) {
+      taskLiveNote.dataset.state = "active";
+      taskLiveNote.textContent = `自动刷新中 · ${formatTaskLiveRefreshTime()} 已获取最新状态`;
+    } else {
+      taskLiveNote.dataset.state = "completed";
+      taskLiveNote.textContent = `状态已更新 · ${formatTaskLiveRefreshTime()}`;
+    }
+  }
+}
+
+function scheduleTaskLiveStatusPolling() {
+  if (!autoPipelineMonitor || document.hidden) return;
+  if (taskLiveStatusTimer) window.clearTimeout(taskLiveStatusTimer);
+  taskLiveStatusTimer = window.setTimeout(() => {
+    pollTaskLiveStatus().catch(() => {});
+  }, TASK_LIVE_STATUS_INTERVAL_MS);
+}
+
+async function pollTaskLiveStatus() {
+  if (!autoPipelineMonitor) return null;
+  if (taskLiveStatusRequestInFlight) return null;
+  const taskId = autoPipelineMonitor.dataset.taskId;
+  if (!taskId) return null;
+  if (taskLiveStatusTimer) {
+    window.clearTimeout(taskLiveStatusTimer);
+    taskLiveStatusTimer = null;
+  }
+
+  taskLiveStatusRequestInFlight = true;
+  try {
+    const data = await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/live-status`);
+    renderTaskLiveStatus(data);
+    if (data.should_poll) taskLiveForcedPollingUntil = 0;
+    if (data.should_poll || Date.now() < taskLiveForcedPollingUntil) {
+      scheduleTaskLiveStatusPolling();
+    }
+    return data;
+  } catch (error) {
+    if (taskLiveNote) {
+      taskLiveNote.dataset.state = "error";
+      taskLiveNote.textContent = `自动更新暂时中断，正在重试：${summarizeErrorMessage(error.message)}`;
+    }
+    scheduleTaskLiveStatusPolling();
+    return null;
+  } finally {
+    taskLiveStatusRequestInFlight = false;
+  }
+}
+
+function startTaskLiveStatusPolling(forceRestart = false) {
+  if (!autoPipelineMonitor) return;
+  if (forceRestart) taskLiveForcedPollingUntil = Date.now() + 10000;
+  pollTaskLiveStatus().catch(() => {});
+}
+
+if (autoPipelineMonitor) {
+  startTaskLiveStatusPolling();
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      if (taskLiveStatusTimer) window.clearTimeout(taskLiveStatusTimer);
+      taskLiveStatusTimer = null;
+      return;
+    }
+    startTaskLiveStatusPolling();
+  });
+}
+
+async function pollAiAnalysisStatus(keepPolling = false) {
+  if (!aiAnalysisForm) return null;
+  const taskId = aiAnalysisForm.dataset.taskId;
+  const response = await fetch(`/api/tasks/${taskId}/ai-analysis-status`);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "读取 AI 分析状态失败");
+  }
+  renderAiAnalysisProgress(data);
+  if (aiStatusPollingTimer) {
+    window.clearTimeout(aiStatusPollingTimer);
+    aiStatusPollingTimer = null;
+  }
+  if (keepPolling || data.is_running) {
+    aiStatusPollingTimer = window.setTimeout(() => {
+      pollAiAnalysisStatus(false).catch(() => {});
+    }, 3000);
+  }
+  return data;
+}
+
+function stopAiAnalysisStatusPolling() {
+  if (!aiStatusPollingTimer) return;
+  window.clearTimeout(aiStatusPollingTimer);
+  aiStatusPollingTimer = null;
+}
+
+document.querySelectorAll("[data-render-subtitle]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const card = button.closest("[data-subtitle-output-card]");
+    if (!card) return;
+    const taskId = card.dataset.taskId;
+    const outputId = card.dataset.outputId;
+    const statusNode = card.querySelector("[data-subtitle-status]");
+    const errorNode = card.querySelector("[data-subtitle-error]");
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "正在入队...";
+    if (statusNode) statusNode.textContent = "字幕排队中";
+    if (errorNode) errorNode.textContent = "";
+
+    try {
+      const response = await fetch(`/api/tasks/${taskId}/output-clips/${outputId}/subtitles`, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "自动加字幕失败");
+      }
+      if (errorNode) errorNode.textContent = data.message || "字幕任务已加入队列。";
+      button.textContent = "后台烧录中";
+      await pollSubtitleWorkflowJob(data.job_id, statusNode, errorNode);
+      window.location.reload();
+    } catch (error) {
+      if (statusNode) statusNode.textContent = "字幕失败";
+      if (errorNode) errorNode.textContent = `自动加字幕失败：${error.message}`;
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
+});
+
+async function pollSubtitleWorkflowJob(jobId, statusNode, messageNode) {
+  if (!jobId) throw new Error("后台没有返回字幕 job id");
+  while (true) {
+    const response = await fetch(`/api/tasks/jobs/${encodeURIComponent(jobId)}`);
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.detail || "读取字幕任务状态失败");
+    if (statusNode) statusNode.textContent = `${job.status_label || job.status} · ${Number(job.progress || 0)}%`;
+    if (messageNode) messageNode.textContent = job.message || "字幕任务处理中";
+    if (job.status === "completed") return job;
+    if (job.status === "failed" || job.status === "cancelled") {
+      throw new Error(job.error_message || job.message || "字幕任务未完成");
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 1500));
+  }
+}
+
+document.querySelectorAll("[data-live-subtitle-skip]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    if (!window.confirm("确认跳过字幕并进入片段审核吗？审核保存后才会同步发送中心。")) return;
+    const taskId = button.dataset.taskId;
+    button.disabled = true;
+    const originalText = button.textContent;
+    button.textContent = "正在进入审核...";
+    try {
+      const data = await apiFetch(`/api/subtitles/tasks/${encodeURIComponent(taskId)}/skip-to-review`, {
+        method: "POST",
+      });
+      if (taskLiveNote) taskLiveNote.textContent = data.message || "已跳过字幕，正在进入片段审核";
+      window.location.href = data.review_url || `/tasks/${encodeURIComponent(taskId)}/clips/review`;
+    } catch (error) {
+      window.alert(`跳过字幕失败：${summarizeErrorMessage(error.message)}`);
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
+});
+
+const cutEditModal = document.querySelector("#cut-edit-modal");
+const closeCutEditButton = document.querySelector("#close-cut-edit");
+const cutEditVideo = document.querySelector("#cut-edit-video");
+const cutEditCaption = document.querySelector("#cut-edit-caption");
+const playCutPreviewButton = document.querySelector("#play-cut-preview");
+const saveCutEditButton = document.querySelector("#save-cut-edit");
+const cutEditSaveMessage = document.querySelector("#cut-edit-save-message");
+const trimFrameTrack = document.querySelector("#trim-frame-track");
+const trimSlider = document.querySelector("#trim-slider");
+const trimStripPlayButton = document.querySelector("#trim-strip-play");
+const trimPlayhead = document.querySelector("#trim-playhead");
+const trimStartInput = document.querySelector("#trim-start-input");
+const trimEndInput = document.querySelector("#trim-end-input");
+const trimDurationLabel = document.querySelector("#trim-duration-label");
+const trimStartPosition = document.querySelector("#trim-start-position");
+const trimCurrentPosition = document.querySelector("#trim-current-position");
+const trimEndPosition = document.querySelector("#trim-end-position");
+const setTrimStartButton = document.querySelector("#set-trim-start");
+const setTrimEndButton = document.querySelector("#set-trim-end");
+let activeTrimState = null;
+let isSyncingTrimSlider = false;
+
+function setCutEditMessage(message, tone = "info") {
+  if (!cutEditSaveMessage) return;
+  cutEditSaveMessage.textContent = message;
+  cutEditSaveMessage.dataset.tone = tone;
+}
+
+function getTrimDuration() {
+  if (!activeTrimState) return 1;
+  const videoDuration = Number(cutEditVideo?.duration || 0);
+  return Math.max(1, videoDuration || activeTrimState.durationSeconds || activeTrimState.endSeconds || 1);
+}
+
+function clampTrimSeconds(value, min, max) {
+  return Math.max(min, Math.min(Number(value) || 0, max));
+}
+
+function normalizeTrimRange(startSeconds, endSeconds) {
+  const duration = getTrimDuration();
+  const minGap = Math.min(1, Math.max(0.1, duration / 10));
+  let start = clampTrimSeconds(startSeconds, 0, Math.max(0, duration - minGap));
+  let end = clampTrimSeconds(endSeconds, start + minGap, duration);
+  if (end - start < minGap) {
+    if (end >= duration) {
+      start = Math.max(0, duration - minGap);
+      end = duration;
+    } else {
+      end = Math.min(duration, start + minGap);
+    }
+  }
+  return { start, end };
+}
+
+function getTrimSliderInstance() {
+  return trimSlider?.noUiSlider || null;
+}
+
+function updateTrimPlayhead() {
+  if (!activeTrimState || !trimPlayhead || !trimFrameTrack) return;
+  const duration = getTrimDuration();
+  const currentSeconds = clampTrimSeconds(cutEditVideo?.currentTime || activeTrimState.startSeconds, 0, duration);
+  const playWidth = trimStripPlayButton?.offsetWidth || 72;
+  const trackWidth = trimFrameTrack.clientWidth || 1;
+  const usableWidth = Math.max(1, trackWidth - playWidth);
+  trimPlayhead.style.left = `${playWidth + (currentSeconds / duration) * usableWidth}px`;
+}
+
+function updateTrimReadout() {
+  if (!activeTrimState) return;
+  const currentSeconds = clampTrimSeconds(cutEditVideo?.currentTime || activeTrimState.startSeconds, 0, getTrimDuration());
+  if (trimStartInput) trimStartInput.value = secondsToTimeText(activeTrimState.startSeconds);
+  if (trimEndInput) trimEndInput.value = secondsToTimeText(activeTrimState.endSeconds);
+  if (trimDurationLabel) trimDurationLabel.textContent = `选中 ${secondsToTimeText(activeTrimState.endSeconds - activeTrimState.startSeconds)}`;
+  if (trimStartPosition) trimStartPosition.textContent = secondsToTimeText(activeTrimState.startSeconds);
+  if (trimCurrentPosition) trimCurrentPosition.textContent = secondsToTimeText(currentSeconds);
+  if (trimEndPosition) trimEndPosition.textContent = secondsToTimeText(activeTrimState.endSeconds);
+  updateTrimPlayhead();
+}
+
+function handleTrimSliderUpdate(values, handle, unencoded) {
+  if (!activeTrimState || isSyncingTrimSlider) return;
+  const start = Number(unencoded?.[0] ?? values?.[0]);
+  const end = Number(unencoded?.[1] ?? values?.[1]);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+  const normalized = normalizeTrimRange(start, end);
+  activeTrimState.startSeconds = Math.round(normalized.start);
+  activeTrimState.endSeconds = Math.round(normalized.end);
+  updateTrimReadout();
+}
+
+function syncTrimSliderOptions() {
+  if (!activeTrimState || !trimSlider) return false;
+  if (!window.noUiSlider) {
+    trimSlider.dataset.disabled = "true";
+    setCutEditMessage("剪切滑块组件加载失败，请刷新页面后再试。", "error");
+    return false;
+  }
+
+  const duration = getTrimDuration();
+  const normalized = normalizeTrimRange(activeTrimState.startSeconds, activeTrimState.endSeconds);
+  activeTrimState.startSeconds = Math.round(normalized.start);
+  activeTrimState.endSeconds = Math.round(normalized.end);
+  activeTrimState.durationSeconds = duration;
+  trimSlider.dataset.disabled = "false";
+
+  const options = {
+    start: [activeTrimState.startSeconds, activeTrimState.endSeconds],
+    connect: [false, true, false],
+    behaviour: "tap-drag",
+    step: 1,
+    margin: Math.min(1, Math.max(0.1, duration / 10)),
+    range: {
+      min: 0,
+      max: duration,
+    },
+  };
+
+  isSyncingTrimSlider = true;
+  if (trimSlider.noUiSlider) {
+    trimSlider.noUiSlider.updateOptions(options, false);
+  } else {
+    window.noUiSlider.create(trimSlider, options);
+    trimSlider.noUiSlider.on("update", handleTrimSliderUpdate);
+    trimSlider.noUiSlider.on("slide", (values, handle, unencoded) => {
+      if (!cutEditVideo || !activeTrimState) return;
+      const nextTime = Number(unencoded?.[handle] ?? values?.[handle]);
+      if (Number.isFinite(nextTime)) cutEditVideo.currentTime = clampTrimSeconds(nextTime, 0, getTrimDuration());
+    });
+    trimSlider.noUiSlider.on("change", () => {
+      setCutEditMessage("已更新这个片段里的入点 / 出点，点击保存后会写回片段审核。", "success");
+    });
+  }
+  trimSlider.noUiSlider.set([activeTrimState.startSeconds, activeTrimState.endSeconds]);
+  isSyncingTrimSlider = false;
+  updateTrimReadout();
+  return true;
+}
+
+function renderTrimEditor() {
+  syncTrimSliderOptions();
+}
+
+function updateTrimRange(startSeconds, endSeconds, seekTo = "start") {
+  if (!activeTrimState) return;
+  const normalized = normalizeTrimRange(startSeconds, endSeconds);
+  activeTrimState.startSeconds = Math.round(normalized.start);
+  activeTrimState.endSeconds = Math.round(normalized.end);
+  const slider = getTrimSliderInstance();
+  if (slider) slider.set([activeTrimState.startSeconds, activeTrimState.endSeconds]);
+  updateTrimReadout();
+  if (cutEditVideo) {
+    cutEditVideo.currentTime = seekTo === "end" ? activeTrimState.endSeconds : activeTrimState.startSeconds;
+  }
+}
+
+function toggleCutEditModal(show) {
+  if (!cutEditModal) return;
+  if (show) {
+    cutEditModal.removeAttribute("hidden");
+    document.body.style.overflow = "hidden";
+    return;
+  }
+  cutEditModal.setAttribute("hidden", "");
+  document.body.style.overflow = "";
+  if (cutEditVideo) cutEditVideo.pause();
+  activeTrimState = null;
+  isSyncingTrimSlider = false;
+}
+
+document.querySelectorAll("[data-cut-edit-trigger]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const card = button.closest("[data-subtitle-output-card]");
+    const clipVideo = card?.querySelector(":scope > video");
+    if (!card || !cutEditVideo || !clipVideo) return;
+    const absoluteStartSeconds = Number(card.dataset.startSeconds || 0);
+    const absoluteEndSeconds = Number(card.dataset.endSeconds || absoluteStartSeconds + 1);
+    const outputBaseStartSeconds = Number(card.dataset.outputBaseStartSeconds || card.dataset.startSeconds || 0);
+    const fallbackDuration = Math.max(
+      1,
+      Number(card.dataset.durationSeconds || 0),
+      Number(clipVideo.duration || 0),
+      absoluteEndSeconds - outputBaseStartSeconds
+    );
+    const localStartSeconds = clampTrimSeconds(absoluteStartSeconds - outputBaseStartSeconds, 0, fallbackDuration);
+    const localEndSeconds = clampTrimSeconds(absoluteEndSeconds - outputBaseStartSeconds, localStartSeconds + 1, fallbackDuration);
+    activeTrimState = {
+      card,
+      taskId: card.dataset.taskId || "",
+      clipId: card.dataset.clipId || "",
+      title: card.dataset.clipTitle || card.querySelector(".subtitle-output-body strong")?.textContent || "当前切片",
+      summary: card.dataset.clipSummary || "",
+      enabled: card.dataset.clipEnabled !== "0",
+      outputBaseStartSeconds,
+      durationSeconds: fallbackDuration,
+      startSeconds: localStartSeconds,
+      endSeconds: localEndSeconds,
+    };
+    cutEditVideo.src = card.dataset.outputMediaUrl || clipVideo.currentSrc || clipVideo.src;
+    cutEditVideo.load();
+    if (cutEditCaption) {
+      cutEditCaption.textContent = activeTrimState.title;
+    }
+    setCutEditMessage("当前只裁这个已生成片段：拖动黄色左右把手调整入点和出点。", "info");
+    toggleCutEditModal(true);
+    renderTrimEditor();
+    cutEditVideo.currentTime = Math.max(0, activeTrimState.startSeconds);
+  });
+});
+
+if (closeCutEditButton) {
+  closeCutEditButton.addEventListener("click", () => toggleCutEditModal(false));
+}
+
+if (cutEditModal) {
+  cutEditModal.addEventListener("click", (event) => {
+    if (event.target === cutEditModal) toggleCutEditModal(false);
+  });
+}
+
+if (playCutPreviewButton && cutEditVideo) {
+  playCutPreviewButton.addEventListener("click", () => {
+    if (activeTrimState) {
+      cutEditVideo.currentTime = Math.max(0, activeTrimState.startSeconds);
+    }
+    cutEditVideo.play().catch(() => {});
+  });
+}
+
+if (trimStripPlayButton && cutEditVideo) {
+  trimStripPlayButton.addEventListener("click", () => {
+    if (activeTrimState) {
+      cutEditVideo.currentTime = Math.max(0, activeTrimState.startSeconds);
+    }
+    cutEditVideo.play().catch(() => {});
+  });
+}
+
+if (cutEditVideo) {
+  cutEditVideo.addEventListener("loadedmetadata", () => {
+    if (!activeTrimState) return;
+    activeTrimState.durationSeconds = getTrimDuration();
+    const normalized = normalizeTrimRange(activeTrimState.startSeconds, activeTrimState.endSeconds);
+    activeTrimState.startSeconds = Math.round(normalized.start);
+    activeTrimState.endSeconds = Math.round(normalized.end);
+    cutEditVideo.currentTime = activeTrimState.startSeconds;
+    renderTrimEditor();
+  });
+  cutEditVideo.addEventListener("timeupdate", () => {
+    if (!activeTrimState) return;
+    updateTrimReadout();
+    if (cutEditVideo.currentTime >= activeTrimState.endSeconds) {
+      cutEditVideo.pause();
+      cutEditVideo.currentTime = activeTrimState.startSeconds;
+    }
+  });
+}
+
+if (trimStartInput) {
+  trimStartInput.addEventListener("change", () => {
+    updateTrimRange(timeTextToSeconds(trimStartInput.value), activeTrimState?.endSeconds || 1, "start");
+  });
+}
+
+if (trimEndInput) {
+  trimEndInput.addEventListener("change", () => {
+    updateTrimRange(activeTrimState?.startSeconds || 0, timeTextToSeconds(trimEndInput.value), "end");
+  });
+}
+
+if (setTrimStartButton && cutEditVideo) {
+  setTrimStartButton.addEventListener("click", () => {
+    updateTrimRange(cutEditVideo.currentTime, activeTrimState?.endSeconds || cutEditVideo.currentTime + 1, "start");
+  });
+}
+
+if (setTrimEndButton && cutEditVideo) {
+  setTrimEndButton.addEventListener("click", () => {
+    updateTrimRange(activeTrimState?.startSeconds || 0, cutEditVideo.currentTime, "end");
+  });
+}
+
+if (saveCutEditButton) {
+  saveCutEditButton.addEventListener("click", async () => {
+    if (!activeTrimState?.taskId || !activeTrimState?.clipId) {
+      setCutEditMessage("这条切片没有关联到候选片段，不能直接保存时间。", "error");
+      return;
+    }
+    const originalText = saveCutEditButton.textContent;
+    saveCutEditButton.disabled = true;
+    saveCutEditButton.textContent = "保存中...";
+    setCutEditMessage("正在保存这个片段内的入点和出点...", "info");
+    const absoluteStartSeconds = Math.round(activeTrimState.outputBaseStartSeconds + activeTrimState.startSeconds);
+    const absoluteEndSeconds = Math.round(activeTrimState.outputBaseStartSeconds + activeTrimState.endSeconds);
+    try {
+      const response = await fetch(`/api/tasks/${activeTrimState.taskId}/clips/${activeTrimState.clipId}/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: activeTrimState.title,
+          start_time: secondsToTimeText(absoluteStartSeconds),
+          end_time: secondsToTimeText(absoluteEndSeconds),
+          enabled: activeTrimState.enabled,
+          summary: activeTrimState.summary,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "保存失败");
+      }
+      activeTrimState.card.dataset.startSeconds = String(absoluteStartSeconds);
+      activeTrimState.card.dataset.endSeconds = String(absoluteEndSeconds);
+      activeTrimState.card.dataset.durationSeconds = String(Math.max(1, absoluteEndSeconds - absoluteStartSeconds));
+      activeTrimState.card.dataset.startTime = secondsToTimeText(absoluteStartSeconds);
+      activeTrimState.card.dataset.endTime = secondsToTimeText(absoluteEndSeconds);
+      setCutEditMessage("已保存。回到片段审核页重新生成切片后，会得到新的视频文件。", "success");
+    } catch (error) {
+      setCutEditMessage(`保存失败：${error.message}`, "error");
+    } finally {
+      saveCutEditButton.disabled = false;
+      saveCutEditButton.textContent = originalText;
+    }
+  });
+}
+
+window.addEventListener("resize", () => {
+  if (activeTrimState) updateTrimPlayhead();
+});
+
+document.querySelectorAll(".js-demo-toast").forEach((button) => {
+  button.addEventListener("click", () => {
+    window.alert(button.dataset.message || "这个功能已经预留入口，后续会继续接入。");
+  });
+});
+
+const aiConfigModal = document.querySelector("#ai-config-modal");
+const aiConfigForm = document.querySelector("#ai-config-form");
+const aiConfigResult = document.querySelector("#ai-config-result");
+const openAiConfigButton = document.querySelector("#open-ai-config");
+const closeAiConfigButton = document.querySelector("#close-ai-config");
+const cancelAiConfigButton = document.querySelector("#cancel-ai-config");
+
+function toggleAiConfigModal(show) {
+  if (!aiConfigModal) return;
+  if (show) {
+    aiConfigModal.removeAttribute("hidden");
+    document.body.style.overflow = "hidden";
+    closeAiConfigButton?.focus();
+    return;
+  }
+  aiConfigModal.setAttribute("hidden", "");
+  document.body.style.overflow = "";
+}
+
+if (openAiConfigButton) {
+  openAiConfigButton.addEventListener("click", () => toggleAiConfigModal(true));
+}
+
+[closeAiConfigButton, cancelAiConfigButton].forEach((button) => {
+  if (!button) return;
+  button.addEventListener("click", () => toggleAiConfigModal(false));
+});
+
+if (aiConfigModal) {
+  aiConfigModal.addEventListener("click", (event) => {
+    if (event.target === aiConfigModal) {
+      toggleAiConfigModal(false);
+    }
+  });
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && aiConfigModal && !aiConfigModal.hidden) {
+    toggleAiConfigModal(false);
+  }
+});
+
+if (aiConfigForm) {
+  aiConfigForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitButton = aiConfigForm.querySelector("button[type='submit']");
+    const formData = new FormData(aiConfigForm);
+    const payload = Object.fromEntries(formData.entries());
+    payload.ai_request_timeout_seconds = Number(payload.ai_request_timeout_seconds || 120);
+    payload.ai_codex_timeout_seconds = Number(payload.ai_codex_timeout_seconds || 600);
+    payload.volcengine_asr_timeout_seconds = Number(payload.volcengine_asr_timeout_seconds || 300);
+    payload.ai_analysis_request_timeout_seconds = Number(payload.ai_analysis_request_timeout_seconds || 120);
+    payload.ai_publish_request_timeout_seconds = Number(payload.ai_publish_request_timeout_seconds || 120);
+    payload.ai_local_health_timeout_seconds = Number(payload.ai_local_health_timeout_seconds || 30);
+
+    submitButton.disabled = true;
+    if (aiConfigResult) aiConfigResult.textContent = "正在保存三类 AI 接口配置...";
+
+    try {
+      const data = await window.apiFetch("/api/settings/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (aiConfigResult) aiConfigResult.textContent = data.message || "保存成功。";
+      window.setTimeout(() => {
+        toggleAiConfigModal(false);
+        window.location.reload();
+      }, 500);
+    } catch (error) {
+      if (aiConfigResult) aiConfigResult.textContent = `保存失败：${error.message}`;
+    } finally {
+      submitButton.disabled = false;
+    }
+  });
+}
+
+// 发送中心页面行为由 publish-center.js 独立维护，避免全局脚本重复绑定。
