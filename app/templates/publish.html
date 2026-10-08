@@ -119,7 +119,7 @@
     {% endif %}
     <button type="button" class="secondary-button" data-reschedule-job {% if job.status != "SCHEDULED" or job.error_code == 'schedule_missed' %}hidden{% endif %}>重新排期</button>
     {% if job.status == "SCHEDULED" %}<button type="button" class="secondary-button" data-clear-schedule>清除排期</button>{% endif %}
-    <button type="button" class="text-button" data-cancel-job>取消发送并返回准备</button>
+    <button type="button" class="secondary-button" data-cancel-job>取消发送并返回准备</button>
   </div>
 </article>
 {% endmacro %}
@@ -286,7 +286,7 @@
 
 <section class="panel publish-center-panel" data-center-panel="schedule" hidden>
   <div class="panel-header"><div><h2>排期计划</h2><p>按日期核对安排；所有时间均为北京时间，应用前必须预览。</p></div><div class="button-row" role="group" aria-label="排期视图"><button class="secondary-button is-active" type="button" data-schedule-view="list" aria-pressed="true">日期清单</button><button class="secondary-button" type="button" data-schedule-view="calendar" aria-pressed="false">月历</button></div></div>
-  <div class="inline-alert tone-blue publish-task-focus-note" data-schedule-task-focus hidden role="status"><span data-schedule-task-message></span><div class="button-row"><button type="button" class="text-button" data-locate-schedule-task>定位本任务排期</button><button type="button" class="text-button" data-clear-schedule-task-focus>清除任务定位</button></div></div>
+  <div class="inline-alert tone-blue publish-task-focus-note" data-schedule-task-focus hidden role="status"><span data-schedule-task-message></span><div class="button-row"><button type="button" class="secondary-button" data-locate-schedule-task>定位本任务排期</button><button type="button" class="secondary-button" data-clear-schedule-task-focus>清除任务定位</button></div></div>
   <section class="publish-calendar-card" data-schedule-calendar-card hidden aria-label="北京时间排期日历">
     <header class="publish-calendar-toolbar">
       <div><h3 data-calendar-title>排期日历</h3></div>

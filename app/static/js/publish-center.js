@@ -312,7 +312,7 @@ if (publishCenterRoot) {
       `[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(jobId || "")}"]`,
     );
     if (!row || row.hidden) return;
-    row.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
+    row.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center", inline: "nearest" });
     row.classList.add("is-calendar-focus");
     window.setTimeout(() => row.classList.remove("is-calendar-focus"), 1600);
   }
@@ -341,7 +341,7 @@ if (publishCenterRoot) {
       workspace?.setScheduleView('list');
       const first = matching.find(row => row.dataset.status === 'SCHEDULED') || matching[0];
       first.tabIndex = -1; first.focus({ preventScroll: true });
-      first.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: 'center' });
+      first.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: 'center', inline: 'nearest' });
     }
   }
 

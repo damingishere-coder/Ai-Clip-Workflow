@@ -63,7 +63,11 @@ body.has-publish-editor { overflow: hidden; }
 .publish-content-maintenance summary { cursor: pointer; font-weight: 600; }
 .publish-content-maintenance[open] > div { margin-top: 12px; }
 .publish-date-heading { padding: 20px 8px 8px; font-size: 15px; color: #384b63; }
+.publish-center-panel, .publish-plan-list, .publish-plan-row > * { min-width: 0; }
+.publish-plan-header, .publish-plan-row { grid-template-columns: 28px 150px minmax(0,1fr) 60px 100px 80px minmax(0,1.4fr); }
 .publish-plan-row .publish-row-actions { flex-wrap: wrap; }
+.publish-plan-row [data-row-account], .publish-plan-row [data-readiness-message] { overflow-wrap: anywhere; }
+.publish-plan-row .publish-row-actions > * { max-width: 100%; }
 .publish-plan-row.is-task-focus { border-color: #7ca9e4; box-shadow: inset 3px 0 #4b86d3; background: #f2f7ff; }
 .publish-task-marker { color: #2764b4; font-size: 11px; white-space: nowrap; background: #e5efff; border-radius: 5px; padding: 2px 6px; }
 .publish-task-focus-note { margin: 14px 0; font-size: 13px; }
@@ -90,5 +94,26 @@ body.has-publish-editor { overflow: hidden; }
 .publish-event-timeline p { margin: 6px 0; }
 [data-center-tab] { min-height: 42px; }
 .publish-content-card.is-editing { outline: 2px solid #91b9ff; }
+/* Account for the sidebar and panel padding, not only the viewport width. */
+@media (max-width: 1400px) {
+  .publish-plan-header { display: none; }
+  .publish-plan-row { grid-template-columns: 28px 132px minmax(0,1fr); align-items: start; }
+  .publish-plan-row > :nth-child(1) { grid-column: 1; grid-row: 1 / 4; }
+  .publish-plan-row > :nth-child(2) { grid-column: 2; grid-row: 1; }
+  .publish-plan-row > :nth-child(3) { grid-column: 3; grid-row: 1; }
+  .publish-plan-row > :nth-child(4) { grid-column: 2; grid-row: 2; }
+  .publish-plan-row > :nth-child(5) { grid-column: 3; grid-row: 2; }
+  .publish-plan-row > :nth-child(6) { grid-column: 2; grid-row: 3; }
+  .publish-plan-row .publish-row-actions { grid-column: 3; grid-row: 3; justify-content: flex-start; }
+  .publish-plan-row .publish-send-readiness { text-align: left; }
+}
 @media (max-width: 1100px) { .publish-selection-bar { width: calc(100vw - 48px); } .publish-content-card { grid-template-columns: 24px 72px minmax(0,1fr); gap: 12px; } .publish-content-media { width: 72px; height: 54px; } .publish-content-summary-actions { grid-column: 3; justify-content: flex-start; } }
+@media (max-width: 760px) {
+  .publish-plan-row { grid-template-columns: 28px minmax(0,1fr); }
+  .publish-plan-row > :nth-child(1) { grid-column: 1; grid-row: 1 / 7; }
+  .publish-plan-row > :nth-child(n+2) { grid-column: 2; grid-row: auto; }
+  .publish-plan-video video { grid-column: 1; grid-row: 1; }
+  .publish-plan-video .publish-task-marker { grid-column: 2; grid-row: 1; justify-self: start; }
+  .publish-plan-video strong { grid-column: 1 / -1; grid-row: 2; white-space: normal; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; }
+}
 @media (max-width: 600px) { .publish-content-card { grid-template-columns: 20px 60px minmax(0,1fr); padding: 12px; gap: 10px; } .publish-content-media { width: 60px; height: 48px; } .publish-content-summary-actions { grid-column: 2 / -1; } .publish-ai-comparison { grid-template-columns: 1fr; } .publish-content-card.is-editing .publish-content-form { padding: 18px; } .publish-dialog { padding: 18px; } .publish-selection-bar { max-height: 45dvh; overflow-y: auto; } }
