@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Challenger 草稿 · {{ settings.app_name }}{% endblock %}
+{% block extra_head %}
+<style>.challenger-evidence {white-space:pre-wrap;overflow-wrap:anywhere;max-height:32rem;overflow:auto}.challenger-text {min-height:18rem}.challenger-history {display:grid;gap:12px}</style>
+{% endblock %}
 {% block content %}
-<section class="page-heading"><div><p class="eyebrow">改进试验</p><h1>Challenger 草稿</h1><p>把一个待验证假设保存为独立方案，先核对差异，再决定是否试验。</p></div><a href="/content-review?tab=experiments" class="secondary-button">返回内容复盘</a></section>
+<section class="page-heading"><div><p class="eyebrow">Content Intelligence</p><h1>Challenger 草稿</h1><p>把一个待验证假设保存为独立方案，先核对差异，再决定是否试验。</p></div><a href="/content-review" class="secondary-button">返回内容复盘</a></section>
 <section class="panel">
   <h2>来源报告</h2>
   <p>人工明确审阅 {{ report.report.human_review.summary.reviewed }} 条 · {{ report.report.human_review.summary.confidence_label }}；官方作品记录 {{ report.report.performance.work_count }} 条。</p>

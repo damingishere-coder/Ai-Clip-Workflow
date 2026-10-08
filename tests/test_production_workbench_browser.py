@@ -37,9 +37,7 @@ def test_inbox_navigation_refresh_and_dashboard(width,output_batch,tmp_path):
             page.on('pageerror',lambda e:errors.append(str(e)))
             page.on('request',lambda r:writes.append(r.url) if r.method not in ('GET','HEAD','OPTIONS') else None)
             page.goto(f'http://127.0.0.1:{port}/',wait_until='networkidle')
-            assert page.locator('.production-card').count() == 4
-            assert page.get_by_role('heading', name='需要我处理', exact=True).is_visible()
-            assert page.locator('[data-attention-category]').count() > 0
+            assert page.locator('.production-card').count() == 8
             page.get_by_role('link',name='打开统一待办',exact=True).click()
             assert '/materials?view=inbox' in page.url
             assert page.locator('.side-nav').get_by_role('link',name='统一待办').count() == 0
@@ -60,7 +58,7 @@ def test_inbox_navigation_refresh_and_dashboard(width,output_batch,tmp_path):
             page.locator('.production-item').wait_for(state='visible')
             assert page.locator('.production-item').count() == 1
             page.locator('.production-item').get_by_role('link',name='去处理').click()
-            page.wait_for_url(f'**/tasks/{task}/clips/review*')
+            page.wait_for_url(f'**/tasks/{task}/clips')
             page.go_back(wait_until='networkidle')
             page.locator('.production-item').wait_for(state='visible')
             review.confirm(task,consent(task))  # Isolated service action, not a page side effect.

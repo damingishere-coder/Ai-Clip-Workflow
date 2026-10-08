@@ -59,7 +59,7 @@ def test_adaptive_drawer_confirm_and_disable(db, monkeypatch, tmp_path):  # noqa
                 f"http://127.0.0.1:{port}/api/publish/schedules/adaptive"
             ).json()
             assert info.get("available"), info
-            assert page.locator("[data-adaptive-panel]").is_hidden()
+            page.locator("[data-adaptive-panel]").wait_for(state="visible")
             checkbox = page.locator(
                 f'[data-section="content"][data-job-id="{job_id}"] [data-publish-select]'
             )
@@ -88,8 +88,7 @@ def test_adaptive_drawer_confirm_and_disable(db, monkeypatch, tmp_path):  # noqa
                 ).fetchone()
                 assert tuple(row) == ("SCHEDULED", 1)
             # Close automatic adjustments without changing the concrete time.
-            page.locator("[data-adaptive-panel] summary").first.click()
-            page.locator("[data-adaptive-panel] details details summary").click()
+            page.locator("[data-adaptive-panel] summary").click()
             assert "完播中位数" in page.locator("[data-adaptive-panel]").inner_text()
             assert "涨粉中位数" in page.locator("[data-adaptive-panel]").inner_text()
             page.locator("[data-refresh-adaptive]").click()
@@ -97,15 +96,6 @@ def test_adaptive_drawer_confirm_and_disable(db, monkeypatch, tmp_path):  # noqa
                 "document.querySelector('[data-toggle-adaptive]').textContent.includes('停用')"
             )
             page.locator("[data-toggle-adaptive]").click()
-            policy_dialog = page.locator("[data-policy-dialog]")
-            policy_dialog.wait_for(state="visible")
-            assert page.locator("[data-toggle-adaptive]").inner_text().find("停用") >= 0
-            assert policy_dialog.locator("[data-apply-policy]").is_disabled()
-            with get_connection() as c:
-                assert c.execute("SELECT enabled FROM adaptive_schedule_policies WHERE account_id='target'").fetchone()[0] == 1
-            policy_dialog.locator("[data-policy-confirm]").check()
-            policy_dialog.locator("[data-apply-policy]").click()
-            policy_dialog.wait_for(state="hidden")
             page.wait_for_function(
                 "document.querySelector('[data-toggle-adaptive]').textContent.includes('启用')"
             )

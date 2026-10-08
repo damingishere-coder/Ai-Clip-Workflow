@@ -36,7 +36,7 @@ def test_human_review_without_account_explicit_decisions_and_c_diagnostics(width
             errors, writes = [], []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.on("request", lambda req: writes.append(req.url) if req.method not in {"GET", "HEAD"} else None)
-            page.goto(f"http://127.0.0.1:{port}/content-review?tab=experience", wait_until="networkidle")
+            page.goto(f"http://127.0.0.1:{port}/content-review", wait_until="networkidle")
             assert "未明确审阅 3" in page.locator("#human-review-summary").inner_text()
             assert "暂无有效分母" in page.locator("#human-review-summary").inner_text()
             assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
@@ -58,7 +58,7 @@ def test_human_review_without_account_explicit_decisions_and_c_diagnostics(width
             page.get_by_text("评价已保存。切片选择仍使用原有审核操作。", exact=True).wait_for()
             assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
             page.screenshot(path=str(tmp_path/f"human-review-{width}.png"), full_page=True)
-            page.goto(f"http://127.0.0.1:{port}/content-review?tab=experience", wait_until="networkidle")
+            page.goto(f"http://127.0.0.1:{port}/content-review", wait_until="networkidle")
             assert "接受 1" in page.locator("#human-review-summary").inner_text()
             assert "拒绝 1" in page.locator("#human-review-summary").inner_text()
             assert "数据不足" in page.locator("#human-review-summary").inner_text()

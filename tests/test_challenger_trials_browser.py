@@ -57,9 +57,6 @@ def test_trial_creation_confirmation_and_manual_ai_do_not_save_production_prompt
                                 ("confirm_challenger", "true"), ("auto_mode", "false")):
                 assert f'name="{name}"\r\n\r\n{value}\r\n' in uploads[0]
             assert page.locator("[data-prompt-preset-card] textarea").evaluate("el => el.readOnly")
-            analysis = page.locator('#analysis > details')
-            if not analysis.evaluate('element => element.open'):
-                analysis.locator('summary').first.click()
             provider_select = page.locator("#ai-analysis-provider")
             analyze_button = page.locator(".js-ai-process-action")
             assert analyze_button.count() == 1

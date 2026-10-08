@@ -7,49 +7,63 @@
     <link rel="icon" href="{{ url_for('static', path='img/brand/niuma-studio-favicon.ico') }}?v=20260604-favicon" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', path='img/brand/niuma-studio-favicon-32.png') }}?v=20260604-favicon">
     <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', path='img/brand/niuma-studio-apple-touch-icon.png') }}?v=20260604-favicon">
-    <meta name="theme-color" content="#f6f7f9">
-    <link rel="stylesheet" href="{{ url_for('static', path='css/studio.css') }}?v={{ request.app.version }}-workspace">
-    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v={{ request.app.version }}-workspace">
+    <meta name="theme-color" content="#f6f9ff">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.css') }}?v=20260929-missed-reschedule-2">
     {% block extra_head %}{% endblock %}
   </head>
-  {% set nav_page = 'tasks' if active_page in ['new_task', 'clips', 'subtitles', 'task_detail', 'review_inbox'] else active_page %}
-  <body data-page="{{ active_page or '' }}" data-workspace="{{ nav_page or '' }}">
-    <a class="skip-link" href="#page-content">跳到页面内容</a>
+  <body data-page="{{ active_page or '' }}">
     <div class="app-shell">
-      <aside class="sidebar" id="studio-navigation" aria-label="工作区导航">
-        <a class="brand" href="/" aria-label="牛马片场工作台">
-          <span class="brand-mark"><img src="{{ url_for('static', path='img/brand/niuma-studio-logo.png') }}" alt=""></span>
-          <span><strong>{{ settings.app_name_cn }}</strong><small>本地制作工作区</small></span>
+      <aside class="sidebar">
+        <a class="brand" href="/">
+          <span class="brand-mark">
+            <img src="{{ url_for('static', path='img/brand/niuma-studio-logo.png') }}" alt="">
+          </span>
+          <span>
+            <strong>{{ settings.app_name_cn }}</strong>
+            <small>本地 AI 高光生产后台</small>
+          </span>
         </a>
         <nav class="side-nav" aria-label="主导航">
-          {% for key, url, name, mark in [('dashboard','/','工作台','◫'),('materials','/materials','素材库','▱'),('tasks','/tasks','制作任务','▤'),('publish','/publish','发送中心','↗'),('content_review','/content-review','内容复盘','◷')] %}
-          <a class="{{ 'active' if nav_page == key else '' }}" href="{{ url }}" {% if nav_page == key %}aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">{{ mark }}</span><span>{{ name }}</span></a>
-          {% endfor %}
+          <a class="{{ 'active' if active_page == 'dashboard' else '' }}" href="/"><span class="nav-icon">台</span><span>工作台</span></a>
+          <a class="{{ 'active' if active_page == 'new_task' else '' }}" href="/tasks/new"><span class="nav-icon">建</span><span>新建任务</span></a>
+          <a class="{{ 'active' if active_page == 'materials' else '' }}" href="/materials"><span class="nav-icon">材</span><span>素材池</span></a>
+          <a class="{{ 'active' if active_page == 'tasks' else '' }}" href="/tasks"><span class="nav-icon">列</span><span>任务列表</span></a>
+          <a class="{{ 'active' if active_page == 'clips' else '' }}" href="/clips"><span class="nav-icon">审</span><span>片段审核</span></a>
+          <a class="{{ 'active' if active_page == 'subtitles' else '' }}" href="/subtitles"><span class="nav-icon">字</span><span>字幕推送</span></a>
+          <a class="{{ 'active' if active_page == 'publish' else '' }}" href="/publish"><span class="nav-icon">发</span><span>发送中心</span></a>
+          <a class="{{ 'active' if active_page == 'content_review' else '' }}" href="/content-review"><span class="nav-icon">复</span><span>内容复盘</span></a>
+          <a class="{{ 'active' if active_page == 'system' else '' }}" href="/system"><span class="nav-icon">设</span><span>系统状态</span></a>
         </nav>
-        <div class="sidebar-footer">
-          <a class="studio-settings-link {{ 'active' if active_page == 'system' else '' }}" href="/system" {% if active_page == 'system' %}aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">⚙</span><span>设置</span></a>
-          <span class="studio-local-label"><i aria-hidden="true"></i>本地工作区 · v{{ request.app.version }}</span>
+        <div class="sidebar-note">
+          <strong>v2.6 本地高光生产版</strong>
+          <span>素材、转写、AI 选片、审核、切片、排期和抖音 / B站发送链路已统一。</span>
         </div>
       </aside>
-      <button class="studio-nav-backdrop" type="button" data-close-navigation aria-label="关闭导航" hidden></button>
+
       <main class="main-panel">
         <header class="topbar">
-          <button class="icon-button studio-menu-button" type="button" id="studio-menu-toggle" aria-label="打开导航" aria-controls="studio-navigation" aria-expanded="false">☰</button>
-          <form class="studio-search" action="/tasks" method="get" role="search" autocomplete="off">
-            <label class="sr-only" for="studio-task-search">搜索制作任务</label>
-            <span aria-hidden="true" class="studio-search-icon">⌕</span>
-            <input id="studio-task-search" type="search" name="q" placeholder="搜索任务名称或 ID" aria-controls="studio-search-results" aria-expanded="false" autocomplete="off">
-            <button class="studio-search-submit" type="submit" aria-label="搜索">↵</button>
-            <div class="studio-search-results" id="studio-search-results" hidden><p class="studio-search-status" role="status"></p><div data-search-items></div></div>
-          </form>
-          <a class="primary-button studio-create-button" href="/tasks/new"><span aria-hidden="true">＋</span>新建制作</a>
+          <div class="topbar-title">
+            <span>Local Studio</span>
+            <strong>{{ settings.app_name_cn }}</strong>
+          </div>
+          <div class="search-box">
+            <span class="search-mark"></span>
+            <input type="search" placeholder="任务名称、平台、状态">
+          </div>
+          <div class="topbar-actions">
+            <span class="system-chip">Windows 本地后台</span>
+            <span class="notice-dot" aria-label="通知"></span>
+            <span class="user-chip">个人工作区</span>
+            <a class="primary-button" href="/tasks/new">新建任务</a>
+          </div>
         </header>
-        <div id="page-content" class="studio-page-content" tabindex="-1">{% block content %}{% endblock %}</div>
+
+        {% block content %}{% endblock %}
       </main>
     </div>
+
     {% include 'partials/core_helpers.html' %}
-    <script src="{{ url_for('static', path='js/studio-shell.js') }}?v={{ request.app.version }}-workspace"></script>
-    <script src="{{ url_for('static', path='js/app.js') }}?v={{ request.app.version }}-workspace"></script>
+    <script src="{{ url_for('static', path='js/app.js') }}?v=20260917-batch-flow"></script>
     {% block extra_scripts %}{% endblock %}
     <script src="{{ url_for('static', path='js/motion.js') }}?v=20260826-motion-v2"></script>
   </body>

@@ -1,24 +1,23 @@
 {% extends "base.html" %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', path='vendor/nouislider/nouislider.min.css') }}?v=15.8.1">
-<link rel="stylesheet" href="{{ url_for('static', path='css/review-workspace.css') }}?v=20261008-workspace">
 {% endblock %}
-{% block title %}字幕处理 - {{ settings.app_name }}{% endblock %}
+{% block title %}字幕推送 - {{ settings.app_name }}{% endblock %}
 
 {% block content %}
 {% if subtitle_task_mode %}
 <section class="page-heading">
   <div>
-    <a class="task-return" href="{{ task_detail_url }}">← 返回制作任务</a>
+    <p class="eyebrow">Subtitle Task</p>
     <h1>{{ task.title }} · 字幕工作台</h1>
     <p>每个任务单独处理字幕，方便区分不同视频的切片、字幕状态和后续推送准备。</p>
   </div>
   <div class="button-row">
-    <a class="secondary-button" href="/tasks?stage=subtitles">查看字幕待办</a>
+    <a class="secondary-button" href="/subtitles">返回字幕任务列表</a>
     <a class="secondary-button" href="/tasks/{{ task.id }}/clips/review">返回片段审核</a>
     {% if output_clips %}
     {% if not (task.auto_mode and task.status == "PENDING_SUBTITLE_REVIEW") %}
-    <button class="primary-button" type="button" data-sync-publish-task data-task-id="{{ task.id }}" data-prefer-subtitled="{{ 'false' if task.subtitle_delivery_mode == 'original' else 'true' }}">同步发送中心</button>
+    <button class="primary-button" type="button" data-sync-publish-task data-task-id="{{ task.id }}" data-prefer-subtitled="true">同步发送中心</button>
     {% endif %}
     <a class="secondary-button" href="/publish?task_id={{ task.id }}&tab=content">查看本任务发送内容</a>
     {% endif %}
@@ -27,7 +26,7 @@
 
 <section class="inline-alert tone-{{ 'green' if publish_link_state.state == 'linked' else 'blue' }}" data-publish-link-summary>
   <strong>发送中心关联：{{ publish_link_state.label }}</strong>
-  <span>当前 {{ publish_link_state.active_clip_count }} 条切片，抖音 {{ publish_link_state.platforms.get('douyin', {}).get('linked', 0) }} 条。</span>
+  <span>当前 {{ publish_link_state.active_clip_count }} 条切片，抖音 {{ publish_link_state.platforms.get('douyin', {}).get('linked', 0) }} 条，B站 {{ publish_link_state.platforms.get('bilibili', {}).get('linked', 0) }} 条。</span>
 </section>
 
 <section class="stat-grid review-stat-grid" aria-label="字幕任务统计">
@@ -41,18 +40,15 @@
   {% endfor %}
 </section>
 
-{% if task.subtitle_delivery_mode == 'original' %}
-<section class="panel subtitle-policy-note"><h2>本任务保留原视频</h2><p>沿用创建时确定的字幕方式，无需新增字幕。请在审片页验收当前成片，再进入内容准备。</p><a class="primary-button" href="/tasks/{{ task.id }}/clips/review">继续审片与成片验收</a></section>
-{% else %}
-<nav class="subtitle-workspace-steps" aria-label="字幕处理阶段"><span>1 · 编辑字幕并保存</span><span>2 · 审核当前版本</span><span>3 · 生成并验证字幕成片</span></nav>
 {% if task.auto_mode and task.status == "PENDING_SUBTITLE_REVIEW" %}
 <section class="panel subtitle-review-gate" id="subtitle-review-gate" data-task-id="{{ task.id }}">
   <div>
+    <p class="eyebrow">Review Gate</p>
     <h2>自动流水线已在字幕审核处暂停</h2>
     <p>请先检查和编辑字幕。点击“审核并批量烧录”会批准每条切片的当前版本，全部成片验证通过后才恢复发送中心流程。</p>
   </div>
   <div class="button-row">
-    <button class="primary-button" id="subtitle-batch-approve-render" type="button">审核并生成 {{ output_clips|length }} 条成片</button>
+    <button class="primary-button" id="subtitle-batch-approve-render" type="button">审核并批量烧录</button>
     {% if not task.subtitle_strategy %}<button class="secondary-button" id="subtitle-skip-and-resume" type="button">跳过字幕，进入片段审核</button>{% endif %}
   </div>
   <div class="subtitle-batch-job" id="subtitle-batch-job" hidden>
@@ -70,6 +66,7 @@
 <section class="panel subtitle-editor" id="subtitle-editor" data-task-id="{{ task.id }}">
   <div class="panel-header subtitle-editor-heading">
     <div>
+      <p class="eyebrow">Professional Subtitle Editor</p>
       <h2>原片主时间轴 · 切片继承编辑器</h2>
       <p>先在原片修正统一字幕，再按切片边界自动继承；已经人工编辑的切片不会被覆盖。</p>
     </div>
@@ -139,6 +136,7 @@
   <section class="subtitle-ai-suggestion-panel" id="subtitle-ai-suggestion-panel" hidden aria-live="polite">
     <div class="panel-header compact">
       <div>
+        <p class="eyebrow">AI Suggestions</p>
         <h3>AI 只建议文字和 cue 内断行</h3>
         <p id="subtitle-ai-suggestion-summary">勾选字幕行后生成建议；时间戳和说话人不会交给 AI 修改。</p>
       </div>
@@ -165,6 +163,7 @@
     <section class="panel">
       <div class="panel-header">
         <div>
+          <p class="eyebrow">Clips</p>
           <h2>本任务切片字幕队列</h2>
         </div>
         <span class="status-pill tone-{{ task.subtitle_tone }}">{{ task.subtitle_stage }}</span>
@@ -191,7 +190,7 @@
           data-clip-enabled="{{ 1 if output.clip_enabled is none or output.clip_enabled else 0 }}"
         >
           {% if output.file_exists and output.status == "completed" %}
-          <video controls preload="none" src="{{ output.media_url }}"></video>
+          <video controls preload="metadata" src="{{ output.media_url }}"></video>
           {% else %}
           <div class="video-placeholder compact-video-placeholder">
             <strong>无法预览原切片</strong>
@@ -205,10 +204,12 @@
               <span class="status-pill" data-subtitle-status>{{ output.subtitle_status_label }}</span>
               {% set output_publish = publish_link_state.per_output.get(output.id, {}) %}
               <span class="status-pill">抖音 {{ output_publish.get('douyin', '未关联') }}</span>
+              <span class="status-pill">B站 {{ output_publish.get('bilibili', '未关联') }}</span>
             </div>
             {% if output.subtitled_file_exists %}
             <div class="subtitled-preview">
-              <video controls preload="none" src="{{ output.subtitled_media_url }}"></video>
+              <p class="eyebrow">Subtitled Preview</p>
+              <video controls preload="metadata" src="{{ output.subtitled_media_url }}"></video>
             </div>
             {% endif %}
             {% if output.subtitle_error_message %}
@@ -217,6 +218,7 @@
             <p class="form-hint" data-subtitle-error></p>
             {% endif %}
             <div class="button-row">
+              <button class="secondary-button compact-button js-demo-toast" type="button" data-message="删除切片会在后续版本接入二次确认；当前请先回到片段审核调整。">删除</button>
               <button class="secondary-button compact-button" type="button" data-cut-edit-trigger>修改剪切</button>
               <button class="primary-button compact-button" type="button" data-render-subtitle>自动加字幕</button>
             </div>
@@ -226,6 +228,7 @@
       </div>
       {% else %}
       <article class="empty-state">
+        <p class="eyebrow">Empty</p>
         <h2>这个任务还没有生成切片</h2>
         <p>请先回到片段审核页点击“生成切片”。成功后，这里会出现每条短视频的字幕处理入口。</p>
         <a class="primary-button" href="/tasks/{{ task.id }}/clips/review">去片段审核</a>
@@ -238,6 +241,7 @@
     <section class="panel">
       <div class="panel-header compact">
         <div>
+          <p class="eyebrow">Style</p>
           <h2>字幕样式模板</h2>
         </div>
       </div>
@@ -309,6 +313,19 @@
       </form>
     </section>
 
+    <section class="panel">
+      <div class="panel-header compact">
+        <div>
+          <p class="eyebrow">Publish</p>
+          <h2>后续推送配置</h2>
+        </div>
+      </div>
+      <div class="compact-list mosaic-demo-list">
+        <li><strong>打码</strong><span>区域编辑仍保留为后续功能，当前先完成字幕烧录。</span></li>
+        <li><strong>发布</strong><span>带字幕成片生成后，进入抖音 / B站发布后台做账号、标题和真实发布确认。</span></li>
+      </div>
+      <a class="primary-button" href="/publish">去发布中心</a>
+    </section>
   </aside>
 </section>
 
@@ -316,6 +333,7 @@
   <section class="modal-panel cut-edit-panel" role="dialog" aria-modal="true" aria-labelledby="cut-edit-title">
     <div class="panel-header">
       <div>
+        <p class="eyebrow">Trim Editor</p>
         <h2 id="cut-edit-title">编辑入点 / 出点</h2>
       </div>
       <button class="icon-button" type="button" id="close-cut-edit" aria-label="关闭">×</button>
@@ -365,10 +383,10 @@
     </div>
   </section>
 </div>
-{% endif %}
 {% else %}
 <section class="page-heading">
   <div>
+    <p class="eyebrow">Subtitle & Publish</p>
     <h1>字幕任务列表</h1>
     <p>切片生成后，每个视频任务会先进入这里；点进任务后再分别处理自动加字幕、检查和推送配置。</p>
   </div>
@@ -389,6 +407,7 @@
 <section class="panel">
   <div class="panel-header">
     <div>
+      <p class="eyebrow">Tasks</p>
       <h2>待处理字幕任务</h2>
     </div>
     <span class="status-pill tone-blue">{{ tasks|length }} 个任务</span>
@@ -418,6 +437,7 @@
   </div>
   {% else %}
   <article class="empty-state">
+    <p class="eyebrow">Empty</p>
     <h2>还没有进入字幕流程的切片</h2>
     <p>请先在片段审核页点击“生成切片”。生成成功后，这里会按任务列出不同视频，方便逐个进入处理。</p>
     <a class="primary-button" href="/clips">去片段审核</a>
@@ -427,13 +447,11 @@
 {% endif %}
 {% endblock %}
 {% block extra_scripts %}
-{% if not subtitle_task_mode or task.subtitle_delivery_mode != 'original' %}
 <script src="{{ url_for('static', path='vendor/nouislider/nouislider.min.js') }}?v=15.8.1"></script>
-{% endif %}
-{% if subtitle_task_mode and task.subtitle_delivery_mode != 'original' %}
+{% if subtitle_task_mode %}
 <script src="{{ url_for('static', path='vendor/wavesurfer/wavesurfer.min.js') }}?v=7.12.11"></script>
 <script src="{{ url_for('static', path='vendor/wavesurfer/regions.min.js') }}?v=7.12.11"></script>
 <script src="{{ url_for('static', path='vendor/wavesurfer/timeline.min.js') }}?v=7.12.11"></script>
-<script src="{{ url_for('static', path='js/subtitle-editor.js') }}?v=20261008-workspace"></script>
+<script src="{{ url_for('static', path='js/subtitle-editor.js') }}?v=20260915-subtitle-policy"></script>
 {% endif %}
 {% endblock %}

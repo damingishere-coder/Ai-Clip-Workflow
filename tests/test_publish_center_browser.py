@@ -333,7 +333,6 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             browser = runtime.chromium.launch(headless=True, executable_path=str(chrome_path))
             context = browser.new_context(timezone_id="Asia/Shanghai")
             page = context.new_page()
-            page.on("dialog", lambda dialog: dialog.accept())
             if block_app_script:
                 page.route("**/static/js/app.js*", lambda route: route.abort())
             page.route(
@@ -355,16 +354,13 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             )
             def fulfill_metadata(route):
                 job_id = route.request.url.split("/jobs/", 1)[1].split("/", 1)[0]
-                with get_connection() as connection:
-                    version = connection.execute("SELECT updated_at FROM publish_jobs WHERE id=?", (job_id,)).fetchone()[0]
                 route.fulfill(
                     status=200,
                     content_type="application/json",
                     body=json.dumps(
                         {
                             "status": "ok",
-                            "expected_updated_at": version,
-                            "metadata": {
+                            "job": {
                                 "id": job_id,
                                 "platform": "douyin",
                                 "status": "WAITING",
@@ -380,7 +376,7 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
                     ),
                 )
 
-            page.route("**/api/publish/jobs/*/metadata/preview", fulfill_metadata)
+            page.route("**/api/publish/jobs/*/metadata?use_ai=true", fulfill_metadata)
             page.goto(f"http://127.0.0.1:{port}/publish?platform=bilibili", wait_until="networkidle")
 
             assert page.locator('[data-publish-platform="bilibili"]').count() == 0
@@ -394,23 +390,16 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
                 f'[data-publish-row][data-section="content"][data-job-id="{newest}"]'
             )
             cover_button = page.locator("[data-backfill-covers]")
-            page.locator(".publish-content-maintenance > summary").click()
             assert "抖音" in cover_button.inner_text()
             assert "10" in cover_button.inner_text()
             unsaved_title = newest_content.locator('[name="title"]')
-            newest_content.locator("[data-open-content-editor]").click()
             unsaved_title.fill("这段标题还没有保存")
-            original_cover = newest_content.locator('[name="cover_file_path"]').input_value()
-            newest_content.locator("[data-close-content-editor]").click()
             cover_button.click()
             page.locator("#send-center-message").filter(has_text="已补齐 10 条").wait_for()
             assert unsaved_title.input_value() == "这段标题还没有保存"
-            assert newest_content.locator('[name="cover_file_path"]').input_value() == original_cover
-            with get_connection() as connection:
-                assert connection.execute("SELECT cover_file_path FROM publish_jobs WHERE id=?", (newest,)).fetchone()[0] == str(generated_cover)
+            assert newest_content.locator('[name="cover_file_path"]').input_value() == str(generated_cover)
+            assert newest_content.locator("[data-cover-preview]").is_visible()
             assert cover_button.is_disabled()
-            # Reload discards this intentional test-only draft after verifying preservation.
-            page.reload(wait_until="networkidle")
             assert first_content.is_hidden()
             assert newest_content.is_visible()
             first_group = first_content.locator("xpath=ancestor::section[@data-publish-task-group]")
@@ -426,18 +415,11 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             group_select.check()
             assert first_content.locator("[data-publish-select]").is_checked()
             assert second_content.locator("[data-publish-select]").is_checked()
-            assert page.locator("[data-batch-ai]").inner_text() == "预览已选 AI 文案"
+            assert page.locator("[data-batch-ai]").inner_text() == "AI 重写已选文案"
             page.locator("[data-batch-ai]").click()
-            ai_dialog = page.locator("[data-ai-preview-dialog]")
-            playwright.expect(ai_dialog.locator("[data-accept-ai-suggestion]")).to_have_count(2)
-            with get_connection() as connection:
-                assert connection.execute("SELECT title FROM publish_jobs WHERE id=?", (first,)).fetchone()[0] == "浏览器测试片段 1"
-            for job_id in (first, douyin_jobs[1]):
-                ai_dialog.locator(f'[data-accept-ai-suggestion="{job_id}"]').click()
-                playwright.expect(ai_dialog.locator(f'[data-accept-ai-suggestion="{job_id}"]').locator("..")).to_contain_text("本条建议已接受并保存")
-            ai_dialog.locator("[data-close-ai-preview]").click()
+            page.locator("#send-center-message").filter(has_text="已选文案 AI 重写完成：成功 2 条").wait_for()
             assert first_content.locator('[name="description"]').input_value() == "陈汉典刚说自己像潘玮柏，小S立刻给出另一答案"
-            assert [tag.strip() for tag in second_content.locator('[name="tags"]').input_value().split(",")] == ["康熙来了", "小S", "反转"]
+            assert second_content.locator('[name="tags"]').input_value() == "康熙来了,小S,反转"
             first_content.locator("[data-publish-select]").uncheck()
             assert group_select.evaluate("element => element.indeterminate") is True
             group_select.check()
@@ -668,10 +650,9 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             ]
 
             calendar_day = page.locator(f'[data-calendar-date="{future_day}"]')
-            page.locator('[data-schedule-view="calendar"]').click()
             assert calendar_day.locator(".calendar-job-chip").all_inner_texts() == [
-                "06:00 小S追问陈汉典到底在模仿谁",
-                "09:00 小S追问陈汉典到底在模仿谁",
+                "06:00 浏览器测试片段 1",
+                "09:00 浏览器测试片段 2",
             ]
             assert calendar_day.locator(".calendar-job-more").inner_text() == "另有 4 条"
             calendar_day.click()
@@ -686,21 +667,19 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             assert "is-calendar-focus" in page.locator(
                 f'[data-publish-row][data-section="schedule"][data-job-id="{first}"]'
             ).get_attribute("class")
-            page.locator('[data-schedule-view="calendar"]').click()
             page.locator("[data-calendar-day-close]").click()
             assert day_detail.is_hidden()
             calendar_day.focus()
             calendar_day.press("Enter")
             assert day_detail.is_visible()
 
-            page.locator('[data-schedule-view="list"]').click()
+            dialogs = []
+            page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.accept()))
             page.locator(
                 f'[data-publish-row][data-section="schedule"][data-job-id="{newest}"] [data-cancel-job]'
             ).click()
-            confirm_dialog = page.locator("[data-publish-confirm]")
-            playwright.expect(confirm_dialog).to_contain_text("返回“内容准备”")
-            confirm_dialog.locator('[value="confirm"]').click()
             page.locator('[data-center-panel="content"].active').wait_for()
+            assert any("返回“内容准备”" in message for message in dialogs)
             assert newest_content.is_visible()
             assert page.locator(
                 f'[data-publish-row][data-section="schedule"][data-job-id="{newest}"]'
@@ -719,8 +698,7 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
                 unscheduled,
             ]
             page.locator(f'[data-publish-row][data-section="schedule"][data-job-id="{first}"] [data-publish-now]').click()
-            playwright.expect(confirm_dialog).to_contain_text("抖音")
-            confirm_dialog.locator('[value="confirm"]').click()
+            assert any("抖音" in message for message in dialogs)
             page.locator("#send-center-message").filter(has_text="统一调度").wait_for()
             # 此测试使用 lifespan="off"，只显式执行当前测试任务，避免扫描同一数据库里的其他排期。
             PublishScheduler().execute_job(first)
@@ -750,13 +728,11 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
 
             exported_row = page.locator(f'[data-history-record][data-job-id="{first}"]')
             exported_row.locator("[data-history-hide]").click()
-            confirm_dialog.locator('[value="confirm"]').click()
             exported_row.wait_for(state="detached")
             page.locator('[data-history-view="deleted"]').click()
             deleted_row = page.locator(f'[data-history-record][data-job-id="{first}"]')
             deleted_row.wait_for()
             deleted_row.locator("[data-history-restore]").click()
-            confirm_dialog.locator('[value="confirm"]').click()
             deleted_row.wait_for(state="detached")
             page.locator('[data-history-view="active"]').click()
             page.locator(f'[data-history-record][data-job-id="{first}"]').wait_for()

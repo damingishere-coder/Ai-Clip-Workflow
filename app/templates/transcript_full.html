@@ -2,17 +2,18 @@
 {% block title %}完整转写原文 - {{ settings.app_name }}{% endblock %}
 
 {% block content %}
-<section class="page-heading task-detail-heading">
+<section class="page-heading">
   <div>
+    <p class="eyebrow">Transcript</p>
     <h1>完整转写原文 · {{ task.title }}</h1>
     <p class="detail-locator">
       <span>任务 ID：{{ task.id }}</span>
       <span>转写文件：{{ transcript_path }}</span>
     </p>
   </div>
-  <div class="button-row task-header-actions">
-    <a class="secondary-button" href="{{ task_detail_url }}">返回任务详情</a>
-    <a class="primary-button" href="{{ review_url }}">进入片段审核</a>
+  <div class="button-row">
+    <a class="secondary-button" href="/tasks/{{ task.id }}">返回任务详情</a>
+    <a class="primary-button" href="/tasks/{{ task.id }}/clips/review">进入片段审核</a>
   </div>
 </section>
 

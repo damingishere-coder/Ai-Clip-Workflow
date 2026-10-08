@@ -49,7 +49,7 @@ def test_report_copy_legacy_readonly_and_compact_disclosure(
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(
-                f"http://127.0.0.1:{port}/content-review?tab=experiments", wait_until="networkidle"
+                f"http://127.0.0.1:{port}/content-review", wait_until="networkidle"
             )
             page.locator("#content-review-account").select_option(sample["account"])
             # 账号切换会重新加载全部模块；旧页面也可能已有同样文案，

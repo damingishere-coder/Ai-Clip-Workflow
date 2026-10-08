@@ -6,15 +6,8 @@ if (publishCenterRoot) {
   const JOB_REFRESH_INTERVAL_MS = 15000;
   const SERVICE_REFRESH_INTERVAL_MS = 30000;
   const POLL_REQUEST_TIMEOUT_MS = 10000;
-  const selections = { content: new Set(), schedule: new Set() };
-  let selectedJobIds = selections.content;
-  let activeTab = 'content';
-  let showScheduledContent = false;
-  let workspace = null;
-  let drawerTrigger = null;
+  const selectedJobIds = new Set();
   let contentTaskId = document.querySelector("[data-publish-focus]")?.dataset.taskId || "";
-  let scheduleFocusTaskId = contentTaskId;
-  let historyFocusJobId = document.querySelector('[data-publish-focus]')?.dataset.jobId || new URL(window.location.href).searchParams.get('job_id') || '';
   const messageNode = document.querySelector("#send-center-message");
   const selectionBar = document.querySelector("[data-selection-bar]");
   const selectedCountNode = document.querySelector("[data-selected-count]");
@@ -108,7 +101,7 @@ if (publishCenterRoot) {
   function missingCoverRows() {
     return Array.from(document.querySelectorAll('[data-publish-row][data-section="content"]')).filter((row) => {
       const editor = row.querySelector("[data-publish-editor]");
-      const coverPath = String(row.dataset.savedCoverPath ?? editor?.elements?.cover_file_path?.value ?? "").trim();
+      const coverPath = String(editor?.elements?.cover_file_path?.value || "").trim();
       return (
         row.dataset.platform === activePlatform
         && row.dataset.outputActive !== "false"
@@ -307,42 +300,13 @@ if (publishCenterRoot) {
   }
 
   function focusScheduleRow(jobId) {
-    workspace?.setScheduleView('list');
     const row = document.querySelector(
       `[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(jobId || "")}"]`,
     );
     if (!row || row.hidden) return;
-    row.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center", inline: "nearest" });
+    row.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
     row.classList.add("is-calendar-focus");
     window.setTimeout(() => row.classList.remove("is-calendar-focus"), 1600);
-  }
-
-  function updateScheduleTaskFocus({ scroll = false } = {}) {
-    const banner = document.querySelector('[data-schedule-task-focus]');
-    if (!banner) return;
-    banner.hidden = !scheduleFocusTaskId;
-    const rows = scheduleRows();
-    const matching = rows.filter(row => !row.hidden && row.dataset.taskId === scheduleFocusTaskId);
-    for (const row of rows) {
-      const focused = Boolean(scheduleFocusTaskId && !row.hidden && row.dataset.taskId === scheduleFocusTaskId);
-      row.classList.toggle('is-task-focus', focused);
-      const marker = row.querySelector('[data-schedule-task-marker]');
-      if (marker) marker.hidden = !focused;
-    }
-    if (!scheduleFocusTaskId) return;
-    const group = document.querySelector(`[data-publish-task-group][data-task-id="${CSS.escape(scheduleFocusTaskId)}"]`);
-    const name = group?.querySelector('h3')?.textContent?.trim() || scheduleFocusTaskId;
-    const scheduled = matching.filter(row => row.dataset.status === 'SCHEDULED').length;
-    const waiting = matching.filter(row => row.dataset.status === 'WAITING').length;
-    banner.querySelector('[data-schedule-task-message]').textContent = matching.length
-      ? `已定位任务「${name}」：${scheduled} 条已排期，${waiting} 条待排期。清单仍显示全部任务，蓝色标记属于本任务。`
-      : `任务「${name}」当前没有待排期或已排期记录。`;
-    if (scroll && matching.length) {
-      workspace?.setScheduleView('list');
-      const first = matching.find(row => row.dataset.status === 'SCHEDULED') || matching[0];
-      first.tabIndex = -1; first.focus({ preventScroll: true });
-      first.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: 'center', inline: 'nearest' });
-    }
   }
 
   function readTaskGroupExpansionState() {
@@ -492,8 +456,6 @@ if (publishCenterRoot) {
   }
 
   function renderPlatformSchedule() {
-    const scheduledContentCount = document.querySelector('[data-scheduled-content-count]');
-    if (scheduledContentCount) scheduledContentCount.textContent = `（${document.querySelectorAll('[data-section="content"][data-status="SCHEDULED"]').length}）`;
     const rows = scheduleRows();
     ["douyin"].forEach((platform) => {
       const available = rows.filter((row) => (
@@ -536,7 +498,6 @@ if (publishCenterRoot) {
         row.dataset.outputActive === "false"
         || !sectionAllows("content", row.dataset.status || "")
         || row.dataset.platform !== activePlatform
-        || (!showScheduledContent && row.dataset.status === 'SCHEDULED')
         || (contentTaskId && row.closest("[data-publish-task-group]")?.dataset.taskId !== contentTaskId)
       );
     });
@@ -559,7 +520,6 @@ if (publishCenterRoot) {
     }
     updateBackfillCoversButton();
     applyHistoryFilter();
-    updateScheduleTaskFocus();
   }
 
   function renderCalendar() {
@@ -846,7 +806,7 @@ if (publishCenterRoot) {
         ? "已删除记录"
         : (historySelectedDate ? `${historySelectedDate} 执行记录` : "全部执行记录");
     }
-    if (historyListEyebrow) historyListEyebrow.textContent = historyDeletedView ? "已删除记录" : "执行记录";
+    if (historyListEyebrow) historyListEyebrow.textContent = historyDeletedView ? "Deleted Records" : "History";
     if (historyListSummary) {
       historyListSummary.textContent = historyDeletedView
         ? `共 ${total} 条 · 删除仅影响页面展示`
@@ -950,7 +910,6 @@ if (publishCenterRoot) {
         page_size: "50",
       });
       if (historySelectedDate && !historyDeletedView) params.set("date", historySelectedDate);
-      if (historyFocusJobId) params.set('job_id', historyFocusJobId);
       requests.push(
         pollingApiFetch(`/api/publish/history/records?${params.toString()}`, controller).then((data) => {
           if (sequence === historyRequestSequence && !controller.signal.aborted && !document.hidden) {
@@ -1003,7 +962,7 @@ if (publishCenterRoot) {
     const confirmation = hidden
       ? `确认安全删除 ${ids.length} 条执行记录？\n\n记录会从正常列表和日历中隐藏，但视频、执行明细、数据库历史和平台作品都不会删除。`
       : `确认恢复 ${ids.length} 条已删除记录？`;
-    if (!await workspace.confirm(confirmation)) return;
+    if (!window.confirm(confirmation)) return;
     try {
       const endpoint = hidden ? "hide" : "restore";
       const data = await window.apiFetch(`/api/publish/history/records/${endpoint}`, {
@@ -1022,7 +981,6 @@ if (publishCenterRoot) {
     sortScheduleRows();
     renderPlatformSchedule();
     renderCalendar();
-    workspace?.dateGroups();
   }
 
   function queueScheduleRefresh() {
@@ -1280,15 +1238,7 @@ if (publishCenterRoot) {
     const count = selectedJobIds.size;
     if (selectedCountNode) selectedCountNode.textContent = String(count);
     if (drawerCount) drawerCount.textContent = String(count);
-    if (selectionBar) selectionBar.hidden = count === 0 || activeTab === 'history';
-    const scope = document.querySelector('[data-selection-scope]');
-    if (scope) {
-      const names = Array.from(selectedJobIds).map(id => document.querySelector(`[data-section="${activeTab === 'history' ? 'schedule' : activeTab}"][data-job-id="${CSS.escape(id)}"] [data-row-title]`)?.textContent?.trim()).filter(Boolean);
-      scope.textContent = `${activeTab === 'content' ? '内容准备' : '排期计划'} · ${names.slice(0, 3).join('、')}${names.length > 3 ? ` 等 ${names.length} 条` : ''}`;
-    }
-    const manageable = count > 0 && Array.from(selectedJobIds).every(id => document.querySelector(`[data-section="schedule"][data-job-id="${CSS.escape(id)}"]`)?.dataset.status === 'SCHEDULED');
-    document.querySelector('[data-fixed-selected]').disabled = !manageable;
-    document.querySelector('[data-managed-selected]').disabled = !manageable;
+    if (selectionBar) selectionBar.hidden = count === 0;
     document.querySelectorAll("[data-publish-task-group]").forEach(syncTaskGroupSelectionUi);
   }
 
@@ -1313,12 +1263,8 @@ if (publishCenterRoot) {
   }
 
   function switchTab(tab) {
-    if (!['content', 'schedule', 'history'].includes(tab)) tab = 'content';
-    activeTab = tab;
-    selectedJobIds = selections[tab] || new Set();
     document.querySelectorAll("[data-center-tab]").forEach((button) => {
       button.classList.toggle("active", button.dataset.centerTab === tab);
-      button.setAttribute('aria-selected', String(button.dataset.centerTab === tab));
     });
     document.querySelectorAll("[data-center-panel]").forEach((panel) => {
       const active = panel.dataset.centerPanel === tab;
@@ -1328,12 +1274,6 @@ if (publishCenterRoot) {
     const batchAiButton = document.querySelector("[data-batch-ai]");
     if (batchAiButton) batchAiButton.hidden = tab !== "content";
     if (tab === "history") void refreshHistory({ calendar: true, records: true });
-    updateSelectionUi();
-    document.querySelector('[data-apply-batch-target]').hidden = tab !== 'content';
-    document.querySelector('[data-batch-account]').hidden = tab !== 'content';
-    document.querySelector('[data-fixed-selected]').hidden = tab !== 'schedule';
-    document.querySelector('[data-managed-selected]').hidden = tab !== 'schedule';
-    const url = new URL(window.location.href); url.searchParams.set('tab', tab); window.history.replaceState(null, '', url);
   }
 
   function updateRowFromJob(job, { syncTaskGroups = true } = {}) {
@@ -1374,9 +1314,7 @@ if (publishCenterRoot) {
       const accountNode = row.querySelector("[data-row-account]");
       if (accountNode && job.account_name !== undefined) accountNode.textContent = job.account_name || "未选择";
       const editor = row.querySelector("[data-publish-editor]");
-      const protectedDraft = editor && workspace?.isLocked(row);
-      workspace?.observe(row, job);
-      if (editor && !protectedDraft) {
+      if (editor) {
         if (job.platform && editor.elements.platform) editor.elements.platform.value = job.platform;
         const resolvedAccountId = job.effective_account_id || job.account_id || job.send_readiness?.resolved_account_id || "";
         if ((job.account_id !== undefined || job.effective_account_id !== undefined) && editor.elements.account_id) {
@@ -1395,7 +1333,7 @@ if (publishCenterRoot) {
         syncPlatformFields(editor);
       }
       const coverPreview = row.querySelector("[data-cover-preview]");
-      if (coverPreview && job.cover_media_url && !protectedDraft) {
+      if (coverPreview && job.cover_media_url) {
         coverPreview.src = job.cover_media_url;
         coverPreview.hidden = false;
       }
@@ -1429,8 +1367,7 @@ if (publishCenterRoot) {
       applyRowReadiness(row);
     });
     if (["PUBLISHED", "EXPORTED", "CANCELLED", "PUBLISHING", "NEED_REVIEW", "FAILED"].includes(String(job.status || ""))) {
-      selections.content.delete(job.id);
-      selections.schedule.delete(job.id);
+      selectedJobIds.delete(job.id);
       updateSelectionUi();
     }
     applyHistoryFilter();
@@ -1442,8 +1379,6 @@ if (publishCenterRoot) {
   function cloneRowsForRetry(sourceId, job) {
     document.querySelectorAll(`[data-publish-row][data-job-id="${CSS.escape(sourceId)}"]`).forEach((source) => {
       const clone = source.cloneNode(true);
-      clone.classList.remove('is-editing');
-      clone.dataset.dirty = 'false';
       clone.dataset.jobId = job.id;
       clone.querySelectorAll("[data-publish-select]").forEach((checkbox) => { checkbox.value = job.id; checkbox.checked = false; });
       source.parentElement.appendChild(clone);
@@ -1498,16 +1433,12 @@ if (publishCenterRoot) {
     showScheduleFeedback();
   }
 
-  async function openDrawer() {
+  function openDrawer() {
     if (!selectedJobIds.size) {
       showMessage("请先选择至少一条任务。", "error");
       return;
     }
     configureAdaptiveForm();
-    const ids = Array.from(selectedJobIds);
-    if (!await workspace.saveIds(ids)) return;
-    workspace.closeEditor();
-    if (activeTab === 'content') { selections.schedule = new Set(ids); switchTab('schedule'); }
     const selectedRows = scheduleRows().filter((row) => selectedJobIds.has(row.dataset.jobId));
     const context = document.querySelector("[data-reschedule-context]");
     if (context) {
@@ -1523,15 +1454,12 @@ if (publishCenterRoot) {
     document.body.classList.add("has-schedule-drawer");
     showLatestScheduleNote();
     updateSelectionUi();
-    drawerTrigger = document.activeElement;
-    drawer.querySelector('input,select,button')?.focus();
   }
 
   function closeDrawer() {
     drawer.hidden = true;
     drawerBackdrop.hidden = true;
     document.body.classList.remove("has-schedule-drawer");
-    drawerTrigger?.focus();
   }
 
   function filterAccountOptions(select, platform) {
@@ -1586,8 +1514,6 @@ if (publishCenterRoot) {
   function openAccountDrawer(platform = "") {
     if (!accountDrawer || !accountBackdrop) return;
     if (platform && platform !== activePlatform) setActivePlatform(platform);
-    if (!drawer.hidden) closeDrawer();
-    drawerTrigger = document.activeElement;
     accountDrawer.hidden = false;
     accountBackdrop.hidden = false;
     document.body.classList.add("has-schedule-drawer");
@@ -1598,7 +1524,6 @@ if (publishCenterRoot) {
     document.querySelectorAll("[data-account-row]").forEach((row) => {
       row.hidden = row.dataset.accountPlatform !== activePlatform;
     });
-    accountDrawer.querySelector('button,input,select')?.focus();
   }
 
   function readinessAccountId(readiness) {
@@ -1611,7 +1536,6 @@ if (publishCenterRoot) {
     const readiness = effectiveReadiness(row);
     if (readiness.action === "start_worker") {
       document.querySelector("[data-worker-help]")?.removeAttribute("hidden");
-      document.querySelector(".publish-health-details")?.setAttribute("open", "");
       document.querySelector("[data-scheduler-health]")?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
       await refreshSchedulerHealth(true);
       return;
@@ -1650,7 +1574,6 @@ if (publishCenterRoot) {
       }
       switchTab("content");
       const editorRow = document.querySelector(`[data-publish-row][data-section="content"][data-job-id="${CSS.escape(row.dataset.jobId)}"]`);
-      workspace.openEditor(editorRow);
       editorRow?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
       editorRow?.querySelector("[data-account-select]")?.focus();
       showMessage("请在内容准备中选择本次使用的同平台账号并保存。", "error");
@@ -1659,8 +1582,7 @@ if (publishCenterRoot) {
     if (readiness.action === "complete_content") {
       switchTab("content");
       const editorRow = document.querySelector(`[data-publish-row][data-section="content"][data-job-id="${CSS.escape(row.dataset.jobId)}"]`);
-      if (editorRow) {
-        workspace.openEditor(editorRow);
+      if (editorRow && !editorRow.hidden) {
         editorRow.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
         editorRow.querySelector("input, textarea, select")?.focus();
       }
@@ -1755,7 +1677,7 @@ if (publishCenterRoot) {
       ready: Boolean(schedulerHealthy && data.worker_available),
       message: schedulerFailures
         ? (data.last_error_message || "调度扫描异常，正在自动重试")
-        : (data.worker_available ? "调度器与发送服务均已连接。" : "发送服务尚未连接。请稍候再检测；若持续未连接，请在项目运行面板确认牛马片场和发送服务均在运行。"),
+        : (data.worker_available ? "调度器与 Windows Worker 均已连接。" : "发送服务仍在随 Docker 项目自动启动；请稍候，或在 Docker Desktop 中停止后重新运行本项目。"),
     };
   }
 
@@ -1849,10 +1771,7 @@ if (publishCenterRoot) {
   }
 
   document.querySelectorAll("[data-center-tab]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      if (!await workspace.leaveEditor()) return;
-      switchTab(button.dataset.centerTab);
-    });
+    button.addEventListener("click", () => switchTab(button.dataset.centerTab));
   });
   document.querySelector("[data-open-missed-schedules]")?.addEventListener("click", () => {
     switchTab("schedule");
@@ -2025,7 +1944,38 @@ if (publishCenterRoot) {
     if (form) {
       event.preventDefault();
       const row = form.closest("[data-publish-row]");
-      await workspace.save(row, { force: true });
+      const jobId = row?.dataset.jobId;
+      const resultNode = form.querySelector("[data-editor-result]");
+      const platform = String(row?.dataset.platform || form.elements.platform.value || "douyin");
+      const publishMode = String(form.elements.publish_mode.value || "local_browser");
+      const target = { platform, account_id: String(form.elements.account_id.value || ""), publish_mode: publishMode };
+      const copyError = validateCopyForm(form);
+      if (copyError) {
+        if (resultNode) resultNode.textContent = `保存失败：${copyError}`;
+        showMessage(copyError, "error");
+        return;
+      }
+      const content = {
+        title: String(form.elements.title.value || "").trim(),
+        description: String(form.elements.description.value || "").trim(),
+        tags: String(form.elements.tags.value || "").trim(),
+        visibility: String(form.elements.visibility.value || "public"),
+        cover_file_path: String(form.elements.cover_file_path.value || ""),
+        cover_time_seconds: Number(form.elements.cover_time_seconds.value || 0),
+        allow_download: Boolean(form.elements.allow_download.checked),
+        bilibili_tid: String(form.elements.bilibili_tid?.value || "娱乐"),
+        bilibili_copyright: String(form.elements.bilibili_copyright?.value || "original"),
+        bilibili_source: String(form.elements.bilibili_source?.value || ""),
+      };
+      try {
+        await window.apiFetch(`/api/publish/jobs/${jobId}/target`, { method: "PATCH", body: JSON.stringify(target) });
+        const data = await window.apiFetch(`/api/publish/jobs/${jobId}/send-content`, { method: "PATCH", body: JSON.stringify(content) });
+        await saveExperimentAssignment(row, form);
+        updateRowFromJob(data.job);
+        if (resultNode) resultNode.textContent = "已保存";
+      } catch (error) {
+        if (resultNode) resultNode.textContent = `保存失败：${error.message}`;
+      }
       return;
     }
 
@@ -2115,7 +2065,7 @@ if (publishCenterRoot) {
         "如果已经排期，排期会同时取消。原视频、裁剪成片、字幕和另一个平台的内容都不会删除。",
         "以后可以在“执行记录”中重新加入。",
       ].join("\n");
-      if (!jobId || !await workspace.confirm(confirmation)) return;
+      if (!jobId || !window.confirm(confirmation)) return;
       dismissButton.disabled = true;
       try {
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/dismiss`, { method: "POST" });
@@ -2139,7 +2089,7 @@ if (publishCenterRoot) {
         accountSelect.focus();
         return;
       }
-      if (!sourceId || !await workspace.confirm(sendConfirmation(row, "确认转换并发送？原需复核记录会保留，系统只会创建一条同平台的 Windows Chrome 投稿任务。", visibility))) return;
+      if (!sourceId || !window.confirm(sendConfirmation(row, "确认转换并发送？原需复核记录会保留，系统只会创建一条同平台的 Windows Chrome 投稿任务。", visibility))) return;
       repairButton.disabled = true;
       try {
         const queryParams = new URLSearchParams({ visibility });
@@ -2159,8 +2109,7 @@ if (publishCenterRoot) {
     if (publishNowButton) {
       const publishRow = publishNowButton.closest("[data-publish-row]");
       const jobId = publishRow?.dataset.jobId;
-      if (jobId && !await workspace.saveIds([jobId])) { switchTab('content'); return; }
-      if (!jobId || !await workspace.confirm(sendConfirmation(publishRow, "确认立即发送？任务会先进入 SCHEDULED，再由统一调度器执行真实投稿。"))) return;
+      if (!jobId || !window.confirm(sendConfirmation(publishRow, "确认立即发送？任务会先进入 SCHEDULED，再由统一调度器执行真实投稿。"))) return;
       publishNowButton.disabled = true;
       try {
         const result = await window.apiFetch(`/api/publish/jobs/${jobId}/publish-now`, { method: "POST" });
@@ -2199,7 +2148,7 @@ if (publishCenterRoot) {
         "",
         "当前排期会清除；视频、标题、简介、话题和封面都会保留。",
       ].join("\n");
-      if (!jobId || !await workspace.confirm(confirmation)) return;
+      if (!jobId || !window.confirm(confirmation)) return;
       cancelButton.disabled = true;
       try {
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/cancel`, { method: "POST" });
@@ -2226,7 +2175,7 @@ if (publishCenterRoot) {
     if (restoreButton) {
       const row = restoreButton.closest("[data-publish-row]");
       const jobId = row?.dataset.jobId;
-      if (!jobId || !await workspace.confirm(`确认把这条${platformLabel(row?.dataset.platform)}内容重新加入“内容准备”？\n\n恢复后不会自动排期或发送。`)) return;
+      if (!jobId || !window.confirm(`确认把这条${platformLabel(row?.dataset.platform)}内容重新加入“内容准备”？\n\n恢复后不会自动排期或发送。`)) return;
       restoreButton.disabled = true;
       try {
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/restore`, { method: "POST" });
@@ -2242,8 +2191,14 @@ if (publishCenterRoot) {
     const metadataButton = event.target.closest("[data-generate-metadata]");
     if (metadataButton) {
       const row = metadataButton.closest("[data-publish-row]");
+      const jobId = row?.dataset.jobId;
       metadataButton.disabled = true;
-      try { await workspace.preview([row.dataset.jobId]); }
+      try {
+        const data = await window.apiFetch(`/api/publish/jobs/${jobId}/metadata?use_ai=true`, { method: "POST" });
+        applyGeneratedMetadataToForm(row, data.job);
+        updateRowFromJob(data.job);
+        showMessage("本条 AI 文案已重写并保存到最终发送字段。", "success");
+      } catch (error) { showMessage(`本条 AI 重写失败：${error.message}`, "error"); }
       finally { metadataButton.disabled = false; }
       return;
     }
@@ -2253,8 +2208,7 @@ if (publishCenterRoot) {
       const row = coverButton.closest("[data-publish-row]");
       const form = row?.querySelector("[data-publish-editor]");
       const current = Number(form?.elements.cover_time_seconds?.value || 0);
-      if (!await workspace.save(row)) return;
-      const rawSeconds = await workspace.pickCover(row, current);
+      const rawSeconds = window.prompt("请输入要作为封面的画面秒数（例如 3.5）：", String(current));
       if (rawSeconds === null) return;
       const seconds = Number(rawSeconds);
       if (!Number.isFinite(seconds) || seconds < 0) { showMessage("封面秒数必须是大于或等于 0 的数字。", "error"); return; }
@@ -2268,12 +2222,13 @@ if (publishCenterRoot) {
             video_source: coverButton.dataset.videoSource || "original",
             title: String(form.elements.title.value || "发布封面"),
             cover_time_seconds: seconds,
-            expected_updated_at: workspace.version(row),
           }),
         });
-        workspace.acceptCover(row, data.job);
+        form.elements.cover_file_path.value = data.cover_file_path || "";
+        form.elements.cover_time_seconds.value = String(seconds);
         const preview = row.querySelector("[data-cover-preview]");
         if (preview && data.cover_media_url) { preview.src = data.cover_media_url; preview.hidden = false; }
+        updateRowFromJob(data.job);
         showMessage(data.message || "封面已生成。", "success");
       } catch (error) { showMessage(`封面生成失败：${error.message}`, "error"); }
       finally { coverButton.disabled = false; }
@@ -2288,11 +2243,10 @@ if (publishCenterRoot) {
         showMessage("当前平台与任务不一致，已阻止加入计划。", "error");
         return;
       }
-      if (!await workspace.save(planRow)) { workspace.openEditor(planRow); return; }
-      selections.schedule = new Set([jobId]);
-      switchTab("schedule");
+      selectedJobIds.add(jobId);
       updateSelectionUi();
-      await openDrawer();
+      switchTab("schedule");
+      openDrawer();
       return;
     }
 
@@ -2301,7 +2255,7 @@ if (publishCenterRoot) {
       const sourceId = retryButton.closest("[data-publish-row]")?.dataset.jobId;
       const retryRow = retryButton.closest("[data-publish-row]");
       const visibility = retryRow?.querySelector("[data-retry-visibility]")?.value || retryRow?.dataset.visibility || "public";
-      if (!await workspace.confirm(`${sendConfirmation(retryRow, "确认立即发送？", visibility)}\n\n系统会保留原失败记录，并创建一条立即执行的新任务。`)) return;
+      if (!window.confirm(`${sendConfirmation(retryRow, "确认立即发送？", visibility)}\n\n系统会保留原失败记录，并创建一条立即执行的新任务。`)) return;
       retryButton.disabled = true;
       try {
         const data = await window.apiFetch(`/api/publish/jobs/${sourceId}/retry`, { method: "POST", body: JSON.stringify({ visibility }) });
@@ -2320,8 +2274,8 @@ if (publishCenterRoot) {
     if (markPublished) {
       const row = markPublished.closest("[data-publish-row]");
       const jobId = row?.dataset.jobId;
-      const platformUrl = await workspace.confirm("请粘贴已经人工核对过的平台作品链接。没有链接不能标记成功：", true);
-      if (!platformUrl || !await workspace.confirm("确认该链接对应本任务，并将任务标记为已发布？")) return;
+      const platformUrl = window.prompt("请粘贴已经人工核对过的平台作品链接。没有链接不能标记成功：", "");
+      if (!platformUrl || !window.confirm("确认该链接对应本任务，并将任务标记为已发布？")) return;
       try {
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/mark-published`, { method: "POST", body: JSON.stringify({ platform_url: platformUrl }) });
         updateRowFromJob(data.job || { id: jobId, status: "PUBLISHED", platform_url: platformUrl });
@@ -2333,7 +2287,7 @@ if (publishCenterRoot) {
     const markFailed = event.target.closest("[data-mark-failed]");
     if (markFailed) {
       const jobId = markFailed.closest("[data-publish-row]")?.dataset.jobId;
-      if (!await workspace.confirm("请先在平台确认没有发布成功。确认将本任务标记为失败？")) return;
+      if (!window.confirm("请先在平台确认没有发布成功。确认将本任务标记为失败？")) return;
       try {
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/mark-failed`, { method: "POST" });
         updateRowFromJob(data.job || { id: jobId, status: "FAILED" });
@@ -2358,7 +2312,8 @@ if (publishCenterRoot) {
       const jobId = viewEvents.closest("[data-publish-row]")?.dataset.jobId;
       try {
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/events`);
-        workspace.events(data.events || []);
+        const lines = (data.events || []).map((item) => `${item.occurred_at} · ${item.from_status || "—"} → ${item.to_status || "—"} · ${item.message || item.event_type}`);
+        window.alert(lines.join("\n") || "暂无执行事件。");
       } catch (error) { showMessage(`读取执行详情失败：${error.message}`, "error"); }
       return;
     }
@@ -2393,21 +2348,9 @@ if (publishCenterRoot) {
   document.querySelector("[data-clear-selection]")?.addEventListener("click", () => { selectedJobIds.clear(); updateSelectionUi(); });
 
   document.querySelector("[data-open-account-drawer]")?.addEventListener("click", () => openAccountDrawer());
-  function closeAccountDrawer() { accountDrawer.hidden = true; accountBackdrop.hidden = true; document.body.classList.remove("has-schedule-drawer"); drawerTrigger?.focus(); }
+  function closeAccountDrawer() { accountDrawer.hidden = true; accountBackdrop.hidden = true; document.body.classList.remove("has-schedule-drawer"); }
   document.querySelector("[data-close-account-drawer]")?.addEventListener("click", closeAccountDrawer);
   accountBackdrop?.addEventListener("click", closeAccountDrawer);
-  document.addEventListener('keydown', event => {
-    if (document.querySelector('dialog[open]')) return;
-    const panel = !drawer.hidden ? drawer : (!accountDrawer.hidden ? accountDrawer : null);
-    if (!panel) return;
-    if (event.key === 'Escape') { event.preventDefault(); if (panel === drawer) closeDrawer(); else closeAccountDrawer(); }
-    if (event.key === 'Tab') {
-      const controls = Array.from(panel.querySelectorAll('button,input,select,textarea,a[href]')).filter(item => !item.disabled && item.getClientRects().length);
-      const first = controls[0], last = controls[controls.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-    }
-  });
 
   document.querySelector("[data-apply-batch-target]")?.addEventListener("click", async () => {
     const payload = {
@@ -2423,11 +2366,26 @@ if (publishCenterRoot) {
     } catch (error) { showMessage(`批量设置失败：${error.message}`, "error"); }
   });
 
-  document.querySelector("[data-batch-ai]")?.addEventListener("click", async (event) => {
-    const button = event.currentTarget;
-    button.disabled = true;
-    try { await workspace.preview(Array.from(selectedJobIds)); }
-    finally { button.disabled = false; }
+  document.querySelector("[data-batch-ai]")?.addEventListener("click", async () => {
+    let succeeded = 0;
+    let failed = 0;
+    for (const jobId of Array.from(selectedJobIds)) {
+      try {
+        const data = await window.apiFetch(`/api/publish/jobs/${jobId}/metadata?use_ai=true`, { method: "POST" });
+        const row = document.querySelector(
+          `[data-publish-row][data-section="content"][data-job-id="${CSS.escape(jobId)}"]`,
+        );
+        applyGeneratedMetadataToForm(row, data.job);
+        updateRowFromJob(data.job);
+        succeeded += 1;
+      } catch (_error) {
+        failed += 1;
+      }
+    }
+    showMessage(
+      `已选文案 AI 重写完成：成功 ${succeeded} 条，失败 ${failed} 条；失败项已保留原文。`,
+      failed ? "error" : "success",
+    );
   });
 
   backfillCoversButton?.addEventListener("click", async () => {
@@ -2587,29 +2545,6 @@ if (publishCenterRoot) {
     syncPlatformFields(form);
     syncCopyCounters(form);
   });
-  workspace = window.NiuMaPublishWorkspace({ updateJob: updateRowFromJob, validateCopy: validateCopyForm, saveExperiment: saveExperimentAssignment, syncCounters: syncCopyCounters, showMessage, revealRow: row => {
-    if (row.dataset.status === 'SCHEDULED') { showScheduledContent = true; document.querySelector('[data-show-scheduled]').checked = true; }
-    const group = row.closest('[data-publish-task-group]');
-    if (group) expandedTaskGroupIds.add(group.dataset.taskId);
-    if (contentTaskId && row.dataset.taskId !== contentTaskId) { contentTaskId = ''; document.querySelector('[data-content-task-focus]')?.setAttribute('hidden', ''); }
-    renderPlatformSchedule();
-  } });
-  document.querySelector('[data-history-job-focus]').hidden = !historyFocusJobId;
-  document.querySelector('[data-clear-history-job-focus]').addEventListener('click', () => {
-    historyFocusJobId = ''; document.querySelector('[data-history-job-focus]').hidden = true;
-    const url = new URL(window.location.href); url.searchParams.delete('job_id'); window.history.replaceState(null, '', url);
-    historyPage = 1; void refreshHistory({ calendar: true, records: true });
-  });
-  document.querySelector('[data-show-scheduled]').addEventListener('change', event => { showScheduledContent = event.target.checked; renderPlatformSchedule(); });
-  document.querySelector('[data-locate-schedule-task]')?.addEventListener('click', () => { scheduleFilter = 'all'; refreshScheduleViews(); updateScheduleTaskFocus({ scroll: true }); });
-  document.querySelector('[data-clear-schedule-task-focus]')?.addEventListener('click', () => {
-    scheduleFocusTaskId = ''; contentTaskId = '';
-    document.querySelector('[data-content-task-focus]')?.setAttribute('hidden', '');
-    const url = new URL(window.location.href); url.searchParams.delete('task_id'); window.history.replaceState(null, '', url);
-    renderPlatformSchedule();
-  });
-  const scheduledCount = document.querySelectorAll('[data-section="content"][data-status="SCHEDULED"]').length;
-  document.querySelector('[data-scheduled-content-count]').textContent = `（${scheduledCount}）`;
   initializeTaskGroupExpansionState();
   document.querySelector("[data-clear-content-task]")?.addEventListener("click", () => {
     contentTaskId = "";
@@ -2622,23 +2557,11 @@ if (publishCenterRoot) {
   const focus = document.querySelector("[data-publish-focus]");
   if (focus?.dataset.platform) setActivePlatform(focus.dataset.platform);
   if (focus?.dataset.tab) switchTab(focus.dataset.tab);
-  const focusJobId = focus?.dataset.jobId || new URL(window.location.href).searchParams.get('job_id') || '';
-  if (focusJobId && activeTab === 'content') {
-    const row = document.querySelector(`[data-section="content"][data-job-id="${CSS.escape(focusJobId)}"]`);
-    if (row) {
-      if (row.dataset.status === 'SCHEDULED') { showScheduledContent = true; document.querySelector('[data-show-scheduled]').checked = true; }
-      const group = row.closest('[data-publish-task-group]'); if (group) expandedTaskGroupIds.add(group.dataset.taskId);
-      renderPlatformSchedule(); workspace.openEditor(row);
-    }
-  }
-  if (focusJobId && activeTab === 'schedule') window.requestAnimationFrame(() => focusScheduleRow(focusJobId));
   filterAccountOptions(document.querySelector("[data-batch-account]"), activePlatform);
   if (scheduleForm?.elements.start_at_local) scheduleForm.elements.start_at_local.value = beijingDatetimeValue(Date.now() + 10 * 60 * 1000);
   document.querySelectorAll('[data-publish-row][data-section="schedule"], [data-publish-row][data-section="history"]').forEach((row) => applyRowReadiness(row));
   updateSelectionUi(); applyHistoryFilter(); refreshScheduleViews(); updateBackfillCoversButton();
-  if (focus?.dataset.taskId && activeTab === 'schedule') {
-    window.requestAnimationFrame(() => updateScheduleTaskFocus({ scroll: !focusJobId }));
-  } else if (focus?.dataset.taskId && activeTab === 'content') {
+  if (focus?.dataset.taskId) {
     const group = document.querySelector(
       `[data-publish-task-group][data-task-id="${CSS.escape(focus.dataset.taskId)}"]`,
     );
@@ -2646,8 +2569,7 @@ if (publishCenterRoot) {
       setTaskGroupExpanded(group, true, { remember: true });
       group.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "start" });
     } else {
-      const scheduled = scheduleRows().filter(row => row.dataset.taskId === focus.dataset.taskId && row.dataset.status === 'SCHEDULED').length;
-      showMessage(scheduled ? `本任务有 ${scheduled} 条已排期记录，可在“排期计划”中查看；勾选“显示已排期内容”可继续编辑。` : '本任务当前没有待准备内容，可在执行记录查看已有发送结果。');
+      showMessage("已定位到该处理任务，但当前没有可准备的抖音新版本内容。可返回任务页重新同步。");
     }
   }
   document.addEventListener("visibilitychange", () => {
@@ -2698,7 +2620,7 @@ if (publishCenterRoot) {
       if (!data.available) return;
       const p = data.policy;
       document.querySelector('[data-adaptive-summary]').textContent = `${p.enabled ? '动态策略已启用（同步不改期）' : '动态策略未启用'} · 每天最多 ${p.daily_limit} 条 · 最小间隔 ${p.min_gap_minutes} 分钟 · ${data.strategy.captured_at ? '数据更新：'+formatBeijingTimestamp(data.strategy.captured_at) : '尚无数据'} · ${data.strategy.reason}`;
-      document.querySelector('[data-toggle-adaptive]').textContent = p.enabled ? '预览停用策略影响' : '预览启用策略影响';
+      document.querySelector('[data-toggle-adaptive]').textContent = p.enabled ? '停用动态策略（保留当前时间）' : '启用并纳入现有排期';
       document.querySelector('[data-adaptive-data-note]').textContent = `${data.strategy.sample_count} 条可比较作品 · ${data.strategy.reason}`;
       const scores = document.querySelector('[data-adaptive-scores]'); scores.replaceChildren();
       (data.strategy.bins || []).forEach(b => {
@@ -2721,16 +2643,15 @@ if (publishCenterRoot) {
   document.querySelector('[data-toggle-adaptive]')?.addEventListener('click', async () => {
     const p=adaptiveContext?.policy; if (!p) return;
     try {
-      await workspace.previewPolicy(p, async () => { invalidatePreview(); await refreshAdaptive(); });
+      await window.apiFetch(`/api/publish/schedules/adaptive/${encodeURIComponent(p.account_id)}`, {method:'PATCH',body:JSON.stringify({enabled:!p.enabled,include_existing:!p.enabled,daily_limit:p.daily_limit,min_gap_minutes:p.min_gap_minutes,daily_start_time:p.daily_start_time,daily_end_time:p.daily_end_time})});
+      invalidatePreview(); await refreshAdaptive();
     } catch(error) { showMessage(error.message,'error'); }
   });
   async function updateManaged(managed) {
     if (!selectedJobIds.size) return;
-    const ids = Array.from(selectedJobIds);
-    if (!await workspace.confirm(`确认${managed ? '将所选重新加入动态管理' : '固定所选时间'} ${ids.length} 条？\n\n${managed ? '后台会按账号策略核对明天以后的受管排期；当天、已执行及待复核记录受保护。' : '当前时间保留，后续动态调整会跳过这些作品。'}`)) return;
     let done=0;
     try {
-      for (const id of ids) { await window.apiFetch(`/api/publish/jobs/${encodeURIComponent(id)}/adaptive`,{method:'PATCH',body:JSON.stringify({managed})}); done++; }
+      for (const id of selectedJobIds) { await window.apiFetch(`/api/publish/jobs/${encodeURIComponent(id)}/adaptive`,{method:'PATCH',body:JSON.stringify({managed})}); done++; }
       showMessage(`已${managed ? '加入动态管理' : '固定时间'} ${done} 条任务`); invalidatePreview(); await refreshAdaptive();
     } catch(error) { showMessage(`已更新 ${done} 条；${error.message}`,'error'); }
   }
