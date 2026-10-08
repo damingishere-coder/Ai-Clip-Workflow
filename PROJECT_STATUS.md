@@ -1,4 +1,18 @@
-## 全站 UI 主重构已上线（2026-10-08 12:05）
+## 全站 UI 重构与补充修复正式验收完成（2026-10-08 13:48）
+
+全站主重构 [PR #155](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/155) 与原片监视器补充 [PR #156](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/156) 已合并、上线并完成正式界面验收。PR #156 最终提交 `3b26f2bdfe1802f18ffb3078b55bf730eecea961` 的 CI run `37726936338` 中 Linux、Windows、Docker 均 success，独立只读审查无阻塞；squash 为 `fea1e2aa921e3adf14612f27440c382ae4dd5d77`。正式 offline-runtime 干净更新至该提交，版本仍为2.6.0。补充产品改动仅模板、JS、CSS，无 Python 改动，沿用当前进程加载新页面，没有为这次前端更新重启 Web 或 Worker。
+
+正式 Chrome 1440 宽度默认仅当前预览 readyState4，隐藏监视器无 src、readyState0，12个成片播放器均 readyState0；首次打开监视器后 readyState4，准确定位当前入点468秒，Esc关闭并归还焦点。390×844重新加载也仅一个视频已加载；打开编辑标签和监视器后定位468秒，文档宽度390，无横向溢出。关闭按钮33–71px、取消和应用772–811px均在屏内；内容区可视667px、滚动内容1005px，overflow auto。初始焦点位于关闭按钮，Shift+Tab环回应用、Tab回到关闭；正常点击取消后归还编辑出入点焦点，视频paused true。正式验收未播放、应用或保存片段，网络无POST/PATCH/PUT/DELETE。主重构此前17页/4旧入口、64任务25/25/14分页及五宽度排期等验收记录保留如下。
+
+恢复后的实际服务仍由既有 RunDock 桌面应用18376托管：Web8001监听10548、父11728、祖父29500；Worker8765监听5332、父22532，同属应用18376。health ok、深度readiness ready；没有新建服务。12:47电脑发生重启，既有服务进程创建时间为13:34，随后复核已恢复；RunDock CLI2999未启动，本次前端更新未另起或重启服务。13:48只读回执 `data/acceptance/ui-refactor/final-patch-runtime.json` 确认运行提交fea1e2a及clean、调度enabled/running/worker_available均true，HTTP返回styles.css和clip-workspace.js的SHA与运行文件一致，模板无初始src/preload none；正式工作台截图为未纳入Git的本机 `output/playwright/live-workbench-final-1440.png`，控制台0错误/0警告。临时8019已无监听，验收CLI浏览器已关闭。
+
+补充更新前后51张表的数据摘要、schema及两份.env哈希完全相同，quick_check ok、外键异常0；忽略目录 `data/acceptance/ui-refactor` 的 `prepatch-recovered-fingerprint.json` / `postpatch-recovered-fingerprint.json` 留证。主重构在线备份及校验仍有效，回滚补充代码可用5011f32；不整库覆盖。原主目录的codemap、四份文档、PROJECT_REAUDIT及agent任务已有修改全部保留。
+
+期间发现主仓库 `.git/config` 为11622字节全NUL，写入时间12:19；已先保存 `data/acceptance/ui-refactor/recovery/git-config-corrupt-20261008.bin`，只恢复核实过的core、origin、master与worktreeConfig设置，没有回退索引、分支或文件。未知丢失的个人Git设置无法据此还原，不将此视为完整配置恢复，也不推断损坏原因。
+
+13:39调度复核为142条未来排期、发送中0、漏期1：原12:30记录 `b6ab17243eac` 已由调度保护自动以 `schedule_missed` 转为WAITING，未代用户补发或改期；当时下一条为14:00。用户可在原8001网页按Ctrl+F5查看新工作区，并在发送中心执行记录查看这条漏期。审片、字幕审核、接受AI文案、排期与发布复核仍由用户操作。本回执只记录已完成事实，文档后续Git交付另行核对。
+
+## 历史上线记录：全站 UI 主重构（2026-10-08 12:05）
 
 [PR #155](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/155) 最终提交 `b072ac9b354c7db7fe6e01563fc2e6b799e8db98` 的 Linux、Windows、Docker CI 全通过，Linux全量1517通过/80跳过。独立审查无阻塞，squash合并为 `5011f32082ce92ce9aa23d7ffb5b87a90d236771`。Windows本机真实Chrome专项覆盖五宽度、慢保存/409/切轨、36候选、发布建议与并发编辑；初始失败均已定位修复并完成关联fresh回归，不以跳过的Linux浏览器测试代替实际界面。
 
@@ -8,9 +22,9 @@
 
 备份为主目录 `data/backups/ui-refactor-20261008/niuma-studio-ui-workflow-refactor-20261008-113319.zip`，SHA256 `c9ee25145d6ca18d97fa3288647a09d0e89f161feaf509b717403bcdc829c52c`，在线SQLite snapshot及包校验通过，无配置密钥和媒体。12:05部署前后51张表计数/数据摘要、schema及两份.env哈希完全相同，quick_check ok、外键异常0。回滚代码基准cbd55c1，媒体仍E盘、正式DB仍主目录data/workflow.sqlite3；不执行整库覆盖或改变用户排期。忽略目录 `data/acceptance/ui-refactor` 保存备份回执、运行/HTTP/布局及数据对照。
 
-正式浏览器另发现隐藏原片监视器在首次打开前也预加载，正在单独补按需加载回归及交付；主重构的上述上线事实有效，补充修复的正式版本在完成后追加。没有代用户审片、审核字幕、接受文案、改期、启用策略或发布；刷新原8001网页可查看新工作区。
+当时正式浏览器另发现隐藏原片监视器在首次打开前也预加载，后续独立补充修复与正式验收已在上方记录；主重构的上述上线事实保留。没有代用户审片、审核字幕、接受文案、改期、启用策略或发布。
 
-## 全站前端重构：本地验收完成，等待 CI 与正式更新（2026-10-08）
+## 实施时记录：全站前端重构本地验收（2026-10-08）
 
 从 master cbd55c1 的独立 codex/ui-workflow-refactor 工作树实施用户批准的全站方案。原主工作目录的已有修改保留。继续Jinja2/原生JS；无数据库迁移、配置迁移或生产记录写入。
 

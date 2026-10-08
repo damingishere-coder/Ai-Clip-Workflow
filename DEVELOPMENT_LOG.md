@@ -2151,4 +2151,12 @@ PR #155最终b072ac9三项CI全green，squash5011f32；12:01停止并更新原We
 
 ## 2026-10-08：原片监视器按需加载与操作边界补验
 
-隐藏出入点监视器移除初始src、preload none；首次打开加载，metadata后归一化范围并seek到入点。新真实Chrome测试也发现旧弹窗滚动边界，使取消/跳出点无法点击；仅将source-monitor限制高度，内容区可滚，头/底按钮始终可见，手机视频与信息换行适配。复用已有页壳焦点管理，不增加重复keydown。新1440/390两项真实12候选/实际MP4回归通过，默认仅当前预览加载，反向seek、首次/再次打开、预览到出点停止、正常点击、双向Tab、Esc及焦点归还均通过；既有审片/批次/字幕可靠保存/editor30项fresh通过，缺Chrome路径20通过/2跳过。无生产写入，待补充最终CI与正式版本回执。
+隐藏出入点监视器移除初始src、preload none；首次打开加载，metadata后归一化范围并seek到入点。新真实Chrome测试也发现旧弹窗滚动边界，使取消/跳出点无法点击；仅将source-monitor限制高度，内容区可滚，头/底按钮始终可见，手机视频与信息换行适配。复用已有页壳焦点管理，不增加重复keydown。新1440/390两项真实12候选/实际MP4回归通过，默认仅当前预览加载，反向seek、首次/再次打开、预览到出点停止、正常点击、双向Tab、Esc及焦点归还均通过；既有审片/批次/字幕可靠保存/editor30项fresh通过，缺Chrome路径20通过/2跳过。无生产写入；最终CI与正式版本回执见下方补充验收记录。
+
+## 2026-10-08 13:48：补充修复正式交付与恢复后验收
+
+PR #156最终3b26f2b的CI run37726936338三项全部success，独立只读审查无阻塞，squash为fea1e2aa921e3adf14612f27440c382ae4dd5d77。正式offline-runtime干净更新至该提交；产品仅模板/JS/CSS变化，无Python变化，不重启现有Web/Worker。正式Chrome1440默认preview ready4、隐藏monitor无src/ready0、12 outputs ready0；首开定位468秒，Esc关闭/焦点归还。390×844重新加载默认仅一视频加载，打开monitor后ready4/468秒，doc390无溢出，关闭33–71px/取消与应用772–811px均屏内，667px可视内容可滚到1005px。关闭按钮初始焦点、双向Tab环回、正常点击取消/焦点归还均通过，视频paused true；没有播放、应用或保存，网络无POST/PATCH/PUT/DELETE。正式手机截图保留在未纳入Git的本机output/playwright/live-source-monitor-390.png。
+
+12:47电脑发生重启，既有服务进程创建时间为13:34，随后复核已恢复；当前RunDock桌面app18376托管Web监听10548/父11728/祖父29500与Worker监听5332/父22532，CLI2999未起，没有新建服务或为前端更新重启进程。13:48只读final-patch-runtime.json确认运行fea1e2a/clean、health ok、deepreadiness ready及HTTP样式/JS SHA与运行文件一致；正式工作台截图为未纳入Git的output/playwright/live-workbench-final-1440.png，控制台0错误/0警告。补充更新前后51表/schema/两份.env摘要相同，quick_check ok、FK0，证据为忽略目录prepatch-recovered-fingerprint.json/postpatch-recovered-fingerprint.json。原主目录codemap、文档、PROJECT_REAUDIT与agent任务已有修改保留。
+
+主仓库.git/config发现11622字节全NUL、写入时间12:19，先备份recovery/git-config-corrupt-20261008.bin，随后仅恢复核实的core/origin/master/worktreeConfig；没有回退索引、分支或文件，未知丢失个人设置无法还原，也不推断损坏原因。13:39调度142未来、发送中0、漏期1，12:30记录b6ab17243eac已由schedule_missed保护转WAITING；当时下一条14:00。未代用户补发、改期或执行任何人工审批。此段为实际产品交付回执，后续仅按Git流程交付文档，不提前填写未完成PR。

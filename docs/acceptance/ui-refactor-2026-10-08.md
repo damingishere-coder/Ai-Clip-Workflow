@@ -1,6 +1,6 @@
 # 2026-10-08 全站 UI 重构验收
 
-基线为 master `cbd55c1`，实施分支 `codex/ui-workflow-refactor`。隔离工作树保护主目录已有修改；未迁移数据库，未改变正式 Prompt、排期或人工门禁。正式环境更新结果由 PROJECT_STATUS 的最终交付记录确认。
+基线为 master `cbd55c1`，实施分支 `codex/ui-workflow-refactor`。隔离工作树保护主目录已有修改；未迁移数据库，未改变正式 Prompt、排期或人工门禁。主重构PR #155与补充PR #156均已通过最终CI、合并并完成正式验收；最新产品代码为fea1e2a，运行及恢复细节由PROJECT_STATUS和本文13:48记录确认。以下保留实施、测试失败定位及分阶段验收证据。
 
 ## 功能与编辑可靠性
 
@@ -16,7 +16,7 @@
 
 本地全量执行：1573通过，6个旧UI结构/文字断言失败。修复断言后对应完整模块79项fresh全部通过；发送中心92、任务/投影34、辅助原文/视觉32、最终页壳/定位14项分区回归通过，重复项不累加成独立总数。新补测试均在真实Chrome中运行；AI、FFmpeg及外部发送在测试中隔离。Ruff、Python编译、全部JS语法及Git差异检查通过。
 
-独立审查确认字幕串轨、封面版本基准、补配置编辑入口、旧跳过字幕绑定均闭环。新增编辑可靠性4项与独立补查6项Chrome验证通过。首轮Linux CI 为1514通过、75跳过、6项fixture清理外键错误；已定位并修复浏览器缺失时遗留关联测试记录，模拟缺Chrome组合22通过/12跳过、正常Chrome组合34通过。最终提交仍须重新通过仓库Linux、Windows和Docker CI，本文不以本地测试代替CI。
+独立审查确认字幕串轨、封面版本基准、补配置编辑入口、旧跳过字幕绑定均闭环。新增编辑可靠性4项与独立补查6项Chrome验证通过。首轮Linux CI 为1514通过、75跳过、6项fixture清理外键错误；已定位并修复浏览器缺失时遗留关联测试记录，模拟缺Chrome组合22通过/12跳过、正常Chrome组合34通过。后续PR #155最终b072ac9的Linux、Windows、Docker CI全部通过，Linux1517通过/80跳过；补充PR #156最终3b26f2b三项CI也全部通过，不以本地测试代替CI。
 
 ## 实际界面
 
@@ -32,14 +32,24 @@
 
 同一进程、同一64任务只读快照，热身后交替调用本轮优化前后的任务页函数各5次，启用cProfile：均值911.25→441.04ms（下降51.6%），中位852.08→371.87ms，每次SQLite实际连接83→1。默认页查询契约、字段与状态逐项相同，快照SHA-256不变；连接强制只读，未初始化或迁移。每页25条当前版本人工审核manifest及冻结字幕策略、活动轨/审批、verified和文件存在校验完整保留，没有以缓存旧凭据或减少校验换取性能。62项查询、状态投影、发布关联及1440/390 Chrome回归通过，Ruff与差异检查通过。原始profile输出见忽略目录的 `task-query-snapshot-profile.txt`，函数profile包含自身采样开销，不能直接当作HTTP时延。
 
-预览服务重启后5轮实际GET中位：正式8001为3723ms，隔离8019为635ms。两服务配置、媒体根目录及负载不同，只记录新版任务页635ms的实际观察，不将差值归因于本轮函数优化或宣称84%提速；原始记录为 `final-http-performance.json`。最终提交仍待CI、合并与正式Web部署验收。
+预览服务重启后5轮实际GET中位：正式8001为3723ms，隔离8019为635ms。两服务配置、媒体根目录及负载不同，只记录新版任务页635ms的实际观察，不将差值归因于本轮函数优化或宣称84%提速；原始记录为 `final-http-performance.json`。后续正式主重构上线后的五次GET中位483.841ms，同样只作为当时服务观察；CI、合并与运行验收见下方正式记录。
 
 ## 交付边界
 
-原正式目标：offline-runtime目录、RunDock Niuma-Studio Web8001、既有Worker8765，数据库为主目录data/workflow.sqlite3，媒体仍在E盘。CI/审查通过后仅更新原Web，先备份及复核活动队列、排期窗口，更新后检查代码SHA、健康、关键界面和业务记录。用户仍负责人工审片、字幕审核、文案接受、排期与发布复核。
+正式目标沿用offline-runtime目录、RunDock Niuma-Studio Web8001、既有Worker8765，数据库为主目录data/workflow.sqlite3，媒体仍在E盘。主重构先备份并核对活动队列/排期窗口，再更新原Web；补充模板/JS/CSS在系统恢复后的既有进程下更新，无需重启。两次分别核对代码SHA、健康、关键界面和业务记录。用户仍负责人工审片、字幕审核、文案接受、排期与发布复核。
 
 ## 12:05 正式主重构验收
 
-PR #155最终b072ac9的Linux/Windows/Docker CI全部success（Linux1517通过/80跳过），squash5011f32并更新原Web8001，Worker8765保留。17主要页与4旧入口HTTP200、64任务25/25/14分页及筛选/唯一查询、E1873原视频策略、辅助返回保护均通过。实际视频Range206，当前播放器readyState4，未播放或写业务。正式排期五宽度均无横向滚动、12条目标标记及操作完整可见。五次正式/tasks中位483.841ms。部署前后51表/schema及两份配置摘要相同，readiness ready、143未来排期、调度连接正常。隐藏原片监视器额外预加载将随独立补充交付验收；最终正式补充版本以PROJECT_STATUS随后记录为准。
+PR #155最终b072ac9的Linux/Windows/Docker CI全部success（Linux1517通过/80跳过），squash5011f32并更新原Web8001，Worker8765保留。17主要页与4旧入口HTTP200、64任务25/25/14分页及筛选/唯一查询、E1873原视频策略、辅助返回保护均通过。实际视频Range206，当前播放器readyState4，未播放或写业务。正式排期五宽度均无横向滚动、12条目标标记及操作完整可见。五次正式/tasks中位483.841ms。部署前后51表/schema及两份配置摘要相同，readiness ready、当时143未来排期、调度连接正常。当时发现的隐藏原片监视器额外预加载，后续独立补充交付及正式验收见下方。
 
-原片监视器补充隔离验收：1440/390两Chrome真实12候选与MP4，默认仅当前preview加载、隐藏monitor无src且ready0，首开/再次打开/反向seek/出点停止正常；弹窗头底操作可见、内容可滚、正常点击及Tab/Esc/焦点归还通过。旧审片/批次/字幕保存编辑30项fresh通过；缺Chrome路径20通过/2跳过。补充代码仍须三项CI通过后更新正式静态文件与模板，并复核加载范围。
+原片监视器补充隔离验收：1440/390两Chrome真实12候选与MP4，默认仅当前preview加载、隐藏monitor无src且ready0，首开/再次打开/反向seek/出点停止正常；弹窗头底操作可见、内容可滚、正常点击及Tab/Esc/焦点归还通过。旧审片/批次/字幕保存编辑30项fresh通过；缺Chrome路径20通过/2跳过。补充随后完成最终CI与正式静态文件/模板更新，并按下方记录复核加载范围。
+
+## 13:48 补充正式验收与恢复记录
+
+PR #156最终提交3b26f2bdfe1802f18ffb3078b55bf730eecea961，CI run37726936338的Linux、Windows、Docker均success，独立审查无阻塞，squash合并fea1e2aa921e3adf14612f27440c382ae4dd5d77。正式offline-runtime干净更新至fea1e2a；仅模板/JS/CSS产品变化，无Python变化，既有Web/Worker未因本次前端更新重启。13:48:31的final-patch-runtime.json确认运行SHA/clean、health/readiness，HTTP返回styles.css与clip-workspace.js的SHA匹配运行文件，监视器模板无初始src/preload none；正式工作台截图为未纳入Git的本机output/playwright/live-workbench-final-1440.png，控制台0错误/0警告。临时8019无监听，验收CLI浏览器已关闭。
+
+正式1440默认当前preview ready4、隐藏monitor无src/ready0、12个output视频ready0；首次打开monitor后ready4，入点468秒准确，Esc关闭并归还焦点。正式390×844重新加载默认仅一个视频ready>0，隐藏monitor仍无src/ready0；进入编辑标签首开后ready4/468秒。文档宽度390，无溢出，关闭按钮33–71px、取消及应用772–811px均屏内；内容667px可视/1005px滚动、overflow auto。初始焦点为关闭按钮，Shift+Tab环回应用，Tab回到关闭；正常点击取消关闭并归还编辑出入点焦点，视频paused true。没有点击应用、保存或播放，网络无POST/PATCH/PUT/DELETE；隔离操作回归不冒充生产写入验收。正式手机截图为未纳入Git的本机output/playwright/live-source-monitor-390.png。
+
+12:47电脑发生重启，既有服务进程创建时间为13:34，随后复核原托管服务已恢复；Web8001监听10548/父11728/祖父29500，Worker8765监听5332/父22532，同属原RunDock桌面app18376，CLI2999未起，没有新服务。health ok、deepreadiness ready。补充更新前后51表摘要/schema/两份.env哈希相同、quick_check ok、FK0，证据为忽略目录prepatch-recovered-fingerprint.json/postpatch-recovered-fingerprint.json；不以12:05到13:48跨时段数据完全不变作承诺。
+
+主仓库.git/config发现11622字节全NUL、写入时间12:19，先留recovery/git-config-corrupt-20261008.bin，再仅恢复已核实core/origin/master/worktreeConfig；原索引、分支、文件及主目录dirty修改保留，未知个人设置无法还原，未推断损坏原因。13:39复核142未来、发送中0、漏期1：12:30记录b6ab17243eac被schedule_missed保护转WAITING，当时下一条14:00。未代用户补发或改期；到发送中心执行记录查看即可。本记录仅描述已发生交付，最终文档PR尚须按正常Git流程另行核对。
