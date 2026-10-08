@@ -1,4 +1,17 @@
-> 2026-10-08 用户明确要求恢复重构前UI。本文保留当时工程与运行验收事实；新版视觉方案已进入撤回，当前界面及运行版本以PROJECT_STATUS的旧版恢复回执为准。
+# 2026-10-08 旧版 UI 恢复正式验收（15:33）
+
+用户明确要求回溯本次重构前页面。PR #158 已通过最终CI run37742629033的Linux、Windows、Docker检查并合并为 `21c4f2ce4f5aa9382714e53ff3330d176090348c`；原offline-runtime干净运行该提交，版本2.6.0。页面、导航、样式和展开编辑区恢复 `cbd55c1`，字幕可靠保存与兼容后台保护保留，未迁移数据库或修改业务配置。
+
+- 工程回归：128项后台、17项真实Chrome全通过；模拟缺Chrome16通过/9跳过，无外键清理失败；Ruff、编译、14份JS语法及快照核对通过。
+- 真实服务：15:27首次CLI结束托管壳后旧11728→10548仍存活，新47496报8001端口占用10048后退出，此时任务仍25条，不作为完成依据。等待既有15:30排期自然完成后，15:31:11精准处理旧Web子树并沿原UUID启动31736→34776→36432。实际监听36432、health ok、deep readiness ready、旧任务完整64条；Worker22532/5332及restart_count3保持不变，其余17托管记录逐字段相同。
+- 正式HTTP：15:33原17页面均200、九入口和旧页壳正确；/clips、/subtitles、review-inbox、任务/clips别名、转写、视觉证据六兼容入口均200，其中review-inbox保留原meta跳转。/review-experience与/experiments并无独立页面路由，经验/试验仍在/content-review，对应区域存在。九项检查全true，回执为忽略目录 `data/acceptance/ui-rollback/postdeploy-http.json`。
+- 静态资源：HTTP styles.css、app.js、subtitle-editor.js与运行目录、验收工作树字节及SHA完全相同；styles/app按LF规范化后与cbd55c1 SHA相同，差异仅Windows CRLF。字幕编辑器保留savePromise/withTrackLock，仍通过旧页面切轨、慢保存、冲突与迟到审核四场景。
+- 正式界面：Chrome1440工作台、64任务、发送中心、12候选审片、字幕策略，以及390工作台/发送中心已目视确认旧UI；控制台0错误/0警告，自有浏览器已关闭。截图为未纳入Git的 `output/playwright/live-rollback-{workbench,tasks,publish,review,subtitles}-1440.png` 和 `live-rollback-{workbench,publish}-390.png`。首次换壳但旧上下文仍在的截图不用于最终结论，相同文件已由恢复后的截图覆盖。
+- 数据保护：15:31:03.677→15:31:19.444的51表摘要、schema与两份.env哈希完全一致，quick_check ok、外键异常0。证据为pre-recovery-fingerprint.json/post-recovery-fingerprint.json；在线备份 `data/backups/ui-rollback-20261008/niuma-studio-ui-rollback-20261008-151923.zip` 已验证，SHA256 `58fe71626f4726aa7709c6c02c91c7158e90019706e857d11bcf471622f76b20`，不含密钥或媒体。原主目录修改、素材与业务凭据保留。
+
+最终只读排期快照为141条未来排期、发送中0、漏期0，既有15:30记录自然执行完成。验收操作只含GET、浏览器导航、调整窗口与截图，没有触发AI、保存业务表单、人工审核、改期、发送或补发；浏览器工具不支持网络请求清单命令，不宣称据此取得完整网络无写入清单。旧界面限制随历史页面恢复，人工事项仍由用户处理。打开原8001按Ctrl+F5刷新即可。
+
+> 以下保留当时全站重构工程与运行验收的历史事实。该视觉方案已经按用户要求撤回，当前页面与运行版本以以上旧版恢复回执及PROJECT_STATUS最新条目为准。
 
 # 2026-10-08 全站 UI 重构验收
 
