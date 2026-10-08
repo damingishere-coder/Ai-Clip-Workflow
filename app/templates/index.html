@@ -1,88 +1,20 @@
 {% extends "base.html" %}
 {% block title %}工作台 - {{ settings.app_name }}{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', path='css/production-workbench.css') }}?v=20260915">{% endblock %}
-
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', path='css/production-workbench.css') }}?v=20261008-workspace">{% endblock %}
 {% block content %}
-<section class="page-heading">
-  <div>
-    <p class="eyebrow">Dashboard</p>
-    <h1>工作台</h1>
-    <p>导入素材、查看生产进度，再集中处理审片、字幕和发送待办。</p>
-  </div>
-  <a class="secondary-button" href="/materials?view=inbox">打开统一待办</a>
-</section>
-
-<section class="production-cards" aria-label="生产工作台">
-{% for card in production.cards %}<a class="production-card" href="{{ card.url | replace('/review-inbox?category=', '/materials?view=inbox&category=') }}"><span>{{ card.label }}</span><strong>{{ card.value }}</strong><small>{{ card.note }}</small></a>{% endfor %}
-</section>
-
-<section class="panel dashboard-overview-panel" aria-labelledby="weekly-overview-title">
-  <div class="dashboard-overview-header">
-    <div>
-      <p class="eyebrow">Weekly overview</p>
-      <h2 id="weekly-overview-title">本周任务概览</h2>
-      <p>周一至周日统计，发布终态内容不会重复计入待推送。</p>
-    </div>
-    <span class="dashboard-week-chip">{{ weekly_summary.range_label }} · 上海时间</span>
-  </div>
-
-  <div class="dashboard-stat-strip" role="list" aria-label="本周核心统计">
-    {% for item in stats %}
-    <article class="dashboard-stat-item tone-{{ item.tone }}" role="listitem">
-      <span>{{ item.label }}</span>
-      <strong>{{ item.value }}</strong>
-      <small>{{ item.note }}</small>
-    </article>
-    {% endfor %}
-  </div>
-</section>
-
-<section class="panel">
-  <div class="panel-header">
-    <div>
-      <p class="eyebrow">Recent</p>
-      <h2>最近任务</h2>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>任务名称</th>
-          <th>平台</th>
-          <th>状态</th>
-          <th>候选片段</th>
-          <th>创建时间</th>
-          <th>进度</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% if recent_tasks %}
-        {% for task in recent_tasks %}
-        <tr>
-          <td>{{ task.title }}</td>
-          <td><span class="platform-badge {{ task.platform_key }}">{{ task.platform_label }}</span></td>
-          <td><span class="status-pill">{{ task.status_label }}</span></td>
-          <td>{{ task.candidate_count }}</td>
-          <td>{{ task.created_at }}</td>
-          <td>
-            <div class="progress">
-              <span style="width: {{ task.progress }}%"></span>
-            </div>
-          </td>
-          <td><a href="/tasks/{{ task.id }}">详情</a></td>
-        </tr>
-        {% endfor %}
-        {% else %}
-        <tr>
-          <td colspan="7" class="empty-table-cell">
-            还没有任务。点击右上角“新建任务”创建第一条直播切片任务。
-          </td>
-        </tr>
-        {% endif %}
-      </tbody>
-    </table>
-  </div>
+<section class="page-heading"><div><p class="eyebrow">今日工作区</p><h1>工作台</h1><p>先处理需要你的事项，再继续下一批制作。</p></div><a class="secondary-button" href="/materials">打开素材库</a></section>
+<div class="studio-dashboard-grid">
+  <section class="panel" aria-labelledby="studio-attention-title">
+    <div class="studio-attention-head"><h2 id="studio-attention-title">需要我处理</h2><a href="/materials?view=inbox" class="link-button">打开统一待办</a></div>
+    {% set attention = production.needs_attention | default({'total': 0, 'items': []}) %}
+    {% if attention['items'] %}
+    <div class="studio-attention-list">{% for item in attention['items'] %}<article class="studio-attention-item" data-attention-category="{{ item.category }}"><div><h3>{{ item.title }}</h3><p>{{ item.message }}{% if item.count %} · {{ item.count }} {{ item.unit }}{% endif %}</p></div><a class="secondary-button compact-button" href="{{ item.url }}">处理</a></article>{% endfor %}</div>
+    {% else %}<div class="studio-attention-empty"><strong>当前没有待处理事项</strong><p>可以从素材库开始下一批制作，处理完成后会在这里提醒你审片。</p></div>{% endif %}
+  </section>
+  <section class="panel" aria-labelledby="weekly-overview-title"><div class="panel-header"><div><h2 id="weekly-overview-title">本周概览</h2><p class="form-hint">{{ weekly_summary.range_label }} · 上海时间</p></div></div><div class="studio-weekly-stats" role="list" aria-label="本周核心统计">{% for item in weekly_stats | default(stats) %}<article class="dashboard-stat-item" role="listitem"><span>{{ item.label }}</span><strong>{{ item.value }}</strong><small>{{ item.note }}</small></article>{% endfor %}</div></section>
+</div>
+<section class="production-cards" aria-label="生产工作台">{% for card in production.cards if card.key in ["total_tasks", "processing", "clip_review", "publish_pending"] %}<a class="production-card" href="{{ card.url | replace('/review-inbox?category=', '/materials?view=inbox&category=') }}"><span>{{ card.label }}</span><strong>{{ card.value }}</strong><small>{{ card.note }}</small></a>{% endfor %}</section>
+<section class="panel"><div class="panel-header"><h2>最近制作</h2><a class="link-button" href="/tasks">全部制作任务</a></div>
+<div class="studio-recent-list">{% for task in recent_tasks %}{% set ui = task.ui | default({}) %}<article class="studio-recent-row"><div><h3><a href="/tasks/{{ task.id }}">{{ task.title }}</a></h3><small>{{ task.platform_label }} · {{ task.created_at }}</small></div><span class="status-pill tone-{{ ui.tone | default('blue') }}">{{ ui.stage_label | default(task.status_label) }}</span><div class="studio-recent-progress"><small>制作 {{ ui.production_progress | default(task.progress) }}%</small><div class="progress"><span style="width: {{ ui.production_progress | default(task.progress) }}%"></span></div></div><a class="secondary-button compact-button" href="{{ ui.primary_action.url if ui.primary_action is defined else '/tasks/' + task.id }}">{{ ui.primary_action.label if ui.primary_action is defined else '打开' }}</a></article>{% else %}<div class="studio-attention-empty"><strong>开始第一条制作</strong><p>上传视频或从素材库选择，处理完成后进入人工审核。</p><a class="primary-button" href="/tasks/new">新建制作</a></div>{% endfor %}</div>
 </section>
 {% endblock %}

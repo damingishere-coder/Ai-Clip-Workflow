@@ -9,9 +9,9 @@
 {% block content %}
 <section class="page-heading content-review-heading">
   <div>
-    <p class="eyebrow">Content Review</p>
+    <p class="eyebrow">内容复盘</p>
     <h1>内容复盘</h1>
-    <p>把账号趋势、发布记录、候选片段、AI 分析和 Prompt 版本放在同一条证据链上。</p>
+    <p>查看作品表现、总结选片经验，并在独立试验中验证改进。</p>
   </div>
   <label class="content-review-account-picker">
     <span>抖音账号</span>
@@ -27,30 +27,16 @@
   </label>
 </section>
 
-<div class="page-alert" id="content-review-message" hidden></div>
+<div class="page-alert" id="content-review-message" role="status" aria-live="polite" hidden></div>
 
-<section class="panel" id="human-review-report">
-  <h2>人工审片</h2>
-  <p>跨任务与内容类型统计，不受上方抖音账号筛选影响；没有官方数据也可以查看。</p>
-  <label>分析批次时间范围 <select id="human-review-days" aria-label="人工审片时间范围"><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="180">最近 180 天</option></select></label>
-  <p id="human-review-report-status" role="status">等待加载</p>
-  <div id="human-review-summary"></div>
-  <div id="human-review-groups"></div>
-</section>
-
-<section class="panel" id="intelligence-report">
-  <h2>选片经验报告</h2>
-  <p>保存此刻的审片统计与作品表现。人工审片覆盖所有任务；作品表现仅使用上方所选账号的官方数据。</p>
-  <label>报告范围 <select id="intelligence-days"><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="180">最近 180 天</option></select></label>
-  <button type="button" class="secondary-button" id="intelligence-create">生成并保存报告</button>
-  <p id="intelligence-status" role="status">报告不会修改策略，也不会同步数据、创建实验或排期。</p>
-  <div id="intelligence-result"></div>
-  <details><summary>已保存的报告</summary><div id="intelligence-history"></div></details>
-</section>
-
-{% if not accounts %}
+<nav class="studio-tabs" id="studio-review-tabs" data-studio-tabs data-default-tab="{{ "performance" if accounts else "experience" }}" role="tablist" aria-label="内容复盘工作区">
+<button type="button" id="review-tab-performance" role="tab" data-studio-tab="performance" aria-controls="review-panel-performance" aria-selected="false">账号表现</button>
+<button type="button" id="review-tab-experience" role="tab" data-studio-tab="experience" aria-controls="review-panel-experience" aria-selected="false">选片经验</button>
+<button type="button" id="review-tab-experiments" role="tab" data-studio-tab="experiments" aria-controls="review-panel-experiments" aria-selected="false">改进试验</button>
+</nav>
+<div id="review-panel-performance" class="studio-tab-panel" role="tabpanel" aria-labelledby="review-tab-performance">{% if not accounts %}
 <section class="panel empty-state content-review-empty">
-  <p class="eyebrow">Account Required</p>
+  <p class="eyebrow">账号数据</p>
   <h2>先添加一个抖音账号</h2>
   <p>内容复盘必须明确数据属于哪个账号，避免把不同账号的表现混在一起。</p>
   <a class="primary-button" href="/publish">前往发送中心</a>
@@ -60,7 +46,7 @@
   <article class="panel content-review-sync-card">
     <div class="content-review-card-title">
       <div>
-        <p class="eyebrow">Weekly Baseline</p>
+        <p class="eyebrow">官方账号数据</p>
         <h2>导入抖音官方数据表</h2>
       </div>
       <span class="status-pill" id="content-review-file-status">尚未选择</span>
@@ -87,7 +73,7 @@
   <article class="panel content-review-sync-card">
     <div class="content-review-card-title">
       <div>
-        <p class="eyebrow">Official Work Export</p>
+        <p class="eyebrow">官方作品数据</p>
         <h2>自动导出并同步全部作品</h2>
       </div>
       <span class="status-pill" id="content-review-sync-age">尚未同步</span>
@@ -104,7 +90,7 @@
 <section class="panel content-review-summary-panel">
   <div class="section-heading content-review-section-heading">
     <div>
-      <p class="eyebrow">7 Days vs Previous 7 Days</p>
+      <p class="eyebrow">近 7 天表现</p>
       <h2>账号趋势</h2>
     </div>
     <span class="status-pill" id="content-review-latest-date">暂无数据</span>
@@ -137,7 +123,7 @@
 <section class="panel content-review-works-panel">
   <div class="section-heading content-review-section-heading">
     <div>
-      <p class="eyebrow">Attribution Chain</p>
+      <p class="eyebrow">作品归因</p>
       <h2>作品级归因</h2>
     </div>
     <span class="status-pill" id="content-review-match-summary">等待作品数据</span>
@@ -154,9 +140,33 @@
   </details>
 </section>
 
+
+{% endif %}
+</div>
+<div id="review-panel-experience" class="studio-tab-panel" role="tabpanel" aria-labelledby="review-tab-experience"><section class="panel" id="human-review-report">
+  <h2>人工审片</h2>
+  <p>跨任务与内容类型统计，不受上方抖音账号筛选影响；没有官方数据也可以查看。</p>
+  <label>分析批次时间范围 <select id="human-review-days" aria-label="人工审片时间范围"><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="180">最近 180 天</option></select></label>
+  <p id="human-review-report-status" role="status">等待加载</p>
+  <div id="human-review-summary"></div>
+  <div id="human-review-groups"></div>
+</section>
+
+<section class="panel" id="intelligence-report">
+  <h2>选片经验报告</h2>
+  <p>保存此刻的审片统计与作品表现。人工审片覆盖所有任务；作品表现仅使用上方所选账号的官方数据。</p>
+  <label>报告范围 <select id="intelligence-days"><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="180">最近 180 天</option></select></label>
+  <button type="button" class="secondary-button" id="intelligence-create">生成并保存报告</button>
+  <p id="intelligence-status" role="status">报告不会修改策略，也不会同步数据、创建实验或排期。</p>
+  <div id="intelligence-result"></div>
+  <details><summary>已保存的报告</summary><div id="intelligence-history"></div></details>
+</section>
+
+</div>
+<div id="review-panel-experiments" class="studio-tab-panel" role="tabpanel" aria-labelledby="review-tab-experiments">{% if accounts %}
 <section class="panel content-review-insights-panel">
   <div class="section-heading content-review-section-heading">
-    <div><p class="eyebrow">Diagnose → Act → Verify</p><h2>本周总结与三条建议</h2></div>
+    <div><p class="eyebrow">建议与验证</p><h2>本周总结与三条建议</h2></div>
     <span class="status-pill" id="content-review-insight-count">等待诊断</span>
   </div>
   <p class="content-review-note" id="content-review-insight-note">同步只更新数据。手动调用 Codex 生成报告与三条建议，修改需另行核对与验证。</p>
@@ -172,7 +182,7 @@
   <div id="content-review-insights" class="content-review-insight-list"></div>
   <div id="weekly-review-changes"></div>
   <div class="content-review-experiment-heading">
-    <div><p class="eyebrow">Controlled Experiments</p><h3>历史手动实验</h3></div>
+    <div><p class="eyebrow">独立试验</p><h3>历史手动实验</h3></div>
     <small>旧实验只记录人工标记，不代表系统已修改规则。</small>
   </div>
   <div id="content-review-experiments" class="content-review-experiment-list"></div>
@@ -190,12 +200,14 @@
 
   <article class="panel">
     <div class="section-heading content-review-section-heading">
-      <div><p class="eyebrow">Import History</p><h2>同步记录</h2></div>
+      <div><p class="eyebrow">同步记录</p><h2>同步记录</h2></div>
     </div>
     <div id="content-review-imports" class="content-review-import-list"></div>
   </article>
 </section>
-{% endif %}
+
+{% else %}<section class="panel empty-state"><h2>开始改进试验</h2><p>先在选片经验中保存经验报告，再创建独立 Challenger 草稿。官方作品实验需要可信的账号数据。</p><a href="/content-review?tab=experience" class="secondary-button">查看选片经验</a></section>{% endif %}
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
