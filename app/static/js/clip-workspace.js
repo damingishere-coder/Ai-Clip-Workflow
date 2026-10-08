@@ -498,7 +498,12 @@ function openSourceMonitor(card) {
     isPreviewing: false,
     stepSeconds: 1,
   };
-  sourceMonitorVideo.currentTime = activeSourceMonitor.startSeconds;
+  if (!sourceMonitorVideo.getAttribute("src")) {
+    sourceMonitorVideo.preload = "metadata";
+    sourceMonitorVideo.src = sourceMonitorVideo.dataset.sourceUrl;
+    sourceMonitorVideo.load();
+  }
+  if (sourceMonitorVideo.readyState >= 1) sourceMonitorVideo.currentTime = activeSourceMonitor.startSeconds;
   if (sourceMonitorZoom) sourceMonitorZoom.value = "fit";
   document.querySelectorAll("[data-source-step]").forEach((button) => {
     button.classList.toggle("active", button.dataset.sourceStep === "1");
@@ -793,7 +798,13 @@ document.querySelectorAll("[data-source-action]").forEach((button) => {
 });
 
 if (sourceMonitorVideo) {
-  sourceMonitorVideo.addEventListener("loadedmetadata", renderSourceMonitor);
+  sourceMonitorVideo.addEventListener("loadedmetadata", () => {
+    if (!activeSourceMonitor) return;
+    const range = normalizeSourceRange(activeSourceMonitor.startSeconds, activeSourceMonitor.endSeconds, "end");
+    activeSourceMonitor.startSeconds = range.start;
+    activeSourceMonitor.endSeconds = range.end;
+    setSourceMonitorTime(range.start);
+  });
   sourceMonitorVideo.addEventListener("timeupdate", () => {
     if (!activeSourceMonitor) return;
     if (activeSourceMonitor.isPreviewing && sourceMonitorVideo.currentTime >= activeSourceMonitor.endSeconds) {

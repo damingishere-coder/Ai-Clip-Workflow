@@ -1609,11 +1609,16 @@ body.transcript-drawer-open .main-panel {
 }
 .source-monitor-backdrop {
   z-index: 42;
+  padding: 16px;
   background: rgba(5, 9, 16, 0.58);
 }
 .source-monitor-panel {
   width: min(1080px, calc(100vw - 34px));
-  max-height: min(900px, calc(100vh - 34px));
+  height: min(900px, calc(100dvh - 32px));
+  max-height: calc(100dvh - 32px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
   padding: 0;
   border-color: rgba(148, 163, 184, 0.28);
   background: #1f1f1f;
@@ -1646,7 +1651,9 @@ body.transcript-drawer-open .main-panel {
 }
 .source-monitor-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
 }
@@ -1854,6 +1861,13 @@ body.transcript-drawer-open .main-panel {
 .source-monitor-footer {
   justify-content: flex-end;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+@media (max-width: 600px) {
+  .source-monitor-body video, .source-monitor-empty {
+    height: min(32dvh, 280px);
+    min-height: 150px;
+  }
+  .source-monitor-status, .source-monitor-times { flex-wrap: wrap; }
 }
 .transcript-line {
   display: grid;
