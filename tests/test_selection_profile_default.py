@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+import re
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -27,11 +28,14 @@ def test_task_create_requires_selection_profile():
 def test_new_task_page_has_required_five_profile_select():
     response = TestClient(app).get("/tasks/new", headers=_headers())
     assert response.status_code == 200
-    assert '<select id="selection-profile" name="selection_profile" required>' in response.text
+    profile_select = re.search(r'<select\b[^>]*\bid="selection-profile"[^>]*>', response.text)
+    assert profile_select is not None
+    assert 'name="selection_profile"' in profile_select.group() and re.search(r'\brequired\b', profile_select.group())
     assert 'name="selection_profile" value="variety_comedy"' not in response.text
     assert "通用内容价值" in response.text
-    assert "棚内综艺 · 笑点互动（康熙等）" in response.text
-    assert "长直播高光（语言类）" in response.text
+    options = re.findall(r'<option value="([^"]+)"[^>]*>([^<]+)</option>', response.text.split(profile_select.group(), 1)[1].split('</select>', 1)[0])
+    assert {value for value, _ in options} == {"general", "variety_comedy", "long_live_talk", "interview_story", "knowledge_opinion"}
+    assert all(re.search(r'[\u4e00-\u9fff]', label) for _, label in options)
     assert "人物访谈与故事" in response.text and "知识与观点" in response.text
 
 

@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from app.db.database import get_connection, init_db
-from app.models.task import PublishSendJobUpdate
+from app.models.task import PublishCoverCreate, PublishSendJobUpdate
 from app.services import publish_service
 from app.services.publish_copy_rules import (
     PUBLISH_COPY_RULE_VERSION,
@@ -129,6 +129,54 @@ def _seed_account(*, login_status: str = "normal") -> str:
         )
         connection.commit()
     return account_id
+
+
+def test_metadata_preview_preserves_all_persisted_job_fields(monkeypatch) -> None:
+    job_id = _seed_job(status="SCHEDULED", scheduled_at="2099-01-01T08:00:00+00:00")
+    before = _raw_job(job_id)
+    monkeypatch.setattr(publish_service, "generate_publish_metadata", lambda *args, **kwargs: {
+        "title": VALID_TITLE, "description": VALID_DESCRIPTION, "tags": VALID_TAGS, "source": "ai:test"
+    })
+    monkeypatch.setattr(publish_service, "_get_completed_publish_clip_by_output", lambda output_id: {"id": output_id})
+    preview = publish_service.preview_send_job_metadata(job_id)
+    assert preview["expected_updated_at"] == before["updated_at"]
+    assert preview["metadata"]["title"] == VALID_TITLE
+    assert _raw_job(job_id) == before
+
+
+def test_editor_expected_version_rejects_stale_content_without_writes() -> None:
+    job_id = _seed_job()
+    before = _raw_job(job_id)
+    with pytest.raises(publish_service.PublishContentConflict):
+        publish_service.update_send_job(job_id, PublishSendJobUpdate(
+            title=VALID_TITLE, description=VALID_DESCRIPTION, tags=VALID_TAGS,
+            expected_updated_at="older-version",
+        ))
+    assert _raw_job(job_id) == before
+
+
+def test_cover_request_rejects_stale_version_before_frame_generation(monkeypatch) -> None:
+    job_id = _seed_job()
+    before = _raw_job(job_id)
+    monkeypatch.setattr(publish_service, "generate_publish_cover", lambda *args, **kwargs: pytest.fail("stale cover must not generate"))
+    payload = PublishCoverCreate(task_id=before["task_id"], output_clip_id=before["output_clip_id"], title="封面", expected_updated_at="stale")
+    with pytest.raises(publish_service.PublishContentConflict):
+        publish_service.generate_publish_job_cover(job_id, payload)
+    assert _raw_job(job_id) == before
+
+
+def test_editor_saves_target_and_content_atomically_against_expected_version() -> None:
+    job_id = _seed_job()
+    account_id = _seed_account()
+    before = _raw_job(job_id)
+    saved = publish_service.update_send_job(job_id, PublishSendJobUpdate(
+        title=VALID_TITLE, description=VALID_DESCRIPTION, tags=VALID_TAGS,
+        expected_updated_at=before["updated_at"], account_id=account_id, publish_mode="local_browser",
+    ))["job"]
+    assert saved["title"] == VALID_TITLE
+    assert saved["account_id"] == account_id
+    assert saved["publish_mode"] == "local_browser"
+    assert saved["status"] == before["status"]
 
 
 def test_generated_douyin_copy_obeys_all_limits_and_removes_cliches() -> None:

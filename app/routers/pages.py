@@ -477,4 +477,5 @@ async def visual_evidence_page(request: Request, task_id: str, run_id: str | Non
     summary["global_reason"] = (meta.get("global_judge") or {}).get("reason")
     summary["unavailable"] = [{"source_id": key, "reason": value.get("failure_reason")} for key, value in (meta.get("candidates") or {}).items() if value.get("status") == "unavailable"]
     return templates.TemplateResponse(name="visual_evidence.html", request=request,
-        context={"request": request, "active_page": "tasks", "settings": settings, "task": task, "run_id": run_id or "", "visual_summary": summary})
+        context={"request": request, "active_page": "tasks", "settings": settings, "task": task, "run_id": run_id or "", "visual_summary": summary,
+                 **_task_navigation(request, task_id)})

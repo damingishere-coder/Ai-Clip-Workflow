@@ -55,7 +55,7 @@ def test_experiment_browser_requires_distinct_baseline_decision_and_policy_confi
             assert get_ai_prompt_preset("preset_001")["prompt_text"] == original
             assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
             page.screenshot(path=str(tmp_path / f"experiment-baseline-{width}.png"), full_page=True)
-            page.goto(f"http://127.0.0.1:{port}/content-review", wait_until="networkidle")
+            page.goto(f"http://127.0.0.1:{port}/content-review?tab=experiments", wait_until="networkidle")
             page.get_by_role("button", name="保留改动", exact=True).click()
             page.get_by_role("button", name="预览正式启用", exact=True).wait_for()
             assert get_ai_prompt_preset("preset_001")["prompt_text"] == original

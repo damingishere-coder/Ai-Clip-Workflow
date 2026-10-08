@@ -293,7 +293,7 @@ def test_review_page_and_api_enqueue_batch_job(tmp_path: Path):
     assert 'id="subtitle-ai-suggest"' in page.text
     assert 'data-sync-publish-task' not in page.text
     assert task_page.status_code == 200
-    assert f'href="/subtitles/{task_id}"' in task_page.text
+    assert f'href="/subtitles/{task_id}?return_to=' in task_page.text
     assert live.status_code == 200
     assert live.json()["actions"]["primary"] == "subtitle_review"
     assert live.json()["should_poll"] is False

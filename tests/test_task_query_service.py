@@ -9,7 +9,7 @@
 - TestQueryServiceIntegration: 迁移后原页面 router 不报错
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -19,6 +19,7 @@ import pytest
 
 from app.db.database import get_connection, init_db
 from app.core.config import settings
+from app.services import task_query_service as queries
 from app.services.task_query_service import (
     get_clips_overview_context,
     get_dashboard_context,
@@ -184,15 +185,23 @@ def _insert_test_subtitle_job(
     status: str = "completed",
 ) -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    media = Path(settings.data_dir) / 'verified-subtitle-fixtures' / f'{job_id}.mp4'
+    media.parent.mkdir(parents=True, exist_ok=True)
+    media.write_bytes(b'isolated verified subtitle fixture')
+    track_id, revision_id = f'track_{job_id}', f'revision_{job_id}'
     with get_connection() as connection:
+        connection.execute('''INSERT INTO subtitle_tracks(id,task_id,track_type,output_clip_id,name,active_revision_id,created_at,updated_at)
+            VALUES(?,?,'clip',?,'test',?,?,?)''', (track_id,task_id,output_clip_id,revision_id,now,now))
+        connection.execute('''INSERT INTO subtitle_revisions(id,track_id,revision_number,origin,status,checksum,created_at)
+            VALUES(?,?,1,'test','approved','test',?)''', (revision_id,track_id,now))
         connection.execute(
             """
             INSERT INTO subtitle_jobs (
                 id, task_id, output_clip_id, style_preset_id, status,
-                subtitle_file_path, output_file_path, error_message, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                subtitle_file_path, output_file_path, error_message, created_at, updated_at,revision_id,validation_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?)
             """,
-            (job_id, task_id, output_clip_id, "default", status, "", "", None, now, now),
+            (job_id, task_id, output_clip_id, "default", status, "", str(media), None, now, now,revision_id,'verified'),
         )
         connection.commit()
 
@@ -216,6 +225,9 @@ def _clean_test_data() -> None:
     with get_connection() as connection:
         connection.execute("DELETE FROM publish_jobs")
         connection.execute("DELETE FROM subtitle_jobs")
+        connection.execute("DELETE FROM subtitle_cues")
+        connection.execute("DELETE FROM subtitle_revisions")
+        connection.execute("DELETE FROM subtitle_tracks")
         connection.execute("DELETE FROM output_clip")
         connection.execute("DELETE FROM cut_runs")
         connection.execute("DELETE FROM workflow_jobs")
@@ -516,7 +528,7 @@ class TestSubtitleWorkflowContext:
         assert context["tasks"] == []
 
         stat_labels = {s["label"] for s in context["stats"]}
-        expected_labels = {"输出切片记录", "待加字幕切片", "已加字幕成片", "可预览视频", "待一键推送"}
+        expected_labels = {"输出切片记录", "待加字幕切片", "已加字幕成片", "可预览视频"}
         assert stat_labels == expected_labels
 
     def test_subtitle_workflow_with_output_clips(self):
@@ -640,3 +652,37 @@ class TestSystemStatusContext:
         assert context["failed_count"] == 2
         assert context["completed_count"] == 1
         assert len(context["recent_errors"]) == 2  # 最多展示 5 条
+
+
+@pytest.mark.parametrize('filters,scope,rows,total,page', [
+    ({'page':2}, list(range(38,13,-1)), list(range(38,13,-1)), 64, 2),
+    ({'page':999}, list(range(13,-1,-1)), list(range(13,-1,-1)), 64, 3),
+    ({'q':' e1873 ', 'platform':'douyin', 'stage':'error', 'sort':'created_asc'},
+     list(range(40)), list(range(2,40,3)), 13, 1),
+    ({'q':'COST-063', 'platform':'bilibili'}, [63], [63], 1, 1),
+    ({'q':'no-matching-title', 'stage':'error'}, [], [], 0, 1),
+])
+def test_task_list_projects_only_the_required_scope(monkeypatch, filters, scope, rows, total, page):
+    """Measure projection calls without coupling the assertion to manifest internals."""
+    start = datetime(2026,10,8,tzinfo=timezone.utc)
+    tasks = [dict(id=f'cost-{i:03d}', title=('E1873 素材' if i < 40 else '其他素材'),
+                  platform='douyin' if i < 50 else 'bilibili', candidate_count=999,
+                  created_at=(start + timedelta(minutes=i)).isoformat(),
+                  updated_at=(start + timedelta(minutes=i)).isoformat()) for i in range(64)]
+    calls = []
+
+    def project(ids):
+        calls.append(ids)
+        return {task_id:dict(stage='error' if int(task_id[-3:]) % 3 == 2 else 'waiting',
+                            candidates=int(task_id[-3:])+1) for task_id in ids}
+
+    monkeypatch.setattr(queries, 'list_tasks', lambda:[dict(task) for task in tasks])
+    monkeypatch.setattr(queries, 'task_projections', project)
+    context = queries.get_tasks_page_context(**filters)
+    expected_scope = [f'cost-{i:03d}' for i in scope]
+    assert calls == ([expected_scope] if expected_scope else [])
+    assert [task['id'] for task in context['tasks']] == [f'cost-{i:03d}' for i in rows]
+    assert context['pagination'] == dict(page=page, pages=max(1,(total+24)//25), page_size=25, total=total)
+    assert all(task['candidate_count'] == int(task['id'][-3:])+1 for task in context['tasks'])
+    assert context['filters']['q'] == filters.get('q','').strip()
+    assert context['stages'] == queries.STAGES

@@ -398,7 +398,7 @@ def test_local_gate_keeps_health_public_and_blocks_cross_site_writes() -> None:
 
 
 def test_dynamic_frontend_text_is_not_written_with_inner_html() -> None:
-    app_script = (PROJECT_ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+    app_script = (PROJECT_ROOT / "app/static/js/task-actions.js").read_text(encoding="utf-8")
     publish_script = (PROJECT_ROOT / "app/static/js/publish-center.js").read_text(encoding="utf-8")
 
     assert "summary.innerHTML" not in app_script
