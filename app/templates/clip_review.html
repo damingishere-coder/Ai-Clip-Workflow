@@ -348,7 +348,7 @@
 
     <div class="source-monitor-body">
       {% if task.source_exists %}
-      <video id="source-monitor-video" controls preload="metadata" src="/media/tasks/{{ task.id }}/source-video"></video>
+      <video id="source-monitor-video" controls preload="none" data-source-url="/media/tasks/{{ task.id }}/source-video"></video>
       {% else %}
       <div class="video-placeholder source-monitor-empty">
         <strong>没有源视频</strong>
