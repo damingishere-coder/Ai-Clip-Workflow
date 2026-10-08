@@ -4,6 +4,7 @@ from datetime import datetime
 from app.core.config import settings
 from app.db.database import get_connection
 from app.services.publish_time import app_zone, parse_datetime
+from app.services.ui_projection_service import load_task_rows, task_projections
 
 CATEGORIES = {
     'start': ('待继续处理', '任务'),
@@ -12,89 +13,32 @@ CATEGORIES = {
     'errors': ('异常任务', '任务'),
 }
 
-TASK_SUMMARY = """
-WITH candidate AS (
- SELECT task_id,count(*) n FROM clip_candidates WHERE is_deleted=0 GROUP BY task_id
-), outputs AS (
- SELECT oc.task_id,count(*) n,
- sum(CASE WHEN EXISTS(SELECT 1 FROM subtitle_jobs sj
-   JOIN subtitle_tracks st ON st.output_clip_id=oc.id AND st.task_id=oc.task_id
-     AND st.is_active=1 AND st.active_revision_id=sj.revision_id
-   JOIN subtitle_revisions sr ON sr.id=sj.revision_id AND sr.track_id=st.id AND sr.status='approved'
-   WHERE sj.output_clip_id=oc.id AND sj.task_id=oc.task_id AND sj.is_active=1
-     AND sj.status='completed' AND sj.validation_status='verified'
-     AND COALESCE(sj.output_file_path,'')!='') THEN 0 ELSE 1 END) subtitle_pending,
- sum(CASE WHEN EXISTS(SELECT 1 FROM publish_jobs p WHERE p.output_clip_id=oc.id
-     AND p.status!='CANCELLED') THEN 0 ELSE 1 END) unprepared
- FROM output_clip oc WHERE oc.is_active=1 AND oc.status='completed' GROUP BY oc.task_id
-), latest_job AS (
- SELECT task_id,max(rowid) latest FROM workflow_jobs GROUP BY task_id
-), latest_review AS (
- SELECT task_id,max(rowid) latest FROM production_reviews GROUP BY task_id
-)
-SELECT t.id,t.task_name title,t.status,t.updated_at,COALESCE(cc.n,0) candidates,
- COALESCE(o.n,0) outputs,COALESCE(o.subtitle_pending,0) subtitle_pending,
- COALESCE(o.unprepared,0) unprepared,b.id batch_item,b.batch_id,
- j.status job_status,j.job_type,j.message job_message,j.error_message job_error,
- EXISTS(SELECT 1 FROM workflow_jobs w WHERE w.task_id=t.id AND w.status IN ('queued','running')) busy,
- EXISTS(SELECT 1 FROM workflow_jobs w WHERE w.task_id=t.id AND w.status='running') running,
- r.delivery_mode,CASE WHEN r.id IS NOT NULL AND r.revision=e.revision
-   AND EXISTS(SELECT 1 FROM cut_runs cr WHERE cr.id=r.cut_run_id AND cr.task_id=t.id
-     AND cr.is_active=1 AND cr.status='completed') THEN 1 ELSE 0 END approved
-FROM tasks t LEFT JOIN candidate cc ON cc.task_id=t.id LEFT JOIN outputs o ON o.task_id=t.id
-LEFT JOIN material_batch_items b ON b.task_id=t.id
-LEFT JOIN latest_job lj ON lj.task_id=t.id LEFT JOIN workflow_jobs j ON j.rowid=lj.latest
-LEFT JOIN latest_review lr ON lr.task_id=t.id LEFT JOIN production_reviews r ON r.rowid=lr.latest
-LEFT JOIN production_review_epochs e ON e.task_id=t.id
-WHERE COALESCE(t.is_deleted,0)=0
-"""
-
-
-def _classify(row):
-    """One task issue at a time. Automatic reviewed flags are intentionally ignored."""
-    if row['busy']:
-        return None
-    status = row['status'].lower()
-    if status in {'failed', 'completed_with_errors'} or status.startswith('failed_') or row['job_status'] == 'failed':
-        return 'errors', 1, row['job_error'] or '处理未完成，请查看任务中的失败步骤和恢复提示', (
-            f"/materials?batch={row['batch_id']}" if row['job_type']=='material_import' else f"/tasks/{row['id']}")
-    if row['batch_item']:
-        if row['outputs'] and not row['approved']:
-            return 'clips', row['outputs'], '查看实际成片并确认；版本变化后需要重新核对', f"/tasks/{row['id']}/clips"
-        if row['approved'] and row['delivery_mode'] == 'subtitled' and row['subtitle_pending']:
-            return 'subtitles', row['subtitle_pending'], '完成字幕审核与渲染验证', f"/subtitles/{row['id']}"
-        if row['approved'] and row['unprepared']:
-            return 'prepare', row['unprepared'], '已确认交付方式，请明确进入内容准备', f"/tasks/{row['id']}/clips"
-    elif status == 'pending_review' and row['candidates']:
-        return 'clips', row['candidates'], '核对 AI 候选和选择；默认保留不代表人工认可', f"/tasks/{row['id']}/clips"
-    elif status == 'pending_subtitle_review' and row['outputs']:
-        return 'subtitles', row['subtitle_pending'] or row['outputs'], '核对字幕版本和交付选择', f"/subtitles/{row['id']}"
-    if status in {'pending_processing', 'pending_ai'}:
-        return 'start', 1, '素材已就绪，请在任务详情继续转写或 AI 分析', f"/tasks/{row['id']}"
-    return None
-
-
 def _projection(c):
-    rows = [dict(r) for r in c.execute(TASK_SUMMARY)]
+    rows = load_task_rows(c)
+    projections = task_projections(connection=c, rows=rows)
     items = []
     for row in rows:
-        issue = _classify(row)
-        if issue:
-            category, count, message, url = issue
+        ui = projections[row['id']]
+        row.update(ui=ui, running=ui['running'], busy=ui['busy'])
+        if ui['category']:
+            category, count, message, url = ui['category'], ui['count'], ui['message'], ui['primary_action']['url']
             items.append(dict(id='task:'+row['id'], task_id=row['id'], title=row['title'],
-                              category=category, count=count, message=message, url=url, updated_at=row['updated_at']))
+                              category=category, count=count, unit=CATEGORIES[category][1],
+                              message=message, url=url, updated_at=row['updated_at']))
     for row in c.execute("""SELECT p.id,p.task_id,p.title,p.updated_at,p.status,t.task_name task_title
         FROM publish_jobs p JOIN tasks t ON t.id=p.task_id
-        WHERE p.status IN ('NEED_REVIEW','FAILED') AND COALESCE(t.is_deleted,0)=0"""):
+        WHERE p.status IN ('NEED_REVIEW','FAILED') AND p.platform='douyin' AND COALESCE(t.is_deleted,0)=0"""):
         items.append(dict(id='publish:'+row['id'], task_id=row['task_id'], title=row['title'] or row['task_title'],
                           category='publish', count=1, message=('发送失败，请查看失败原因后决定是否重试' if row['status']=='FAILED'
                               else '发送结果或条件需要人工复核，请查看执行记录'),
-                          url='/publish', updated_at=row['updated_at']))
+                          unit='发布任务', url=f"/publish?task_id={row['task_id']}&job_id={row['id']}&tab=history", updated_at=row['updated_at']))
     counts = {key: dict(label=label, unit=unit, count=0, tasks=0) for key,(label,unit) in CATEGORIES.items()}
     for key in counts:
         subset = [item for item in items if item['category'] == key]
         counts[key].update(count=sum(i['count'] for i in subset), tasks=len({i['task_id'] for i in subset}))
+    priority = {'publish': 0, 'errors': 1, 'clips': 2, 'subtitles': 3, 'prepare': 4, 'start': 5}
     items.sort(key=lambda i:(i['updated_at'] or '',i['id']), reverse=True)
+    items.sort(key=lambda i:priority[i['category']])
     return rows, items, counts
 
 
@@ -130,28 +74,35 @@ def dashboard(*, now=None):
     today = (now.replace(tzinfo=zone) if now.tzinfo is None else now.astimezone(zone)).date()
     with get_connection() as c:
         c.execute('BEGIN')
-        rows,_,counts = _projection(c)
+        rows,items,counts = _projection(c)
         materials = c.execute('SELECT count(*) FROM source_materials').fetchone()[0]
-        scheduled, pending = 0,0
+        scheduled, pending, all_scheduled = 0,0,0
         for job in c.execute("""SELECT p.status,p.scheduled_at FROM publish_jobs p JOIN tasks t ON t.id=p.task_id
-            WHERE COALESCE(t.is_deleted,0)=0 AND p.status IN ('DRAFT','WAITING','SCHEDULED','PUBLISHING','PUBLISHED')"""):
+            JOIN output_clip o ON o.id=p.output_clip_id AND o.task_id=p.task_id
+            WHERE COALESCE(t.is_deleted,0)=0 AND o.is_active=1 AND p.platform='douyin'
+            AND p.status IN ('DRAFT','WAITING','SCHEDULED','PUBLISHING','PUBLISHED')"""):
             pending += job['status'] in {'DRAFT','WAITING'}
+            all_scheduled += job['status'] == 'SCHEDULED'
             if job['scheduled_at'] and job['status'] in {'SCHEDULED','PUBLISHING','PUBLISHED'}:
                 try:
                     scheduled += parse_datetime(job['scheduled_at'],settings.app_timezone).astimezone(zone).date() == today
                 except ValueError:
                     pass  # Invalid historical time is not a fabricated schedule.
         works,note = _reviewable(c)
-    cards = [dict(label='素材池',value=materials,note='已登记素材',url='/materials'),
-             dict(label='处理中',value=sum(r['running'] for r in rows),
+    cards = [dict(key='total_tasks',label='制作任务',value=len(rows),note='个有效制作任务',url='/tasks'),
+             dict(key='materials',label='素材池',value=materials,note='已登记素材',url='/materials'),
+             dict(key='processing',label='制作中',value=sum(r['busy'] for r in rows),
                   note=f"另 {sum(bool(r['busy']) and not r['running'] for r in rows)} 个任务排队中 · {counts['start']['count']} 个待继续处理",url='/tasks')]
     for key in ('clips','subtitles'):
         value = counts[key]
-        cards.append(dict(label=value['label'],value=value['count'],note=f"{value['unit']} · {value['tasks']} 个任务",url='/review-inbox?category='+key))
+        cards.append(dict(key='clip_review' if key == 'clips' else 'subtitle_review',label=value['label'],value=value['count'],note=f"{value['unit']} · {value['tasks']} 个任务",url='/materials?view=inbox&category='+key))
     cards.extend([
-        dict(label='待发布',value=pending,note=f"发布任务 · 另 {counts['prepare']['count']} 条切片待内容准备",url='/publish'),
-        dict(label='今日排期',value=scheduled,note=f'{today} · 上海时间',url='/publish'),
-        dict(label='可复盘作品',value=works,note=note,url='/content-review'),
-        dict(label='异常任务',value=counts['errors']['count'],note=f"另 {counts['publish']['count']} 个发布任务需复核",url='/review-inbox?category=errors'),
+        dict(key='publish_pending',label='待安排发布',value=pending,note=f"条发布记录 · 另 {counts['prepare']['count']} 条切片待内容准备",url='/publish?tab=content'),
+        dict(key='scheduled',label='已排期',value=all_scheduled,note='条发布记录 · 抖音',url='/publish?tab=schedule'),
+        dict(key='today_schedule',label='今日排期',value=scheduled,note=f'{today} · 上海时间',url='/publish'),
+        dict(key='reviewable',label='可复盘作品',value=works,note=note,url='/content-review'),
+        dict(key='production_error',label='制作异常',value=counts['errors']['count'],note='个制作任务',url='/materials?view=inbox&category=errors'),
+        dict(key='publish_attention',label='发布需处理',value=counts['publish']['count'],note='条发布记录 · 失败或需复核',url='/materials?view=inbox&category=publish'),
     ])
-    return dict(cards=cards,counts=counts)
+    return dict(cards=cards,counts=counts,
+                needs_attention=dict(total=len(items), items=items[:8], counts=counts))

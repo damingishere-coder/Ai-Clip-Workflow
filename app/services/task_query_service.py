@@ -15,6 +15,7 @@ from app.services.publish_domain import TERMINAL_PUBLISH_STATUSES
 from app.services.publish_time import app_zone, parse_datetime
 from app.services.storage_service import resolve_video_file_path
 from app.services.subtitle_workflow_service import SUBTITLE_STATUS_LABELS
+from app.services.ui_projection_service import STAGES, task_projections
 from app.services.task_service import (
     OUTPUT_STATUS_LABELS,
     _parse_time_to_seconds,
@@ -130,9 +131,35 @@ def _dashboard_weekly_summary(tasks: list[dict], *, now: datetime | None = None)
         if week_start <= created_at < week_end:
             weekly_total += 1
 
+    def this_week(value):
+        if not value:
+            return False
+        try:
+            return week_start <= parse_datetime(value, settings.app_timezone).astimezone(zone) < week_end
+        except (ValueError, TypeError):
+            return False
+
+    with get_connection() as connection:
+        # Output rows are inserted after cutting finishes. Their creation time is
+        # distinct from both task creation and later subtitle/publishing changes.
+        outputs = connection.execute('''
+            SELECT o.task_id,o.created_at FROM output_clip o JOIN tasks t ON t.id=o.task_id
+            WHERE o.status='completed' AND o.is_active=1 AND COALESCE(t.is_deleted,0)=0
+        ''').fetchall()
+        deliveries = connection.execute('''
+            SELECT p.id,COALESCE(NULLIF(p.published_at,''),NULLIF(p.finished_at,'')) AS completed_at
+            FROM publish_jobs p JOIN tasks t ON t.id=p.task_id
+            WHERE p.status='PUBLISHED' AND p.platform='douyin' AND COALESCE(t.is_deleted,0)=0
+        ''').fetchall()
+    produced = [output for output in outputs if this_week(output['created_at'])]
+
     return {
         "total": weekly_total,
         "range_label": f"{week_start:%m.%d} - {(week_end - timedelta(days=1)):%m.%d}",
+        "produced_clips": len(produced),
+        "production_tasks": len({output['task_id'] for output in produced}),
+        "published_clips": sum(this_week(job['completed_at']) for job in deliveries),
+        "published_unknown_time": sum(not job['completed_at'] for job in deliveries),
     }
 
 
@@ -180,6 +207,7 @@ def _batch_all_output_clips(task_ids: list[str]) -> dict[str, list[dict]]:
                 clip_candidates.duration_seconds AS clip_duration_seconds,
                 clip_candidates.summary AS clip_summary,
                 clip_candidates.enabled AS clip_enabled,
+                subtitle_tracks.id AS subtitle_track_id,
                 subtitle_jobs.id AS subtitle_job_id,
                 subtitle_jobs.status AS subtitle_status,
                 subtitle_jobs.revision_id AS subtitle_revision_id,
@@ -194,8 +222,13 @@ def _batch_all_output_clips(task_ids: list[str]) -> dict[str, list[dict]]:
                 subtitle_jobs.updated_at AS subtitle_updated_at
             FROM output_clip
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
-            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
-            LEFT JOIN subtitle_revisions ON subtitle_revisions.id = subtitle_jobs.revision_id
+            LEFT JOIN subtitle_tracks ON subtitle_tracks.output_clip_id = output_clip.id
+                AND subtitle_tracks.task_id = output_clip.task_id AND subtitle_tracks.is_active = 1
+            LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id
+                AND subtitle_jobs.task_id = output_clip.task_id AND subtitle_jobs.is_active = 1
+                AND subtitle_jobs.revision_id = subtitle_tracks.active_revision_id
+            LEFT JOIN subtitle_revisions ON subtitle_revisions.id = subtitle_tracks.active_revision_id
+                AND subtitle_revisions.track_id = subtitle_tracks.id
             WHERE output_clip.task_id IN ({placeholders}) AND output_clip.is_active = 1
             ORDER BY
                 CASE WHEN output_clip.output_file_name IS NULL OR output_clip.output_file_name = '' THEN 1 ELSE 0 END,
@@ -232,7 +265,7 @@ def _batch_all_output_clips(task_ids: list[str]) -> dict[str, list[dict]]:
                 "subtitle_status": subtitle_status,
                 "subtitle_status_label": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),
                 "subtitle_publish_ready": bool(
-                    subtitle_status == "completed"
+                    output.get("subtitle_track_id") and subtitle_status == "completed"
                     and output.get("subtitle_validation_status") == "verified"
                     and output.get("subtitle_revision_status") == "approved"
                     and subtitled_path
@@ -252,6 +285,9 @@ def get_dashboard_context(*, now: datetime | None = None) -> dict:
     """Dashboard 首页统计上下文"""
     from app.services.production_workbench_service import dashboard
     tasks = list_tasks()
+    projections = task_projections([task['id'] for task in tasks])
+    for task in tasks:
+        task['ui'] = projections[task['id']]
     task_ids = [task["id"] for task in tasks]
     weekly_summary = _dashboard_weekly_summary(tasks, now=now)
     completed_oc_map = _batch_completed_output_clip_counts(task_ids)
@@ -288,13 +324,60 @@ def get_dashboard_context(*, now: datetime | None = None) -> dict:
             {"label": "失败任务", "value": failed_count, "note": "需排查", "tone": "red"},
         ],
         "weekly_summary": weekly_summary,
+        "weekly_stats": [
+            dict(label='本周新增制作', value=weekly_summary['total'], note='按任务创建时间统计', tone='blue'),
+            dict(label='本周生成成片', value=weekly_summary['produced_clips'],
+                note=f"当前有效成片 · {weekly_summary['production_tasks']} 个任务 · 按成片生成时间", tone='green'),
+            dict(label='本周实际发送', value=weekly_summary['published_clips'],
+                note='抖音 · 仅确认成功，按发布完成时间' + (f" · 另 {weekly_summary['published_unknown_time']} 条历史记录缺完成时间" if weekly_summary['published_unknown_time'] else ''), tone='green'),
+        ],
         "recent_tasks": tasks[:5],
     }
+
+
+def get_tasks_page_context(*, q='', platform='all', stage='all', sort='created_desc', page=1):
+    """Filter the same read-only stages used by the workbench and task detail."""
+    if platform not in {'all', 'douyin', 'bilibili', 'general'}:
+        raise ValueError('平台筛选无效')
+    if stage not in {'all', *STAGES}:
+        raise ValueError('制作阶段筛选无效')
+    if sort not in {'created_desc', 'created_asc', 'updated_desc'} or page < 1:
+        raise ValueError('排序或页码无效')
+    query = q.strip().casefold()
+    filtered = []
+    for task in list_tasks():
+        if query and query not in task['title'].casefold() and query not in task['id'].casefold():
+            continue
+        if platform != 'all' and task['platform'] != platform:
+            continue
+        filtered.append(task)
+    field = 'updated_at' if sort == 'updated_desc' else 'created_at'
+    filtered.sort(key=lambda task: (task.get(field) or '', task['id']), reverse=sort != 'created_asc')
+    projections = {}
+    if stage != 'all' and filtered:
+        # A stage filter needs the narrowed set before pagination, otherwise
+        # matching tasks on later pages would disappear from both rows and total.
+        projections = task_projections([task['id'] for task in filtered])
+        filtered = [task for task in filtered if projections[task['id']]['stage'] == stage]
+    page_size = 25
+    total = len(filtered)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = min(page, pages)
+    page_tasks = filtered[(page-1)*page_size:page*page_size]
+    if stage == 'all' and page_tasks:
+        projections = task_projections([task['id'] for task in page_tasks])
+    for task in page_tasks:
+        task['ui'] = projections[task['id']]
+        task['candidate_count'] = task['ui']['candidates']
+    return dict(tasks=page_tasks,
+                pagination=dict(page=page, pages=pages, page_size=page_size, total=total),
+                filters=dict(q=q.strip(), platform=platform, stage=stage, sort=sort), stages=STAGES)
 
 
 def get_clips_overview_context() -> dict:
     """片段总览页统计上下文"""
     tasks = list_tasks()
+    projections = task_projections([task['id'] for task in tasks])
     clip_counts_map = _batch_clip_candidate_counts([task["id"] for task in tasks])
     enriched_tasks = []
     for task in tasks:
@@ -326,10 +409,11 @@ def get_clips_overview_context() -> dict:
         enriched_tasks.append(
             {
                 **task,
+                "ui": projections[task['id']],
                 "real_clip_count": clip_count,
                 "enabled_clip_count": enabled_count,
-                "review_stage": review_stage,
-                "review_tone": review_tone,
+                "review_stage": projections[task['id']]['stage_label'] if projections[task['id']]['review_required'] else review_stage,
+                "review_tone": projections[task['id']]['tone'] if projections[task['id']]['review_required'] else review_tone,
                 "can_cut": can_cut,
                 "review_ready": review_ready,
             }
@@ -376,7 +460,7 @@ def _resolve_task_subtitle_stage(output_clips: list[dict]) -> tuple[str, str]:
     """根据输出切片列表判断字幕整体阶段"""
     if not output_clips:
         return "无切片", "amber"
-    completed = sum(1 for output in output_clips if output.get("subtitle_status") == "completed")
+    completed = sum(1 for output in output_clips if output.get("subtitle_publish_ready"))
     if completed == len(output_clips):
         return "字幕完成", "green"
     if completed:
@@ -387,6 +471,7 @@ def _resolve_task_subtitle_stage(output_clips: list[dict]) -> tuple[str, str]:
 def get_subtitle_workflow_context() -> dict:
     """字幕工作台总览页上下文"""
     tasks = list_tasks()
+    projections = task_projections([task['id'] for task in tasks])
     all_outputs = _batch_all_output_clips([task["id"] for task in tasks])
     workflow_tasks = []
     total_output_records = 0
@@ -395,18 +480,21 @@ def get_subtitle_workflow_context() -> dict:
     playable_output_clips = 0
 
     for task in tasks:
+        task['ui'] = projections[task['id']]
+        if not task['ui']['subtitle_eligible']:
+            continue
         output_clips = all_outputs.get(task["id"], [])
         for output in output_clips:
             total_output_records += 1
-            if output.get("status") == "completed":
+            if output.get("status") == "completed" and not output.get('subtitle_publish_ready'):
                 ready_output_clips += 1
-            if output.get("subtitle_status") == "completed":
+            if output.get("subtitle_publish_ready"):
                 completed_subtitles += 1
             if output.get("file_exists"):
                 playable_output_clips += 1
 
-        if output_clips:
-            task_completed_subtitles = sum(1 for output in output_clips if output.get("subtitle_status") == "completed")
+        if output_clips and task['ui']['subtitle_pending_count']:
+            task_completed_subtitles = sum(1 for output in output_clips if output.get("subtitle_publish_ready"))
             if task_completed_subtitles == len(output_clips):
                 subtitle_stage = "字幕完成"
                 subtitle_tone = "green"
@@ -433,7 +521,6 @@ def get_subtitle_workflow_context() -> dict:
             {"label": "待加字幕切片", "value": ready_output_clips, "tone": "blue"},
             {"label": "已加字幕成片", "value": completed_subtitles, "tone": "green"},
             {"label": "可预览视频", "value": playable_output_clips, "tone": "purple"},
-            {"label": "待一键推送", "value": completed_subtitles, "tone": "red"},
         ],
     }
 
@@ -444,11 +531,17 @@ def get_subtitle_task_context(task_id: str) -> dict:
     if not task:
         raise ValueError("任务不存在")
     output_clips = list_output_clips(task_id)
+    ui = task_projections([task_id])[task_id]
+    subtitle_stage, subtitle_tone = _resolve_task_subtitle_stage(output_clips)
+    if ui['subtitle_mode'] == 'original':
+        subtitle_stage, subtitle_tone = '保留原视频画面', 'green'
     return {
         "task": {
             **task,
-            "subtitle_stage": _resolve_task_subtitle_stage(output_clips)[0],
-            "subtitle_tone": _resolve_task_subtitle_stage(output_clips)[1],
+            "ui": ui,
+            "subtitle_delivery_mode": ui['subtitle_mode'],
+            "subtitle_stage": subtitle_stage,
+            "subtitle_tone": subtitle_tone,
         },
         "output_clips": output_clips,
         "subtitle_style": get_default_subtitle_style(),
@@ -456,12 +549,12 @@ def get_subtitle_task_context(task_id: str) -> dict:
             {"label": "输出切片", "value": len(output_clips), "tone": "green"},
             {
                 "label": "待加字幕",
-                "value": sum(1 for output in output_clips if output.get("subtitle_status") != "completed"),
+                "value": ui['subtitle_pending_count'],
                 "tone": "blue",
             },
             {
                 "label": "已加字幕",
-                "value": sum(1 for output in output_clips if output.get("subtitle_status") == "completed"),
+                "value": ui['subtitle_done_count'],
                 "tone": "green",
             },
         ],

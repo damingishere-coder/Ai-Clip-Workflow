@@ -139,6 +139,7 @@ def list_publish_history_records(
     deleted: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=50),
+    job_id: str = Query(default="", max_length=128, pattern=r"^[A-Za-z0-9_-]*$"),
 ) -> dict:
     try:
         return publish_service.list_publish_history_records(
@@ -148,6 +149,7 @@ def list_publish_history_records(
             deleted=deleted,
             page=page,
             page_size=page_size,
+            job_id=job_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -286,6 +288,8 @@ async def generate_publish_cover_frames(payload: PublishCoverFrameBatchCreate) -
 async def generate_publish_job_cover(job_id: str, payload: PublishCoverCreate) -> dict:
     try:
         return publish_service.generate_publish_job_cover(job_id, payload)
+    except publish_service.PublishContentConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -294,6 +298,8 @@ async def generate_publish_job_cover(job_id: str, payload: PublishCoverCreate) -
 async def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
     try:
         return publish_service.update_send_job(job_id, payload)
+    except publish_service.PublishContentConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -310,6 +316,14 @@ def upgrade_pending_douyin_metadata() -> dict:
 async def regenerate_send_job_metadata(job_id: str, use_ai: bool = Query(default=True)) -> dict:
     try:
         return publish_service.regenerate_send_job_metadata(job_id, use_ai=use_ai)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/metadata/preview")
+async def preview_send_job_metadata(job_id: str) -> dict:
+    try:
+        return await run_in_threadpool(publish_service.preview_send_job_metadata, job_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -557,14 +571,34 @@ async def adaptive_schedule_context(account_id: str = "") -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/schedules/adaptive/{account_id}/preview")
+async def preview_adaptive_policy(account_id: str, payload: AdaptivePolicyUpdate) -> dict:
+    from app.services import adaptive_schedule
+    try:
+        values = payload.model_dump(exclude={"include_existing", "preview_token", "confirmed"})
+        return await run_in_threadpool(adaptive_schedule.preview_policy, account_id, values, payload.include_existing)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.patch("/schedules/adaptive/{account_id}")
 async def update_adaptive_policy(account_id: str, payload: AdaptivePolicyUpdate) -> dict:
     from app.services import adaptive_schedule
     try:
-        values = payload.model_dump(exclude={"include_existing"})
-        return {"policy": adaptive_schedule.save_policy(account_id, values, payload.include_existing)}
+        values = payload.model_dump(exclude={"include_existing", "preview_token", "confirmed"})
+        return {"policy": adaptive_schedule.save_policy(account_id, values, payload.include_existing,
+                preview_token=payload.preview_token, confirmed=payload.confirmed)}
+    except adaptive_schedule.ScheduleConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/schedules/adaptive/{account_id}/apply-preview")
+async def apply_adaptive_policy_preview(account_id: str, payload: AdaptivePolicyUpdate) -> dict:
+    if not payload.preview_token or not payload.confirmed:
+        raise HTTPException(status_code=409, detail="请先生成影响预览并明确确认。")
+    return await update_adaptive_policy(account_id, payload)
 
 
 @router.patch("/jobs/{job_id}/adaptive")

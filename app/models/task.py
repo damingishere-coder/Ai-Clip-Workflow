@@ -318,6 +318,7 @@ class PublishBatchJobCreate(BaseModel):
 
 
 class PublishCoverCreate(BaseModel):
+    expected_updated_at: Optional[str] = Field(default=None, max_length=100)
     task_id: str = Field(..., min_length=1, max_length=80)
     output_clip_id: str = Field(..., min_length=1, max_length=80)
     video_source: Literal["original", "subtitled"] = "original"
@@ -326,6 +327,9 @@ class PublishCoverCreate(BaseModel):
 
 
 class PublishSendJobUpdate(BaseModel):
+    expected_updated_at: Optional[str] = Field(default=None, max_length=100)
+    account_id: Optional[str] = Field(default=None, max_length=120)
+    publish_mode: Optional[Literal["local_browser", "manual_export"]] = None
     title: str = Field(..., min_length=1, max_length=120)
     description: Optional[str] = Field(default="", max_length=2000)
     tags: Optional[str] = Field(default="", max_length=500)
@@ -474,6 +478,8 @@ class AdaptivePolicyUpdate(BaseModel):
     daily_start_time: str = "07:00"
     daily_end_time: str = "23:59"
     include_existing: bool = False
+    preview_token: Optional[str] = Field(default=None, max_length=100)
+    confirmed: bool = False
 
 
 class AdaptiveJobUpdate(BaseModel):

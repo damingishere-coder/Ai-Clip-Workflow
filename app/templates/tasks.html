@@ -1,108 +1,39 @@
 {% extends "base.html" %}
-{% block title %}任务列表 - {{ settings.app_name }}{% endblock %}
-
+{% block title %}制作任务 - {{ settings.app_name }}{% endblock %}
 {% block content %}
 <section class="page-heading">
-  <div>
-    <p class="eyebrow">Tasks</p>
-    <h1>任务列表</h1>
-    <p>每条素材独立推进。其他任务转写或分析时，可以继续审片、切片和安排已完成的内容。</p>
-  </div>
-  <a class="primary-button" href="/tasks/new">新建任务</a>
+  <div><h1>制作任务</h1><p>查看每份素材的制作进度，按当前阶段继续处理。</p></div>
 </section>
-
 <section class="panel">
-  <p class="form-hint">切片使用独立通道，按提交顺序处理。选一条已分析的任务，点击“审片与切片”；确认成片后即可进入发送中心准备内容、排期。</p>
-  <div class="toolbar">
-    <input class="control" type="search" placeholder="搜索任务名称">
-    <select class="control" aria-label="平台筛选">
-      <option>全部平台</option>
-      <option>抖音</option>
-      <option>B站</option>
-      <option>通用</option>
-    </select>
-    <select class="control" aria-label="状态筛选">
-      <option>全部状态</option>
-      <option>待处理</option>
-      <option>AI结果待检查</option>
-      <option>已完成</option>
-      <option>失败</option>
-    </select>
-    <button class="secondary-button" type="button">按创建时间排序</button>
-    <button class="icon-button" type="button" aria-label="筛选">⌁</button>
-  </div>
-
+  <form class="toolbar task-filter-form" method="get" action="/tasks" aria-label="筛选制作任务">
+    <label><span class="sr-only">搜索名称或任务 ID</span><input class="control" name="q" type="search" placeholder="搜索名称或任务 ID" value="{{ filters.q }}"></label>
+    <label><span class="sr-only">平台</span><select class="control" name="platform" aria-label="平台筛选">
+      {% for value,label in [('all','全部平台'),('douyin','抖音'),('bilibili','B站历史'),('general','通用')] %}<option value="{{ value }}" {{ 'selected' if filters.platform == value else '' }}>{{ label }}</option>{% endfor %}
+    </select></label>
+    <label><span class="sr-only">阶段</span><select class="control" name="stage" aria-label="制作阶段筛选"><option value="all">全部阶段</option>{% for value,label in stages.items() %}<option value="{{ value }}" {{ 'selected' if filters.stage == value else '' }}>{{ label }}</option>{% endfor %}</select></label>
+    <label><span class="sr-only">排序</span><select class="control" name="sort" aria-label="排序">{% for value,label in [('created_desc','最新创建'),('created_asc','最早创建'),('updated_desc','最近更新')] %}<option value="{{ value }}" {{ 'selected' if filters.sort == value else '' }}>{{ label }}</option>{% endfor %}</select></label>
+    <button class="secondary-button" type="submit">筛选</button>
+    {% if filters.q or filters.platform != 'all' or filters.stage != 'all' or filters.sort != 'created_desc' %}<a class="text-button" href="/tasks">清除筛选</a>{% endif %}
+  </form>
+  <p class="form-hint" role="status">共 {{ pagination.total }} 个任务 · 第 {{ pagination.page }} / {{ pagination.pages }} 页</p>
   <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>任务名称</th>
-          <th>平台</th>
-          <th>视频时长</th>
-          <th>当前状态</th>
-          <th>候选片段数</th>
-          <th>后续工作流</th>
-          <th>创建时间</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% if tasks %}
-        {% for task in tasks %}
-        <tr>
-          <td>{{ task.title }}</td>
-          <td><span class="platform-badge {{ task.platform_key }}">{{ task.platform_label }}</span></td>
-          <td>{{ task.duration }}</td>
-          <td>
-            <div class="task-status-cell">
-              <span class="status-pill">{{ task.status_label }}</span>
-              {% if task.error_message %}
-              <small title="{{ task.error_message }}">{{ task.error_message }}</small>
-              {% endif %}
-            </div>
-          </td>
-          <td>{{ task.candidate_count }}</td>
-          <td>
-            {% if task.output_clip_count > 0 %}
-            <span class="status-pill tone-blue">{{ '保留原字幕' if task.subtitle_strategy == 'original' else ('新增字幕' if task.subtitle_strategy == 'review' else '字幕工作台') }}</span>
-            {% set link = task.publish_link_state or {} %}
-            <span class="status-pill tone-{{ link.tone or 'blue' }}">
-              {{ link.label or "等待发送关联" }}
-            </span>
-            {% elif task.status in ["completed", "completed_with_errors"] %}
-            <span class="status-pill tone-amber">等待切片文件</span>
-            {% else %}
-            <span class="status-pill">等待切片</span>
-            {% endif %}
-          </td>
-          <td>{{ task.created_at }}</td>
-          <td class="action-links">
-            <a href="/tasks/{{ task.id }}">详情</a>
-            <a href="/tasks/{{ task.id }}/clips/review">审片与切片</a>
-            {% if task.subtitle_strategy != 'original' %}<a href="/subtitles/{{ task.id }}">字幕</a>{% endif %}
-            {% if task.output_clip_count > 0 %}<a href="/publish?task_id={{ task.id }}&tab=content">发送中心</a>{% endif %}
-            <button class="link-button danger js-hide-task" type="button" data-task-id="{{ task.id }}" data-task-title="{{ task.title }}">永久删除</button>
-          </td>
-        </tr>
-        {% endfor %}
-        {% else %}
-        <tr>
-          <td colspan="8" class="empty-table-cell">
-            暂无任务。请先进入“新建任务”页面创建一条任务。
-          </td>
-        </tr>
-        {% endif %}
-      </tbody>
-    </table>
+    <table class="production-task-table"><thead><tr><th>素材与任务</th><th>当前阶段</th><th>制作进度</th><th>成片</th><th>创建时间</th><th>下一步</th></tr></thead><tbody>
+    {% for task in tasks %}
+      <tr data-task-row data-task-id="{{ task.id }}">
+        <td data-label="素材与任务"><a href="{{ task.navigation.detail }}"><strong>{{ task.title }}</strong></a><small class="task-row-meta">{{ task.platform_label }} · {{ task.id }}</small></td>
+        <td data-label="当前阶段"><span class="status-pill tone-{{ task.ui.tone }}">{{ task.ui.stage_label }}</span><small class="task-row-meta" data-task-publish-summary>{% set pub = task.ui.publish_summary %}{% if pub.PUBLISHED %}已发送 {{ pub.PUBLISHED }} 条{% endif %}{% if pub.SCHEDULED %}{{ ' · ' if pub.PUBLISHED }}已排期 {{ pub.SCHEDULED }} 条{% endif %}{% if pub.DRAFT or pub.WAITING %}{{ ' · ' if pub.PUBLISHED or pub.SCHEDULED }}待发送 {{ (pub.DRAFT or 0) + (pub.WAITING or 0) }} 条{% endif %}{% if task.ui.publish_attention_count %}{{ ' · ' if pub.PUBLISHED or pub.SCHEDULED or pub.DRAFT or pub.WAITING }}发布需处理 {{ task.ui.publish_attention_count }} 条{% endif %}</small>{% if task.ui.blocked_reason %}<small class="task-row-meta">{{ task.ui.blocked_reason }}</small>{% endif %}</td>
+        <td data-label="制作进度"><span>{{ task.ui.production_progress }}%</span><div class="progress"><span style="width: {{ task.ui.production_progress }}%"></span></div></td>
+        <td data-label="成片">{{ task.ui.outputs }} 条<small class="task-row-meta">{{ '保留原视频画面' if task.ui.subtitle_mode == 'original' else ('新增字幕' if task.ui.subtitle_mode == 'subtitled' else '历史流程') }}</small></td>
+        <td data-label="创建时间">{{ task.created_at }}</td>
+        <td data-label="下一步"><div class="task-row-actions"><a class="secondary-button compact-button" href="{{ task.navigation.primary }}">{{ task.ui.primary_action.label }}</a><details class="task-more-menu"><summary>更多</summary><div class="task-more-actions"><a href="{{ task.navigation.detail }}">查看制作记录</a><a href="{{ task.navigation.review }}">审片与切片</a>{% if task.ui.subtitle_mode != 'original' %}<a href="{{ task.navigation.subtitle }}">字幕工作区</a>{% endif %}{% if task.ui.outputs %}<a href="{{ task.navigation.publish }}">发送中心</a>{% endif %}<button class="link-button danger js-hide-task" type="button" data-task-id="{{ task.id }}" data-task-title="{{ task.title }}">永久删除</button></div></details></div></td>
+      </tr>
+    {% else %}<tr><td colspan="6" class="empty-table-cell">{% if filters.q or filters.platform != 'all' or filters.stage != 'all' %}没有符合当前筛选的任务。<a href="/tasks">查看全部任务</a>{% else %}还没有制作任务。<a href="/tasks/new">创建制作</a>{% endif %}</td></tr>{% endfor %}
+    </tbody></table>
   </div>
-
-  {% if tasks %}
-  <div class="pagination">
-    <button type="button">上一页</button>
-    <span>1</span>
-    <button type="button">下一页</button>
-    <small>共 {{ tasks|length }} 条</small>
-  </div>
-  {% endif %}
+  <nav class="pagination" aria-label="任务分页">
+    {% if pagination.page > 1 %}<a class="secondary-button" href="{{ request.url.include_query_params(page=pagination.page-1) }}">上一页</a>{% else %}<span aria-disabled="true">上一页</span>{% endif %}
+    <span>{{ pagination.page }} / {{ pagination.pages }}</span>
+    {% if pagination.page < pagination.pages %}<a class="secondary-button" href="{{ request.url.include_query_params(page=pagination.page+1) }}">下一页</a>{% else %}<span aria-disabled="true">下一页</span>{% endif %}
+  </nav>
 </section>
 {% endblock %}

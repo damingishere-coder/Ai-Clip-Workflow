@@ -61,6 +61,10 @@
     selectedRegion: null,
     saveTimer: null,
     saving: false,
+    savePromise: null,
+    switching: false,
+    busyAction: false,
+    batchRunning: false,
     dirty: false,
     changeVersion: 0,
     requestToken: 0,
@@ -122,6 +126,7 @@
   }
 
   function mutate(callback) {
+    if (state.switching || state.busyAction || state.batchRunning) return;
     state.undo.push(cueSnapshot());
     if (state.undo.length > 50) state.undo.shift();
     state.redo = [];
@@ -361,12 +366,43 @@
     }
   }
 
-  async function loadTrack(trackId) {
+  function syncEditorAccess() {
+    root.inert = state.switching || state.busyAction || state.batchRunning;
+    elements.track.disabled = root.inert || state.tracks.length === 0;
+  }
+
+  async function withTrackLock(action) {
+    if (state.switching || state.busyAction || state.batchRunning || !state.track) return;
+    state.busyAction = true;
+    syncEditorAccess();
+    try {
+      if (!(await saveRevision(true))) return;
+      await action();
+    } finally {
+      state.busyAction = false;
+      syncEditorAccess();
+    }
+  }
+
+  async function loadTrack(trackId, internal = false) {
+    if (state.switching || (!internal && (state.busyAction || state.batchRunning))) {
+      if (state.track) elements.track.value = state.track.id;
+      return false;
+    }
+    const previousTrackId = state.track?.id;
+    state.switching = true;
+    syncEditorAccess();
+    if (!(await saveRevision(true))) {
+      if (previousTrackId) elements.track.value = previousTrackId;
+      state.switching = false;
+      syncEditorAccess();
+      return false;
+    }
     const token = ++state.requestToken;
     window.clearTimeout(state.saveTimer);
     setStatus("正在载入毫秒级字幕…", "blue");
     const track = state.tracks.find((item) => item.id === trackId);
-    if (!track) return;
+    if (!track) { state.switching = false; syncEditorAccess(); return false; }
     try {
       const first = await api(`/api/subtitles/tracks/${encodeURIComponent(trackId)}/cues?offset=0&limit=${PAGE_SIZE}`);
       const cues = [...(first.cues || [])];
@@ -397,8 +433,14 @@
       updateUndoButtons();
       setStatus(`已载入 ${state.cues.length} 条，自动保存已开启`, "green");
       loadWaveform(token);
+      return true;
     } catch (error) {
-      setStatus(error.message, "red");
+      if (previousTrackId) elements.track.value = previousTrackId;
+      setStatus(`载入失败，当前编辑已保留：${error.message}`, "red");
+      return false;
+    } finally {
+      state.switching = false;
+      syncEditorAccess();
     }
   }
 
@@ -457,41 +499,52 @@
   }
 
   async function saveRevision(force) {
-    if (!state.dirty || state.saving || !state.track || !state.revision) return;
+    while (state.savePromise) {
+      if (!(await state.savePromise)) return false;
+    }
+    if (!state.dirty) return true;
+    if (!state.track || !state.revision) return false;
     window.clearTimeout(state.saveTimer);
     state.saving = true;
     const version = state.changeVersion;
+    const trackId = state.track.id;
     const cues = cueSnapshot();
     const baseRevisionId = state.revision.id;
-    setStatus("正在自动保存新 revision…", "blue");
-    try {
-      const payload = await api(`/api/subtitles/tracks/${encodeURIComponent(state.track.id)}/revisions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ base_revision_id: baseRevisionId, cues, note: force ? "手动立即保存" : "字幕编辑器自动保存" }),
-      });
-      state.revision = payload.revision;
-      if (version === state.changeVersion) {
-        state.cues = (payload.revision.cues || []).map((cue) => ({ ...cue }));
-        state.dirty = false;
-        state.selectedIds.clear();
-        updateAiButton();
-        elements.save.disabled = true;
-        applySearch();
-        setStatus(`Revision ${state.revision.revision_number} 已保存`, "green");
-      } else {
-        state.dirty = true;
-        setStatus("保存期间又有修改，正在继续保存…", "amber");
+    setStatus("正在保存当前字幕…", "blue");
+    state.savePromise = (async () => {
+      try {
+        const payload = await api(`/api/subtitles/tracks/${encodeURIComponent(trackId)}/revisions`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ base_revision_id: baseRevisionId, cues, note: force ? "手动立即保存" : "字幕编辑器自动保存" }),
+        });
+        if (state.track?.id !== trackId) return false;
+        state.revision = payload.revision;
+        if (version === state.changeVersion) {
+          state.cues = (payload.revision.cues || []).map(cue => ({ ...cue }));
+          state.dirty = false;
+          state.selectedIds.clear();
+          updateAiButton();
+          elements.save.disabled = true;
+          applySearch();
+          setStatus(`第 ${state.revision.revision_number} 版已保存`, "green");
+        } else {
+          setStatus("保存期间有新修改，继续保存…", "amber");
+        }
+        renderRevisionMeta();
+        return true;
+      } catch (error) {
+        setStatus(error.status === 409 ? "版本冲突：未保存内容已保留，请另开页面核对最新版本" : `保存失败，编辑内容已保留：${error.message}`, "red");
+        return false;
       }
-      renderRevisionMeta();
-    } catch (error) {
-      setStatus(error.status === 409 ? "版本已变化，请重新选择字幕轨后再编辑" : `保存失败：${error.message}`, "red");
-    } finally {
-      state.saving = false;
-      if (state.dirty && version !== state.changeVersion) {
-        state.saveTimer = window.setTimeout(() => saveRevision(false), 300);
-      }
+    })();
+    const ok = await state.savePromise;
+    state.savePromise = null;
+    state.saving = false;
+    if (ok && state.dirty) {
+      if (force) return saveRevision(true);
+      state.saveTimer = window.setTimeout(() => saveRevision(false), 300);
     }
+    return ok;
   }
 
   function selectedCues() {
@@ -583,8 +636,7 @@
     mutate(() => state.cues.forEach((cue) => { cue.text = cue.text.split(search).join(replacement); }));
   });
 
-  elements.approve.addEventListener("click", async () => {
-    if (state.dirty) await saveRevision(false);
+  elements.approve.addEventListener("click", () => withTrackLock(async () => {
     if (state.dirty || !state.revision) return;
     try {
       const payload = await api(`/api/subtitles/tracks/${encodeURIComponent(state.track.id)}/approve`, {
@@ -598,10 +650,9 @@
     } catch (error) {
       setStatus(`审核失败：${error.message}`, "red");
     }
-  });
+  }));
 
-  elements.aiSuggest?.addEventListener("click", async () => {
-    if (state.dirty) await saveRevision(false);
+  elements.aiSuggest?.addEventListener("click", () => withTrackLock(async () => {
     const cueIds = [...state.selectedIds];
     if (state.dirty || !state.revision || !cueIds.length) return;
     elements.aiSuggest.disabled = true;
@@ -620,7 +671,7 @@
     } finally {
       updateAiButton();
     }
-  });
+  }));
 
   function renderAiSuggestionDiff() {
     const diff = state.suggestion?.diff || [];
@@ -651,7 +702,7 @@
     state.suggestion = null;
   });
 
-  elements.aiAccept?.addEventListener("click", async () => {
+  elements.aiAccept?.addEventListener("click", () => withTrackLock(async () => {
     if (!state.suggestion || !state.revision) return;
     const cueIds = [...elements.aiDiffList.querySelectorAll("[data-ai-diff-cue]:checked")].map((input) => input.value);
     if (!cueIds.length) return setStatus("请至少勾选一条 AI 文字建议", "amber");
@@ -667,15 +718,15 @@
       );
       state.suggestion = null;
       elements.aiPanel.hidden = true;
-      await loadTrack(state.track.id);
+      await loadTrack(state.track.id, true);
       setStatus(`已接受 ${cueIds.length} 条建议并创建人工草稿 Revision ${payload.revision.revision_number}`, "green");
     } catch (error) {
       setStatus(`接受 AI 建议失败：${error.message}`, "red");
       elements.aiAccept.disabled = false;
     }
-  });
+  }));
 
-  elements.importFile.addEventListener("change", async () => {
+  elements.importFile.addEventListener("change", () => withTrackLock(async () => {
     const file = elements.importFile.files?.[0];
     if (!file || !state.track) return;
     const form = new FormData();
@@ -683,13 +734,13 @@
     setStatus(`正在导入 ${file.name}…`, "blue");
     try {
       await api(`/api/subtitles/tracks/${encodeURIComponent(state.track.id)}/import`, { method: "POST", body: form });
-      await loadTrack(state.track.id);
+      await loadTrack(state.track.id, true);
     } catch (error) {
       setStatus(`导入失败：${error.message}`, "red");
     } finally {
       elements.importFile.value = "";
     }
-  });
+  }));
 
   elements.exports.forEach(([format, button]) => button.addEventListener("click", () => {
     if (!state.track || !state.revision) return;
@@ -705,6 +756,8 @@
     batch.label.textContent = `${job.status_label || job.status} · ${progress}%`;
     batch.message.textContent = job.error_message || job.message || "字幕任务状态已更新";
     const active = job.status === "queued" || job.status === "running";
+    state.batchRunning = active;
+    syncEditorAccess();
     batch.cancel.hidden = !active;
     batch.retry.hidden = !(job.status === "failed" || job.status === "cancelled");
     batch.approve.disabled = active;
@@ -728,8 +781,7 @@
     }
   }
 
-  batch.approve?.addEventListener("click", async () => {
-    if (state.dirty) await saveRevision(false);
+  batch.approve?.addEventListener("click", () => withTrackLock(async () => {
     if (state.dirty) return;
     if (!window.confirm("确认审核所有切片的当前字幕版本并批量烧录吗？全部验证通过后流水线会自动继续。")) return;
     batch.approve.disabled = true;
@@ -748,9 +800,9 @@
       batch.approve.disabled = false;
       if (batch.skip) batch.skip.disabled = false;
     }
-  });
+  }));
 
-  batch.skip?.addEventListener("click", async () => {
+  batch.skip?.addEventListener("click", () => withTrackLock(async () => {
     if (!window.confirm("确认跳过字幕并进入片段审核吗？审核保存后才会同步发送中心。")) return;
     if (batch.skip) batch.skip.disabled = true;
     try {
@@ -761,7 +813,7 @@
       batch.panel.hidden = false;
       if (batch.skip) batch.skip.disabled = false;
     }
-  });
+  }));
 
   batch.cancel?.addEventListener("click", async () => {
     if (!batch.jobId || !window.confirm("确认取消当前字幕烧录吗？已完成并验证的切片会保留，可稍后重试缺失部分。")) return;
