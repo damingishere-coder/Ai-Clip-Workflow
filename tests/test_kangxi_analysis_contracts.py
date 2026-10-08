@@ -241,20 +241,26 @@ def test_browser_shows_prompt_revision_separately_from_analysis_count(leased_tas
         with playwright.sync_playwright() as runtime:
             browser = runtime.chromium.launch(executable_path=str(chrome), headless=True)
             page = browser.new_page(viewport={"width": width, "height": 1000})
-            errors = []
+            errors, writes = [], []
             page.on("pageerror", lambda error: errors.append(str(error)))
+            page.on("request", lambda request:writes.append(request.url) if request.method not in {'GET', 'HEAD', 'OPTIONS'} else None)
             page.goto(f"http://127.0.0.1:{port}/tasks/{task_id}", wait_until="networkidle")
+            analysis = page.locator('#analysis > details')
+            if not analysis.evaluate('element => element.open'):
+                analysis.locator('summary').first.click()
             assert set(page.locator('input[name="ai_prompt_preset_id"]').evaluate_all("els => els.map(el => el.value)")) == {
                 "preset_001", "preset_002", "preset_003", "profile_interview_v1", "profile_knowledge_v1",
             }
             assert page.locator('input[value="preset_004"]').count() == 0
             page.locator('[data-prompt-preset-tab][data-preset-id="preset_002"]').click()
-            page.locator('[name="preset_name_preset_002"]').fill("未选择的编辑不能保存")
+            assert page.locator('[name="preset_name_preset_002"]').evaluate('element => element.readOnly')
+            assert page.locator('[name="preset_prompt_preset_002"]').evaluate('element => element.readOnly')
             page.locator('[data-prompt-preset-tab][data-preset-id="preset_001"]').click()
             assert "【已确认的周复盘补充规则】" in page.locator('[name="preset_prompt_preset_001"]').input_value()
             page.locator("#save-ai-prompts-button").click()
             page.locator("#ai-process-result").filter(has_text="当前任务已选择").wait_for()
             assert [presets.get_ai_prompt_preset(f"preset_{index:03d}") for index in (2, 3)] == untouched
+            assert not any('/api/ai-prompt-presets/' in url for url in writes)
             assert "第 4 次分析" in page.locator("#ai-analysis-summary").inner_text()
             assert f"内容修订：第 {snapshot['prompt_version_number']} 次" in page.locator("#ai-analysis-summary").inner_text()
             assert "提示词方案：1 号" in page.locator("#ai-analysis-summary").inner_text()
@@ -265,8 +271,12 @@ def test_browser_shows_prompt_revision_separately_from_analysis_count(leased_tas
                 connection.execute("UPDATE tasks SET ai_prompt_preset_id='preset_004' WHERE id=?", (task_id,))
                 connection.commit()
             page.reload(wait_until="networkidle")
-            page.get_by_text("当前任务保留 4 号历史绑定", exact=False).click()
-            assert page.locator("details.empty-note pre").is_visible()
+            analysis = page.locator('#analysis > details')
+            if not analysis.evaluate('element => element.open'):
+                analysis.locator('summary').first.click()
+            archived = page.locator('details.empty-note').filter(has_text='当前任务保留 4 号历史绑定')
+            archived.locator('summary').click()
+            assert archived.locator('pre').is_visible()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             browser.close()
     finally:

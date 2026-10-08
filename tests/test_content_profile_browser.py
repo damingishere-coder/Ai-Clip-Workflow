@@ -54,6 +54,7 @@ def test_profile_prompt_provider_creation_flow(width, tmp_path):
             assert page.input_value('[name="max_clip_duration"]') == "3"
             assert "30–180" in page.inner_text("#profile-duration-hint")
             assert page.locator('[name="candidate_clip_count"] option[value="20"]').evaluate("el => el.disabled"), page.locator('[name="candidate_clip_count"]').evaluate("el => el.outerHTML")
+            page.locator('.production-advanced > summary').click()
             page.select_option("#new-task-prompt", "preset_002")
             page.select_option("#new-task-provider", "remote")
             assert not page.is_checked('[name="visual_enabled"]')

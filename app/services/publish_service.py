@@ -2777,14 +2777,18 @@ def generate_publish_cover(payload: PublishCoverCreate, job_id: str | None = Non
 
     if job_id:
         with get_connection() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE publish_jobs
                 SET cover_mode = 'time', cover_time_seconds = ?, cover_file_path = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status IN ('DRAFT', 'WAITING', 'SCHEDULED')
+                  AND (? IS NULL OR updated_at = ?)
                 """,
-                (float(payload.cover_time_seconds or 0), str(cover_path), _now_iso(), job_id),
+                (float(payload.cover_time_seconds or 0), str(cover_path), _version_iso(), job_id, payload.expected_updated_at, payload.expected_updated_at),
             )
+            if not cursor.rowcount:
+                connection.rollback()
+                raise PublishContentConflict("封面生成期间内容或状态已变化，请保留输入并核对服务器版本。")
             connection.commit()
 
     return {
@@ -2801,6 +2805,11 @@ def generate_publish_job_cover(job_id: str, payload: PublishCoverCreate) -> dict
         raise ValueError("发布任务不存在。")
     if job.get("task_id") != payload.task_id or job.get("output_clip_id") != payload.output_clip_id:
         raise ValueError("封面参数和发布任务不一致。")
+    if job.get("status") not in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_SCHEDULED}:
+        raise ValueError("只有草稿、等待或已排期任务可以更换封面。")
+    if payload.expected_updated_at is not None and payload.expected_updated_at != job.get("updated_at"):
+        raise PublishContentConflict("封面所依据的内容版本已变化，请先核对服务器版本。")
+    payload = payload.model_copy(update={"expected_updated_at": job.get("updated_at")})
     result = generate_publish_cover(payload, job_id=job_id)
     result["job"] = get_publish_job(job_id)
     return result
@@ -3167,6 +3176,7 @@ def list_publish_history_records(
     deleted: bool = False,
     page: int = 1,
     page_size: int = 50,
+    job_id: str = "",
 ) -> dict:
     normalized_platform = _validate_history_platform(platform)
     normalized_date = str(date or "").strip()
@@ -3184,6 +3194,8 @@ def list_publish_history_records(
     )
     if normalized_date:
         jobs = [job for job in jobs if job.get("history_date") == normalized_date]
+    if job_id:
+        jobs = [job for job in jobs if job.get("id") == job_id]
     jobs.sort(
         key=lambda job: (
             str(job.get("history_anchor_at") or ""),
@@ -3215,6 +3227,7 @@ def list_publish_history_records(
             "date": normalized_date,
             "status": str(status or "all").upper(),
             "deleted": bool(deleted),
+            "job_id": job_id,
         },
         "timezone": settings.app_timezone,
     }
@@ -3437,10 +3450,16 @@ def update_publish_job_status(job_id: str, status: str, error_message: str = "")
     return {"status": "ok", "message": "发布任务状态已更新。", "job": get_publish_job(job_id)}
 
 
+class PublishContentConflict(ValueError):
+    """A user preview or editor was based on an older persisted version."""
+
+
 def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
     job = get_publish_job(job_id)
     if not job:
         raise ValueError("发送任务不存在。")
+    if payload.expected_updated_at is not None and payload.expected_updated_at != job.get("updated_at"):
+        raise PublishContentConflict("内容已在其他窗口更新；本次修改未覆盖，请保留输入并刷新核对。")
     if job.get("status") not in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_SCHEDULED}:
         raise ValueError("只有草稿、等待或已排期任务可以编辑；失败任务请先创建重试任务。")
     safe_content = _sanitize_publish_content(
@@ -3453,8 +3472,15 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
         validate=str(job.get("platform") or "") == "douyin",
     )
     with get_connection() as connection:
-        account_id = str(job.get("account_id") or "")
-        if not account_id and str(job.get("publish_mode") or "") == "local_browser":
+        publish_mode = payload.publish_mode or str(job.get("publish_mode") or "")
+        if job.get("publish_mode") == "opencli_publish" and payload.publish_mode is not None:
+            raise ValueError("旧版任务请使用转换入口，不能覆盖发布方式。")
+        account_id = str(job.get("account_id") or "") if payload.account_id is None else payload.account_id.strip()
+        if payload.account_id is not None and publish_mode == "local_browser":
+            account = get_account(account_id)
+            if not account or account.get("platform") != job.get("platform"):
+                raise ValueError("真实浏览器发布必须选择当前平台账号。")
+        if not account_id and publish_mode == "local_browser":
             account_id = _unique_normal_account_id(connection, str(job.get("platform") or ""))
         provider_response = _publish_provider_payload(
             {
@@ -3475,7 +3501,7 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
             SET title = ?, description = ?, caption = ?, tags = ?, hashtags = ?, visibility = ?,
                 cover_file_path = ?, cover_time_seconds = ?, allow_download = ?,
                 bilibili_tid = ?, bilibili_copyright = ?, bilibili_source = ?,
-                account_id = ?, provider_response = ?, updated_at = ?
+                account_id = ?, publish_mode = ?, provider_response = ?, updated_at = ?
             WHERE id = ? AND status = ? AND updated_at = ?
             """,
             (
@@ -3492,6 +3518,7 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
                 payload.bilibili_copyright,
                 (payload.bilibili_source or "").strip(),
                 account_id or None,
+                publish_mode,
                 provider_response,
                 _version_iso(),
                 job_id,
@@ -3501,7 +3528,7 @@ def update_send_job(job_id: str, payload: PublishSendJobUpdate) -> dict:
         )
         if not cursor.rowcount:
             connection.rollback()
-            raise ValueError("发送任务内容或状态已经变化，请刷新后重试。")
+            raise PublishContentConflict("发送任务内容或状态已经变化，请保留输入并刷新核对。")
         connection.commit()
     return {"status": "ok", "message": "发送内容已保存。", "job": get_publish_job(job_id)}
 
@@ -3639,6 +3666,23 @@ def update_publish_job_content(job_id: str, payload: PublishJobContentUpdate) ->
             raise ValueError("发布任务内容或状态已经变化，请刷新后重试")
         connection.commit()
     return {"status": "ok", "message": "publish content saved", "job": get_publish_job(job_id)}
+
+
+def preview_send_job_metadata(job_id: str) -> dict:
+    """Generate a suggestion without updating publish content, schedule or state."""
+    job = get_publish_job(job_id)
+    if not job:
+        raise ValueError("发送任务不存在。")
+    if job.get("status") not in {PUBLISH_STATUS_DRAFT, PUBLISH_STATUS_WAITING, PUBLISH_STATUS_SCHEDULED}:
+        raise ValueError("只有草稿、等待或已排期任务可以生成文案建议。")
+    item = _get_completed_publish_clip_by_output(job["output_clip_id"])
+    if not item:
+        raise ValueError("找不到这条发送任务对应的切片。")
+    metadata = generate_publish_metadata(item, use_ai=True, platform=str(job.get("platform") or "douyin"))
+    if metadata.get("error") or not str(metadata.get("source") or "").startswith("ai:"):
+        raise ValueError(f"AI 文案建议生成失败：{metadata.get('error') or '没有返回有效文案'}")
+    return {"status": "ok", "job_id": job_id, "expected_updated_at": job.get("updated_at"),
+            "metadata": metadata, "message": "建议已生成，接受前不会覆盖待发文案。"}
 
 
 def regenerate_send_job_metadata(job_id: str, use_ai: bool = True) -> dict:

@@ -9,7 +9,8 @@
 - TestQueryServiceIntegration: 迁移后原页面 router 不报错
 """
 
-from datetime import datetime, timezone
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -19,6 +20,7 @@ import pytest
 
 from app.db.database import get_connection, init_db
 from app.core.config import settings
+from app.services import task_query_service as queries
 from app.services.task_query_service import (
     get_clips_overview_context,
     get_dashboard_context,
@@ -184,15 +186,23 @@ def _insert_test_subtitle_job(
     status: str = "completed",
 ) -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    media = Path(settings.data_dir) / 'verified-subtitle-fixtures' / f'{job_id}.mp4'
+    media.parent.mkdir(parents=True, exist_ok=True)
+    media.write_bytes(b'isolated verified subtitle fixture')
+    track_id, revision_id = f'track_{job_id}', f'revision_{job_id}'
     with get_connection() as connection:
+        connection.execute('''INSERT INTO subtitle_tracks(id,task_id,track_type,output_clip_id,name,active_revision_id,created_at,updated_at)
+            VALUES(?,?,'clip',?,'test',?,?,?)''', (track_id,task_id,output_clip_id,revision_id,now,now))
+        connection.execute('''INSERT INTO subtitle_revisions(id,track_id,revision_number,origin,status,checksum,created_at)
+            VALUES(?,?,1,'test','approved','test',?)''', (revision_id,track_id,now))
         connection.execute(
             """
             INSERT INTO subtitle_jobs (
                 id, task_id, output_clip_id, style_preset_id, status,
-                subtitle_file_path, output_file_path, error_message, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                subtitle_file_path, output_file_path, error_message, created_at, updated_at,revision_id,validation_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?)
             """,
-            (job_id, task_id, output_clip_id, "default", status, "", "", None, now, now),
+            (job_id, task_id, output_clip_id, "default", status, "", str(media), None, now, now,revision_id,'verified'),
         )
         connection.commit()
 
@@ -216,6 +226,9 @@ def _clean_test_data() -> None:
     with get_connection() as connection:
         connection.execute("DELETE FROM publish_jobs")
         connection.execute("DELETE FROM subtitle_jobs")
+        connection.execute("DELETE FROM subtitle_cues")
+        connection.execute("DELETE FROM subtitle_revisions")
+        connection.execute("DELETE FROM subtitle_tracks")
         connection.execute("DELETE FROM output_clip")
         connection.execute("DELETE FROM cut_runs")
         connection.execute("DELETE FROM workflow_jobs")
@@ -516,7 +529,7 @@ class TestSubtitleWorkflowContext:
         assert context["tasks"] == []
 
         stat_labels = {s["label"] for s in context["stats"]}
-        expected_labels = {"输出切片记录", "待加字幕切片", "已加字幕成片", "可预览视频", "待一键推送"}
+        expected_labels = {"输出切片记录", "待加字幕切片", "已加字幕成片", "可预览视频"}
         assert stat_labels == expected_labels
 
     def test_subtitle_workflow_with_output_clips(self):
@@ -640,3 +653,96 @@ class TestSystemStatusContext:
         assert context["failed_count"] == 2
         assert context["completed_count"] == 1
         assert len(context["recent_errors"]) == 2  # 最多展示 5 条
+
+
+@pytest.mark.parametrize('filters,scope,rows,total,page', [
+    ({'page':2}, list(range(38,13,-1)), list(range(38,13,-1)), 64, 2),
+    ({'page':999}, list(range(13,-1,-1)), list(range(13,-1,-1)), 64, 3),
+    ({'q':' e1873 ', 'platform':'douyin', 'stage':'error', 'sort':'created_asc'},
+     list(range(40)), list(range(2,40,3)), 13, 1),
+    ({'q':'COST-063', 'platform':'bilibili'}, [63], [63], 1, 1),
+    ({'q':'no-matching-title', 'stage':'error'}, [], [], 0, 1),
+])
+def test_task_list_projects_only_the_required_scope(monkeypatch, filters, scope, rows, total, page):
+    """Only matching page rows need projection; never format the legacy full list."""
+    start = datetime(2026,10,8,tzinfo=timezone.utc)
+    tasks = [dict(id=f'cost-{i:03d}', task_name=('E1873 素材' if i < 40 else '其他素材'),
+                  platform='douyin' if i < 50 else 'bilibili', candidate_count=999,
+                  created_at=(start + timedelta(minutes=i)).isoformat(),
+                  updated_at=(start + timedelta(minutes=i)).isoformat()) for i in range(64)]
+    calls, connections, statements = [], [], []
+    get_connection_original = queries.get_connection
+
+    @contextmanager
+    def observed_connection():
+        with get_connection_original() as connection:
+            connections.append(connection)
+            connection.set_trace_callback(statements.append)
+            yield connection
+
+    def project(*, connection, rows):
+        assert connection is connections[0]
+        ids = [row['id'] for row in rows]
+        calls.append(ids)
+        return {task_id:dict(stage='error' if int(task_id[-3:]) % 3 == 2 else 'waiting',
+                            candidates=int(task_id[-3:])+1) for task_id in ids}
+
+    monkeypatch.setattr(queries, 'get_connection', observed_connection)
+    monkeypatch.setattr(queries, 'load_task_rows', lambda connection:[dict(task) for task in tasks])
+    monkeypatch.setattr(queries, 'list_tasks', lambda:pytest.fail('Legacy full list formatter used'))
+    monkeypatch.setattr(queries, 'task_projections', project)
+    context = queries.get_tasks_page_context(**filters)
+    expected_scope = [f'cost-{i:03d}' for i in scope]
+    assert calls == ([expected_scope] if expected_scope else [])
+    assert [task['id'] for task in context['tasks']] == [f'cost-{i:03d}' for i in rows]
+    assert len(connections) == 1
+    count_queries = [statement for statement in statements if 'COUNT(*) AS cnt FROM output_clip' in statement]
+    assert len(count_queries) == (1 if rows else 0)
+    if rows:
+        assert all(f"'cost-{i:03d}'" in count_queries[0] for i in rows)
+        assert all(f"'cost-{i:03d}'" not in count_queries[0] for i in range(64) if i not in rows)
+    assert context['pagination'] == dict(page=page, pages=max(1,(total+24)//25), page_size=25, total=total)
+    assert all(task['candidate_count'] == int(task['id'][-3:])+1 for task in context['tasks'])
+    assert context['filters']['q'] == filters.get('q','').strip()
+    assert context['stages'] == queries.STAGES
+
+
+def test_task_list_light_rows_preserve_labels_dates_and_active_output_counts(monkeypatch):
+    """Page-only formatting keeps public fields and active counts without filesystem probes."""
+    from app.services import task_service
+
+    created = '2026-10-08T02:31:42+00:00'
+    _insert_test_task('light-title', 'E1873 测试素材', platform='douyin', created_at=created)
+    _insert_test_task('light-fallback', '', platform='', created_at=created)
+    _insert_test_task('light-deleted', 'E1873 已删除', is_deleted=1, created_at=created)
+    for i, status in enumerate(('completed', 'pending', 'completed')):
+        _insert_test_clip_candidate(f'light-candidate-{i}', 'light-title')
+        _insert_test_output_clip(f'light-output-{i}', 'light-title', f'light-candidate-{i}', status=status)
+    with get_connection() as connection:
+        connection.execute("UPDATE output_clip SET is_active=0 WHERE id='light-output-2'")
+        connection.commit()
+
+    monkeypatch.setattr(queries, 'list_tasks', lambda:pytest.fail('Legacy full list used'))
+    monkeypatch.setattr(task_service, '_row_to_task', lambda *args, **kwargs:pytest.fail('Legacy formatter used'))
+    monkeypatch.setattr(task_service, 'count_output_clips', lambda *args:pytest.fail('Per-task count used'))
+    monkeypatch.setattr(task_service, 'get_source_video_path', lambda *args:pytest.fail('Unused source probe'))
+    monkeypatch.setattr(task_service, 'get_artifact_paths', lambda *args:pytest.fail('Unused artifact probe'))
+
+    def project(*, connection, rows):
+        return {row['id']:dict(stage='waiting', candidates=3) for row in rows}
+
+    monkeypatch.setattr(queries, 'task_projections', project)
+    context = queries.get_tasks_page_context(q=' E1873 ', platform='douyin')
+    assert context['pagination']['total'] == 1
+    task = context['tasks'][0]
+    assert {key: task[key] for key in ('id', 'title', 'platform', 'platform_label')} == dict(
+        id='light-title', title='E1873 测试素材', platform='douyin', platform_label='抖音')
+    assert task['created_at'] == task_service._format_datetime(created)
+    assert task['created_at_raw'] == created
+    assert task['updated_at'] == task_service._format_datetime(created)
+    assert task['candidate_count'] == 3
+    assert task['output_clip_count'] == 2  # All current outputs, including pending; excludes retired versions.
+    assert task['ui']['stage'] == 'waiting'
+    fallback = queries.get_tasks_page_context(q='light-fallback', platform='general')['tasks'][0]
+    assert fallback['title'] == '未命名任务'
+    assert fallback['platform'] == 'general' and fallback['platform_label'] == '通用'

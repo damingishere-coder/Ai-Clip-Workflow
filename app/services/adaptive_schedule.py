@@ -203,10 +203,74 @@ def _save_policy(connection, account_id, options, include_existing=False):
     return policy(connection, account_id)
 
 
-def save_policy(account_id, options, include_existing=False):
+def _policy_impact(connection, account_id, options, include_existing=False):
+    current = policy(connection, account_id)
+    values = validate_options({**current, **options})
+    now = _now()
+    rows = _jobs(connection, account_id)
+    scores = score_times(connection, account_id, now)
+    protected = []
+    managed = []
+    newly_managed = []
+    for row in rows:
+        time = _time(row) if row["status"] == "SCHEDULED" and row.get("scheduled_at") else None
+        reason = ""
+        if row["status"] != "SCHEDULED":
+            reason = "不是待执行排期"
+        elif row.get("claimed_at") or row.get("needs_manual_review"):
+            reason = "已执行或待人工复核"
+        elif row.get("adaptive_fixed"):
+            reason = "人工固定时间"
+        elif not time or time.date() <= now.date():
+            reason = "当天及已过时间保持不变"
+        if reason:
+            protected.append({"job_id": row["id"], "title": row.get("title") or row["id"], "reason": reason})
+        elif row.get("adaptive_managed") or include_existing:
+            managed.append(row)
+            if not row.get("adaptive_managed"):
+                newly_managed.append(row["id"])
+    managed.sort(key=lambda row: (_time(row), row["created_at"], row["id"]))
+    schedule = []
+    if values["enabled"] and scores["ready"] and managed:
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        schedule = allocate(managed, rows, values, scores, tomorrow, now)
+    by_id = {row["id"]: row for row in rows}
+    for item in schedule:
+        row = by_id[item["job_id"]]
+        item.update(title=row.get("title") or row["id"], old_time=row.get("scheduled_at"))
+    snapshot = [
+        {key: row.get(key) for key in ("id", "status", "updated_at", "scheduled_at", "adaptive_managed", "adaptive_fixed", "claimed_at", "needs_manual_review")}
+        for row in sorted(rows, key=lambda row: row["id"])
+    ]
+    token = hashlib.sha256(_json([account_id, current, values, bool(include_existing), now.date().isoformat(), snapshot, scores]).encode()).hexdigest()
+    return {"account_id": account_id, "preview_token": token, "before": current, "after": values,
+            "newly_managed_count": len(newly_managed), "managed_count": len(managed),
+            "newly_managed_ids": newly_managed,
+            "protected_count": len(protected), "protected": protected, "schedule": schedule,
+            "message": "停用只保留当前时间。" if not values["enabled"] else scores["reason"],
+            "include_existing": bool(include_existing)}
+
+
+def preview_policy(account_id, options, include_existing=False):
+    with get_connection() as connection:
+        return _policy_impact(connection, account_id, options, include_existing)
+
+
+def save_policy(account_id, options, include_existing=False, *, preview_token=None, confirmed=False):
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        result = _save_policy(connection, account_id, options, include_existing)
+        if preview_token is not None:
+            if not confirmed:
+                raise ScheduleConflict("请核对影响预览并明确确认。")
+            current_preview = _policy_impact(connection, account_id, options, include_existing)
+            if preview_token != current_preview["preview_token"]:
+                raise ScheduleConflict("账号策略或排期已变化，请重新预览后确认。")
+        # The reviewed UI only enrolls the future jobs named in its impact preview.
+        # Legacy callers keep the existing include_existing behavior.
+        result = _save_policy(connection, account_id, options, include_existing and preview_token is None)
+        if preview_token is not None and options.get("enabled") and include_existing:
+            for job_id in current_preview["newly_managed_ids"]:
+                connection.execute("UPDATE publish_jobs SET adaptive_managed=1,updated_at=? WHERE id=?", (to_utc_iso(_now()), job_id))
         connection.commit()
     return result
 

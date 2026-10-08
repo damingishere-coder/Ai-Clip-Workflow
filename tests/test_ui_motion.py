@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -67,7 +68,9 @@ def test_styles_disable_nonessential_motion_when_user_requests_it() -> None:
 
 
 def test_reduced_motion_also_disables_scripted_smooth_scrolling() -> None:
-    app_script = APP_SCRIPT.read_text(encoding="utf-8")
+    app_script = "\n".join((APP_SCRIPT.parent / name).read_text(encoding="utf-8") for name in (
+        "app.js", "clip-workspace.js", "task-progress.js", "new-task.js", "task-actions.js", "subtitle-workflow.js",
+    ))
     publish_script = PUBLISH_SCRIPT.read_text(encoding="utf-8")
 
     helpers = (PROJECT_ROOT / "app/templates/partials/core_helpers.html").read_text(encoding="utf-8")
@@ -76,4 +79,6 @@ def test_reduced_motion_also_disables_scripted_smooth_scrolling() -> None:
     assert "window.preferredScrollBehavior = function preferredScrollBehavior" in helpers
     assert 'behavior: "smooth"' not in app_script
     assert 'behavior: "smooth"' not in publish_script
-    assert publish_script.count("window.preferredScrollBehavior()") == 8
+    scroll_calls = re.findall(r'scrollIntoView\(\{([^}]+)\}\)', publish_script)
+    assert scroll_calls
+    assert all("window.preferredScrollBehavior()" in call for call in scroll_calls)

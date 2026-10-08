@@ -814,6 +814,8 @@ def get_task_live_status(task_id: str) -> dict:
     task = get_task(task_id, include_video_probe=False)
     if not task:
         raise ValueError("任务不存在")
+    from app.services.ui_projection_service import task_projections
+    ui = task_projections([task_id])[task_id]
 
     status = task["status"]
     auto_mode = bool(task.get("auto_mode"))
@@ -887,6 +889,7 @@ def get_task_live_status(task_id: str) -> dict:
 
     return {
         "task_id": task_id,
+        "ui": ui,
         "snapshot_at": _now_iso(),
         "status": status,
         "status_label": display_status_label,
@@ -1433,6 +1436,7 @@ def list_output_clips(task_id: str) -> list[dict]:
                 clip_candidates.cover_time_seconds AS cover_time_seconds,
                 clip_candidates.summary AS clip_summary,
                 clip_candidates.enabled AS clip_enabled,
+                subtitle_tracks.id AS subtitle_track_id,
                 subtitle_jobs.id AS subtitle_job_id,
                 subtitle_jobs.status AS subtitle_status,
                 subtitle_jobs.revision_id AS subtitle_revision_id,
@@ -1448,7 +1452,11 @@ def list_output_clips(task_id: str) -> list[dict]:
             FROM output_clip
             LEFT JOIN clip_candidates ON clip_candidates.id = output_clip.clip_candidate_id
             LEFT JOIN subtitle_jobs ON subtitle_jobs.output_clip_id = output_clip.id AND subtitle_jobs.is_active = 1
+            LEFT JOIN subtitle_tracks ON subtitle_tracks.output_clip_id = output_clip.id
+                AND subtitle_tracks.task_id = output_clip.task_id AND subtitle_tracks.is_active = 1
+                AND subtitle_tracks.active_revision_id = subtitle_jobs.revision_id
             LEFT JOIN subtitle_revisions ON subtitle_revisions.id = subtitle_jobs.revision_id
+                AND subtitle_revisions.track_id = subtitle_tracks.id
             WHERE output_clip.task_id = ? AND output_clip.is_active = 1
             ORDER BY
                 CASE WHEN output_clip.output_file_name IS NULL OR output_clip.output_file_name = '' THEN 1 ELSE 0 END,
@@ -1485,7 +1493,7 @@ def list_output_clips(task_id: str) -> list[dict]:
                 "subtitle_status": subtitle_status,
                 "subtitle_status_label": SUBTITLE_STATUS_LABELS.get(subtitle_status, subtitle_status),
                 "subtitle_publish_ready": bool(
-                    subtitle_status == "completed"
+                    output.get("subtitle_track_id") and subtitle_status == "completed"
                     and output.get("subtitle_validation_status") == "verified"
                     and output.get("subtitle_revision_status") == "approved"
                     and subtitled_path

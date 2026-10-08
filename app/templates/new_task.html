@@ -1,16 +1,18 @@
 {% extends "base.html" %}
+{% from "partials/production_config.html" import production_config %}
 {% block title %}新建任务 - {{ settings.app_name }}{% endblock %}
 
 {% block content %}
 <section class="page-heading">
   <div>
-    <p class="eyebrow">New Task</p>
-    <h1>新建任务</h1>
-    <p>上传临时文件、原片副本和后续切片都会直接保存在 E 盘工作流存储目录，不占用 C 盘视频空间。</p>
+    <p class="eyebrow">新建制作</p>
+    <h1>新建制作</h1>
+    <p>选择素材与制作方案，自动处理完成后由你审片。</p>
   </div>
 </section>
 
-<section class="split-layout">
+<nav class="studio-tabs studio-source-tabs" aria-label="素材来源"><a href="/tasks/new" aria-current="page">上传单个视频</a><a href="/materials#batch-panel">从素材库选择</a></nav>
+<section class="studio-create-layout">
   <form id="new-task-form" class="panel form-panel" {% if challenger_trial %}data-trial-preset="{{ challenger_trial.challenger_preset_id }}"{% endif %}>
     {% if challenger_trial %}
     <div class="empty-note"><strong>Challenger 试验：{{ challenger_trial.evidence.name }}</strong><p>使用已冻结的 Profile 和 Prompt 逐步处理素材，人工审片后再决定是否发布。此次创建不会替换正式方案或建立作品实验。</p></div>
@@ -21,7 +23,7 @@
     {% endif %}
     <div class="panel-header">
       <div>
-        <p class="eyebrow">Basic Info</p>
+        <p class="eyebrow">选择素材</p>
         <h2>基本信息</h2>
       </div>
     </div>
@@ -60,105 +62,15 @@
       </select>
     </label>
 
-    <label>
-      <span>内容类型 / Content Profile</span>
-      <select id="selection-profile" name="selection_profile" required>
-        {% if not challenger_trial %}<option value="" selected disabled>请选择内容类型</option>{% endif %}
-        {% for profile in content_profiles %}
-        <option value="{{ profile.id }}">{{ "棚内综艺 · 笑点互动（康熙等）" if profile.id == "variety_comedy" and profile.rules_version != "comedy-playback-v1" else profile.name }}{{ " · 试用" if profile.id in ["interview_story", "knowledge_opinion"] else "" }}</option>
-        {% endfor %}
-      </select>
-      <span class="form-hint" id="selection-profile-hint">按素材选择内容类型，查看推荐片长与选片规则。</span>
-    </label>
+    {{ production_config(content_profiles, prompt_presets, settings, "upload", candidate_count_options, challenger_trial) }}
     <script type="application/json" id="content-profile-options">{{ content_profiles|tojson }}</script>
-
-    <div class="form-row">
-      <label>
-        <span>Prompt 方案</span>
-        <select id="new-task-prompt" name="ai_prompt_preset_id" required>
-          {% for preset in prompt_presets %}
-          <option value="{{ preset.id }}">{{ preset.slot }} · {{ preset.name }}</option>
-          {% endfor %}
-        </select>
-        <span class="form-hint">选择内容类型时带入模板默认方案，可再选择自己的方案。</span>
-      </label>
-      <label>
-        <span>AI Provider</span>
-        <select id="new-task-provider" name="ai_provider">
-          <option value="codex" {% if settings.ai_default_provider == 'codex' %}selected{% endif %}>Codex CLI · {{ settings.ai_codex_model }}</option>
-          <option value="remote" {% if settings.ai_default_provider == 'remote' %}selected{% endif %}>远程 AI · {{ settings.ai_analysis_remote_model }}</option>
-          <option value="local" {% if settings.ai_default_provider == 'local' %}selected{% endif %}>本地 AI · {{ settings.ai_local_model }}</option>
-        </select>
-        <span class="form-hint">使用当前已配置的模型与登录方式。</span>
-      </label>
-    </div>
-
-    <label class="checkbox-row">
-      <input name="visual_enabled" type="checkbox" value="true">
-      <span>候选画面辅助验证 · 试用</span>
-    </label>
-    <p class="form-hint">使用当前 Codex 模型核验候选内少量关键帧，最多增加 10 分钟分析时间。不可用时保留文字与音频结果；其他 Provider 暂无视觉能力。</p>
-
-    <div class="form-row" id="long-live-settings" hidden>
-      <label>
-        <span>每小时高光密度</span>
-        <span class="unit-input">
-          <input name="highlight_density_per_hour" type="number" min="1" max="10" step="1" value="4">
-          <small>条 / 小时</small>
-        </span>
-      </label>
-      <label>
-        <span>候选总上限</span>
-        <span class="unit-input">
-          <input name="highlight_total_limit" type="number" min="1" max="50" step="1" value="30">
-          <small>条</small>
-        </span>
-      </label>
-    </div>
-
-    <div class="form-row">
-      <label>
-        <span>单条切片最长</span>
-        <span class="unit-input">
-          <input name="max_clip_duration" type="number" min="1" max="60" step="1" value="10" required>
-          <small>分钟</small>
-        </span>
-        <span class="form-hint" id="profile-duration-hint">AI 根据内容完整度选择片长，且不能超出模板硬边界。</span>
-      </label>
-      <label>
-        <span>候选池上限</span>
-        <select name="candidate_clip_count">
-          {% for option in candidate_count_options %}
-          <option value="{{ option }}" {% if option == 12 %}selected{% endif %}>{{ option }} 条</option>
-          {% endfor %}
-        </select>
-        <span class="form-hint">供人工审核的最多条数，不等于最终自动切片数量。</span>
-      </label>
-      <label>
-        <span>最终启用目标</span>
-        <span class="unit-input">
-          <input name="final_clip_target" type="number" min="1" max="12" step="1" value="5" required>
-          <small>条</small>
-        </span>
-        <span class="form-hint">质量不足时允许少于 5 条，绝不自动补齐次选。</span>
-      </label>
-    </div>
-
-    <label>
-      <span>字幕处理</span>
-      <select name="subtitle_strategy" aria-describedby="new-task-subtitle-help">
-        <option value="original">跳过字幕 · 保留原视频画面</option>
-        <option value="review">新增字幕 · 进入字幕审核</option>
-      </select>
-      <span class="form-hint" id="new-task-subtitle-help">创建时确定字幕方式。跳过字幕会保留画面中已有的字幕，AI 选片所需的语音转写仍会执行；新增字幕会在切片后进入字幕审核。</span>
-    </label>
 
     {% if not challenger_trial %}
     <fieldset>
-      <legend>全自动模式</legend>
+      <legend>处理方式</legend>
       <label class="checkbox-row">
         <input name="auto_mode" type="checkbox" value="true">
-        <span>新建后自动跑完整流水线</span>
+        <span>创建后自动制作</span>
       </label>
       <p class="form-hint">按所选内容类型自动转写、分析和切片，随后进入现有人工审核流程。</p>
     </fieldset>
@@ -168,19 +80,19 @@
       <a class="secondary-button" href="/tasks">取消</a>
       <button class="primary-button" id="new-task-submit-button" type="submit">创建任务</button>
     </div>
-    <p class="form-hint" id="new-task-result"></p>
+    <p class="form-hint" id="new-task-result" role="status" aria-live="polite"></p>
   </form>
 
   <aside class="stacked-side">
   <section class="panel">
     <div class="panel-header">
       <div>
-        <p class="eyebrow">Pipeline</p>
-        <h2>智能 MVP 流程</h2>
+        <p class="eyebrow">完成制作的四个阶段</p>
+        <h2>制作流程</h2>
       </div>
     </div>
     <ol class="timeline-list">
-      {% for step in workflow_steps %}
+      {% for step in ["素材就绪", "转写与选片", "生成成片", "人工确认"] %}
       <li>
         <span>{{ loop.index }}</span>
         <strong>{{ step }}</strong>
