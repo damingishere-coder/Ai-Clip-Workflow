@@ -4,7 +4,7 @@
 .send-heading p { margin: 0; font-size: 13px; }
 .scheduler-health-card { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 18px; padding: 10px 14px; margin-bottom: 8px; font-size: 12px; }
 .scheduler-health-card > div { display: flex; align-items: center; gap: 8px; }
-.scheduler-health-card .worker-refresh-button { min-height: 28px; padding: 2px 6px; font-size: 12px; }
+.scheduler-health-card .worker-refresh-button { font-size: 12px; }
 .publish-health-details { position: relative; margin-left: auto; }
 .publish-health-details summary { cursor: pointer; color: var(--muted); }
 .publish-health-detail-body { position: absolute; z-index: 12; right: 0; top: 28px; width: min(460px,calc(100vw - 48px)); padding: 18px; border: 1px solid #dce3ef; border-radius: 12px; background: var(--surface, #fff); box-shadow: 0 14px 40px #182d5120; }

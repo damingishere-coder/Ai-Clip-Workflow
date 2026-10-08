@@ -149,19 +149,9 @@
   gap: 12px;
 }
 .action-links a,
-td a,
-.link-button {
+td a {
   color: var(--blue);
   font-weight: 700;
-}
-.link-button {
-  min-height: 0;
-  padding: 0;
-  background: transparent;
-  cursor: pointer;
-}
-.link-button.danger {
-  color: var(--red);
 }
 .split-layout,
 .review-layout {
@@ -3291,12 +3281,10 @@ body::selection {
 }
 .action-links a,
 td a,
-.link-button,
 .text-link {
   color: var(--blue);
   font-weight: 760;
 }
-.link-button.danger,
 .error-text {
   color: var(--red);
 }
@@ -3642,7 +3630,6 @@ td a,
   background: var(--blue);
   box-shadow: 0 0 0 3px rgba(31, 111, 255, 0.12);
 }
-.text-button.danger { color: var(--red); }
 .publish-content-grid,
 .publish-bilibili-fields {
   display: grid;
