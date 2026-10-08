@@ -15,11 +15,13 @@ from app.services.publish_domain import TERMINAL_PUBLISH_STATUSES
 from app.services.publish_time import app_zone, parse_datetime
 from app.services.storage_service import resolve_video_file_path
 from app.services.subtitle_workflow_service import SUBTITLE_STATUS_LABELS
-from app.services.ui_projection_service import STAGES, task_projections
+from app.services.ui_projection_service import STAGES, load_task_rows, task_projections
 from app.services.task_service import (
     OUTPUT_STATUS_LABELS,
+    _format_datetime,
     _parse_time_to_seconds,
     get_default_subtitle_style,
+    get_platform_label,
     get_task,
     list_output_clips,
     list_tasks,
@@ -344,31 +346,57 @@ def get_tasks_page_context(*, q='', platform='all', stage='all', sort='created_d
     if sort not in {'created_desc', 'created_asc', 'updated_desc'} or page < 1:
         raise ValueError('排序或页码无效')
     query = q.strip().casefold()
-    filtered = []
-    for task in list_tasks():
-        if query and query not in task['title'].casefold() and query not in task['id'].casefold():
-            continue
-        if platform != 'all' and task['platform'] != platform:
-            continue
-        filtered.append(task)
-    field = 'updated_at' if sort == 'updated_desc' else 'created_at'
-    filtered.sort(key=lambda task: (task.get(field) or '', task['id']), reverse=sort != 'created_asc')
-    projections = {}
-    if stage != 'all' and filtered:
-        # A stage filter needs the narrowed set before pagination, otherwise
-        # matching tasks on later pages would disappear from both rows and total.
-        projections = task_projections([task['id'] for task in filtered])
-        filtered = [task for task in filtered if projections[task['id']]['stage'] == stage]
-    page_size = 25
-    total = len(filtered)
-    pages = max(1, (total + page_size - 1) // page_size)
-    page = min(page, pages)
-    page_tasks = filtered[(page-1)*page_size:page*page_size]
-    if stage == 'all' and page_tasks:
-        projections = task_projections([task['id'] for task in page_tasks])
-    for task in page_tasks:
-        task['ui'] = projections[task['id']]
-        task['candidate_count'] = task['ui']['candidates']
+    with get_connection() as connection:
+        # The legacy list formatter probes every task's source and artifacts.
+        # This page needs only labels/dates plus the authoritative UI projection.
+        filtered = []
+        for task in load_task_rows(connection):
+            title = task.get('task_name') or '未命名任务'
+            task_platform = task.get('platform') or 'general'
+            if query and query not in title.casefold() and query not in task['id'].casefold():
+                continue
+            if platform != 'all' and task_platform != platform:
+                continue
+            filtered.append(task)
+        field = 'updated_at' if sort == 'updated_desc' else 'created_at'
+        # Preserve the existing displayed-minute/id ordering, including old dates.
+        filtered.sort(key=lambda task: (_format_datetime(task.get(field)), task['id']),
+                      reverse=sort != 'created_asc')
+        projections = {}
+        if stage != 'all' and filtered:
+            # Stage filtering must inspect every narrowed match before paging.
+            projections = task_projections(connection=connection, rows=filtered)
+            filtered = [task for task in filtered if projections[task['id']]['stage'] == stage]
+        page_size = 25
+        total = len(filtered)
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, pages)
+        page_rows = filtered[(page-1)*page_size:page*page_size]
+        if stage == 'all' and page_rows:
+            projections = task_projections(connection=connection, rows=page_rows)
+        output_counts = {}
+        if page_rows:
+            ids = [task['id'] for task in page_rows]
+            output_counts = {row['task_id']: int(row['cnt']) for row in connection.execute(
+                f"SELECT task_id,COUNT(*) AS cnt FROM output_clip WHERE is_active=1 "
+                f"AND task_id IN ({','.join('?' for _ in ids)}) GROUP BY task_id", ids)}
+        page_tasks = []
+        for row in page_rows:
+            task_platform = row.get('platform') or 'general'
+            ui = projections[row['id']]
+            page_tasks.append({
+                **row,
+                'title': row.get('task_name') or '未命名任务',
+                'platform': task_platform,
+                'platform_label': get_platform_label(task_platform),
+                'created_at': _format_datetime(row.get('created_at')),
+                'updated_at': _format_datetime(row.get('updated_at')),
+                'created_at_raw': row.get('created_at'),
+                'updated_at_raw': row.get('updated_at'),
+                'candidate_count': ui['candidates'],
+                'output_clip_count': output_counts.get(row['id'], 0),
+                'ui': ui,
+            })
     return dict(tasks=page_tasks,
                 pagination=dict(page=page, pages=pages, page_size=page_size, total=total),
                 filters=dict(q=q.strip(), platform=platform, stage=stage, sort=sort), stages=STAGES)
