@@ -4,6 +4,7 @@ import os
 import base64
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,39 +21,77 @@ from tests.test_publish_center_browser import _cleanup, _free_port, _seed_job  #
 
 @pytest.fixture
 def workspace_page(tmp_path, monkeypatch):
-    init_db()
-    _cleanup()
-    ids = [_seed_job(tmp_path, index, task_key="workspace") for index in range(2)]
-    with get_connection() as connection:
-        connection.executemany("UPDATE publish_jobs SET tags='测试,片段,访谈', description='具体片段的测试简介', caption='具体片段的测试简介' WHERE id=?", [(id,) for id in ids])
-        connection.commit()
-    monkeypatch.setattr(publish_service, "generate_publish_metadata", lambda *args, **kwargs: {
-        "title": "AI提出的具体片段标题", "description": "这个回答，把话题带到意料之外", "tags": "测试,片段,访谈", "source": "ai:offline-browser"
-    })
-    port = _free_port()
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.time() + 10
-    while not server.started and time.time() < deadline:
-        time.sleep(0.05)
     chrome = Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "Google/Chrome/Application/chrome.exe"
     if not chrome.exists():
-        server.should_exit = True
         pytest.skip("需要本机 Chrome")
-    with playwright.sync_playwright() as runtime:
-        browser = runtime.chromium.launch(headless=True, executable_path=str(chrome))
-        page = browser.new_page(timezone_id="Asia/Shanghai", viewport={"width": 1440, "height": 1000})
-        errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
-        try:
-            page.goto(f"http://127.0.0.1:{port}/publish", wait_until="networkidle")
-            yield page, ids, errors
-        finally:
-            browser.close()
+    init_db()
+    _cleanup()
+    server = None
+    thread = None
+    try:
+        ids = [_seed_job(tmp_path, index, task_key="workspace") for index in range(2)]
+        with get_connection() as connection:
+            connection.executemany("UPDATE publish_jobs SET tags='测试,片段,访谈', description='具体片段的测试简介', caption='具体片段的测试简介' WHERE id=?", [(id,) for id in ids])
+            connection.commit()
+        monkeypatch.setattr(publish_service, "generate_publish_metadata", lambda *args, **kwargs: {
+            "title": "AI提出的具体片段标题", "description": "这个回答，把话题带到意料之外", "tags": "测试,片段,访谈", "source": "ai:offline-browser"
+        })
+        port = _free_port()
+        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off"))
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        deadline = time.time() + 10
+        while not server.started and time.time() < deadline:
+            time.sleep(0.05)
+        assert server.started
+        with playwright.sync_playwright() as runtime:
+            browser = runtime.chromium.launch(headless=True, executable_path=str(chrome))
+            try:
+                page = browser.new_page(timezone_id="Asia/Shanghai", viewport={"width": 1440, "height": 1000})
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(f"http://127.0.0.1:{port}/publish", wait_until="networkidle")
+                yield page, ids, errors
+            finally:
+                browser.close()
+    finally:
+        if server is not None:
             server.should_exit = True
+        if thread is not None and thread.ident is not None:
             thread.join(timeout=10)
-            _cleanup()
+        _cleanup()
+
+
+def test_workspace_fixture_skips_before_seeding_when_chrome_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path / "chrome-absent"))
+    seeds = []
+    monkeypatch.setitem(workspace_page.__wrapped__.__globals__, "_seed_job", lambda *args, **kwargs: seeds.append(args))
+    generator = workspace_page.__wrapped__(tmp_path, monkeypatch)
+    with pytest.raises(pytest.skip.Exception, match="需要本机 Chrome"):
+        next(generator)
+    assert not seeds
+
+
+def test_workspace_fixture_cleans_seeded_rows_if_browser_launch_fails(tmp_path, monkeypatch):
+    chrome = tmp_path / "Google/Chrome/Application/chrome.exe"
+    chrome.parent.mkdir(parents=True)
+    chrome.touch()
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path))
+
+    def fail_launch(**kwargs):
+        raise RuntimeError("模拟浏览器启动失败")
+
+    @contextmanager
+    def failing_runtime():
+        yield SimpleNamespace(chromium=SimpleNamespace(launch=fail_launch))
+
+    monkeypatch.setattr(playwright, "sync_playwright", failing_runtime)
+    generator = workspace_page.__wrapped__(tmp_path, monkeypatch)
+    with pytest.raises(RuntimeError, match="模拟浏览器启动失败"):
+        next(generator)
+    with get_connection() as connection:
+        for table, column in [("publish_jobs", "task_id"), ("output_clip", "task_id"), ("tasks", "id")]:
+            assert connection.execute(f"SELECT COUNT(*) FROM {table} WHERE {column} LIKE 'test-browser-publish-%'").fetchone()[0] == 0
 
 
 def raw_job(id):
