@@ -1,3 +1,15 @@
+## 全站 UI 主重构已上线（2026-10-08 12:05）
+
+[PR #155](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/155) 最终提交 `b072ac9b354c7db7fe6e01563fc2e6b799e8db98` 的 Linux、Windows、Docker CI 全通过，Linux全量1517通过/80跳过。独立审查无阻塞，squash合并为 `5011f32082ce92ce9aa23d7ffb5b87a90d236771`。Windows本机真实Chrome专项覆盖五宽度、慢保存/409/切轨、36候选、发布建议与并发编辑；初始失败均已定位修复并完成关联fresh回归，不以跳过的Linux浏览器测试代替实际界面。
+
+12:01沿用原RunDock Web记录 `fe184e2b-9e04-4b21-a86b-12c59f98d71e` 更新offline-runtime至5011f32；托管PID117840、监听4504。Worker原托管PID27132/监听22780未重启，没有新建服务。health ok、深度readiness ready，Scheduler enabled/running/worker_available均true，143条未来排期、发送中0、漏期0。当前版本仍2.6.0，以此代码/运行证据确认部署。
+
+正式页面17/17及四个有效旧入口HTTP200；64任务真实分页25/25/14、名称/ID唯一搜索、平台与阶段筛选、返回条件均验证。E1873制作100%、保留原视频，不被列为字幕待办；12条排期精准标记。正式排期1440/1280/1024/768/390均scrollX=0、无横向溢出、操作完整可见。审片只展开当前编辑器，现有原片播放器readyState4，Range读取206，未实际播放。正式任务页五次GET中位483.841ms；不将历史不同负载采样差值解释为正式整体提速。
+
+备份为主目录 `data/backups/ui-refactor-20261008/niuma-studio-ui-workflow-refactor-20261008-113319.zip`，SHA256 `c9ee25145d6ca18d97fa3288647a09d0e89f161feaf509b717403bcdc829c52c`，在线SQLite snapshot及包校验通过，无配置密钥和媒体。12:05部署前后51张表计数/数据摘要、schema及两份.env哈希完全相同，quick_check ok、外键异常0。回滚代码基准cbd55c1，媒体仍E盘、正式DB仍主目录data/workflow.sqlite3；不执行整库覆盖或改变用户排期。忽略目录 `data/acceptance/ui-refactor` 保存备份回执、运行/HTTP/布局及数据对照。
+
+正式浏览器另发现隐藏原片监视器在首次打开前也预加载，正在单独补按需加载回归及交付；主重构的上述上线事实有效，补充修复的正式版本在完成后追加。没有代用户审片、审核字幕、接受文案、改期、启用策略或发布；刷新原8001网页可查看新工作区。
+
 ## 全站前端重构：本地验收完成，等待 CI 与正式更新（2026-10-08）
 
 从 master cbd55c1 的独立 codex/ui-workflow-refactor 工作树实施用户批准的全站方案。原主工作目录的已有修改保留。继续Jinja2/原生JS；无数据库迁移、配置迁移或生产记录写入。
