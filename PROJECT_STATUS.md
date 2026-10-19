@@ -1,3 +1,9 @@
+## 2026-10-19：Codex 异常退出诊断修复（工程验证完成）
+
+Codex 返回非零退出码时，后台现会生成本机失败回执，并在原异常中附上回执位置。回执保存请求/错误摘要哈希、退出码与有限的脱敏错误行；不保存完整提示词、标准输出、登录信息或原始 stderr。URL 凭据及查询参数、Bearer、API Key、Token、Cookie 均脱敏，日志体积受限。原 cli_exit_error 分类、计费不确定语义和显式确认重试门禁保持，不能把网络错误视作自动重试许可。诊断保存失败也不会掩盖原退出错误。
+
+本机 31 项 Provider、AI 重试及流水线 checkpoint 回归通过，Ruff 和差异检查通过。此修复改善故障证据，不代表历史失败任务已经全部恢复；正式部署及真实任务完成仍以运行回执为准。无 UI、数据库迁移、模型、Prompt 或分析策略变更。
+
 ## 当前交付：v2.6.1 已正式发布并部署（2026-10-19 11:18，北京时间）
 
 [GitHub Release v2.6.1](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.6.1) 已发布为 Latest，非草稿、非预发布，Tag 指向 `11ff68dff5a5ba774f5cb954870a817cc7051eb5`。[PR #160](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/160) 已 squash 合并；最终 PR CI `39192479926` 与主干 CI `39193083988` 的 Linux、Windows、Docker 三项均通过，Linux 完整回归 1496 passed / 56 skipped。本机其余 1551 项通过；同时更新页面文案导致旧测试进程的一条版本断言失效，最新进程版本模块 3 项已重新通过。Ruff、编译、JS/PowerShell 语法、pip check 及差异审查通过，无阻塞审核。
