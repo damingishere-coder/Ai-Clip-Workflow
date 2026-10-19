@@ -6,7 +6,7 @@
 
 ## 当前交付状态
 
-v2.6.1 正在准备发布。最终提交 CI、当前 Windows 实机门禁和正式 Web/Worker 验收通过后，才创建 Tag 与 GitHub Release；实际交付以 PROJECT_STATUS.md 最新记录为准。
+v2.6.1 已于北京时间 2026-10-19 11:18 正式发布为 Latest，Tag 对应 11ff68d。PR #160 与主干最终 Linux/Windows/Docker CI 全通过；当前提交 Windows 实机 17 项及 release_gate 通过。原 RunDock Web/Worker 实际均为 2.6.1，九导航页面与静态资源、深度 readiness、23 项迁移及部署前后 50 表/配置/2638 文件保护通过。备份、私有报告及代码回滚证据见 PROJECT_STATUS.md。以下为后续发布的逐项模板，本次结果以当前提交实机报告为准；本次交付回执只改文档，不要求重复启动服务。
 
 ## 1. 自动化检查
 
