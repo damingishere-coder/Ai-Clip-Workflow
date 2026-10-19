@@ -1,3 +1,13 @@
+## 当前交付：v2.6.1 已正式发布并部署（2026-10-19 11:18，北京时间）
+
+[GitHub Release v2.6.1](https://github.com/damingishere-coder/Ai-Clip-Workflow/releases/tag/v2.6.1) 已发布为 Latest，非草稿、非预发布，Tag 指向 `11ff68dff5a5ba774f5cb954870a817cc7051eb5`。[PR #160](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/160) 已 squash 合并；最终 PR CI `39192479926` 与主干 CI `39193083988` 的 Linux、Windows、Docker 三项均通过，Linux 完整回归 1496 passed / 56 skipped。本机其余 1551 项通过；同时更新页面文案导致旧测试进程的一条版本断言失效，最新进程版本模块 3 项已重新通过。Ruff、编译、JS/PowerShell 语法、pip check 及差异审查通过，无阻塞审核。
+
+当前提交的 Windows 11 / Docker Desktop 实机 17 项、`release_gate.ps1` 均通过；隔离 Demo 的 3 任务、6 候选、6 手动导出草稿正确，Demo 已停止。11:14 沿用原 RunDock Web `fe184e2b-9e04-4b21-a86b-12c59f98d71e` 与 Worker `6f5fc7c4-9e42-4966-a8ef-f382b0c3e451` 更新 offline-runtime。实际 Web 8001、Worker 8765 的 OpenAPI 均为 2.6.1；9 个当前导航页面显示完整版本且 HTTP 200，3 项 served 静态资源哈希匹配运行文件；深度 readiness=ready、23 项迁移、integrity=ok、外键异常 0。调度 running/worker_available=true，未来排期 66、投稿中 0、漏期 0、连续失败 0。未为验收触发 AI、确认成片、改期或新投稿；原 11:00 记录已在维护前由既有调度确认成功。
+
+即时维护前后 50 张业务表（含 1350 条 publish_jobs）、schema、两份 .env 哈希和 E 盘全部 2638 个素材文件路径/大小/修改时间一致。正式备份 `data/backups/release-v2.6.1/niuma-studio-pre-deploy-20261019-110831.zip` 已通过 verify，SHA256 `d0d8a005453c4b5a338276d53c8843911811d8651bbe19542e9bb1abefde1b70`，无密钥及媒体；代码回滚引用 `codex/rollback-v2.6.0-20261019` 保留原 `7c51997`，不整库覆盖后续业务数据。实机、维护、表/媒体快照及 verification.json 均在本机忽略目录 `data/operations/release-v2.6.1/`，不上传数据库或运行缓存。
+
+本次已同步本地运维和架构阅读记录；旧审计完整保存在 docs/audits，根目录 PROJECT_REAUDIT 继续采用较后整改收口结论。公开版本只提供 GitHub 源码包，没有签名安装包；当前原有页面与导航保留。下方“准备”段落为交付过程历史。本次交付回执仅更新文档，合并后同步文档，不再次重启原服务。
+
 ## 2026-10-19：v2.6.1 同步与发布准备
 
 已保存本地未提交记录，合并 GitHub master 最新内容；旧审计快照归档至 docs/audits，保留较新整改收口报告。维护版汇总 v2.6.0 以来已合入修复，统一应用、Worker、备份清单、README、指南、版本回归和发布门禁为 2.6.1。当前正在执行本地检查、最终 CI 与 Windows 实机验收，尚未发布或更新正式运行版本。正式目标沿用原 RunDock Web 8001 / Worker 8765、offline-runtime 与主目录数据库，人工审片、排期和投稿不属于本次发布验收。
