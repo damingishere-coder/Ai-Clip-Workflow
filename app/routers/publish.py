@@ -95,7 +95,7 @@ async def login_browser_account(account_id: str) -> dict:
 
 
 @router.post("/accounts/{account_id}/check")
-async def check_browser_account(account_id: str) -> dict:
+def check_browser_account(account_id: str) -> dict:
     try:
         return publish_service.check_browser_account(account_id)
     except (ValueError, PublishError) as exc:

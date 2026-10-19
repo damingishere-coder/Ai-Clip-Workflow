@@ -14,6 +14,7 @@ from app.services.publishers.base import (
     job_hashtags,
 )
 from app.services.publishers.worker_client import PublishWorkerClient
+from app.services.publishers.login_status import login_status_message, normalize_login_status
 
 
 class LocalBrowserPublisher(BasePublisher):
@@ -52,21 +53,23 @@ class LocalBrowserPublisher(BasePublisher):
         self.validate(job)
         account_id = str(job.get("account_id") or "")
         login = self.worker_client.check_account(self.platform, account_id)
-        login_status = str(login.get("login_status") or login.get("status") or "unknown").lower()
+        login_status = normalize_login_status(login)
+        message = str(login.get("message") or login_status_message(login_status))
         if self.repository is not None:
             self.repository.update_account_status(
                 account_id,
-                "normal" if login_status == "normal" else "invalid",
-                str(login.get("message") or ""),
+                "invalid" if login_status in {"invalid", "login_required"} else login_status,
+                message,
                 logged_in=login_status == "normal",
             )
         if login_status != "normal":
             return PublishResult(
                 outcome=PublishOutcome.NEED_REVIEW,
-                message=str(login.get("message") or "账号登录失效，请重新登录"),
-                error_code="account_login_required",
+                message=message,
+                error_code=("account_login_required" if login_status in {"invalid", "login_required"}
+                            else "account_check_inconclusive"),
                 needs_manual_review=True,
-                provider_response={"login_status": login_status},
+                provider_response={"login_status": login_status, "evidence": login.get("evidence") or {}},
             )
         self.before_dispatch()
         return self.worker_client.publish(self.build_payload(job))

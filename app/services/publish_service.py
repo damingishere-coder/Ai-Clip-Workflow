@@ -33,6 +33,7 @@ from app.models.task import (
 from app.services.ai.ai_clip_analyzer import build_provider, loads_ai_json
 from app.services.ai.base import AIProviderError, generate_json_with_safe_retry
 from app.services.publishers.base import parse_public_json_dict
+from app.services.publishers.login_status import login_status_message, normalize_login_status
 from app.services.database_backup_service import create_publish_migration_backup
 from app.services.publish_copy_rules import (
     BILIBILI_TITLE_MAX,
@@ -616,7 +617,9 @@ def _normalize_account(row) -> dict:
                 "invalid": "登录失效",
                 "login_pending": "等待登录完成",
                 "busy": "账号操作中",
-            }.get(login_status, "需要重新登录"),
+                "login_required": "需要登录",
+                "check_failed": "检测未完成",
+            }.get(login_status, "待检测"),
             "login_message": account.get("login_message") or "",
         }
     )
@@ -806,11 +809,15 @@ def _normalize_job(
     content_invalid = "content_invalid" in issue_codes
     metadata_needs_edit = "metadata_needs_edit" in issue_codes
     account_login_required = "account_login_required" in issue_codes
+    account_check_required = "account_check_required" in issue_codes
     if missing_fields:
         content_status_message = f"缺少：{'、'.join(missing_fields)}"
         content_status_tone = "amber"
     elif account_login_required:
         content_status_message = "账号需登录"
+        content_status_tone = "amber"
+    elif account_check_required:
+        content_status_message = "账号待检测"
         content_status_tone = "amber"
     elif metadata_needs_edit:
         content_status_message = "文案草稿需编辑"
@@ -827,7 +834,7 @@ def _normalize_job(
         {
             "effective_account_id": resolved_account_id or str(job.get("account_id") or ""),
             "account_name": resolved_account_name or job.get("account_name") or "未选择账号",
-            "content_complete": not missing_fields and not content_invalid and not account_login_required and not metadata_needs_edit,
+            "content_complete": not missing_fields and not content_invalid and not account_login_required and not account_check_required and not metadata_needs_edit,
             "missing_fields": missing_fields,
             "content_status_message": content_status_message,
             "content_status_tone": content_status_tone,
@@ -1044,19 +1051,19 @@ def check_browser_account(account_id: str) -> dict:
     from app.services.publishers.worker_client import PublishWorkerClient
 
     result = PublishWorkerClient().check_account(account["platform"], account_id)
-    worker_status = str(result.get("login_status") or "").lower()
+    worker_status = normalize_login_status(result)
     normal = worker_status == "normal"
     previous_login = str(account.get("login_status") or "") == "normal" or bool(account.get("last_login_at"))
     if normal:
         stored_status = "normal"
-    elif worker_status in {"busy", "login_pending"}:
-        stored_status = worker_status
-    else:
+    elif worker_status in {"invalid", "login_required"}:
         stored_status = "invalid" if previous_login else "login_required"
+    else:
+        stored_status = worker_status
     PublishRepository().update_account_status(
         account_id,
         stored_status,
-        str(result.get("message") or ""),
+        str(result.get("message") or login_status_message(worker_status)),
         logged_in=normal,
     )
     return {"status": "ok", "account": get_account(account_id), "worker_result": result}

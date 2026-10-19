@@ -101,7 +101,7 @@
     {% elif readiness.ready or readiness.can_auto_resolve %}
       <button type="button" class="primary-button" data-primary-send-action data-publish-now>{{ "立即导出" if readiness.action == "export" else ("转换并发送" if readiness.can_auto_resolve else "立即发送") }}</button>
     {% else %}
-      <button type="button" class="secondary-button" data-primary-send-action data-send-setup>{{ {"login_account": "打开登录窗口", "create_account": "新增账号", "select_account": "选择账号", "complete_content": "完善内容", "start_worker": "连接 Worker"}.get(readiness.action, "完善发送配置") }}</button>
+      <button type="button" class="secondary-button" data-primary-send-action data-send-setup>{{ {"login_account": "打开登录窗口", "check_account": "检查登录状态", "create_account": "新增账号", "select_account": "选择账号", "complete_content": "完善内容", "start_worker": "连接 Worker"}.get(readiness.action, "完善发送配置") }}</button>
     {% endif %}
     <button type="button" class="secondary-button" data-reschedule-job {% if job.status != "SCHEDULED" or job.error_code == 'schedule_missed' %}hidden{% endif %}>重新排期</button>
     {% if job.status == "SCHEDULED" %}<button type="button" class="secondary-button" data-clear-schedule>清除排期</button>{% endif %}
@@ -135,7 +135,7 @@
       {% elif readiness.dispatch_ready %}
         <button type="button" class="primary-button" data-primary-send-action data-repair-job>修复并发送</button>
       {% else %}
-        <button type="button" class="secondary-button" data-primary-send-action data-send-setup>{{ {"login_account": "打开登录窗口", "create_account": "新增账号", "select_account": "选择账号", "complete_content": "完善内容", "start_worker": "连接 Worker"}.get(readiness.action, "完善发送配置") }}</button>
+        <button type="button" class="secondary-button" data-primary-send-action data-send-setup>{{ {"login_account": "打开登录窗口", "check_account": "检查登录状态", "create_account": "新增账号", "select_account": "选择账号", "complete_content": "完善内容", "start_worker": "连接 Worker"}.get(readiness.action, "完善发送配置") }}</button>
       {% endif %}
     {% endif %}
     {% if job.platform_url %}<a class="text-button" href="{{ job.platform_url }}" target="_blank" rel="noreferrer">平台链接</a>{% endif %}
@@ -421,7 +421,7 @@
 <aside class="schedule-drawer account-drawer" data-account-drawer hidden aria-label="账号管理">
   <div class="schedule-drawer-header"><div><p class="eyebrow">Accounts</p><h2>发布账号</h2><p>账号密码不会保存到数据库。</p></div><button type="button" class="icon-button" data-close-account-drawer aria-label="关闭">×</button></div>
   <div class="publish-account-list" data-account-list>
-    {% for account in accounts %}<article data-account-row data-account-id="{{ account.id }}" data-account-platform="{{ account.platform }}"><div><strong>{{ account.account_name }}</strong><small>{{ account.platform_label }}</small><small data-account-message>{{ account.login_message or '' }}</small></div><span class="status-pill tone-{{ 'green' if account.login_status == 'normal' else ('red' if account.login_status == 'invalid' else 'amber') }}" data-account-status>{{ account.login_status_label }}</span><div class="button-row">{% if account.login_status == 'normal' %}<button type="button" class="secondary-button" data-account-open-center>打开创作者中心</button><button type="button" class="text-button" data-account-login>重新登录</button>{% else %}<button type="button" class="secondary-button" data-account-login>登录 / 重新登录</button><button type="button" class="text-button" data-account-check>检查状态</button>{% endif %}</div></article>{% endfor %}
+    {% for account in accounts %}<article data-account-row data-account-id="{{ account.id }}" data-account-platform="{{ account.platform }}"><div><strong>{{ account.account_name }}</strong><small>{{ account.platform_label }}</small><small data-account-message>{{ account.login_message or '' }}</small></div><span class="status-pill tone-{{ 'green' if account.login_status == 'normal' else ('red' if account.login_status == 'invalid' else 'amber') }}" data-account-status>{{ account.login_status_label }}</span><div class="button-row">{% if account.login_status == 'normal' %}<button type="button" class="secondary-button" data-account-open-center>打开创作者中心</button><button type="button" class="text-button" data-account-login>重新登录</button>{% elif account.login_status == "check_failed" %}<button type="button" class="secondary-button" data-account-check>检查状态</button><button type="button" class="text-button" data-account-open-center>打开创作者中心</button>{% else %}<button type="button" class="secondary-button" data-account-login>登录 / 重新登录</button><button type="button" class="text-button" data-account-check>检查状态</button>{% endif %}</div></article>{% endfor %}
   </div>
   <form class="publish-account-create" data-account-create><h3>新增账号</h3><label><span>当前平台</span><strong class="publish-locked-value" data-account-create-platform>抖音</strong><input type="hidden" name="platform" value="douyin"></label><label><span>账号备注名</span><input name="account_name" maxlength="120" required placeholder="例如：抖音主账号"></label><button type="submit" class="primary-button">保存并准备登录</button><span class="form-hint" data-account-form-result></span></form>
 </aside>

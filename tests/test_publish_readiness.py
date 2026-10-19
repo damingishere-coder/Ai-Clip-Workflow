@@ -97,6 +97,15 @@ def test_manual_export_does_not_require_account_cover_tags_or_worker():
     assert readiness["action"] == "export"
 
 
+@pytest.mark.parametrize("status", ["check_failed", "busy", "login_pending"])
+def test_unconfirmed_login_requests_a_check_instead_of_relogin(status):
+    readiness = build_send_readiness(_job_payload(), accounts=[_account(login_status=status)])
+    assert not readiness["dispatch_ready"]
+    assert readiness["action"] == "check_account"
+    assert any(issue["code"] == "account_check_required" for issue in readiness["issues"])
+    assert all(issue["action"] != "login_account" for issue in readiness["issues"])
+
+
 def test_douyin_copy_rules_block_schedule_preflight_but_not_bilibili_title_limit():
     account = _account()
     invalid = _job_payload()

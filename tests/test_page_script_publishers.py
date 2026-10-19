@@ -21,7 +21,10 @@ class FakeUpload:
 
 
 class FakePage:
-    url = "https://creator.example.test/upload"
+    url = "https://creator.douyin.com/creator-micro/content/upload"
+
+    def wait_for_timeout(self, _ms):
+        pass
 
 
 class FakeRuntime:
@@ -130,6 +133,20 @@ def make_job(tmp_path: Path, platform: str) -> dict:
     if platform == "bilibili":
         job.update({"bilibili_tid": "娱乐", "bilibili_copyright": "original"})
     return job
+
+
+def test_douyin_inconclusive_login_never_uploads(tmp_path, monkeypatch):
+    runtime = FakeRuntime("douyin")
+    publisher = DouyinPublisher(runtime=runtime)
+    monkeypatch.setattr(publisher, "_wait_for_login", lambda _: {
+        "login_status": "check_failed", "message": "页面尚未就绪",
+        "evidence": {"reason": "page_not_ready"},
+    })
+    with pytest.raises(PublishNeedsReview) as error:
+        publisher.publish(make_job(tmp_path, "douyin"))
+    assert error.value.error_code == "account_check_inconclusive"
+    assert not runtime.upload.files
+    assert "submit_clicked" not in runtime.phases
 
 
 @pytest.mark.parametrize(
