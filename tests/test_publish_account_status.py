@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -53,6 +55,40 @@ def test_busy_account_check_is_not_mislabeled_as_expired(monkeypatch):
     monkeypatch.setattr(PublishRepository, "update_account_status", update)
     result = publish_service.check_browser_account("account-busy")
     assert result["account"]["login_status"] == "busy"
+
+
+@pytest.mark.parametrize("worker_status,stored", [("check_failed", "check_failed"), ("unknown", "check_failed"), ("login_pending", "login_pending")])
+def test_inconclusive_check_does_not_expire_previously_logged_in_account(monkeypatch, worker_status, stored):
+    state = {"id": "account-uncertain", "platform": "douyin", "login_status": "normal", "last_login_at": "2026-10-19T12:00:00Z"}
+    monkeypatch.setattr(publish_service, "get_account", lambda _: dict(state))
+    monkeypatch.setattr(PublishWorkerClient, "check_account", lambda *args: {"login_status": worker_status})
+
+    def update(_self, _account, status, message, **kwargs):
+        assert kwargs["logged_in"] is False
+        state.update(login_status=status, login_message=message)
+
+    monkeypatch.setattr(PublishRepository, "update_account_status", update)
+    result = publish_service.check_browser_account(state["id"])
+    assert result["account"]["login_status"] == stored
+    assert "重新登录" not in result["account"]["login_message"]
+
+
+def test_worker_page_error_is_not_a_login_expiration(monkeypatch, tmp_path):
+    from app.services.publishers.base import PublishError
+
+    class Publisher:
+        def check_login(self, _account):
+            raise PublishError("页面尚未就绪", "platform_form_changed")
+
+    monkeypatch.setattr(publish_host_worker, "settings", replace(publish_host_worker.settings, publish_worker_state_dir=tmp_path))
+    monkeypatch.setattr(publish_host_worker, "get_platform_publisher", lambda *args, **kwargs: Publisher())
+    response = TestClient(publish_host_worker.create_worker_app(token="test-token")).post(
+        "/v1/accounts/check", headers={"Authorization": "Bearer test-token"},
+        json={"platform": "douyin", "account_id": "account-page-error"},
+    )
+    assert response.status_code == 200
+    assert response.json()["login_status"] == "check_failed"
+    assert response.json()["error_code"] == "platform_form_changed"
 
 
 def test_worker_login_background_never_writes_sqlite(monkeypatch):

@@ -14,6 +14,23 @@ def _headers() -> dict[str, str]:
     return {}
 
 
+def test_inconclusive_account_drawer_offers_check_instead_of_relogin(monkeypatch):
+    service = publish_router.publish_service
+    monkeypatch.setattr(service, "list_publish_jobs", lambda **kwargs: [])
+    monkeypatch.setattr(service, "list_accounts", lambda: [{
+        "id": "account-unconfirmed", "account_name": "测试账号", "platform": "douyin",
+        "platform_label": "抖音", "login_status": "check_failed", "login_status_label": "检测未完成",
+        "login_message": "页面尚未就绪，请重新检查状态",
+    }])
+    response = TestClient(app).get("/publish", headers=_headers())
+    assert response.status_code == 200
+    account = response.text.split('data-account-id="account-unconfirmed"', 1)[1].split('</article>', 1)[0]
+    assert 'data-account-check' in account
+    assert 'data-account-open-center' in account
+    assert 'data-account-login' not in account
+    assert '检测未完成' in account
+
+
 def test_send_content_returns_conflict_for_stale_editor(monkeypatch):
     def conflict(*args):
         raise publish_router.publish_service.PublishContentConflict("旧版本")

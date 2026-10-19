@@ -654,7 +654,8 @@ def create_worker_app(token: str | None = None) -> FastAPI:
             result = publisher.check_login(payload.account_id)
             return result
         except PublishError as exc:
-            return {"login_status": "login_required", "message": exc.message, "error_code": exc.error_code}
+            status = "login_required" if exc.error_code in {"login_required", "account_login_required"} else "check_failed"
+            return {"login_status": status, "message": exc.message, "error_code": exc.error_code}
         finally:
             lock.release()
 

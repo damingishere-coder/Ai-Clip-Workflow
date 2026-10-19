@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from app.services.publish_copy_rules import validate_douyin_publish_copy
 from app.services.publish_time import utc_now_iso
@@ -55,26 +56,72 @@ class DouyinPublisher(BasePlatformPublisher):
 
     def check_login(self, account_id: str) -> dict[str, Any]:
         with self.runtime.page(self.creator_url) as page:
-            time.sleep(2)
-            text = self.runtime.body_text(page)
-            login_required = "扫码登录" in text or "手机号登录" in text or "login" in page.url.lower()
-            normal = not login_required and (
-                page.locator('input[type="file"]').count() > 0 or "发布视频" in text or "上传视频" in text
-            )
-            return {
-                "login_status": "normal" if normal else "login_required",
-                "message": "登录状态正常" if normal else "抖音账号需要重新登录",
-            }
+            return self._wait_for_login(page)
 
     def open_login(self, account_id: str) -> dict[str, Any]:
         with self.runtime.page(self.creator_url) as page:
-            deadline = time.monotonic() + 600
-            while time.monotonic() < deadline:
-                text = self.runtime.body_text(page)
-                if "发布视频" in text or "上传视频" in text or page.locator('input[type="file"]').count() > 0:
-                    return {"login_status": "normal", "message": "抖音登录成功"}
-                time.sleep(2)
-        return {"login_status": "login_required", "message": "等待登录超时，请重新打开登录窗口"}
+            return self._wait_for_login(page, timeout_seconds=600, wait_for_user=True)
+
+    def _login_snapshot(self, page: Any) -> dict[str, Any]:
+        text = self.runtime.body_text(page)
+        parsed = urlsplit(str(page.url))
+        path = parsed.path.lower().rstrip("/")
+        login_url = parsed.hostname in {"login.douyin.com", "passport.douyin.com"} or any(
+            part in {"login", "passport"} for part in path.split("/")
+        )
+        login_form = any(marker in text for marker in ("扫码登录", "手机号登录", "请先登录", "登录后使用"))
+        if login_url or login_form:
+            return {"login_status": "login_required", "message": "抖音账号需要重新登录",
+                    "reason": "login_page", "path": path}
+        if any(marker in text for marker in ("滑块", "验证码", "安全验证", "短信验证", "操作频繁", "账号存在风险")):
+            return {"login_status": "check_failed", "message": "平台要求人工验证，请在创作者中心处理",
+                    "reason": "verification_required", "path": path}
+        try:
+            file_inputs = page.locator('input[type="file"]').count()
+        except Exception:
+            file_inputs = 0
+        normal = parsed.hostname == "creator.douyin.com" and (
+            file_inputs > 0 or ("加载中" not in text and any(marker in text for marker in ("发布视频", "上传视频")))
+        )
+        return {
+            "login_status": "normal" if normal else "check_failed",
+            "message": "登录状态正常" if normal else "页面尚未就绪，暂时无法确认登录状态，请重新检查状态",
+            "reason": "upload_ready" if normal else "page_not_ready", "path": path,
+            "file_inputs": file_inputs,
+        }
+
+    def _wait_for_login(self, page: Any, *, timeout_seconds: float = 45, wait_for_user: bool = False) -> dict[str, Any]:
+        started = time.monotonic()
+        previous = ""
+        stable = 0
+        checks = 0
+        while True:
+            snapshot = self._login_snapshot(page)
+            checks += 1
+            status = snapshot["login_status"]
+            stable = stable + 1 if status == previous else 1
+            previous = status
+            elapsed = time.monotonic() - started
+            confirmed = stable >= 2 and (status == "normal" or (
+                status == "login_required" and elapsed >= 2 and not wait_for_user
+            ))
+            timed_out = elapsed >= timeout_seconds
+            verification = snapshot["reason"] == "verification_required" and not wait_for_user
+            if confirmed or timed_out or verification:
+                if timed_out and stable < 2 and status != "check_failed":
+                    status = "check_failed"
+                    snapshot.update(message="页面状态尚未稳定，请重新检查状态", reason="state_unstable")
+                evidence = {key: value for key, value in snapshot.items() if key not in {"message", "login_status"}}
+                evidence.update(checks=checks, elapsed_seconds=round(elapsed, 2))
+                if status == "check_failed":
+                    evidence["screenshot"] = self.runtime.screenshot(page, "douyin-login-check-inconclusive")
+                self.runtime.phase("account_login_checked", evidence)
+                return {"login_status": status, "message": snapshot["message"], "evidence": evidence}
+            wait_ms = min(500, max(1, int((timeout_seconds - elapsed) * 1000)))
+            if hasattr(page, "wait_for_timeout"):
+                page.wait_for_timeout(wait_ms)
+            else:
+                time.sleep(wait_ms / 1000)
 
     def publish(self, job: dict[str, Any]) -> PublishResult:
         self.validate(job)
@@ -83,10 +130,14 @@ class DouyinPublisher(BasePlatformPublisher):
         evidence: dict[str, Any] = {}
         with self.runtime.page(self.creator_url) as page:
             try:
+                login = self._wait_for_login(page)
+                evidence["login"] = login
+                if login["login_status"] != "normal":
+                    code = "account_login_required" if login["login_status"] == "login_required" else "account_check_inconclusive"
+                    if login["evidence"]["reason"] == "verification_required":
+                        code = "platform_verification_required"
+                    raise PublishNeedsReview(login["message"], code)
                 self.runtime.detect_manual_challenge(page)
-                login = self._page_logged_in(page)
-                if not login:
-                    raise PublishNeedsReview("抖音账号登录失效，请重新登录", "account_login_required")
 
                 upload = self.runtime.first_visible(page, ['input[type="file"]'], timeout_ms=5000)
                 if upload is None:
@@ -220,10 +271,6 @@ class DouyinPublisher(BasePlatformPublisher):
                     raise
                 # 失败窗口允许用户人工操作，因此即使错误发生在点击前，也不能再自动重试。
                 raise PublishNeedsReview(message, error_code) from exc
-
-    def _page_logged_in(self, page: Any) -> bool:
-        text = self.runtime.body_text(page)
-        return not ("扫码登录" in text or "手机号登录" in text or "login" in page.url.lower())
 
     def _set_cover(self, page: Any, cover_path: str) -> None:
         if not cover_path or not Path(cover_path).is_file():

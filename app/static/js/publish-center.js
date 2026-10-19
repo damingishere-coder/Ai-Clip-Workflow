@@ -1006,7 +1006,8 @@ if (publishCenterRoot) {
       login_pending: "等待登录完成",
       busy: "账号操作中",
       login_required: "需要重新登录",
-    }[status] || "需要重新登录";
+      check_failed: "检测未完成",
+    }[status] || "待检测";
   }
 
   function rowReadiness(row) {
@@ -1035,6 +1036,7 @@ if (publishCenterRoot) {
   function setupActionLabel(action) {
     return {
       login_account: "打开登录窗口",
+      check_account: "检查登录状态",
       create_account: "新增账号",
       select_account: "选择账号",
       complete_content: "完善内容",
@@ -1165,6 +1167,11 @@ if (publishCenterRoot) {
       primary.textContent = "打开创作者中心";
       secondary.dataset.accountLogin = "";
       secondary.textContent = "重新登录";
+    } else if (account.login_status === "check_failed") {
+      primary.dataset.accountCheck = "";
+      primary.textContent = "检查状态";
+      secondary.dataset.accountOpenCenter = "";
+      secondary.textContent = "打开创作者中心";
     } else {
       primary.dataset.accountLogin = "";
       primary.textContent = account.login_status === "login_pending" ? "再次打开登录窗口" : "登录 / 重新登录";
@@ -1528,7 +1535,7 @@ if (publishCenterRoot) {
 
   function readinessAccountId(readiness) {
     if (readiness.resolved_account_id) return readiness.resolved_account_id;
-    const loginIssue = (readiness.issues || []).find((issue) => issue.action === "login_account");
+    const loginIssue = (readiness.issues || []).find((issue) => ["login_account", "check_account"].includes(issue.action));
     return loginIssue?.account_id || "";
   }
 
@@ -1538,6 +1545,18 @@ if (publishCenterRoot) {
       document.querySelector("[data-worker-help]")?.removeAttribute("hidden");
       document.querySelector("[data-scheduler-health]")?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "center" });
       await refreshSchedulerHealth(true);
+      return;
+    }
+    if (readiness.action === "check_account") {
+      const accountId = readinessAccountId(readiness);
+      openAccountDrawer(row.dataset.platform || "");
+      if (!accountId) return;
+      try {
+        const data = await window.apiFetch(`/api/publish/accounts/${accountId}/check`, { method: "POST" });
+        if (data.account) updateAccountRow(data.account);
+        showMessage(data.account?.login_message || "登录状态检测完成。", data.account?.login_status === "normal" ? "success" : "error");
+        await Promise.all([refreshAccounts(), refreshJobs()]);
+      } catch (error) { showMessage(`检测未完成：${error.message}`, "error"); }
       return;
     }
     if (readiness.action === "login_account") {

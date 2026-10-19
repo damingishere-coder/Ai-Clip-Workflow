@@ -218,11 +218,13 @@ def build_send_readiness(
             if str(resolved_account.get("platform") or "") != platform:
                 issues.append(_issue("account_platform_mismatch", "账号与目标平台不一致", "select_account"))
             elif str(resolved_account.get("login_status") or "login_required") != "normal":
+                needs_login = str(resolved_account.get("login_status") or "login_required") in {"invalid", "login_required"}
+                account_name = resolved_account.get("account_name") or "未命名账号"
                 issues.append(
                     _issue(
-                        "account_login_required",
-                        f"账号“{resolved_account.get('account_name') or '未命名账号'}”尚未登录",
-                        "login_account",
+                        "account_login_required" if needs_login else "account_check_required",
+                        f"账号“{account_name}”尚未登录" if needs_login else f"账号“{account_name}”登录状态待确认，请检查状态",
+                        "login_account" if needs_login else "check_account",
                         account_id=str(resolved_account.get("id") or ""),
                         account_name=str(resolved_account.get("account_name") or ""),
                         login_message=str(resolved_account.get("login_message") or ""),
@@ -282,6 +284,7 @@ def build_send_readiness(
         "create_account": 2,
         "select_account": 3,
         "login_account": 4,
+        "check_account": 4,
         "complete_content": 5,
         "convert_and_send": 6,
     }

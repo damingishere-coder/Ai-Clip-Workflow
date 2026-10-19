@@ -102,6 +102,19 @@ def test_login_expired_becomes_need_review_without_upload(tmp_path):
     assert repository.results == []
 
 
+@pytest.mark.parametrize("status,stored", [("check_failed", "check_failed"), ("unknown", "check_failed"), ("busy", "busy"), ("login_pending", "login_pending")])
+def test_inconclusive_preflight_blocks_upload_without_expiring_account(tmp_path, status, stored):
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"fake video")
+    worker = FakeWorker(login_status=status)
+    repository = FakeRepository()
+    result = LocalBrowserPublisher(platform="douyin", worker_client=worker, repository=repository).publish(make_job(video))
+    assert result.outcome == PublishOutcome.NEED_REVIEW
+    assert result.error_code == "account_check_inconclusive"
+    assert repository.accounts[0][0][1] == stored
+    assert not worker.payloads
+
+
 def test_bilibili_repost_requires_source(tmp_path):
     video = tmp_path / "clip.mp4"
     video.write_bytes(b"fake video")
