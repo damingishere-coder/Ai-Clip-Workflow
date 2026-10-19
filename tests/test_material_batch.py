@@ -43,6 +43,40 @@ def stub_preflight(monkeypatch):
     monkeypatch.setattr(imports, 'preflight_media', lambda *a, **k:SimpleNamespace(to_dict=lambda:{'verified':'test-double'}))
 
 
+def test_full_batch_mode_is_frozen_replayable_and_cannot_switch(batch_db, tmp_path, monkeypatch):
+    from app.services import playback_activation_service as activation
+    with db.get_connection() as c:
+        c.execute('BEGIN IMMEDIATE')
+        activation.apply(c, expected_sha256=activation.preview(c)['current_sha256'])
+        c.commit()
+    payload, _ = batch_input(tmp_path, 1, settings={'selection_profile':'variety_comedy',
+        'ai_provider':'codex', 'analysis_mode':'codex_full_transcript_v1'})
+    batch = batches.create_batch(payload)
+    assert batches.create_batch(payload)['id'] == batch['id']
+    assert batch['config']['analysis_mode'] == 'codex_full_transcript_v1'
+    item = batch['items'][0]
+    with db.get_connection() as c:
+        snapshot = batches.task_item(c, item['task_id'])['generation']['snapshot']
+        assert snapshot['analysis_mode'] == 'codex_full_transcript_v1'
+        assert snapshot['provider'] == 'codex'
+    stub_preflight(monkeypatch)
+    job_worker.execute_job(item['job_id'])
+    job = job_service.create_job(item['task_id'], 'ai_analysis')
+    assert profiles.read_job_snapshot(job)['analysis_mode'] == 'codex_full_transcript_v1'
+    with pytest.raises(ValueError, match='分析模式'):
+        job_service.create_job(item['task_id'], 'ai_analysis', {'analysis_mode':'staged_v1'})
+
+
+@pytest.mark.parametrize('overrides', [
+    {'ai_provider':'remote'}, {'selection_profile':'general'}, {'visual_enabled':True},
+])
+def test_full_batch_rejects_incompatible_configuration(overrides):
+    from app.models.material_batch import BatchSettings
+    with pytest.raises(ValueError, match='全文一次分析'):
+        BatchSettings(**{'selection_profile':'variety_comedy', 'ai_provider':'codex',
+                         'analysis_mode':'codex_full_transcript_v1', **overrides})
+
+
 def test_ten_batch_tasks_atomic_concurrent_and_explicit_reproduction(batch_db, tmp_path):
     payload, folder = batch_input(tmp_path)
     with pytest.raises(catalog.MaterialError, match='确认'):

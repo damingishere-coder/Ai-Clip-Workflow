@@ -48,6 +48,7 @@ from app.services.task_log_service import append_task_log
 
 
 logger = logging.getLogger(__name__)
+SCHEDULE_MISSED_GRACE_SECONDS = 120
 
 
 def now_iso() -> str:
@@ -206,6 +207,7 @@ class PublishScheduler:
                 "failed_count": sum(item.get("status") == "failed" for item in results),
                 "need_review_count": sum(item.get("status") == "need_review" for item in results),
                 "rescheduled_count": sum(item.get("status") == "rescheduled" for item in results),
+                "missed_count": sum(item.get("status") == "missed" for item in results),
                 "skipped_count": sum(item.get("status") == "skipped" for item in results),
                 "results": results,
             }
@@ -329,6 +331,20 @@ class PublishScheduler:
                 expected_statuses=("SCHEDULED",),
             )
 
+        try:
+            scheduled_at = parse_datetime(job.get("scheduled_at")).astimezone(timezone.utc)
+            due_at = parse_datetime(job.get("next_attempt_at") or job.get("scheduled_at")).astimezone(timezone.utc)
+        except ValueError as exc:
+            return self._mark_failed(
+                job_id, "invalid_scheduled_at", str(exc), expected_statuses=("SCHEDULED",)
+            )
+        if not force:
+            now = utc_now()
+            if now > scheduled_at + timedelta(seconds=SCHEDULE_MISSED_GRACE_SECONDS):
+                return self._mark_schedule_missed(job, scheduled_at)
+            if due_at > now:
+                return {"status": "skipped", "job_id": job_id, "message": "尚未到计划发布时间"}
+
         readiness = build_send_readiness(
             job,
             accounts=list_account_snapshots(),
@@ -366,15 +382,6 @@ class PublishScheduler:
                 f"内容风险标记需要人工复核：{risk_flags}",
                 expected_statuses=("SCHEDULED",),
             )
-        try:
-            due_at = parse_datetime(job.get("next_attempt_at") or job.get("scheduled_at"))
-        except ValueError as exc:
-            return self._mark_failed(
-                job_id, "invalid_scheduled_at", str(exc), expected_statuses=("SCHEDULED",)
-            )
-        if not force and due_at > utc_now():
-            return {"status": "skipped", "job_id": job_id, "message": "尚未到计划发布时间"}
-
         max_attempts = max(1, int(job.get("max_attempts") or self.max_retry_count))
         if not force and int(job.get("attempt_count") or 0) >= max_attempts:
             return self._mark_failed(
@@ -383,7 +390,9 @@ class PublishScheduler:
                 "上传前安全重试次数已用完",
                 expected_statuses=("SCHEDULED",),
             )
-        execution_id = self._claim_scheduled_job(job_id)
+        if not force and utc_now() > scheduled_at + timedelta(seconds=SCHEDULE_MISSED_GRACE_SECONDS):
+            return self._mark_schedule_missed(job, scheduled_at)
+        execution_id = self._claim_scheduled_job(job_id, expected_updated_at=str(job.get("updated_at") or ""))
         if not execution_id:
             return {"status": "skipped", "job_id": job_id, "message": "任务已被另一个调度器领取"}
         claimed = self.repository.get_job(job_id) or job
@@ -446,6 +455,39 @@ class PublishScheduler:
             result,
             expected_execution_id=execution_id,
         )
+
+    def _mark_schedule_missed(self, job: dict[str, Any], scheduled_at: datetime) -> dict[str, Any]:
+        job_id = str(job["id"])
+        planned = local_display(scheduled_at, str(job.get("schedule_timezone") or settings.app_timezone))
+        message = f"原定 {planned} 的发布时间已过，系统未投稿；请重新排期"
+        now = utc_now_iso()
+        with get_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE publish_jobs
+                SET status = 'WAITING', scheduled_at = '', next_attempt_at = NULL,
+                    adaptive_managed = 0, adaptive_fixed = 1,
+                    error_code = 'schedule_missed', error_message = ?, last_error = ?, updated_at = ?
+                WHERE id = ? AND status = 'SCHEDULED' AND updated_at = ? AND scheduled_at = ?
+                """,
+                (message, message, now, job_id, job.get("updated_at"), job.get("scheduled_at")),
+            )
+            if cursor.rowcount:
+                self.repository.add_event(
+                    job_id, "schedule_missed", from_status="SCHEDULED", to_status="WAITING",
+                    error_code="schedule_missed", message=message,
+                    payload={"scheduled_at": job.get("scheduled_at"),
+                             "next_attempt_at": job.get("next_attempt_at"),
+                             "grace_seconds": SCHEDULE_MISSED_GRACE_SECONDS},
+                    connection=connection,
+                )
+                connection.commit()
+            else:
+                connection.rollback()
+        if not cursor.rowcount:
+            return {"status": "skipped", "job_id": job_id, "message": "排期已变化，未覆盖新状态"}
+        return {"status": "missed", "job_id": job_id, "message": message}
 
     def publish_now(self, job_id: str) -> dict[str, Any]:
         job = self.repository.get_job(job_id)
@@ -895,7 +937,8 @@ class PublishScheduler:
                 """
                 UPDATE publish_jobs SET adaptive_managed = 0, adaptive_fixed = 1, account_id = ?, publish_mode = ?,
                     scheduled_at = ?, next_attempt_at = NULL,
-                    timezone = ?, schedule_timezone = ?, status = 'SCHEDULED', updated_at = ?
+                    timezone = ?, schedule_timezone = ?, status = 'SCHEDULED',
+                    error_code = '', error_message = '', last_error = '', updated_at = ?
                 WHERE id = ? AND status = ? AND updated_at = ?
                 """,
                 (
@@ -1106,7 +1149,8 @@ class PublishScheduler:
                     """
                     UPDATE publish_jobs SET adaptive_managed = 0, adaptive_fixed = 1, account_id = ?, publish_mode = ?,
                         scheduled_at = ?, next_attempt_at = NULL,
-                        timezone = ?, schedule_timezone = ?, status = ?, updated_at = ?
+                        timezone = ?, schedule_timezone = ?, status = ?,
+                        error_code = '', error_message = '', last_error = '', updated_at = ?
                     WHERE id = ? AND status = ? AND updated_at = ?
                     """,
                     (
@@ -1298,7 +1342,7 @@ class PublishScheduler:
 
         return publish_service.get_publish_job(job_id) or self.repository.get_job(job_id)
 
-    def _claim_scheduled_job(self, job_id: str) -> str | None:
+    def _claim_scheduled_job(self, job_id: str, *, expected_updated_at: str) -> str | None:
         now = utc_now_iso()
         execution_id = uuid4().hex
         with get_connection() as connection:
@@ -1312,9 +1356,9 @@ class PublishScheduler:
                     retry_count = COALESCE(retry_count, 0) + 1,
                     next_attempt_at = NULL, last_error = '', error_message = '',
                     needs_manual_review = 0, updated_at = ?
-                WHERE id = ? AND status = 'SCHEDULED'
+                WHERE id = ? AND status = 'SCHEDULED' AND updated_at = ?
                 """,
-                (now, now, self.worker_id, execution_id, now, job_id),
+                (now, now, self.worker_id, execution_id, now, job_id, expected_updated_at),
             )
             if cursor.rowcount:
                 self.repository.add_event(
@@ -1874,7 +1918,8 @@ def scheduler_health() -> dict[str, Any]:
         counts = connection.execute(
             """
             SELECT SUM(CASE WHEN status = 'SCHEDULED' THEN 1 ELSE 0 END) scheduled_count,
-                   SUM(CASE WHEN status = 'PUBLISHING' THEN 1 ELSE 0 END) publishing_count
+                   SUM(CASE WHEN status = 'PUBLISHING' THEN 1 ELSE 0 END) publishing_count,
+                   SUM(CASE WHEN status = 'WAITING' AND error_code = 'schedule_missed' THEN 1 ELSE 0 END) missed_schedule_count
             FROM publish_jobs
             """
         ).fetchone()
@@ -1898,6 +1943,7 @@ def scheduler_health() -> dict[str, Any]:
         "interval_seconds": int(settings.publish_scheduler_interval_seconds),
         "scheduled_count": int(counts["scheduled_count"] or 0),
         "publishing_count": int(counts["publishing_count"] or 0),
+        "missed_schedule_count": int(counts["missed_schedule_count"] or 0),
         "worker_available": worker_available,
         "worker_message": worker_message,
         "timezone": settings.app_timezone,

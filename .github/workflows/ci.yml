@@ -19,9 +19,17 @@ jobs:
           python-version: "3.12"
 
       - name: 安装 FFmpeg
+        timeout-minutes: 5
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          apt_options=(-o Acquire::Retries=1 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            if ! sudo apt-get "${apt_options[@]}" install -y ffmpeg; then
+              sudo apt-get "${apt_options[@]}" update
+              sudo apt-get "${apt_options[@]}" install -y ffmpeg
+            fi
+          fi
+          ffmpeg -version
+          ffprobe -version
 
       - name: 安装依赖
         run: |
@@ -34,6 +42,9 @@ jobs:
 
       - name: Ruff 代码检查
         run: ruff check app tests scripts/seed_demo_data.py scripts/backup_restore.py scripts/backup_restore_runtime.py scripts/replay_adaptive_schedule.py
+
+      - name: 离线选片比较工具检查
+        run: ruff check --isolated --select E,F,W,B --ignore E501 scripts/compare_playback_candidate.py scripts/activate_playback_policy.py tests/test_playback_candidate_offline.py
 
       - name: JavaScript 语法检查
         run: find app/static/js -name '*.js' -print0 | xargs -0 -r -n1 node --check

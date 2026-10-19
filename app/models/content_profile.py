@@ -116,7 +116,7 @@ class DedupePolicy(PolicyModel):
 
 
 class SelectionPolicy(PolicyModel):
-    strategy: Literal["default_selected", "a_only", "hourly_balanced"]
+    strategy: Literal["default_selected", "a_only", "hourly_balanced", "evidence_ranked"]
     candidate_pool_default: int = Field(ge=1, le=50)
     candidate_pool_max: int = Field(ge=1, le=50)
     final_target_default: int = Field(ge=1, le=50)

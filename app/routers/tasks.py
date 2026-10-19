@@ -73,7 +73,7 @@ async def create_upload_task(
     auto_schedule_interval_hours: int = Form(3),
     auto_schedule_daily_start_time: str = Form("07:00"),
     auto_schedule_daily_end_time: str = Form("00:00"),
-    auto_metadata_use_ai: bool = Form(False),
+    auto_metadata_use_ai: bool = Form(True),
     video_file: UploadFile = File(...),
 ) -> dict:
     if not selection_profile:

@@ -82,7 +82,7 @@ DEFAULT_AUTO_CONFIG = {
     "auto_schedule_interval_hours": 3,
     "auto_schedule_daily_start_time": "07:00",
     "auto_schedule_daily_end_time": "00:00",
-    "auto_metadata_use_ai": False,
+    "auto_metadata_use_ai": True,
 }
 
 

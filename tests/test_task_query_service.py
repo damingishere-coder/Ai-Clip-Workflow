@@ -184,15 +184,23 @@ def _insert_test_subtitle_job(
     status: str = "completed",
 ) -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    media = Path(settings.data_dir) / 'verified-subtitle-fixtures' / f'{job_id}.mp4'
+    media.parent.mkdir(parents=True, exist_ok=True)
+    media.write_bytes(b'isolated verified subtitle fixture')
+    track_id, revision_id = f'track_{job_id}', f'revision_{job_id}'
     with get_connection() as connection:
+        connection.execute('''INSERT INTO subtitle_tracks(id,task_id,track_type,output_clip_id,name,active_revision_id,created_at,updated_at)
+            VALUES(?,?,'clip',?,'test',?,?,?)''', (track_id,task_id,output_clip_id,revision_id,now,now))
+        connection.execute('''INSERT INTO subtitle_revisions(id,track_id,revision_number,origin,status,checksum,created_at)
+            VALUES(?,?,1,'test','approved','test',?)''', (revision_id,track_id,now))
         connection.execute(
             """
             INSERT INTO subtitle_jobs (
                 id, task_id, output_clip_id, style_preset_id, status,
-                subtitle_file_path, output_file_path, error_message, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                subtitle_file_path, output_file_path, error_message, created_at, updated_at,revision_id,validation_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?)
             """,
-            (job_id, task_id, output_clip_id, "default", status, "", "", None, now, now),
+            (job_id, task_id, output_clip_id, "default", status, "", str(media), None, now, now,revision_id,'verified'),
         )
         connection.commit()
 
@@ -216,6 +224,9 @@ def _clean_test_data() -> None:
     with get_connection() as connection:
         connection.execute("DELETE FROM publish_jobs")
         connection.execute("DELETE FROM subtitle_jobs")
+        connection.execute("DELETE FROM subtitle_cues")
+        connection.execute("DELETE FROM subtitle_revisions")
+        connection.execute("DELETE FROM subtitle_tracks")
         connection.execute("DELETE FROM output_clip")
         connection.execute("DELETE FROM cut_runs")
         connection.execute("DELETE FROM workflow_jobs")

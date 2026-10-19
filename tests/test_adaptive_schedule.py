@@ -73,6 +73,39 @@ def scores():
     )
 
 
+def test_policy_impact_preview_is_read_only_and_confirmation_rejects_changed_jobs(db):
+    seed_job(job("future-preview", "2026-09-08T14:00:00+08:00", managed=False))
+    seed_job(job("fixed-preview", "2026-09-08T17:00:00+08:00", managed=False, adaptive_fixed=1))
+    with get_connection() as connection:
+        before = [dict(row) for row in connection.execute("SELECT * FROM publish_jobs ORDER BY id")]
+    preview = service.preview_policy("target", {"enabled": True}, include_existing=True)
+    assert preview["newly_managed_count"] == 1
+    assert any(item["reason"] == "人工固定时间" for item in preview["protected"])
+    with get_connection() as connection:
+        assert [dict(row) for row in connection.execute("SELECT * FROM publish_jobs ORDER BY id")] == before
+        assert connection.execute("SELECT COUNT(*) FROM adaptive_schedule_policies").fetchone()[0] == 0
+        connection.execute("UPDATE publish_jobs SET updated_at='changed' WHERE id='future-preview'")
+        connection.commit()
+    with pytest.raises(service.ScheduleConflict):
+        service.save_policy("target", {"enabled": True}, True, preview_token=preview["preview_token"], confirmed=True)
+    with get_connection() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM adaptive_schedule_policies").fetchone()[0] == 0
+        assert connection.execute("SELECT adaptive_managed FROM publish_jobs WHERE id='future-preview'").fetchone()[0] == 0
+
+
+def test_policy_preview_token_requires_confirmation_and_accepts_unchanged_snapshot(db):
+    seed_job(job("future-confirm", "2026-09-08T14:00:00+08:00", managed=False))
+    seed_job(job("today-protected", "2026-09-06T21:00:00+08:00", managed=False))
+    preview = service.preview_policy("target", {"enabled": True}, include_existing=True)
+    with pytest.raises(service.ScheduleConflict):
+        service.save_policy("target", {"enabled": True}, True, preview_token=preview["preview_token"])
+    saved = service.save_policy("target", {"enabled": True}, True, preview_token=preview["preview_token"], confirmed=True)
+    assert saved["enabled"]
+    with get_connection() as connection:
+        assert connection.execute("SELECT adaptive_managed FROM publish_jobs WHERE id='future-confirm'").fetchone()[0] == 1
+        assert connection.execute("SELECT adaptive_managed FROM publish_jobs WHERE id='today-protected'").fetchone()[0] == 0
+
+
 def test_default_fallback_capacity_order_and_gap():
     rows = [job(i, status="WAITING") for i in range(20)]
     out = service.allocate(

@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
 from uuid import uuid4
@@ -373,7 +374,10 @@ def test_invalid_scheduled_batch_moves_to_review_and_does_not_dispatch(output_ba
     review.confirm(task,consent(task))
     key = insert_publish(task,output,'SCHEDULED')
     with db.get_connection() as c:
-        c.execute("UPDATE publish_jobs SET publish_mode='manual_export' WHERE id=?",(key,))
+        c.execute(
+            "UPDATE publish_jobs SET publish_mode='manual_export', scheduled_at=? WHERE id=?",
+            ((datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(), key),
+        )
         c.execute('UPDATE clip_candidates SET enabled=0 WHERE id=?',(candidate,))
         c.commit()
     scheduler = PublishScheduler()

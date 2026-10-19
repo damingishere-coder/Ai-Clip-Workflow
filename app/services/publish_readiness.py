@@ -46,6 +46,12 @@ def _issue(code: str, message: str, action: str, **details: Any) -> dict[str, An
 
 def _content_issues(job: dict[str, Any], platform: str, publish_mode: str) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
+    provider_payload = job.get("provider_payload")
+    if not isinstance(provider_payload, dict):
+        from app.services.publishers.base import parse_public_json_dict
+        provider_payload = parse_public_json_dict(job.get("provider_response") or "")
+    if provider_payload.get("metadata_review_required"):
+        issues.append(_issue("metadata_needs_edit", "文案仍为规则草稿，请 AI 重写或编辑保存后再排期", "complete_content"))
     caption = str(job.get("caption") or job.get("description") or "").strip()
     hashtags = str(job.get("hashtags") or job.get("tags") or "").strip()
     checks = [

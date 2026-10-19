@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "candidate_id": "playback-v1-draft",
+  "status": "offline_only",
+  "activation_allowed": false,
+  "profile_id": "variety_comedy",
+  "weights": {
+    "hook": 0.25,
+    "novelty": 0.20,
+    "interaction_reaction": 0.20,
+    "completeness": 0.20,
+    "humor": 0.10,
+    "title": 0.05
+  },
+  "dimension_meanings": {
+    "hook": "原始开头的可理解性和继续观看理由",
+    "novelty": "具体处境与关系反差的吸引力",
+    "interaction_reaction": "持续推进与信息增量",
+    "completeness": "结果兑现、回应与最短必要闭环",
+    "humor": "有证据的真实笑点与反差",
+    "title": "标题在真实片内得到兑现"
+  },
+  "duration_seconds": {"minimum": 45, "maximum": 150, "preferred_minimum": 60, "preferred_maximum": 90},
+  "recommendation_threshold": null,
+  "quality_gates": ["时码有效", "不改变原意", "核心事件已确认", "待核事项已处理", "人工成片验收"],
+  "audio_role": "evidence_only_no_score_bonus",
+  "comparison": {"rank_only": true, "top_n": 5, "ties": "competition_rank_clip_key_for_display_only"},
+  "runtime_compatibility": "not_registered_do_not_use_as_content_profile"
+}

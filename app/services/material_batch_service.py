@@ -60,6 +60,8 @@ def frozen_job_payload(connection, task_id, job_type, payload):
     generation = item["generation"]
     if payload.get("provider") and payload["provider"] != generation["snapshot"]["provider"]:
         raise MaterialError("AI Provider 与批次冻结配置不同，请使用原配置或另建生产任务")
+    if payload.get("analysis_mode") and payload["analysis_mode"] != generation["snapshot"].get("analysis_mode", "staged_v1"):
+        raise MaterialError("分析模式与批次冻结配置不同，请另建生产任务")
     return {**payload, profiles.JOB_SNAPSHOT_KEY: generation}
 
 
@@ -67,6 +69,9 @@ def create_batch(payload: MaterialBatchCreate):
     if not payload.confirmed:
         raise MaterialError("请核对素材和批次配置后确认创建任务", 400)
     request = payload.model_dump(mode="json")
+    # Keep historical request keys replayable after adding an opt-in field.
+    if request["settings"]["analysis_mode"] == "staged_v1":
+        request["settings"].pop("analysis_mode")
     request["material_ids"] = sorted(request["material_ids"])
     request_hash = digest(request)
     with get_connection() as c:
@@ -90,10 +95,14 @@ def create_batch(payload: MaterialBatchCreate):
                   (batch_id, str(payload.request_key), request_hash, canonical(config), digest(config), now))
         for material in materials:
             task_id, item_id = uuid4().hex[:12], uuid4().hex
-            task_payload = payload.settings.task_payload(Path(material["file_name"]).stem)
+            name = Path(material["file_name"]).stem
+            if payload.settings.analysis_mode == "codex_full_transcript_v1":
+                name = name[:110] + " · 全文提速"
+            task_payload = payload.settings.task_payload(name)
             # No file creation in this transaction. The Job allocates its owned directory.
             insert_task_record_with_connection(c, task_payload, task_id=task_id, task_dir_name=f"batch-{task_id}")
-            generation = profiles.freeze_new_job_payload(c, task_id, "ai_analysis", {})[profiles.JOB_SNAPSHOT_KEY]
+            generation = profiles.freeze_new_job_payload(c, task_id, "ai_analysis",
+                {"analysis_mode": payload.settings.analysis_mode})[profiles.JOB_SNAPSHOT_KEY]
             job_id, created = job_service.create_or_get_active_job_with_connection(c, task_id=task_id,
                 job_type=job_service.JOB_TYPE_MATERIAL_IMPORT,
                 payload={"batch_id": batch_id, "item_id": item_id, "material_id": material["id"],

@@ -194,7 +194,7 @@ def insert_task_record_with_connection(connection: Connection, payload: TaskCrea
     a fenced material import Job. Batch placeholders must have no source path.
     """
     from app.services.task_service import _now_iso, STATUS_PROGRESS
-    from app.services.content_profile_service import registered_profile, validate_content_candidate_limit
+    from app.services.content_profile_service import active_profile, validate_content_candidate_limit
     validate_content_candidate_limit(payload.selection_profile, payload.candidate_clip_count)
     resolved_task_id, resolved_task_dir_name = task_id, task_dir_name
     now = _now_iso()
@@ -238,7 +238,7 @@ def insert_task_record_with_connection(connection: Connection, payload: TaskCrea
         "highlight_density_per_hour": payload.highlight_density_per_hour,
         "highlight_total_limit": payload.highlight_total_limit,
         "ai_preference": payload.ai_preference,
-        "ai_prompt_preset_id": payload.ai_prompt_preset_id or registered_profile(payload.selection_profile).prompt_preset_id,
+        "ai_prompt_preset_id": payload.ai_prompt_preset_id or active_profile(connection, payload.selection_profile)[1].prompt_preset_id,
         "auto_mode": 1 if payload.auto_mode else 0,
         "auto_config_json": json.dumps(auto_config, ensure_ascii=False),
         "status": initial_status,

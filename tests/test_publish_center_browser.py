@@ -83,6 +83,95 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+@pytest.mark.parametrize("viewport_width", [390, 1440])
+def test_missed_schedule_prompts_for_replan_without_export(tmp_path, viewport_width):
+    init_db()
+    _cleanup()
+    job_id = _seed_job(tmp_path, 99)
+    old_time = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE publish_jobs SET status='SCHEDULED', scheduled_at=? WHERE id=?",
+            (old_time, job_id),
+        )
+        connection.commit()
+    assert PublishScheduler().run_once()["missed_count"] == 1
+    assert publish_service.get_publish_job(job_id)["attempt_count"] == 0
+    future_ids = [_seed_job(tmp_path, index) for index in range(16)]
+    future_time = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    with get_connection() as connection:
+        connection.executemany(
+            "UPDATE publish_jobs SET status='SCHEDULED', scheduled_at=? WHERE id=?",
+            [(future_time, item) for item in future_ids],
+        )
+        connection.commit()
+
+    port = _free_port()
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.time() + 10
+    while not server.started and time.time() < deadline:
+        time.sleep(0.05)
+    try:
+        assert server.started
+        with playwright.sync_playwright() as runtime:
+            chrome_path = Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "Google/Chrome/Application/chrome.exe"
+            if not chrome_path.exists():
+                pytest.skip("浏览器级测试需要本机安装 Google Chrome")
+            browser = runtime.chromium.launch(headless=True, executable_path=str(chrome_path))
+            page = browser.new_page(viewport={"width": viewport_width, "height": 844}, timezone_id="Asia/Shanghai")
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(f"http://127.0.0.1:{port}/publish", wait_until="networkidle")
+            alert = page.locator("[data-missed-schedule-alert]")
+            playwright.expect(alert).to_be_visible()
+            playwright.expect(alert).to_contain_text("1 条排期已错过")
+            page.locator('[data-center-tab="schedule"]').click()
+            playwright.expect(page.locator('.publish-plan-list [data-publish-row]:visible').first).to_have_attribute("data-job-id", job_id)
+            normal_row = page.locator(f'[data-section="schedule"][data-job-id="{future_ids[0]}"]')
+            normal_row.locator("[data-reschedule-job]").click()
+            playwright.expect(page.locator("[data-drawer-count]")).to_have_text("1")
+            playwright.expect(page.locator("[data-reschedule-context]")).to_contain_text("原计划")
+            page.locator("[data-close-schedule-drawer]").click()
+            assert publish_service.get_publish_job(future_ids[0])["scheduled_at"] == future_time
+            alert.locator("[data-open-missed-schedules]").click()
+            playwright.expect(page.locator('.publish-plan-list [data-publish-row]:visible')).to_have_count(1)
+            row = page.locator(f'[data-section="schedule"][data-job-id="{job_id}"]')
+            playwright.expect(row).to_have_attribute("data-status", "WAITING")
+            playwright.expect(row).to_contain_text("待重新排期")
+            playwright.expect(row.locator("[data-row-status]")).to_contain_text("已错过")
+            playwright.expect(row.locator("[data-reschedule-job]")).to_be_hidden()
+            assert row.locator("[data-row-title]").evaluate("node => getComputedStyle(node).whiteSpace") == "normal"
+            row.locator("[data-reschedule-missed]").click()
+            playwright.expect(page.locator("[data-schedule-drawer]")).to_be_visible()
+            playwright.expect(page.locator("[data-reschedule-context]")).to_contain_text("已错过，系统未补发")
+            playwright.expect(page.locator("[data-reschedule-context]")).to_contain_text(publish_service.get_publish_job(job_id)["error_message"])
+            assert publish_service.get_publish_job(job_id)["status"] == "WAITING"
+            future = (datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(days=2)).strftime("%Y-%m-%dT19:00")
+            page.locator('[name="start_at_local"]').fill(future)
+            page.locator("[data-preview-schedule]").click()
+            page.locator("[data-confirm-schedule]:not([disabled])").click()
+            playwright.expect(alert).to_be_hidden(timeout=10000)
+            playwright.expect(page.locator('[data-missed-list-count]')).to_have_text("0")
+            playwright.expect(row).to_be_hidden()
+            page.locator('[data-schedule-filter="all"]').click()
+            playwright.expect(row).to_be_visible()
+            playwright.expect(row.locator('[data-reschedule-job]')).to_be_visible()
+            page.reload(wait_until="networkidle")
+            playwright.expect(page.locator("[data-missed-schedule-alert]")).to_be_hidden()
+            assert publish_service.get_publish_job(job_id)["error_code"] == ""
+            assert publish_service.get_publish_job(job_id)["status"] == "SCHEDULED"
+            assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+            assert not errors
+            assert all(publish_service.get_publish_job(item)["scheduled_at"] == future_time for item in future_ids)
+            browser.close()
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+        _cleanup()
+
+
 def test_schedule_real_api_without_app_script(tmp_path):
     """Missing optional JS must not break next-start, preview, or persisted scheduling."""
     init_db()
@@ -277,7 +366,7 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
                                 "status": "WAITING",
                                 "title": "小S追问陈汉典到底在模仿谁",
                                 "description": "陈汉典刚说自己像潘玮柏，小S立刻给出另一答案",
-                                "tags": "综艺,高光,小S,反转",
+                                "tags": "康熙来了,小S,反转",
                                 "content_complete": True,
                                 "content_status_message": "内容完整",
                                 "content_status_tone": "green",
@@ -330,7 +419,7 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             page.locator("[data-batch-ai]").click()
             page.locator("#send-center-message").filter(has_text="已选文案 AI 重写完成：成功 2 条").wait_for()
             assert first_content.locator('[name="description"]').input_value() == "陈汉典刚说自己像潘玮柏，小S立刻给出另一答案"
-            assert second_content.locator('[name="tags"]').input_value() == "综艺,高光,小S,反转"
+            assert second_content.locator('[name="tags"]').input_value() == "康熙来了,小S,反转"
             first_content.locator("[data-publish-select]").uncheck()
             assert group_select.evaluate("element => element.indeterminate") is True
             group_select.check()

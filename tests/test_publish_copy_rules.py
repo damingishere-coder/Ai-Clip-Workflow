@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from app.db.database import get_connection, init_db
-from app.models.task import PublishSendJobUpdate
+from app.models.task import PublishCoverCreate, PublishSendJobUpdate
 from app.services import publish_service
 from app.services.publish_copy_rules import (
     PUBLISH_COPY_RULE_VERSION,
@@ -21,7 +21,7 @@ from app.services.publish_copy_rules import (
 PREFIX = "test-publish-copy-rules-"
 VALID_TITLE = "小S当场追问陈汉典到底在模仿谁"
 VALID_DESCRIPTION = "陈汉典刚说自己像潘玮柏，小S立刻给出另一答案"
-VALID_TAGS = "综艺,高光,小S,反转"
+VALID_TAGS = "康熙来了,小S,反转"
 
 
 @pytest.fixture(autouse=True)
@@ -131,6 +131,54 @@ def _seed_account(*, login_status: str = "normal") -> str:
     return account_id
 
 
+def test_metadata_preview_preserves_all_persisted_job_fields(monkeypatch) -> None:
+    job_id = _seed_job(status="SCHEDULED", scheduled_at="2099-01-01T08:00:00+00:00")
+    before = _raw_job(job_id)
+    monkeypatch.setattr(publish_service, "generate_publish_metadata", lambda *args, **kwargs: {
+        "title": VALID_TITLE, "description": VALID_DESCRIPTION, "tags": VALID_TAGS, "source": "ai:test"
+    })
+    monkeypatch.setattr(publish_service, "_get_completed_publish_clip_by_output", lambda output_id: {"id": output_id})
+    preview = publish_service.preview_send_job_metadata(job_id)
+    assert preview["expected_updated_at"] == before["updated_at"]
+    assert preview["metadata"]["title"] == VALID_TITLE
+    assert _raw_job(job_id) == before
+
+
+def test_editor_expected_version_rejects_stale_content_without_writes() -> None:
+    job_id = _seed_job()
+    before = _raw_job(job_id)
+    with pytest.raises(publish_service.PublishContentConflict):
+        publish_service.update_send_job(job_id, PublishSendJobUpdate(
+            title=VALID_TITLE, description=VALID_DESCRIPTION, tags=VALID_TAGS,
+            expected_updated_at="older-version",
+        ))
+    assert _raw_job(job_id) == before
+
+
+def test_cover_request_rejects_stale_version_before_frame_generation(monkeypatch) -> None:
+    job_id = _seed_job()
+    before = _raw_job(job_id)
+    monkeypatch.setattr(publish_service, "generate_publish_cover", lambda *args, **kwargs: pytest.fail("stale cover must not generate"))
+    payload = PublishCoverCreate(task_id=before["task_id"], output_clip_id=before["output_clip_id"], title="封面", expected_updated_at="stale")
+    with pytest.raises(publish_service.PublishContentConflict):
+        publish_service.generate_publish_job_cover(job_id, payload)
+    assert _raw_job(job_id) == before
+
+
+def test_editor_saves_target_and_content_atomically_against_expected_version() -> None:
+    job_id = _seed_job()
+    account_id = _seed_account()
+    before = _raw_job(job_id)
+    saved = publish_service.update_send_job(job_id, PublishSendJobUpdate(
+        title=VALID_TITLE, description=VALID_DESCRIPTION, tags=VALID_TAGS,
+        expected_updated_at=before["updated_at"], account_id=account_id, publish_mode="local_browser",
+    ))["job"]
+    assert saved["title"] == VALID_TITLE
+    assert saved["account_id"] == account_id
+    assert saved["publish_mode"] == "local_browser"
+    assert saved["status"] == before["status"]
+
+
 def test_generated_douyin_copy_obeys_all_limits_and_removes_cliches() -> None:
     copy = build_generated_douyin_publish_copy(
         "长" * 40,
@@ -139,12 +187,12 @@ def test_generated_douyin_copy_obeys_all_limits_and_removes_cliches() -> None:
     )
 
     assert len(copy["title"]) <= 30
-    assert 15 <= len(copy["description"]) <= 35
+    assert 1 <= len(copy["description"]) <= 35
     assert not any(phrase in copy["description"] for phrase in ("现场爆笑", "引发热议", "不容错过"))
     tags = split_publish_tags(copy["tags"])
-    assert 4 <= len(tags) <= 6
+    assert len(tags) == 3
     assert len(tags) == len(set(tags))
-    assert all(2 <= len(tag) <= 3 for tag in tags)
+    assert all(2 <= len(tag) <= 12 for tag in tags)
     validate_douyin_publish_copy(copy["title"], copy["description"], copy["tags"])
 
 
@@ -187,7 +235,7 @@ def test_ai_failure_does_not_overwrite_existing_copy(monkeypatch) -> None:
         lambda *_args, **_kwargs: {
             "title": "失败回退标题",
             "description": "失败回退简介不应写入数据库",
-            "tags": "综艺,高光,笑点,反转",
+            "tags": "康熙来了,小S,反转",
             "source": "rule",
             "error": "模拟 AI 网络失败",
         },
@@ -203,6 +251,23 @@ def test_ai_failure_does_not_overwrite_existing_copy(monkeypatch) -> None:
         before["tags"],
         before["hashtags"],
     )
+
+
+def test_rule_draft_badge_requires_edit_and_manual_save_clears_it() -> None:
+    _seed_account()
+    job_id = _seed_job(
+        title=VALID_TITLE, description=VALID_DESCRIPTION, tags=VALID_TAGS,
+        provider_response=json.dumps({"metadata_review_required": True}),
+    )
+    draft = publish_service.get_publish_job(job_id)
+    assert draft["content_complete"] is False
+    assert draft["content_status_message"] == "文案草稿需编辑"
+    assert draft["content_status_tone"] == "amber"
+    saved = publish_service.update_send_job(job_id, PublishSendJobUpdate(
+        title=VALID_TITLE, description=VALID_DESCRIPTION, tags=VALID_TAGS, cover_file_path="cover.jpg",
+    ))["job"]
+    assert saved["content_complete"] is True
+    assert saved["content_status_message"] == "内容完整"
 
 
 def test_metadata_regeneration_does_not_overwrite_concurrent_publish(monkeypatch) -> None:
@@ -254,7 +319,7 @@ def test_manual_save_binds_unique_account_and_synchronizes_alias_fields() -> Non
     saved = _raw_job(job_id)
     assert saved["account_id"] == account_id
     assert saved["description"] == saved["caption"] == VALID_DESCRIPTION
-    assert saved["tags"] == saved["hashtags"] == "综艺, 高光, 小S, 反转"
+    assert saved["tags"] == saved["hashtags"] == "康熙来了, 小S, 反转"
     assert json.loads(saved["provider_response"])["metadata_upgrade_status"] == "manual_saved"
 
     with pytest.raises(ValueError, match="不能超过 30 字"):

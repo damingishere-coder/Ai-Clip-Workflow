@@ -1,3 +1,129 @@
+## 按用户要求恢复旧版 UI，正式验收完成（2026-10-08 15:33）
+
+已按用户明确要求恢复本次全站重构前 `cbd55c1` 的页面、导航、样式和编辑区。回退 [PR #158](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/158) 的最终 CI run `37742629033` 中 Linux、Windows、Docker 全部通过，独立审查无阻塞，squash 合并为 `21c4f2ce4f5aa9382714e53ff3330d176090348c`。原 offline-runtime 已干净更新到该提交，版本仍为 2.6.0；当前界面是旧版九入口和完整任务列表。保留不改变旧页面结构的字幕串行保存、切轨保护、当前字幕版本凭据校验及兼容旧客户端的后台保护接口。
+
+15:27 首次使用 RunDock CLI 停止、启动后，只有托管壳发生变化，13:34 启动的旧 Python `11728 → 10548` 仍在监听 8001，新启动记录出现 `WinError 10048` 并退出。当时模板虽已更新，旧内存中的 `/tasks` 仍只有 25 条，因此没有将该次操作视为完成。等待原 15:30 排期自然执行结束后，15:31:11 精准核验并结束旧 Web 子树，沿用既有 Web UUID `fe184e2b-9e04-4b21-a86b-12c59f98d71e` 启动；当前进程链 `31736 → 34776 → 36432` 均为本次新建，8001 由 36432 监听。health 为 ok、深度 readiness 为 ready，实际旧任务页面完整显示 64 条。没有另建重复服务。
+
+正式 HTTP 回执 `data/acceptance/ui-rollback/postdeploy-http.json` 的九项检查全部通过：原 17 个页面地址均 200、九入口和旧页壳正确；独立 `/clips`、`/subtitles`、任务 `/clips` 别名、完整转写及视觉证据均 200；`/review-inbox` 保留原 meta 跳转。源码没有独立 `/review-experience`、`/experiments` 页面，经验报告和改进试验仍位于 `/content-review`，对应区域已核实。HTTP 的 styles.css、app.js、subtitle-editor.js 字节与运行文件、验收工作树相同；styles.css 和 app.js 规范化 Windows CRLF 后与 `cbd55c1` 内容 SHA 完全相同，subtitle-editor.js 保留可靠保存版本。
+
+正式 Chrome 已目视确认 1440 宽度的工作台、64 条任务、发送中心、12 条候选审片和字幕策略页面，以及 390 宽度的工作台、发送中心恢复旧 UI。旧工作台实际统计包括素材 23、待字幕 0、待发布 32；浏览器控制台全程 0 错误、0 警告。本机截图保存于未纳入 Git 的 `output/playwright/live-rollback-*-1440.png` 和 `live-rollback-{workbench,publish}-390.png`。界面验收只进行导航、调整窗口和截图；没有调用 AI、保存业务表单、确认审片、审核字幕、改期或发送。浏览器工具不支持此次网络清单命令，没有据此宣称取得完整请求清单；验收自有浏览器已关闭。
+
+恢复前 15:31:03.677 与恢复后 15:31:19.444 的 51 张表数据摘要、schema、两份 .env 哈希完全一致，quick_check 为 ok、外键异常 0，证据为 `pre-recovery-fingerprint.json` / `post-recovery-fingerprint.json`。其余 17 个托管记录逐字段相同；Worker 8765 托管 PID 22532、监听 5332、restart_count 3 均未变。最终只读调度快照为 141 条未来排期、发送中 0、漏期 0；原 15:30 记录自然执行完成，没有代用户触发发布、补发或修改排期。
+
+部署前已验证在线备份 `C:\Users\10578\Documents\Ai-Clip-Workflow\data\backups\ui-rollback-20261008\niuma-studio-ui-rollback-20261008-151923.zip`，SHA256 为 `58fe71626f4726aa7709c6c02c91c7158e90019706e857d11bcf471622f76b20`，不含密钥和媒体。原主目录已有修改、素材、任务、人工凭据及当前排期保留。工程回归为 128 项后台、17 项真实 Chrome 全通过；模拟无 Chrome 为 16 通过、9 跳过，没有外键清理失败，Ruff、编译和 JS 语法通过。
+
+打开原 `http://127.0.0.1:8001/`，按 Ctrl+F5 即可查看恢复后的页面。旧页面已知交互限制也随历史界面恢复；不再宣称提供本次新版导航、分页或编辑抽屉。人工审片、字幕审核、排期和发布复核仍由用户操作。以下全站重构上线记录保留为撤回前的历史事实，当前界面及运行版本以本条回执为准。
+
+## 全站 UI 重构与补充修复正式验收完成（2026-10-08 13:48）
+
+全站主重构 [PR #155](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/155) 与原片监视器补充 [PR #156](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/156) 已合并、上线并完成正式界面验收。PR #156 最终提交 `3b26f2bdfe1802f18ffb3078b55bf730eecea961` 的 CI run `37726936338` 中 Linux、Windows、Docker 均 success，独立只读审查无阻塞；squash 为 `fea1e2aa921e3adf14612f27440c382ae4dd5d77`。正式 offline-runtime 干净更新至该提交，版本仍为2.6.0。补充产品改动仅模板、JS、CSS，无 Python 改动，沿用当前进程加载新页面，没有为这次前端更新重启 Web 或 Worker。
+
+正式 Chrome 1440 宽度默认仅当前预览 readyState4，隐藏监视器无 src、readyState0，12个成片播放器均 readyState0；首次打开监视器后 readyState4，准确定位当前入点468秒，Esc关闭并归还焦点。390×844重新加载也仅一个视频已加载；打开编辑标签和监视器后定位468秒，文档宽度390，无横向溢出。关闭按钮33–71px、取消和应用772–811px均在屏内；内容区可视667px、滚动内容1005px，overflow auto。初始焦点位于关闭按钮，Shift+Tab环回应用、Tab回到关闭；正常点击取消后归还编辑出入点焦点，视频paused true。正式验收未播放、应用或保存片段，网络无POST/PATCH/PUT/DELETE。主重构此前17页/4旧入口、64任务25/25/14分页及五宽度排期等验收记录保留如下。
+
+恢复后的实际服务仍由既有 RunDock 桌面应用18376托管：Web8001监听10548、父11728、祖父29500；Worker8765监听5332、父22532，同属应用18376。health ok、深度readiness ready；没有新建服务。12:47电脑发生重启，既有服务进程创建时间为13:34，随后复核已恢复；RunDock CLI2999未启动，本次前端更新未另起或重启服务。13:48只读回执 `data/acceptance/ui-refactor/final-patch-runtime.json` 确认运行提交fea1e2a及clean、调度enabled/running/worker_available均true，HTTP返回styles.css和clip-workspace.js的SHA与运行文件一致，模板无初始src/preload none；正式工作台截图为未纳入Git的本机 `output/playwright/live-workbench-final-1440.png`，控制台0错误/0警告。临时8019已无监听，验收CLI浏览器已关闭。
+
+补充更新前后51张表的数据摘要、schema及两份.env哈希完全相同，quick_check ok、外键异常0；忽略目录 `data/acceptance/ui-refactor` 的 `prepatch-recovered-fingerprint.json` / `postpatch-recovered-fingerprint.json` 留证。主重构在线备份及校验仍有效，回滚补充代码可用5011f32；不整库覆盖。原主目录的codemap、四份文档、PROJECT_REAUDIT及agent任务已有修改全部保留。
+
+期间发现主仓库 `.git/config` 为11622字节全NUL，写入时间12:19；已先保存 `data/acceptance/ui-refactor/recovery/git-config-corrupt-20261008.bin`，只恢复核实过的core、origin、master与worktreeConfig设置，没有回退索引、分支或文件。未知丢失的个人Git设置无法据此还原，不将此视为完整配置恢复，也不推断损坏原因。
+
+13:39调度复核为142条未来排期、发送中0、漏期1：原12:30记录 `b6ab17243eac` 已由调度保护自动以 `schedule_missed` 转为WAITING，未代用户补发或改期；当时下一条为14:00。用户可在原8001网页按Ctrl+F5查看新工作区，并在发送中心执行记录查看这条漏期。审片、字幕审核、接受AI文案、排期与发布复核仍由用户操作。本回执只记录已完成事实，文档后续Git交付另行核对。
+
+## 历史上线记录：全站 UI 主重构（2026-10-08 12:05）
+
+[PR #155](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/155) 最终提交 `b072ac9b354c7db7fe6e01563fc2e6b799e8db98` 的 Linux、Windows、Docker CI 全通过，Linux全量1517通过/80跳过。独立审查无阻塞，squash合并为 `5011f32082ce92ce9aa23d7ffb5b87a90d236771`。Windows本机真实Chrome专项覆盖五宽度、慢保存/409/切轨、36候选、发布建议与并发编辑；初始失败均已定位修复并完成关联fresh回归，不以跳过的Linux浏览器测试代替实际界面。
+
+12:01沿用原RunDock Web记录 `fe184e2b-9e04-4b21-a86b-12c59f98d71e` 更新offline-runtime至5011f32；托管PID117840、监听4504。Worker原托管PID27132/监听22780未重启，没有新建服务。health ok、深度readiness ready，Scheduler enabled/running/worker_available均true，143条未来排期、发送中0、漏期0。当前版本仍2.6.0，以此代码/运行证据确认部署。
+
+正式页面17/17及四个有效旧入口HTTP200；64任务真实分页25/25/14、名称/ID唯一搜索、平台与阶段筛选、返回条件均验证。E1873制作100%、保留原视频，不被列为字幕待办；12条排期精准标记。正式排期1440/1280/1024/768/390均scrollX=0、无横向溢出、操作完整可见。审片只展开当前编辑器，现有原片播放器readyState4，Range读取206，未实际播放。正式任务页五次GET中位483.841ms；不将历史不同负载采样差值解释为正式整体提速。
+
+备份为主目录 `data/backups/ui-refactor-20261008/niuma-studio-ui-workflow-refactor-20261008-113319.zip`，SHA256 `c9ee25145d6ca18d97fa3288647a09d0e89f161feaf509b717403bcdc829c52c`，在线SQLite snapshot及包校验通过，无配置密钥和媒体。12:05部署前后51张表计数/数据摘要、schema及两份.env哈希完全相同，quick_check ok、外键异常0。回滚代码基准cbd55c1，媒体仍E盘、正式DB仍主目录data/workflow.sqlite3；不执行整库覆盖或改变用户排期。忽略目录 `data/acceptance/ui-refactor` 保存备份回执、运行/HTTP/布局及数据对照。
+
+当时正式浏览器另发现隐藏原片监视器在首次打开前也预加载，后续独立补充修复与正式验收已在上方记录；主重构的上述上线事实保留。没有代用户审片、审核字幕、接受文案、改期、启用策略或发布。
+
+## 实施时记录：全站前端重构本地验收（2026-10-08）
+
+从 master cbd55c1 的独立 codex/ui-workflow-refactor 工作树实施用户批准的全站方案。原主工作目录的已有修改保留。继续Jinja2/原生JS；无数据库迁移、配置迁移或生产记录写入。
+
+全站导航与浅色页壳、共享制作配置、统一状态、真实任务查询、审片工作区、字幕可靠保存、发布建议预览和冲突保护、动态策略影响确认、复盘/设置二级导航均已实施。独立审查发现的字幕响应串轨、封面保存版本冲突、补齐设置未打开编辑器、旧任务跳过字幕绑定问题均已修复。
+
+本地全量运行 1573 项通过、6 项旧结构/文案断言失败；适配新结构后，对应完整模块 79 项重新通过。另有发送中心92项、任务/投影34项、辅助详情32项及最终页壳/定位14项分区回归通过；实际Chrome覆盖字幕慢保存/409/审核切轨、36候选单编辑器、共享Prompt作用范围、AI建议与版本冲突等。64任务和200作品的隔离副本在1440/1280/1024/768/390宽度完成实际检查，设置长路径与复盘操作离屏问题修复后复核通过。Ruff、Python编译与全部JS语法通过。详细范围及性能限制见 docs/acceptance/ui-refactor-2026-10-08.md。最终CI、合并、正式服务更新以随后交付记录为准，不以源码或隔离页面代表部署完成。
+
+本轮正式目标仍为原RunDock Niuma-Studio Web8001、offline-runtime运行目录、主目录data/workflow.sqlite3，以及既有Worker8765。正式更新前保留在线备份和代码回滚版本；不代用户审片、改期、接受AI建议或发布内容。
+
+## 当前：187条排期文案已改写并部署（2026-10-02 19:45）
+
+[PR #153](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/153) 最终提交 `0eddb86` 的 Linux、Windows、Docker CI 全通过，Squash 合并为 `ac7bf5e7f183e7000bc2a163bc0d73c0836c5e38`。本地完整1535项离线回归通过，最终文案/保存/就绪37项补测通过，Ruff、Python编译、JS语法通过，无阻塞审查。
+
+19:32沿用原RunDock记录更新Web和Worker功能代码，运行目录仍为offline-runtime；Web托管PID81308、监听138284，Worker托管PID130900、监听138040。没有新建服务。按用户授权原样保留187条排期时间，全部重写标题、简介与恰好3个话题，description/caption、tags/hashtags同步。正式API逐条核对187条、发送就绪187条，页面提示及JS响应与部署文件一致；readiness=ready、调度正常、投稿中0、错过排期0。
+
+生成规则v3按实际片段台词写具体钩子与自然接梗，标题不超过30字、简介非空且不超过35字，不凑字数、不统一加节目名前缀。话题3个、每个2～12字，可用完整节目名；禁止时长、纯数字、内部分析记录及空泛营销套话。新成片交接默认AI生成；旧任务显式配置保留。规则草稿标为待编辑，AI失败保留旧文案，执行中及历史记录禁止重写。未改变选片策略、成片审核或发布复核门禁。
+
+19:39在正式运行目录调用新生成服务实测既有未来排期一条：生成源为 `ai:codex-publish:gpt-6.1-sol`，规则版本3，标题、简介和3个话题齐全，原SCHEDULED状态及时间保留，发送就绪。19:45再次核对187条正式API和数据库，全部发送就绪、时间与其他记录未变；对照CSV已同步这条实测结果，证据为 `live-generation.json`、`final-jobs.json`、`final-verification.json`。本次未实测浏览器重写按钮或平台投稿，不将服务生成成功视为实际发布成功。
+
+写入前在线备份与初始备份SHA256均为 `ab91ddc5b4000a2bd4750fd763a3b11524abc1832756326621658c67bab5b414`。事务只改本次187条发布记录的7个文案/版本字段，其他发布记录和成片文件大小、修改时间保持不变；部署后51表仅publish_jobs摘要变化。配置SHA保持不变，数据库integrity=ok、外键异常0、迁移仍为23项，无DDL或环境变量更改。原文、改写对照CSV、备份及核对回执在忽略目录 `data/operations/20261002-copy-rewrite/`；回退应仅按原文列和并发版本恢复待发布文案，不能整库覆盖后续操作。
+
+本次没有代用户审新成片、改变时间、立即投稿或改写已发布历史。用户刷新发送中心即可查看。
+
+## 五期全文接续已完成，后续使用原分段分析（2026-10-02 16:01）
+
+接续批次 `1668699555cf4d10bc4264ca9283ed70` 按 E1869–E1873 顺序完成五期，共 **59 条候选、25 条实际切片**。五期均为 `pending_review`，人工凭据 `approved=false`；25 个文件均通过 FFprobe 视频、音频及切片时长检查。每期核实完整逐句转写指纹、唯一 `full_001` 单元及一次全文 Provider 提交的原始响应凭据；没有自动重试或混用分段 checkpoint。沿用冻结的 `comedy-playback-v1`、原字幕与视觉关闭。
+
+| 期数 | 新任务 | 候选 / 成片 | AI 请求耗时 | 流水线耗时 | 最终状态 |
+| --- | --- | --- | --- | --- | --- |
+| E1869 | `af070674e434` | 12 / 5 | 21分38秒 | 32分55秒 | 待人工审片 |
+| E1870 | `ed1de6ab17ad` | 12 / 5 | 20分04秒 | 25分59秒 | 待人工审片 |
+| E1871 | `d7e714386217` | 11 / 5 | 19分57秒 | 24分36秒 | 待人工审片 |
+| E1872 | `36dace7704a2` | 12 / 5 | 25分45秒 | 31分38秒 | 待人工审片 |
+| E1873 | `7248a9119acb` | 12 / 5 | 25分21秒 | 30分40秒 | 待人工审片 |
+
+流水线平均 29分10秒，AI 请求平均 22分33秒（按记录四舍五入）；流水线统计从自动生产 Job 开始至结束，含转写、分析和切片，不含此前队列等待。一次提交指应用层 Provider 调用，不能据此推断 Codex 内部模型轮数。以上为不同期数的运行实测，未做同素材盲评，不作为全文选片更好、漏选更少或播放提升的证据；内容质量仍由用户审片判断。
+
+按用户最新要求，全文仅用于本批，之后新视频使用原分段召回、扩展和全局评审（`staged_v1`）。正式 OpenAPI 的 BatchSettings 默认和资源池首选项再次核实均为 `staged_v1`，无需改当前冻结快照或重启服务。新旧导入原片 SHA256 对应一致；原五个旧任务于 15:46 已有删除标记，原 Job 随删除取消，`attempt_count=0`、`started_at` 为空，从未重新分析，保留删除状态和历史回执。
+
+正式 RunDock Web 8001 仍运行代码 PR #150 的 `9a7e63a0302f7a59feb0e3f03bab166d7aee9300`，目录为 `Ai-Clip-Workflow-offline-runtime`，正式库为主项目 `data/workflow.sqlite3`；Web PID 116860、Worker 8765 PID 32764 未变。最终深度 readiness ready、SQLite integrity ok、外键异常 0。五期均无发送中心记录，未代用户确认成片、排期或发布。临时接续脚本已于 16:01 完成验收并退出。本次只补结果文档，部署记录 PR #151 已合并，无需再部署。
+
+详细证据保存在本机忽略目录 `data/operations/20261002-march-remaining/pause-after-e1868/`：`speedup-final-acceptance.json`、逐期 `full-<task_id>-completion.json`、`speedup-final-live-verification.json`、`original-task-deletion-receipt.json` 和 `post-batch-analysis-policy.json`。
+
+## 部署时记录：全文一次分析上线、首期开始验证（2026-10-02 13:34）
+
+PR #150 三项 CI 全部通过并 squash 合并为 `9a7e63a`；已有 RunDock Web 8001 已更新至该提交，Worker 8765 保持原进程。正式深度 readiness ready、数据库完整性 ok、外键异常 0；部署前后原任务、发布记录、五期暂停 Job 和配置哈希一致。在线备份与回滚版本 `578714b` 留在本机操作目录。E1868 于 13:21 完成 5 条真实音视频并停在未批准的人工审片。13:34 时，新批次 `1668699555cf4d10bc4264ca9283ed70` 的首期 E1869 已开始自动生产，后四期导入仍暂停；当时尚未完成真实提速验收。逐期后续结果与旧任务删除后的实际状态见上方最终记录。
+
+## AI 分析入口精简（2026-10-02）
+
+任务详情由四个并列分析按钮改为“分析方式”下拉框和唯一“开始分析”，独立保留“保存提示词”。三种 Provider 仍是受支持能力，移除的是重复入口；默认继续沿用任务冻结设置，旧任务缺记录时使用当前默认，显式切换仅用于本轮。开始分析保留自动保存、原确认、Job 冻结、恢复账本与运行中锁定。Challenger 不写正式 Prompt。
+
+本地相关 41 项测试通过，含真实 Chrome 1440/390 布局与四种请求路由；Ruff、JS 语法和差异检查通过。已有主工作区文档/架构图修改保留，本次独立 codex/simplify-analysis-actions 分支直接对 master。交付沿用原 RunDock 正式 Web/Worker，无数据库迁移或配置调整，不触发模型分析、人工确认、排期或投稿。最终 CI/合并见精简分析操作 PR；正式 HTTP、浏览器、进程和数据保护证据写入本机 data/acceptance/analysis-actions/，以验收回执判断生效，不按版本号推定部署。
+
+## 运行验收：待补发视频定位与重新排期（2026-09-29 21:15）
+
+PR #147最终提交c0fecd8的Linux、Windows、Docker三项CI全部通过，Squash合并为85d54963be5c78711ab72145f8372b3e83060b71。21:14:46通过原RunDock管理记录重启Web 8001，运行目录仍为Ai-Clip-Workflow-offline-runtime；托管PID155704，监听72324。Worker监听86544保持运行。
+
+正式Chrome在1440/390宽度验证17条清单中错过记录置顶，顶部入口筛出唯一待补发视频，单条按钮打开对应重新排期面板，普通排期也可直接调整；浏览器无JS错误、无横向溢出、零写请求。真实记录de21cadab5fa的原时间为9月25日18:00，未代用户选新时间或投稿。截图复核另补隐藏按钮的CSS规则和错过记录长标题换行，并增加浏览器断言；最终样式交付以补充PR为准。
+
+深度readiness=ready，23项迁移、integrity=ok、外键异常0，调度扫描继续且失败计数0。16条未来排期、794个媒体路径元数据和配置哈希不变。50表中49表摘要不变；publish_jobs仅16条既有记录的publish_result由启动兼容逻辑从provider_response补齐，其他字段及行数不变。维护前备份SHA256为60c401674aa18d0d3844ff8396c55e0e279a825c483031e421b281d1260687bc。无新迁移。完整备份、逐字段差异、浏览器截图和报告在本机data/backups/reschedule-deploy-20260929/；原代码a9080f0可回滚，不应用旧数据库覆盖后续用户操作。
+
+## 当前运行：综艺播放目标已启用（2026-09-27 14:50）
+
+[PR #145](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/145) 最终提交的 Linux、Windows、Docker 三项 CI 全通过，Squash 合并为 `a9080f0eb271a2939d02a3981b58d51d747d8589`。原 RunDock 项目的 Web 8001 与发布 Worker 8765 均于14:49:42重启成功，实际运行目录仍为 `Ai-Clip-Workflow-offline-runtime`，干净 detached HEAD 为上述合并提交。Web 托管 PID88236 → Python90604 → 监听91084；Worker 托管89608 → 监听86544。没有另起服务。
+
+正式数据库已通过显式事务启用 `comedy-playback-v1`，Profile SHA256 为 `7e17d532adf38fb84e1fbd2b5b1ef44e2b2041830ff72fb95373fece50bbb067`，专用 Prompt 为 `profile_comedy_playback_v1`。正式 Chrome 在1440px与390px下选择“棚内综艺·播放目标”均自动带入该 Prompt，实际返回六维权重与证据排序策略匹配，无脚本错误或横向溢出。本次浏览器只读验收零POST，不新建任务、调用AI或投稿；新任务冻结与三阶段执行由隔离数据库演练和模拟Provider回归验证。
+
+重启后深度 readiness=ready，23项迁移、integrity=ok、外键异常0；调度扫描持续推进、失败计数0、Worker可用。维护前SQLite备份 SHA256 `1c4130977289e85b5c7c34d3839be268e71b86e7c6b2bcb509c3562baf3beae5`。部署前后50表中仅4个预期策略表变化（新增专用Prompt、Prompt版本、Profile版本及切换正式指针），其余46表摘要完全一致；758个登记媒体路径的存在状态/大小/修改时间、配置哈希及9条排期完全一致。已有1条错过排期的提醒保持原状，未补发。
+
+本地全量回归1482 passed、9项既有弃用警告，Ruff和diff检查通过；全量期间后续调整了页面说明，最终页面及新增规则另有13项定向回归通过，最终提交三项CI均通过。旧任务与Job冻结不变，无数据库结构迁移。备份、激活回执、进程归属、浏览器截图与完整性比较位于本机忽略目录 `data/backups/playback-deploy-20260927/`。回退使用新代码的 `--target legacy`，仅影响后续任务，不用旧数据库覆盖用户操作。详见 docs/PLAYBACK_PRODUCTION.md；真实播放效果仍需后续新内容验证。
+
+## 历史阶段：播放目标离线比较（2026-09-27，当时未启用）
+
+已准备 playback-v1-draft Prompt、六维评分规则和纯文件对比工具。基于最新50条关联的8个完整分析任务，84条候选均完成当前 Astra 的非盲文本复评。只调权改变41条期内排名，按新定义复评改变66条，每期前五对照组共更换10条；不作为播放提升证据。实际明细仅保存在本机忽略目录，生产配置、数据库、媒体、排期与服务未改变。使用方式和边界见 docs/PLAYBACK_CANDIDATE.md。正式启用仍须另行确认并实现受支持的评分版本；当前交付无需部署或重启。
+
+本地68项相关测试通过；合并与最终CI以本次PR为准。下面保留既有生产运行记录。
+
+## 当前运行：过期排期保护已部署（2026-09-24 17:55）
+
+[PR #142](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/142) 的 Linux 全量、Windows 与 Docker 三项 CI 均通过，Squash 合并为 `5f6e22e8015814f932424a9208f373c9ce58e31e`；本机完整回归 **1451 passed**，包含隔离数据中“过期不补发、后续任务照常处理”和真实 Chrome 重新排期流程。17:53 原 RunDock Web 8001 更新至该提交，监听 PID 68036 → Python 71272 → 托管 PowerShell 71036 → alter → rundock；Worker 8765 原托管 PID 35320 保持运行。没有修改数据库结构、发布配置或媒体。
+
+维护前 SQLite 在线备份 SHA256 `1bea33e9de4c676f262b733f5ebd157ec5e3e2a98a0c839f0c2b81f1ffdf0b7d`；部署前后 1105 条发送记录摘要及 9 条未来排期完全一致，0 条发送中。深度 readiness=ready、23 项迁移、integrity=ok、外键异常 0，配置哈希不变；调度扫描持续推进、失败计数 0、Worker 可用。正式返回的 JS/CSS 哈希等于运行源码，1440px 与 390px Chrome 页面均显示今天后续四条排期，无脚本错误或横向溢出。正式环境尚无新错过的任务，因此“错过后显示提醒”由隔离 Chrome 用例验证；后续真实投稿仍以执行记录核对。备份和验收报告位于本机忽略目录 `data/backups/missed-schedule-deploy-20260924-1752/`。
+
 ## 当前生产安排：E1868 后暂停并应用全文提速（2026-10-02 12:26）
 
 3 月资源池批次 `4921291c515941b19ccaca8967d2a0ec` 当前 E1859–E1867 已完成预切待人工审片，E1868 正在 AI 分析。按用户确认，仅对后五期 E1869–E1873 未启动流水线设置持久队列挂起，五个 Job 的执行次数均为 0，可领取数为 0；未取消或删除任务，E1868 未中断。正式 Web、Worker 和既有发布流程继续运行，health=ok、readiness=ready、数据库 integrity=ok、外键异常 0。
@@ -422,6 +548,10 @@ PR [#88](https://github.com/damingishere-coder/Ai-Clip-Workflow/pull/88) 已 squ
 | 单条素材进度 | 以任务页面和当前数据库为准；历史日志里的处理百分比、候选数量和排期不是实时状态 |
 
 Issue #23 仍保留早期 v2.0 实机验收标题；本次 v2.3 实机验收已经完成。Issue 的旧标题或开放状态不能替代最新发布证据。
+
+## 2026-09-24 过期发布排期保护（待合并部署）
+
+针对服务或账号恢复后集中补发过期任务的问题，调度器改为仅在计划时间后两分钟内允许正常扫描延迟；超过后将尚未开始上传的任务移回待排期，记录原时间及 `schedule_missed` 审计事件，不自动投稿或重排。后续未到点的任务保持原排期。发送中心显示错过数量、原计划时间和重新排期入口；用户保存新排期后清除提醒。已通过调度状态机、API、动态排期和真实 Chrome 页面回归；合并、正式运行更新及实际验收另以交付记录为准。
 
 
 

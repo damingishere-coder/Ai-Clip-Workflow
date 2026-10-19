@@ -52,6 +52,7 @@ if (publishCenterRoot) {
   const contentEmpty = document.querySelector("[data-content-empty]");
   const platformListTitle = document.querySelector("[data-platform-list-title]");
   const schedulerHealthNode = document.querySelector("[data-scheduler-health]");
+  const missedScheduleAlert = document.querySelector("[data-missed-schedule-alert]");
   const backfillCoversButton = document.querySelector("[data-backfill-covers]");
   let latestPreviewSignature = "";
   let latestPreviewItems = [];
@@ -171,6 +172,20 @@ if (publishCenterRoot) {
     return Array.from(document.querySelectorAll('[data-publish-row][data-section="schedule"]'));
   }
 
+  let scheduleFilter = "all";
+
+  function isMissedSchedule(row) {
+    return row.dataset.status === "WAITING" && row.dataset.errorCode === "schedule_missed";
+  }
+
+  function setScheduleFilter(filter) {
+    scheduleFilter = filter === "missed" ? "missed" : "all";
+    selectedJobIds.clear();
+    invalidatePreview();
+    renderPlatformSchedule();
+    updateSelectionUi();
+  }
+
   function scheduleRowOrder(row) {
     if (!scheduleRowOrders.has(row)) {
       scheduleRowOrders.set(row, scheduleRowOrderSequence);
@@ -190,6 +205,7 @@ if (publishCenterRoot) {
     const rows = scheduleRows();
     rows.forEach(scheduleRowOrder);
     rows.sort((first, second) => {
+      if (isMissedSchedule(first) !== isMissedSchedule(second)) return isMissedSchedule(first) ? -1 : 1;
       const firstTimestamp = scheduleTimestamp(first);
       const secondTimestamp = scheduleTimestamp(second);
       const firstScheduled = Number.isFinite(firstTimestamp);
@@ -462,11 +478,17 @@ if (publishCenterRoot) {
       if (action) action.textContent = active ? "当前" : "切换";
     });
     let visibleCount = 0;
+    const missedCount = rows.filter((row) => row.dataset.outputActive !== "false" && row.dataset.platform === activePlatform && isMissedSchedule(row)).length;
+    document.querySelectorAll("[data-missed-list-count]").forEach((node) => { node.textContent = String(missedCount); });
+    document.querySelectorAll("[data-schedule-filter]").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.dataset.scheduleFilter === scheduleFilter));
+    });
     rows.forEach((row) => {
       const visible = (
         row.dataset.outputActive !== "false"
         && sectionAllows("schedule", row.dataset.status || "")
         && row.dataset.platform === activePlatform
+        && (scheduleFilter !== "missed" || isMissedSchedule(row))
       );
       row.hidden = !visible;
       if (visible) visibleCount += 1;
@@ -492,7 +514,10 @@ if (publishCenterRoot) {
     if (accountPlatformLabel) accountPlatformLabel.textContent = platformLabel();
     filterAccountOptions(document.querySelector("[data-batch-account]"), activePlatform);
     if (platformListTitle) platformListTitle.textContent = `${platformLabel()}任务清单`;
-    if (scheduleEmpty) scheduleEmpty.hidden = visibleCount > 0;
+    if (scheduleEmpty) {
+      scheduleEmpty.hidden = visibleCount > 0;
+      scheduleEmpty.textContent = scheduleFilter === "missed" ? "当前平台没有待补发视频，可切回全部任务查看排期。" : "当前平台没有待排期或已排期任务。";
+    }
     updateBackfillCoversButton();
     applyHistoryFilter();
   }
@@ -1033,10 +1058,19 @@ if (publishCenterRoot) {
     button.removeAttribute("data-publish-now");
     button.removeAttribute("data-send-setup");
     button.removeAttribute("data-repair-job");
+    button.removeAttribute("data-reschedule-missed");
     button.hidden = false;
     button.disabled = false;
     const section = row.dataset.section;
     if (section === "schedule") {
+      const rescheduleButton = row.querySelector("[data-reschedule-job]");
+      if (rescheduleButton) rescheduleButton.hidden = row.dataset.status !== "SCHEDULED" || isMissedSchedule(row);
+      if (row.dataset.errorCode === "schedule_missed") {
+        button.dataset.rescheduleMissed = "";
+        button.className = "primary-button";
+        button.textContent = "重新排期";
+        return;
+      }
       if (readiness.ready || readiness.can_auto_resolve) {
         button.dataset.publishNow = "";
         button.className = "primary-button";
@@ -1167,7 +1201,7 @@ if (publishCenterRoot) {
     const tagsCount = form.querySelector('[data-copy-count="tags"]');
     if (titleCount) titleCount.textContent = `${title.length}/30`;
     if (descriptionCount) descriptionCount.textContent = `${description.length}/35`;
-    if (tagsCount) tagsCount.textContent = `${tags.length}/4～6 个`;
+    if (tagsCount) tagsCount.textContent = `${tags.length}/3 个`;
   }
 
   function validateCopyForm(form) {
@@ -1176,10 +1210,10 @@ if (publishCenterRoot) {
     const tags = splitCopyTags(form.elements.tags?.value || "");
     if (!title) return "抖音标题不能为空";
     if (title.length > 30) return `抖音标题不能超过 30 字，当前为 ${title.length} 字`;
-    if (description.length < 15 || description.length > 35) return `抖音简介需为 15～35 字，当前为 ${description.length} 字`;
-    if (tags.length < 4 || tags.length > 6) return "抖音标签需填写 4～6 个";
-    if (new Set(tags).size !== tags.length || tags.some((tag) => tag.length < 2 || tag.length > 3)) {
-      return "抖音标签必须去重，且每个标签严格为 2～3 字";
+    if (!description.length || description.length > 35) return `抖音简介不能为空且最多 35 字，当前为 ${description.length} 字`;
+    if (tags.length !== 3) return "抖音话题需恰好填写 3 个";
+    if (new Set(tags).size !== tags.length || tags.some((tag) => tag.length < 2 || tag.length > 12 || /^\d+(秒|分|分钟)?$/.test(tag))) {
+      return "抖音话题必须去重，每个 2～12 字，不能使用时长或纯数字";
     }
     return "";
   }
@@ -1247,6 +1281,7 @@ if (publishCenterRoot) {
     document.querySelectorAll(`[data-publish-row][data-job-id="${CSS.escape(job.id)}"]`).forEach((row) => {
       const status = String(job.status || row.dataset.status || "").toUpperCase();
       row.dataset.status = status;
+      if (job.error_code !== undefined) row.dataset.errorCode = job.error_code || "";
       if (job.platform) row.dataset.platform = job.platform;
       if (job.account_id !== undefined || job.effective_account_id !== undefined) {
         row.dataset.accountId = job.effective_account_id || job.account_id || job.send_readiness?.resolved_account_id || "";
@@ -1260,7 +1295,16 @@ if (publishCenterRoot) {
         || (row.dataset.section !== "history" && row.dataset.outputActive === "false")
       );
       const statusNode = row.querySelector("[data-row-status]");
-      if (statusNode) statusNode.textContent = job.status_label || statusLabel(status);
+      if (statusNode) {
+        statusNode.textContent = job.status_label || statusLabel(status);
+        statusNode.classList.remove("tone-blue", "tone-amber", "tone-green", "tone-red", "tone-purple");
+        statusNode.classList.add(`tone-${job.status_tone || "blue"}`);
+      }
+      const missedNote = row.querySelector("[data-missed-schedule-note]");
+      if (missedNote) {
+        missedNote.hidden = row.dataset.errorCode !== "schedule_missed";
+        missedNote.textContent = missedNote.hidden ? "" : (job.error_message || "原排期已错过，请重新排期");
+      }
       const executionMessage = row.querySelector("[data-execution-message]");
       if (executionMessage) executionMessage.textContent = job.error_message || job.execution_phase_label || "";
       const titleNode = row.querySelector("[data-row-title]");
@@ -1395,6 +1439,16 @@ if (publishCenterRoot) {
       return;
     }
     configureAdaptiveForm();
+    const selectedRows = scheduleRows().filter((row) => selectedJobIds.has(row.dataset.jobId));
+    const context = document.querySelector("[data-reschedule-context]");
+    if (context) {
+      context.hidden = selectedRows.length !== 1;
+      const row = selectedRows[0];
+      const originalPlan = row && isMissedSchedule(row)
+        ? `已错过，系统未补发。${row.querySelector("[data-missed-schedule-note]")?.textContent || "请核对原排期"}`
+        : `原计划：${row?.querySelector("[data-row-schedule]")?.textContent || "未排期"}`;
+      context.textContent = row ? `${row.querySelector("[data-row-title]")?.textContent || ""} · ${originalPlan}。预览并确认后才会保存新时间。` : "";
+    }
     drawer.hidden = false;
     drawerBackdrop.hidden = false;
     document.body.classList.add("has-schedule-drawer");
@@ -1600,6 +1654,12 @@ if (publishCenterRoot) {
     workerMessage = data.worker_message || "Windows 发布 Worker 未连接";
     const schedulerFailures = Number(data.consecutive_failures || 0);
     const schedulerHealthy = Boolean(data.running && schedulerFailures === 0);
+    if (missedScheduleAlert) {
+      const count = Number(data.missed_schedule_count || 0);
+      missedScheduleAlert.hidden = count === 0;
+      const countNode = missedScheduleAlert.querySelector("[data-missed-schedule-count]");
+      if (countNode) countNode.textContent = String(count);
+    }
     if (schedulerHealthNode) {
       schedulerHealthNode.dataset.workerAvailable = workerAvailable ? "true" : "false";
       schedulerHealthNode.dataset.schedulerFailures = String(schedulerFailures);
@@ -1712,6 +1772,14 @@ if (publishCenterRoot) {
 
   document.querySelectorAll("[data-center-tab]").forEach((button) => {
     button.addEventListener("click", () => switchTab(button.dataset.centerTab));
+  });
+  document.querySelector("[data-open-missed-schedules]")?.addEventListener("click", () => {
+    switchTab("schedule");
+    setScheduleFilter("missed");
+    document.querySelector(".publish-schedule-filters")?.scrollIntoView({ behavior: window.preferredScrollBehavior(), block: "start" });
+  });
+  document.querySelectorAll("[data-schedule-filter]").forEach((button) => {
+    button.addEventListener("click", () => setScheduleFilter(button.dataset.scheduleFilter));
   });
   document.querySelectorAll("[data-publish-platform]").forEach((button) => {
     button.addEventListener("click", () => setActivePlatform(button.dataset.publishPlatform));
@@ -1941,6 +2009,18 @@ if (publishCenterRoot) {
   });
 
   document.addEventListener("click", async (event) => {
+    const rescheduleMissed = event.target.closest("[data-reschedule-missed], [data-reschedule-job]");
+    if (rescheduleMissed) {
+      const jobId = rescheduleMissed.closest("[data-publish-row]")?.dataset.jobId;
+      if (!jobId) return;
+      switchTab("schedule");
+      selectedJobIds.clear();
+      selectedJobIds.add(jobId);
+      invalidatePreview();
+      updateSelectionUi();
+      openDrawer();
+      return;
+    }
     const taskGroupToggle = event.target.closest("[data-task-group-toggle]");
     if (taskGroupToggle) {
       const group = taskGroupToggle.closest("[data-publish-task-group]");
@@ -2441,6 +2521,7 @@ if (publishCenterRoot) {
       const saved = (data.schedule || []).map((item, index) => `第 ${index + 1} 条：${item.scheduled_at_local_display}`).join("；");
       showMessage(`${data.message} ${saved}`, "success");
       selectedJobIds.clear(); updateSelectionUi(); closeDrawer(); invalidatePreview();
+      void refreshSchedulerHealth();
     } catch (error) {
       const row = document.querySelector(`[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(payload.job_ids[0] || "")}"]`);
       applyReadinessError(error, row);

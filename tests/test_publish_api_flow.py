@@ -14,6 +14,31 @@ def _headers() -> dict[str, str]:
     return {}
 
 
+def test_send_content_returns_conflict_for_stale_editor(monkeypatch):
+    def conflict(*args):
+        raise publish_router.publish_service.PublishContentConflict("旧版本")
+    monkeypatch.setattr(publish_router.publish_service, "update_send_job", conflict)
+    response = TestClient(app).patch("/api/publish/jobs/example/send-content", headers=_headers(), json={"title": "标题", "expected_updated_at": "old"})
+    assert response.status_code == 409
+
+
+def test_metadata_preview_endpoint_returns_suggestion_without_save(monkeypatch):
+    calls = []
+    def preview(job_id):
+        calls.append(job_id)
+        return {"metadata": {"title": "建议"}, "expected_updated_at": "original"}
+    monkeypatch.setattr(publish_router.publish_service, "preview_send_job_metadata", preview)
+    response = TestClient(app).post("/api/publish/jobs/example/metadata/preview", headers=_headers())
+    assert response.status_code == 200
+    assert response.json()["expected_updated_at"] == "original"
+    assert calls == ["example"]
+
+
+def test_dynamic_policy_apply_preview_requires_token_and_confirmation():
+    response = TestClient(app).post("/api/publish/schedules/adaptive/example/apply-preview", headers=_headers(), json={"enabled": True, "include_existing": True})
+    assert response.status_code == 409
+
+
 def test_publish_now_api_only_schedules_then_wakes_same_scheduler(monkeypatch):
     events: list[tuple[str, str]] = []
 

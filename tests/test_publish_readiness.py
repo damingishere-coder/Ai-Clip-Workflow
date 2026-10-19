@@ -56,7 +56,7 @@ def _job_payload(*, platform: str = "douyin", publish_mode: str = "local_browser
         "account_id": account_id,
         "title": "测试标题",
         "caption": "这段对话的反转让所有人都没想到",
-        "hashtags": "综艺,高光,笑点,反转",
+        "hashtags": "康熙来了,小S,反转",
         "cover_file_path": "cover.jpg",
         "video_path": "video.mp4",
         "bilibili_tid": "娱乐",
@@ -100,7 +100,7 @@ def test_manual_export_does_not_require_account_cover_tags_or_worker():
 def test_douyin_copy_rules_block_schedule_preflight_but_not_bilibili_title_limit():
     account = _account()
     invalid = _job_payload()
-    invalid["caption"] = "太短"
+    invalid["caption"] = "简介" * 18
     readiness = build_send_readiness(invalid, accounts=[account])
     assert readiness["dispatch_ready"] is False
     assert readiness["action"] == "complete_content"
@@ -188,7 +188,7 @@ def _insert_job(
                 tags, hashtags, cover_file_path, scheduled_at, schedule_timezone, timezone,
                 status, error_code, remote_video_id, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, 'douyin', ?, 'original', ?, ?, '测试标题', '这段对话的反转让所有人都没想到',
-                '这段对话的反转让所有人都没想到', '综艺,高光,笑点,反转', '综艺,高光,笑点,反转', ?, ?, 'Asia/Shanghai', 'Asia/Shanghai', ?, ?, ?, ?, ?)
+                '这段对话的反转让所有人都没想到', '康熙来了,小S,反转', '康熙来了,小S,反转', ?, ?, 'Asia/Shanghai', 'Asia/Shanghai', ?, ?, ?, ?, ?)
             """,
             (
                 job_id,

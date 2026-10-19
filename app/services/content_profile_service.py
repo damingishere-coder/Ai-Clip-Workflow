@@ -1,7 +1,7 @@
 """Version lookup and explicit task binding, using the existing DB transaction.
 
-There is intentionally no activation/editor API. Legacy adapters only support
-their audited policy; unknown revisions fail closed instead of ignoring rules.
+Only audited revisions are executable; the explicit activation service switches
+the head without rewriting frozen tasks. Unknown revisions fail closed.
 """
 
 import json
@@ -9,10 +9,11 @@ import hashlib
 from contextlib import nullcontext
 
 from app.models.content_profile import ContentProfile
-from app.services.content_profile_definitions import builtin_profiles
+from app.services.content_profile_definitions import builtin_profiles, playback_comedy_profile
 
 
 _BUILTINS = {p.id: p for p in builtin_profiles()}
+_SUPPORTED = {(p.id, p.content_hash()) for p in (*builtin_profiles(), playback_comedy_profile())}
 JOB_SNAPSHOT_KEY = "generation_snapshot_v1"
 SELECTION_FIELDS = (
     "selection_profile", "candidate_clip_count", "final_clip_target", "max_clip_duration",
@@ -67,7 +68,7 @@ def list_content_profiles() -> list[dict]:
 
 
 def _assert_supported(profile: ContentProfile):
-    if profile.content_hash() != registered_profile(profile.id).content_hash():
+    if (profile.id, profile.content_hash()) not in _SUPPORTED:
         raise ValueError("此 Profile 规则版本尚无匹配的 Analyzer，已阻止以旧算法执行新规则")
 
 
@@ -180,7 +181,14 @@ def freeze_new_job_payload(connection, task_id: str, job_type: str, payload: dic
     if not prompt.get("content_profile_version_id"):
         # A new execution of an old task is known now. Do not backfill that
         # task's historical binding or any existing/queued/failed Job or Run.
-        version, profile = active_profile(connection, task["selection_profile"] or "general")
+        # Unknown historical tasks must not combine their old Prompt with a
+        # newly activated scoring revision. Freeze the supported legacy policy.
+        profile = registered_profile(task["selection_profile"] or "general")
+        row = connection.execute("SELECT id FROM content_profile_versions WHERE profile_id=? AND config_sha256=?",
+                                 (profile.id, profile.content_hash())).fetchone()
+        if not row:
+            raise ValueError("历史任务缺少兼容的 Profile 版本，不能替换为当前策略")
+        version, profile = _version(connection, row[0])
         prompt.update(content_profile_version_id=version["id"], content_profile_sha256=profile.content_hash(),
                       content_profile_json=profile.canonical_json())
     from app.services.ai.provider_snapshot import capture
@@ -198,6 +206,13 @@ def freeze_new_job_payload(connection, task_id: str, job_type: str, payload: dic
     }
     from app.services.visual_policy_service import task_visual_policy
     snapshot["visual_policy"] = task_visual_policy(connection, task_id)
+    from app.services.ai.analysis_modes import STAGED_MODE, validate_analysis_mode
+    mode = result.pop("analysis_mode", STAGED_MODE)
+    validate_analysis_mode(mode, provider=identity["name"], profile_id=task["selection_profile"],
+                           visual_enabled=snapshot["visual_policy"]["enabled"],
+                           rules_version=json.loads(prompt["content_profile_json"])["rules_version"])
+    if mode != STAGED_MODE:
+        snapshot["analysis_mode"] = mode
     if task["selection_profile"] == "variety_comedy":
         from app.services.clip_feedback_service import list_recent_feedback_context_with_connection
         snapshot["feedback_context"] = {
@@ -244,6 +259,11 @@ def read_job_snapshot(job: dict, *, connection=None) -> dict | None:
                 or any(not isinstance(item, dict) for item in feedback["items"])):
             raise ValueError("Job 审片反馈快照损坏，不能替换为当前反馈")
     analyzer_key(snapshot["selection"], snapshot["prompt"])
+    from app.services.ai.analysis_modes import STAGED_MODE, validate_analysis_mode
+    validate_analysis_mode(snapshot.get("analysis_mode", STAGED_MODE), provider=snapshot["provider"],
+                           profile_id=snapshot["selection"].get("selection_profile"),
+                           visual_enabled=snapshot.get("visual_policy", {}).get("enabled", False),
+                           rules_version=json.loads(snapshot["prompt"]["content_profile_json"])["rules_version"])
     from app.db.database import get_connection
     with (nullcontext(connection) if connection is not None else get_connection()) as connection:
         prompt = snapshot["prompt"]
