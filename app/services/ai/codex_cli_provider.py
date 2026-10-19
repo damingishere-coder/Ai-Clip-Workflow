@@ -7,12 +7,14 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
 from uuid import uuid4
+from urllib.parse import urlsplit
 
 from app.services.ai.base import AIProviderError
 from app.services.ai.visual_provider import VisualImage, current_visual_deadline
@@ -124,8 +126,9 @@ class CodexCliProvider:
                 else:
                     completed = self._run_text_command(command, temp_dir, environment, task_prompt)
                 if completed.returncode != 0:
+                    diagnostic = self._save_execution_failure(task_prompt, completed)
                     raise AIProviderError(
-                        f"Codex CLI 执行失败（退出码 {completed.returncode}）",
+                        f"Codex CLI 执行失败（退出码 {completed.returncode}）" + diagnostic,
                         category="cli_exit_error",
                         billing_uncertain=True,
                     )
@@ -191,6 +194,38 @@ class CodexCliProvider:
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=max(10, int(self.config.timeout_seconds)), check=False)
 
+    def _save_execution_failure(self, prompt: str, completed: subprocess.CompletedProcess) -> str:
+        if not self.config.diagnostics_dir:
+            return ""
+        try:
+            stderr = str(completed.stderr or "")
+            clean = stderr.replace("\r\n", "\n").replace("\r", "\n")
+            clean = clean.replace(prompt.replace("\r\n", "\n").replace("\r", "\n"), "[request omitted]")
+            clean = re.sub(r"<user_material>.*?</user_material>", "[material omitted]", clean, flags=re.S)
+            lines = [line for line in clean.splitlines() if re.match(
+                r"^(?:\d{4}-\d{2}-\d{2}T\S+\s+(?:ERROR|WARN)\s|ERROR:|Error:|error:|Reconnecting)", line)]
+            safe_lines = []
+            for line in lines[-10:]:
+                for private in (self.config.codex_home, self.config.executable, str(Path.home())):
+                    if private and private not in {"codex", "codex.exe", "codex.cmd"}:
+                        line = line.replace(private, "[local path]")
+                line = _redact_cli_diagnostic(line)
+                safe_lines.append(line[:1200])
+            directory = Path(self.config.diagnostics_dir)
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f"execution-failed-{uuid4().hex}.json"
+            path.write_text(json.dumps({
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "returncode": completed.returncode,
+                "request_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                "stderr_sha256": hashlib.sha256(stderr.encode("utf-8")).hexdigest(),
+                "diagnostic_lines": safe_lines,
+                "truncated": len(lines) > 10 or any(len(line) > 1200 for line in lines),
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            return f"；退出诊断：{path}"
+        except (OSError, ValueError):
+            return "；退出诊断保存失败"
+
     def _save_invalid_output(self, prompt: str, raw_output: str, error: str) -> str:
         if not self.config.diagnostics_dir:
             return ""
@@ -240,6 +275,25 @@ class CodexCliProvider:
             return resolved
         candidate = Path(configured).expanduser()
         return str(candidate.resolve()) if candidate.is_file() else ""
+
+
+def _redact_cli_diagnostic(text: str) -> str:
+    def safe_url(match):
+        try:
+            parsed = urlsplit(match.group(0))
+            host = parsed.hostname or ""
+            if ":" in host:
+                host = f"[{host}]"
+            port = f":{parsed.port}" if parsed.port else ""
+            return f"{parsed.scheme}://{host}{port}{parsed.path}"
+        except ValueError:
+            return "[URL]"
+    text = re.sub(r"https?://[^\s<>\"']+", safe_url, text)
+    text = re.sub(r"(?i)\bBearer\s+[^\s\"',;]+", "Bearer [REDACTED]", text)
+    text = re.sub(r'''(?i)(\b(?:cookie|set-cookie)\b["']?\s*[:=]\s*).*''', r"\1[REDACTED]", text)
+    text = re.sub(r'''(?i)(\b(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|secret|token|cookie|set-cookie)\b["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}]+)''', r"\1[REDACTED]", text)
+    text = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[REDACTED]", text)
+    return text
 
 
 def _strip_json_fence(text: str) -> str:
