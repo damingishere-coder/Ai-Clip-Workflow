@@ -1,12 +1,12 @@
-# v2.6.0 Release 检查清单
+# v2.6.1 Release 检查清单
 
-历史版本清单：[v2.5.5](RELEASE_CHECKLIST_V2_5_5.md)。用户已同意工程/实机验收后在日常使用中补充内容质量检查，不要求先提供专门媒体或完成人工盲审；访谈、知识与视觉保持试用，人工审片、字幕决定与排期操作仍须明确执行。
+历史版本清单：[v2.6.0](RELEASE_CHECKLIST_V2_6.md)、[v2.5.5](RELEASE_CHECKLIST_V2_5_5.md)。用户已同意工程/实机验收后在日常使用中补充内容质量检查，不要求先提供专门媒体或完成人工盲审；访谈、知识与视觉保持试用，人工审片、字幕决定与排期操作仍须明确执行。
 
 本清单用于发布牛马片场正式版本。只有代码检查、Windows 实机验收、备份保护和文档核对均通过后，才创建 Git Tag 与 GitHub Release。
 
 ## 当前交付状态
 
-v2.6.0 已发布并部署，运行提交 75cdd93。1346 项完整回归、PR/主干三项 CI、Windows 实机 17 项通过；真实 Web/Worker 2.6.0、23 项迁移、18 次页面、7 项资源哈希及配置/媒体/旧记录保护通过。证据与提前迁移纠正见 PROJECT_STATUS.md；下面是以后逐项执行的模板，不能用空勾选覆盖本次实际报告。
+v2.6.1 正在准备发布。最终提交 CI、当前 Windows 实机门禁和正式 Web/Worker 验收通过后，才创建 Tag 与 GitHub Release；实际交付以 PROJECT_STATUS.md 最新记录为准。
 
 ## 1. 自动化检查
 
@@ -80,7 +80,7 @@ git pull --ff-only
 确认输出：
 
 ```text
-=== v2.6.0 发布门禁通过 ===
+=== v2.6.1 发布门禁通过 ===
 ```
 
 门禁会阻止以下情况发布：
@@ -93,7 +93,7 @@ git pull --ff-only
 - 当前分支不是 `master`
 - 验收报告对应旧 commit
 - Git 工作区不干净
-- 应用、README 或 Changelog 版本不是 `2.6.0`
+- 应用、README 或 Changelog 版本不是 `2.6.1`
 
 本地保留经过检查的实机报告；提交 PROJECT_STATUS 的脱敏结论即可。Issue 评论需另外明确授权，不上传完整日志、`.env`、SQLite 或视频。
 
@@ -139,8 +139,8 @@ git pull --ff-only
 
 ## 6. 文档和版本一致性
 
-- [ ] `app/main.py` 版本为 `2.6.0`
-- [ ] README 中英文版本徽章为 `2.6.0`
+- [ ] `app/main.py` 版本为 `2.6.1`
+- [ ] README 中英文版本徽章为 `2.6.1`
 - [ ] `CHANGELOG.md` 包含本次版本的重要变化
 - [ ] `README.md` 快速开始命令可复制执行
 - [ ] `.env.example` 没有个人绝对路径和真实密钥
@@ -169,21 +169,21 @@ git pull --ff-only
 建议填写：
 
 ```text
-Tag: v2.6.0
+Tag: v2.6.1
 Target: master
-Title: NiuMa Studio v2.6.0 — Production Queue
+Title: NiuMa Studio v2.6.1 — Production Queue
 Latest release: Yes
 Pre-release: No
 ```
 
-发布正文以 `CHANGELOG.md` 的 2.6.0 内容为基础，并明确：
+发布正文以 `CHANGELOG.md` 的 2.6.1 内容为基础，并明确：
 
 - Windows 本地单用户工具
 - Demo 不连接真实账号
 - 抖音与 B站发布需要逐账号灰度验证
 - 不绕过登录、验证码或平台风控
 - 升级前应使用 `pre_upgrade.ps1` 创建本地回滚包
-- v2.6.0 的 Windows 10/11 + Docker Desktop 验收日期和对应 commit
+- v2.6.1 的 Windows 10/11 + Docker Desktop 验收日期和对应 commit
 - 视觉默认关闭；图像/综合评审技术验收不代表节目质量提升
 - 访谈/知识模板及视觉功能为试用，真实内容质量未宣称通过；人工审片、字幕及发布边界保留
 

@@ -6,7 +6,7 @@ from scripts.publish_host_worker import create_worker_app
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "2.6.0"
+EXPECTED_VERSION = "2.6.1"
 
 
 def test_runtime_versions_match_release_version() -> None:
@@ -28,9 +28,8 @@ def test_readme_badges_and_release_gate_match_release_version() -> None:
 
 
 def test_visible_version_and_current_guides_match_release_version() -> None:
-    short_version = ".".join(EXPECTED_VERSION.split(".")[:2])
     sidebar = (PROJECT_ROOT / "app/templates/base.html").read_text(encoding="utf-8")
-    assert f"v{short_version} 本地高光生产版" in sidebar
+    assert f"v{EXPECTED_VERSION} 本地高光生产版" in sidebar
     agents = (PROJECT_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     assert f"当前版本：{EXPECTED_VERSION}" in agents
     assert f"当前 {EXPECTED_VERSION} 范围" in agents
