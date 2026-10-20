@@ -440,6 +440,13 @@ def normalize_clip_bounds(
             return None
         start = _nearest_boundary(start_seconds, context_rows, use_start=True)
         end = _nearest_boundary(end_seconds, context_rows, use_start=False)
+        # Ending just before the next utterance is also a natural boundary.
+        # Preserve that exact point instead of shortening 45s to 44s across a
+        # silence gap. An overlapping utterance must not be cut in the middle.
+        if (end != end_seconds
+                and any(row.start_seconds == end_seconds for row in context_rows)
+                and not any(row.start_seconds < end_seconds < row.end_seconds for row in context_rows)):
+            end = end_seconds
         if policy.duration.min_seconds <= end - start <= policy.duration.max_seconds and start <= key_seconds < end:
             return start, end
         return None
