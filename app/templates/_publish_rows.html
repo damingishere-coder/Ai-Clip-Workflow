@@ -1,0 +1,164 @@
+{% macro account_options(job) %}
+  <option value="">请选择账号</option>
+  {% for account in accounts %}
+  <option value="{{ account.id }}" data-account-platform="{{ account.platform }}" {% if job.effective_account_id == account.id or job.account_id == account.id %}selected{% endif %}>
+    {{ account.account_name }} · {{ account.platform_label }} · {{ "正常" if account.login_status == "normal" else ("登录失效" if account.login_status == "invalid" else "需登录") }}
+  </option>
+  {% endfor %}
+{% endmacro %}
+
+{% macro content_row(job, expanded=false) %}
+<article class="publish-content-card{% if job.status == 'SCHEDULED' %} is-scheduled{% endif %}" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.effective_account_id or job.account_id or '' }}" data-platform="{{ job.platform }}" data-status="{{ job.status }}" data-experiment-id="{{ job.content_experiment_id or '' }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-cover-path="{{ job.cover_file_path or '' }}" data-section="content" {% if not job.output_is_active or job.status not in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
+  <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
+  <div class="publish-content-media">
+    {% if expanded %}<video muted preload="none" poster="{{ job.cover_media_url }}" src="{{ job.video_media_url }}"></video>{% endif %}
+    <img loading="lazy" decoding="async" data-cover-preview src="{{ job.cover_media_url }}" alt="{{ job.title }} 的封面" {% if not job.cover_media_url %}hidden{% endif %}>
+  </div>
+{% if expanded %}
+  <form class="publish-content-form" data-publish-editor>
+    <div class="publish-card-heading">
+      <div><small>裁剪片段</small><strong data-row-title>{{ job.output_file_name or job.title }}</strong></div>
+      <div class="publish-card-heading-actions">
+        <span class="publish-schedule-badge" data-content-schedule {% if job.status != "SCHEDULED" %}hidden{% endif %}>
+          <span class="publish-schedule-dot" aria-hidden="true"></span>
+          <strong>已排期</strong>
+          <time data-content-schedule-time>{{ job.scheduled_at_display }}</time>
+        </span>
+        <span class="status-pill tone-{{ job.content_status_tone }}" data-content-ready>
+          {{ job.content_status_message }}
+        </span>
+        <button type="button" class="text-button danger" data-dismiss-job>移出内容准备</button>
+      </div>
+    </div>
+    <div class="publish-copy-toolbar">
+      <div>
+        <strong>发布文案</strong>
+        <small>AI 重写会立即生成并保存本条标题、话题和简介</small>
+      </div>
+      <button type="button" class="secondary-button" data-generate-metadata>AI 重写本条文案</button>
+    </div>
+    <div class="publish-content-grid">
+      <label>
+        <span class="publish-copy-label"><span>标题</span><small data-copy-count="title">{{ job.title|length }}/30</small></span>
+        <input name="title" value="{{ job.title }}" maxlength="30" required data-copy-field="title">
+        <small class="form-hint">用具体反差、妙语或悬念吸引人；抖音最多 30 字</small>
+      </label>
+      <label>
+        <span class="publish-copy-label"><span>话题 / 标签</span><small data-copy-count="tags">3 个</small></span>
+        <input name="tags" value="{{ job.tags }}" maxlength="40" placeholder="恰好 3 个，例如：康熙来了, 小S, 造型师" data-copy-field="tags">
+        <small class="form-hint">用逗号分隔；每个 2～12 字，选择相关节目、人物或主题</small>
+      </label>
+      <label class="span-2">
+        <span class="publish-copy-label"><span>正文 / 简介</span><small data-copy-count="description">{{ job.description|length }}/35</small></span>
+        <textarea name="description" maxlength="35" required data-copy-field="description">{{ job.description }}</textarea>
+        <small class="form-hint">接一句有趣的梗或问题，别重复标题；最多 35 字，不凑字数</small>
+      </label>
+      <label><span>发布平台（创建后不可更改）</span><strong class="publish-locked-value" data-row-platform>{{ job.platform_label }}</strong><input type="hidden" name="platform" value="{{ job.platform }}"></label>
+      <label><span>发布账号</span><select name="account_id" data-account-select>{{ account_options(job) }}</select></label>
+      <label><span>发布方式</span><select name="publish_mode"><option value="local_browser" {% if job.publish_mode == "local_browser" %}selected{% endif %}>Windows Chrome 真实投稿</option><option value="manual_export" {% if job.publish_mode == "manual_export" %}selected{% endif %}>仅导出本地发布包</option></select></label>
+      <label><span>可见范围</span><select name="visibility"><option value="public" {% if job.visibility == "public" %}selected{% endif %}>公开</option><option value="friends" {% if job.visibility == "friends" %}selected{% endif %}>好友可见</option><option value="private" {% if job.visibility == "private" %}selected{% endif %}>仅自己可见</option></select></label>
+      <label class="span-2 publish-experiment-picker">
+        <span>本片属于哪个改进实验（可选）</span>
+        <select name="content_experiment_id" data-experiment-select>
+          <option value="">不参加实验</option>
+          {% for experiment in content_experiments %}
+          <option value="{{ experiment.id }}" data-account-id="{{ experiment.account_id }}" {% if job.content_experiment_id == experiment.id %}selected{% endif %}>{{ experiment.title }} · {{ experiment.action_text }}</option>
+          {% endfor %}
+        </select>
+        <small class="form-hint">只标记确实采用了该规则的作品；投稿执行开始后不能更改。</small>
+      </label>
+      <input type="hidden" name="cover_file_path" value="{{ job.cover_file_path or '' }}">
+      <input type="hidden" name="cover_time_seconds" value="{{ job.cover_time_seconds or 0 }}">
+      <label class="toggle-line"><input type="checkbox" name="allow_download" {% if job.allow_download %}checked{% endif %}>允许保存 / 下载</label>
+    </div>
+    <div class="button-row">
+      <button type="submit" class="primary-button">保存草稿</button>
+      <button type="button" class="secondary-button" data-generate-cover data-task-id="{{ job.task_id }}" data-clip-id="{{ job.output_clip_id }}" data-video-source="{{ job.video_source or 'original' }}">生成 / 更换封面帧</button>
+      <button type="button" class="secondary-button" data-add-to-plan>{{ "调整排期" if job.status == "SCHEDULED" else "加入发布计划" }}</button>
+      <span class="form-hint" data-editor-result></span>
+    </div>
+  </form>
+{% else %}
+  <div class="publish-content-form">
+    <strong data-row-title>{{ job.title }}</strong>
+    <p>{{ job.description }}</p>
+    <span class="publish-schedule-badge" data-content-schedule {% if job.status != 'SCHEDULED' %}hidden{% endif %}><strong>已排期</strong><time data-content-schedule-time>{{ job.scheduled_at_display }}</time></span>
+    <span class="status-pill tone-{{ job.content_status_tone }}" data-content-ready>{{ job.content_status_message }}</span>
+    <button type="button" class="secondary-button" data-load-editor>编辑内容</button>
+    <button type="button" class="secondary-button" data-add-to-plan>{{ '调整排期' if job.status == 'SCHEDULED' else '加入发布计划' }}</button>
+    <button type="button" class="text-button danger" data-dismiss-job>移出内容准备</button>
+  </div>
+{% endif %}
+</article>
+{% endmacro %}
+
+{% macro schedule_row(job) %}
+{% set readiness = job.send_readiness %}
+<article class="publish-plan-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.effective_account_id or job.account_id or '' }}" data-platform="{{ job.platform }}" data-visibility="{{ job.visibility or 'public' }}" data-status="{{ job.status }}" data-error-code="{{ job.error_code or '' }}" data-output-active="{{ 'true' if job.output_is_active else 'false' }}" data-section="schedule" data-send-readiness="{{ readiness | tojson | forceescape }}" {% if not job.output_is_active or job.status not in ["WAITING", "SCHEDULED"] %}hidden{% endif %}>
+  <label class="publish-row-select" aria-label="选择 {{ job.title }}"><input type="checkbox" data-publish-select value="{{ job.id }}"></label>
+  <time data-row-schedule data-utc="{{ job.scheduled_at_utc }}">{{ job.scheduled_at_display }}</time>
+  <div class="publish-plan-video"><video muted preload="none" poster="{{ job.cover_media_url }}" src="{{ job.video_media_url }}"></video><strong data-row-title>{{ job.title }}</strong></div>
+  <span data-row-platform>{{ job.platform_label }}</span>
+  <span data-row-account>{{ job.account_name }}</span>
+  <span class="status-pill tone-{{ job.status_tone }}" data-row-status>{{ job.status_label }}</span>
+  <div class="publish-row-actions">
+    <small class="publish-missed-note" data-missed-schedule-note {% if job.error_code != 'schedule_missed' %}hidden{% endif %}>{{ job.error_message if job.error_code == 'schedule_missed' else '' }}</small>
+    <small class="publish-send-readiness {{ 'is-ready' if readiness.ready else 'is-blocked' }}" data-readiness-message>{{ readiness.message }}</small>
+    {% if job.error_code == 'schedule_missed' %}
+      <button type="button" class="primary-button" data-primary-send-action data-reschedule-missed>重新排期</button>
+    {% elif readiness.ready or readiness.can_auto_resolve %}
+      <button type="button" class="primary-button" data-primary-send-action data-publish-now>{{ "立即导出" if readiness.action == "export" else ("转换并发送" if readiness.can_auto_resolve else "立即发送") }}</button>
+    {% else %}
+      <button type="button" class="secondary-button" data-primary-send-action data-send-setup>{{ {"login_account": "打开登录窗口", "check_account": "检查登录状态", "create_account": "新增账号", "select_account": "选择账号", "complete_content": "完善内容", "start_worker": "连接 Worker"}.get(readiness.action, "完善发送配置") }}</button>
+    {% endif %}
+    <button type="button" class="secondary-button" data-reschedule-job {% if job.status != "SCHEDULED" or job.error_code == 'schedule_missed' %}hidden{% endif %}>重新排期</button>
+    {% if job.status == "SCHEDULED" %}<button type="button" class="secondary-button" data-clear-schedule>清除排期</button>{% endif %}
+    <button type="button" class="text-button" data-cancel-job>取消发送并返回准备</button>
+  </div>
+</article>
+{% endmacro %}
+
+{% macro history_row(job) %}
+{% set readiness = job.send_readiness %}
+<article class="publish-execution-row" data-publish-row data-job-id="{{ job.id }}" data-account-id="{{ job.effective_account_id or job.account_id or '' }}" data-platform="{{ job.platform }}" data-visibility="{{ job.visibility or 'public' }}" data-status="{{ job.status }}" data-section="history" data-send-readiness="{{ readiness | tojson | forceescape }}" {% if job.status in ["DRAFT", "WAITING", "SCHEDULED"] %}hidden{% endif %}>
+  <strong data-row-title>{{ job.title }}</strong>
+  <span data-row-platform>{{ job.platform_label }}</span>
+  <span data-row-account>{{ job.account_name }}</span>
+  <time data-row-schedule>{{ job.scheduled_at_display }}</time>
+  <time>{{ job.started_at or "—" }}</time>
+  <time>{{ job.finished_at or "—" }}</time>
+  <span class="status-pill tone-{{ job.status_tone }}" data-row-status>{{ job.status_label }}</span>
+  <small class="publish-send-readiness" data-execution-message>{{ job.error_message or job.execution_phase_label or "" }}</small>
+  <span>{{ job.publish_mode_label }}</span>
+  <div class="publish-row-actions">
+    {% if job.status == "NEED_REVIEW" and readiness.repairable %}
+      <small class="publish-send-readiness {{ 'is-ready' if readiness.dispatch_ready else 'is-blocked' }}" data-readiness-message>{{ readiness.message }}</small>
+      <select class="compact-filter" data-repair-visibility aria-label="替代任务可见范围"><option value="public" {% if job.visibility == 'public' %}selected{% endif %}>公开</option><option value="friends" {% if job.visibility == 'friends' %}selected{% endif %}>好友可见</option><option value="private" {% if job.visibility == 'private' %}selected{% endif %}>仅自己可见</option></select>
+      {% if readiness.action == "select_account" %}
+        <select class="compact-filter" data-repair-account-select aria-label="选择替代任务账号">
+          <option value="">请选择账号</option>
+          {% for account in accounts %}{% if account.platform == job.platform %}<option value="{{ account.id }}">{{ account.account_name }} · {{ "已登录" if account.login_status == "normal" else "需登录" }}</option>{% endif %}{% endfor %}
+        </select>
+        <button type="button" class="primary-button" data-primary-send-action data-repair-job>选择后修复并发送</button>
+      {% elif readiness.dispatch_ready %}
+        <button type="button" class="primary-button" data-primary-send-action data-repair-job>修复并发送</button>
+      {% else %}
+        <button type="button" class="secondary-button" data-primary-send-action data-send-setup>{{ {"login_account": "打开登录窗口", "check_account": "检查登录状态", "create_account": "新增账号", "select_account": "选择账号", "complete_content": "完善内容", "start_worker": "连接 Worker"}.get(readiness.action, "完善发送配置") }}</button>
+      {% endif %}
+    {% endif %}
+    {% if job.platform_url %}<a class="text-button" href="{{ job.platform_url }}" target="_blank" rel="noreferrer">平台链接</a>{% endif %}
+    {% if job.status == "FAILED" %}
+      <select class="compact-filter" data-retry-visibility aria-label="重试任务可见范围"><option value="public" {% if job.visibility == 'public' %}selected{% endif %}>公开</option><option value="friends" {% if job.visibility == 'friends' %}selected{% endif %}>好友可见</option><option value="private" {% if job.visibility == 'private' %}selected{% endif %}>仅自己可见</option></select>
+      <button type="button" class="primary-button" data-retry-job>立即发送</button>
+    {% endif %}
+    {% if job.status == "NEED_REVIEW" %}
+      <button type="button" class="secondary-button" data-open-creator>打开创作者中心</button>
+      <button type="button" class="secondary-button" data-mark-published>标记已发布</button>
+      <button type="button" class="secondary-button" data-mark-failed>标记失败</button>
+    {% endif %}
+    {% if job.is_user_removed %}<button type="button" class="secondary-button" data-restore-job>重新加入内容准备</button>{% endif %}
+    <button type="button" class="text-button" data-view-events>执行详情</button>
+  </div>
+  {% if job.error_message %}<details class="publish-error-detail"><summary>查看错误</summary><p>{{ job.error_message }}</p><code>{{ job.error_code or '' }}</code></details>{% endif %}
+</article>
+{% endmacro %}

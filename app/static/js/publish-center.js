@@ -90,6 +90,167 @@ if (publishCenterRoot) {
   let jobsRefreshTimer = 0;
   let servicesRefreshTimer = 0;
 
+  const selectionMetadata = new Map();
+  const centerState = {
+    content: {page:1,total_pages:1,loaded:true,q:"",task_id:contentTaskId,status:"",sequence:0},
+    schedule: {page:1,total_pages:1,loaded:false,q:"",task_id:"",status:"",sequence:0},
+  };
+  let centerActiveTab = "content";
+  let centerMissingCovers = Number(backfillCoversButton?.dataset.missingCount || 0);
+  let calendarData = [];
+  let calendarDataKey = "";
+  let calendarLoadedAt = 0;
+  let calendarController = null;
+  let calendarSequence = 0;
+  const initialPagination = JSON.parse(document.getElementById("center-initial-pagination")?.textContent || "{}");
+  Object.assign(centerState.content, initialPagination);
+  document.querySelectorAll('[data-publish-row]').forEach(row => selectionMetadata.set(row.dataset.jobId, {account_id:row.dataset.accountId,platform:row.dataset.platform}));
+
+  let centerSummaryTimer=0;
+  function queueCenterSummary(){
+    clearTimeout(centerSummaryTimer);centerSummaryTimer=setTimeout(()=>{
+      if(document.hidden)return;
+      void refreshCenterSummary('content');if(centerState.schedule.loaded)void refreshCenterSummary('schedule');
+    },150);
+  }
+
+  function centerFilters(section) {
+    const state = centerState[section];
+    return new URLSearchParams({section,platform:activePlatform,task_id:state.task_id,status:state.status,q:state.q});
+  }
+
+  function centerPager(section) {
+    const root = document.querySelector(`[data-center-pagination="${section}"]`);
+    const state = centerState[section];
+    root.querySelector('[data-center-page-summary]').textContent = `第 ${state.page} / ${state.total_pages} 页 · 共 ${state.total || 0} 条`;
+    root.querySelector('[data-center-previous]').disabled = state.page <= 1;
+    root.querySelector('[data-center-next]').disabled = state.page >= state.total_pages;
+  }
+
+  async function refreshCenterSummary(section) {
+    const key = centerFilters(section).toString();
+    try {
+      const data = await window.apiFetch(`/api/publish/center/summary?${key}`);
+      if (centerFilters(section).toString() !== key) return;
+      const select = document.querySelector(`[data-center-pagination="${section}"] [data-center-task]`);
+      const value = centerState[section].task_id;
+      centerState[section].counts = data.counts;
+      centerState[section].missed_count = data.missed_count;
+      renderPlatformSchedule();
+      select.replaceChildren(new Option('全部任务',''));
+      (data.tasks || []).forEach(task => select.add(new Option(`${task.task_name || task.task_id}（${task.count}）`,task.task_id)));
+      select.value = value;
+      if (section === 'content' && !value && !centerState.content.q && !centerState.content.status) {
+        centerMissingCovers = data.missing_cover_count; updateBackfillCoversButton();
+      }
+    } catch (_error) { /* 列表仍可浏览，汇总下次重试。 */ }
+  }
+
+  function canLeaveEditors() {
+    return !document.querySelector('[data-publish-editor][data-dirty="true"]')
+      || window.confirm('有尚未保存的编辑。放弃这些修改并切换列表？');
+  }
+
+  async function loadCenterPage(section, page=1, {discard=false}={}) {
+    if (!centerState[section] || (!discard && !canLeaveEditors())) return false;
+    const state = centerState[section];
+    const sequence = ++state.sequence;
+    state.controller?.abort();
+    const controller = new AbortController(); state.controller = controller;
+    const root = document.querySelector(`[data-center-pagination="${section}"]`);
+    root.querySelector('[data-center-page-summary]').textContent = '正在加载…';
+    try {
+      const query = centerFilters(section); query.set('page',page);
+      const data = await window.apiFetch(`/api/publish/center/jobs?${query}`,{signal:controller.signal});
+      if (sequence !== state.sequence) return false;
+      const container = section === 'content' ? document.querySelector('.publish-content-list') : scheduleListNode;
+      container.innerHTML = data.html;
+      (data.jobs || []).forEach(job => selectionMetadata.set(job.id,job));
+      Object.assign(state,data.pagination,{loaded:true});
+      if (section === 'content') initializeTaskGroupExpansionState();
+      centerPager(section); updateSelectionUi(); refreshScheduleViews();
+      void refreshCenterSummary(section);
+      return true;
+    } catch (error) {
+      if (error.name !== 'AbortError' && sequence === state.sequence) {
+        root.querySelector('[data-center-page-summary]').textContent = '加载失败，请重试';
+        showMessage(`列表加载失败：${error.message}`,'error');
+      }
+      return false;
+    } finally { if(state.controller===controller)state.controller=null; }
+  }
+
+  async function changeCenterFilter(section) {
+    if (!canLeaveEditors()) return;
+    const root = document.querySelector(`[data-center-pagination="${section}"]`);
+    Object.assign(centerState[section],{q:root.querySelector('[data-center-search]').value.trim(),
+      task_id:root.querySelector('[data-center-task]').value,status:root.querySelector('[data-center-status]').value});
+    if (section === 'content') contentTaskId = centerState.content.task_id;
+    if (section === 'schedule') scheduleFilter = 'all';
+    selectedJobIds.clear(); updateSelectionUi(); invalidatePreview();
+    showMessage('筛选已更新，已清空之前的选择。');
+    await loadCenterPage(section,1,{discard:true});
+  }
+
+  async function loadCalendar() {
+    if (centerActiveTab !== 'schedule' || document.hidden) return;
+    const key = `${calendarMonth.year}-${String(calendarMonth.month).padStart(2,'0')}`;
+    if (calendarDataKey === key && (calendarController || Date.now()-calendarLoadedAt < 15000)) return;
+    calendarController?.abort();
+    const controller = new AbortController(); calendarController = controller; calendarDataKey = key;
+    const sequence = ++calendarSequence;
+    try {
+      const data = await window.apiFetch(`/api/publish/center/calendar?month=${key}`,{signal:controller.signal});
+      if (sequence !== calendarSequence || document.hidden) return;
+      calendarData = data.jobs || []; calendarLoadedAt = Date.now();
+    } catch (error) {
+      if (error.name !== 'AbortError') { calendarDataKey=''; showMessage(`月历加载失败：${error.message}`,'error'); }
+    } finally {
+      if (calendarController === controller) { calendarController = null; if (calendarDataKey) renderCalendar(); }
+    }
+  }
+
+  document.querySelectorAll('[data-center-pagination]').forEach(root => {
+    const section = root.dataset.centerPagination;
+    root.querySelector('[data-center-previous]').addEventListener('click',()=>loadCenterPage(section,centerState[section].page-1));
+    root.querySelector('[data-center-next]').addEventListener('click',()=>loadCenterPage(section,centerState[section].page+1));
+    root.querySelector('[data-center-search]').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();void changeCenterFilter(section);}});
+    root.querySelector('[data-center-search]').addEventListener('search',()=>changeCenterFilter(section));
+    for (const attr of ['task','status']) root.querySelector(`[data-center-${attr}]`).addEventListener('change',()=>changeCenterFilter(section));
+    root.querySelector('[data-center-select-page]').addEventListener('click',()=>{
+      document.querySelectorAll(`[data-center-panel="${section}"] [data-publish-select]`).forEach(box=>{if(!box.closest('[data-publish-row]').hidden)selectedJobIds.add(box.value);});
+      updateSelectionUi();
+    });
+    root.querySelector('[data-center-select-all]').addEventListener('click',async event=>{
+      const button=event.currentTarget;button.disabled=true;const key=centerFilters(section).toString();
+      try {
+        const data=await window.apiFetch(`/api/publish/center/selection?${key}`);
+        if(key!==centerFilters(section).toString() || centerActiveTab!==section)return;
+        data.jobs.forEach(job=>{selectionMetadata.set(job.id,job);selectedJobIds.add(job.id);});updateSelectionUi();
+      } catch(error){showMessage(error.message,'error');}finally{button.disabled=false;}
+    });
+    centerPager(section);
+  });
+
+  function markEditorDirty(event){
+    const form=event.target.closest('[data-publish-editor]');if(!form)return;
+    form.dataset.dirty='true';const fields=new Set(JSON.parse(form.dataset.dirtyFields || '[]'));
+    if(event.target.name)fields.add(event.target.name);form.dataset.dirtyFields=JSON.stringify([...fields]);
+  }
+  document.addEventListener('input',markEditorDirty);
+  document.addEventListener('change',markEditorDirty);
+  document.addEventListener('click',async event=>{
+    const button=event.target.closest('[data-load-editor]');if(!button)return;
+    const row=button.closest('[data-publish-row]');button.disabled=true;
+    try {
+      const data=await window.apiFetch(`/api/publish/center/editor/${encodeURIComponent(row.dataset.jobId)}`);
+      if(!row.isConnected)return;
+      const template=document.createElement('template');template.innerHTML=data.html;const replacement=template.content.firstElementChild;
+      row.replaceWith(replacement);const form=replacement.querySelector('[data-publish-editor]');syncPlatformFields(form);syncCopyCounters(form);
+      updateSelectionUi();
+    } catch(error){showMessage(error.message,'error');button.disabled=false;}
+  });
+
   function showMessage(message, tone = "info") {
     if (!messageNode) return;
     messageNode.hidden = false;
@@ -113,7 +274,7 @@ if (publishCenterRoot) {
 
   function updateBackfillCoversButton() {
     if (!backfillCoversButton) return;
-    const count = missingCoverRows().length;
+    const count = centerMissingCovers;
     const loading = backfillCoversButton.dataset.loading === "true";
     backfillCoversButton.dataset.missingCount = String(count);
     backfillCoversButton.disabled = loading || count === 0;
@@ -178,11 +339,13 @@ if (publishCenterRoot) {
     return row.dataset.status === "WAITING" && row.dataset.errorCode === "schedule_missed";
   }
 
-  function setScheduleFilter(filter) {
-    scheduleFilter = filter === "missed" ? "missed" : "all";
-    selectedJobIds.clear();
-    invalidatePreview();
-    renderPlatformSchedule();
+  async function setScheduleFilter(filter) {
+    if(!canLeaveEditors())return;
+    centerState.schedule.status=filter==='missed'?'missed':'';
+    scheduleFilter=filter==='missed'?'missed':'all';
+    selectedJobIds.clear();invalidatePreview();
+    scheduleListNode.hidden=true;
+    try{await loadCenterPage('schedule',1,{discard:true});}finally{scheduleListNode.hidden=false;}
     updateSelectionUi();
   }
 
@@ -219,26 +382,12 @@ if (publishCenterRoot) {
 
   function scheduledJobsByDate() {
     const jobsByDate = new Map();
-    scheduleRows().forEach((row) => {
-      if (
-        row.dataset.platform !== activePlatform
-        || row.dataset.status !== "SCHEDULED"
-        || row.dataset.outputActive === "false"
-      ) return;
-      const utcValue = row.querySelector("[data-row-schedule]")?.dataset.utc || "";
-      const timestamp = Date.parse(utcValue);
-      const key = beijingDateKey(utcValue);
-      if (!key || !Number.isFinite(timestamp)) return;
-      if (!jobsByDate.has(key)) jobsByDate.set(key, []);
-      jobsByDate.get(key).push({
-        id: row.dataset.jobId,
-        title: row.querySelector("[data-row-title]")?.textContent?.trim() || "未命名任务",
-        account: row.querySelector("[data-row-account]")?.textContent?.trim() || "未选择账号",
-        status: row.querySelector("[data-row-status]")?.textContent?.trim() || "已排期",
-        time: formatBeijingTimestamp(utcValue).slice(11),
-        timestamp,
-        order: scheduleRowOrder(row),
-      });
+    calendarData.forEach((job,index) => {
+      const timestamp=Date.parse(job.scheduled_at);const key=beijingDateKey(job.scheduled_at);
+      if(!key || !Number.isFinite(timestamp))return;
+      if(!jobsByDate.has(key))jobsByDate.set(key,[]);
+      jobsByDate.get(key).push({id:job.id,title:job.title,account:job.account_name || '未选择账号',status:'已排期',
+        time:formatBeijingTimestamp(job.scheduled_at).slice(11),timestamp,order:index});
     });
     jobsByDate.forEach((jobs) => {
       jobs.sort((first, second) => first.timestamp - second.timestamp || first.order - second.order);
@@ -299,7 +448,18 @@ if (publishCenterRoot) {
     calendarDayDetail.hidden = false;
   }
 
-  function focusScheduleRow(jobId) {
+  async function focusScheduleRow(jobId) {
+    if (!document.querySelector(`[data-section="schedule"][data-job-id="${CSS.escape(jobId)}"]`)) {
+      if(!canLeaveEditors())return;
+      try {
+        const data=await window.apiFetch(`/api/publish/center/locate/${encodeURIComponent(jobId)}`);
+        Object.assign(centerState.schedule,{q:'',task_id:'',status:''});
+        const controls=document.querySelector('[data-center-pagination="schedule"]');
+        controls.querySelector('[data-center-search]').value='';controls.querySelector('[data-center-task]').value='';controls.querySelector('[data-center-status]').value='';
+        selectedJobIds.clear();invalidatePreview();
+        await loadCenterPage('schedule',data.page,{discard:true});
+      }catch(error){showMessage(error.message,'error');return;}
+    }
     const row = document.querySelector(
       `[data-publish-row][data-section="schedule"][data-job-id="${CSS.escape(jobId || "")}"]`,
     );
@@ -415,7 +575,7 @@ if (publishCenterRoot) {
     checkbox.disabled = rows.length === 0;
     checkbox.checked = allSelected;
     checkbox.indeterminate = selectedCount > 0 && !allSelected;
-    if (label) label.textContent = allSelected ? "取消全选" : "全选本任务";
+    if (label) label.textContent = allSelected ? "取消全选" : "选择本页该任务";
   }
 
   function syncContentTaskGroups() {
@@ -463,8 +623,8 @@ if (publishCenterRoot) {
         && sectionAllows("schedule", row.dataset.status || "")
         && row.dataset.platform === platform
       ));
-      const waiting = available.filter((row) => row.dataset.status === "WAITING").length;
-      const scheduled = available.filter((row) => row.dataset.status === "SCHEDULED").length;
+      const waiting = (centerState.schedule.counts || centerState.content.counts || {}).WAITING || 0;
+      const scheduled = (centerState.schedule.counts || centerState.content.counts || {}).SCHEDULED || 0;
       const waitingNode = document.querySelector(`[data-platform-waiting="${platform}"]`);
       const scheduledNode = document.querySelector(`[data-platform-scheduled="${platform}"]`);
       if (waitingNode) waitingNode.textContent = String(waiting);
@@ -478,7 +638,7 @@ if (publishCenterRoot) {
       if (action) action.textContent = active ? "当前" : "切换";
     });
     let visibleCount = 0;
-    const missedCount = rows.filter((row) => row.dataset.outputActive !== "false" && row.dataset.platform === activePlatform && isMissedSchedule(row)).length;
+    const missedCount = centerState.schedule.missed_count ?? centerState.content.missed_count ?? 0;
     document.querySelectorAll("[data-missed-list-count]").forEach((node) => { node.textContent = String(missedCount); });
     document.querySelectorAll("[data-schedule-filter]").forEach((button) => {
       button.setAttribute("aria-pressed", String(button.dataset.scheduleFilter === scheduleFilter));
@@ -519,11 +679,11 @@ if (publishCenterRoot) {
       scheduleEmpty.textContent = scheduleFilter === "missed" ? "当前平台没有待补发视频，可切回全部任务查看排期。" : "当前平台没有待排期或已排期任务。";
     }
     updateBackfillCoversButton();
-    applyHistoryFilter();
   }
 
   function renderCalendar() {
     if (!calendarNode) return;
+    void loadCalendar();
     const { year, month } = calendarMonth;
     if (calendarTitle) calendarTitle.textContent = `${year} 年 ${month} 月 · ${platformLabel()}`;
     const firstDay = new Date(Date.UTC(year, month - 1, 1));
@@ -1235,10 +1395,6 @@ if (publishCenterRoot) {
   }
 
   function updateSelectionUi() {
-    Array.from(selectedJobIds).forEach((jobId) => {
-      const row = document.querySelector(`[data-publish-row][data-job-id="${CSS.escape(jobId)}"]`);
-      if (!row || row.dataset.platform !== activePlatform) selectedJobIds.delete(jobId);
-    });
     document.querySelectorAll("[data-publish-select]").forEach((checkbox) => {
       checkbox.checked = selectedJobIds.has(checkbox.value);
     });
@@ -1270,6 +1426,10 @@ if (publishCenterRoot) {
   }
 
   function switchTab(tab) {
+    if (centerActiveTab !== tab) { selectedJobIds.clear(); updateSelectionUi(); invalidatePreview(); }
+    centerActiveTab = tab;
+    if (centerState[tab] && !centerState[tab].loaded) void loadCenterPage(tab,1,{discard:true});
+    if (tab === 'schedule') void loadCalendar();
     document.querySelectorAll("[data-center-tab]").forEach((button) => {
       button.classList.toggle("active", button.dataset.centerTab === tab);
     });
@@ -1285,6 +1445,14 @@ if (publishCenterRoot) {
 
   function updateRowFromJob(job, { syncTaskGroups = true } = {}) {
     if (!job?.id) return;
+    selectionMetadata.set(job.id,{...selectionMetadata.get(job.id),...job});
+    if (job.scheduled_at !== undefined || job.scheduled_at_utc !== undefined) {
+      calendarData=calendarData.filter(item=>item.id!==job.id);
+      const scheduled=job.scheduled_at_utc || job.scheduled_at;
+      if(job.status==='SCHEDULED' && scheduled && beijingDateKey(scheduled).slice(0,7)===calendarDataKey) {
+        calendarData.push({id:job.id,title:job.title,scheduled_at:scheduled,account_name:job.account_name});
+      }
+    }
     document.querySelectorAll(`[data-publish-row][data-job-id="${CSS.escape(job.id)}"]`).forEach((row) => {
       const status = String(job.status || row.dataset.status || "").toUpperCase();
       row.dataset.status = status;
@@ -1322,19 +1490,20 @@ if (publishCenterRoot) {
       if (accountNode && job.account_name !== undefined) accountNode.textContent = job.account_name || "未选择";
       const editor = row.querySelector("[data-publish-editor]");
       if (editor) {
-        if (job.platform && editor.elements.platform) editor.elements.platform.value = job.platform;
+        const dirtyFields=new Set(JSON.parse(editor.dataset.dirtyFields || "[]"));
+        if (job.platform && editor.elements.platform && !dirtyFields.has("platform")) editor.elements.platform.value = job.platform;
         const resolvedAccountId = job.effective_account_id || job.account_id || job.send_readiness?.resolved_account_id || "";
-        if ((job.account_id !== undefined || job.effective_account_id !== undefined) && editor.elements.account_id) {
+        if ((job.account_id !== undefined || job.effective_account_id !== undefined) && editor.elements.account_id && !dirtyFields.has("account_id")) {
           editor.elements.account_id.value = resolvedAccountId;
         }
         const resolvedMode = job.send_readiness?.resolved_publish_mode || job.publish_mode || "";
-        if (resolvedMode && editor.elements.publish_mode?.querySelector(`option[value="${CSS.escape(resolvedMode)}"]`)) {
+        if (!dirtyFields.has("publish_mode") && resolvedMode && editor.elements.publish_mode?.querySelector(`option[value="${CSS.escape(resolvedMode)}"]`)) {
           editor.elements.publish_mode.value = resolvedMode;
         }
-        if (job.cover_file_path !== undefined && editor.elements.cover_file_path) {
+        if (job.cover_file_path !== undefined && editor.elements.cover_file_path && !dirtyFields.has("cover_file_path")) {
           editor.elements.cover_file_path.value = job.cover_file_path || "";
         }
-        if (job.cover_time_seconds !== undefined && editor.elements.cover_time_seconds) {
+        if (job.cover_time_seconds !== undefined && editor.elements.cover_time_seconds && !dirtyFields.has("cover_time_seconds")) {
           editor.elements.cover_time_seconds.value = String(job.cover_time_seconds || 0);
         }
         syncPlatformFields(editor);
@@ -1381,6 +1550,7 @@ if (publishCenterRoot) {
     queueScheduleRefresh();
     updateBackfillCoversButton();
     if (syncTaskGroups) syncContentTaskGroups();
+    queueCenterSummary();
   }
 
   function cloneRowsForRetry(sourceId, job) {
@@ -1615,7 +1785,9 @@ if (publishCenterRoot) {
     jobsRefreshController = controller;
     const promise = (async () => {
       try {
-        const ids = Array.from(new Set(Array.from(document.querySelectorAll("[data-publish-row][data-job-id]"), (row) => row.dataset.jobId)));
+        const ids = Array.from(new Set(Array.from(document.querySelectorAll("[data-publish-row][data-job-id]"))
+          .filter(row => !row.closest('[data-center-panel]')?.hidden || row.querySelector('[data-publish-editor][data-dirty="true"]'))
+          .map(row => row.dataset.jobId)));
         // Refresh the rows on this page even after they reach a terminal status.
         // A global latest-100 query can silently omit older scheduled jobs.
         for (let offset = 0; offset < ids.length; offset += 200) {
@@ -1742,6 +1914,8 @@ if (publishCenterRoot) {
     historyRefreshInFlight = false;
     historyRequestSequence += 1;
     historyRefreshController?.abort();
+    calendarController?.abort();calendarController=null;calendarLoadedAt=0;
+    Object.values(centerState).forEach(state=>{state.controller?.abort();if(state.controller)state.loaded=false;});
     jobsRefreshController?.abort();
     accountsRefreshController?.abort();
     schedulerHealthRefreshController?.abort();
@@ -1778,6 +1952,8 @@ if (publishCenterRoot) {
     clearPublishCenterPollingTimers();
     if (document.hidden) return;
     if (refreshImmediately) {
+      if(centerState[centerActiveTab] && !centerState[centerActiveTab].loaded)void loadCenterPage(centerActiveTab,centerState[centerActiveTab].page,{discard:true});
+      void loadCalendar();
       void refreshJobs().finally(() => {
         if (historyPanelIsActive()) queueHistoryRefresh(true);
         scheduleJobsRefresh();
@@ -1990,6 +2166,7 @@ if (publishCenterRoot) {
         await window.apiFetch(`/api/publish/jobs/${jobId}/target`, { method: "PATCH", body: JSON.stringify(target) });
         const data = await window.apiFetch(`/api/publish/jobs/${jobId}/send-content`, { method: "PATCH", body: JSON.stringify(content) });
         await saveExperimentAssignment(row, form);
+        delete form.dataset.dirty;delete form.dataset.dirtyFields;
         updateRowFromJob(data.job);
         if (resultNode) resultNode.textContent = "已保存";
       } catch (error) {
@@ -2262,9 +2439,9 @@ if (publishCenterRoot) {
         showMessage("当前平台与任务不一致，已阻止加入计划。", "error");
         return;
       }
+      switchTab("schedule");
       selectedJobIds.add(jobId);
       updateSelectionUi();
-      switchTab("schedule");
       openDrawer();
       return;
     }
@@ -2408,7 +2585,7 @@ if (publishCenterRoot) {
   });
 
   backfillCoversButton?.addEventListener("click", async () => {
-    const missingCount = missingCoverRows().length;
+    const missingCount = centerMissingCovers;
     if (!missingCount) {
       showMessage("当前没有需要补充封面的未发布任务。", "success");
       updateBackfillCoversButton();
@@ -2422,6 +2599,7 @@ if (publishCenterRoot) {
         { method: "POST" },
       );
       (data.jobs || []).forEach(updateRowFromJob);
+      await refreshCenterSummary("content");
       const errorText = (data.errors || [])
         .slice(0, 3)
         .map((item) => `${item.output_file_name || item.output_clip_id}：${item.message}`)
@@ -2537,6 +2715,7 @@ if (publishCenterRoot) {
     try {
       const data = await window.apiFetch("/api/publish/jobs/schedule-batch", { method: "PATCH", body: JSON.stringify(payload) });
       (data.jobs || []).forEach(updateRowFromJob);
+      refreshScheduleViews();
       const saved = (data.schedule || []).map((item, index) => `第 ${index + 1} 条：${item.scheduled_at_local_display}`).join("；");
       showMessage(`${data.message} ${saved}`, "success");
       selectedJobIds.clear(); updateSelectionUi(); closeDrawer(); invalidatePreview();
@@ -2565,13 +2744,15 @@ if (publishCenterRoot) {
     syncCopyCounters(form);
   });
   initializeTaskGroupExpansionState();
+  void refreshCenterSummary('content');
+  void refreshSchedulerHealth();
   document.querySelector("[data-clear-content-task]")?.addEventListener("click", () => {
     contentTaskId = "";
     document.querySelector("[data-content-task-focus]").hidden = true;
     const url = new URL(window.location.href);
     url.searchParams.delete("task_id");
     window.history.replaceState(null, "", url);
-    renderPlatformSchedule();
+    centerState.content.task_id = ""; void loadCenterPage("content");
   });
   const focus = document.querySelector("[data-publish-focus]");
   if (focus?.dataset.platform) setActivePlatform(focus.dataset.platform);
@@ -2607,8 +2788,7 @@ if (publishCenterRoot) {
     const mode = scheduleForm?.elements.schedule_mode;
     if (!mode) return;
     const sameAccount = selectedJobIds.size > 0 && Array.from(selectedJobIds).every(id => {
-      const row=document.querySelector(`[data-publish-row][data-job-id="${CSS.escape(id)}"]`);
-      return row?.dataset.accountId === adaptiveContext?.policy?.account_id;
+      return (selectionMetadata.get(id)?.account_id || document.querySelector(`[data-publish-row][data-job-id="${CSS.escape(id)}"]`)?.dataset.accountId) === adaptiveContext?.policy?.account_id;
     });
     const available = activePlatform === "douyin" && adaptiveContext?.available && sameAccount;
     if (available && !scheduleModeChosen) {

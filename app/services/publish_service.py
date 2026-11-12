@@ -3069,7 +3069,9 @@ def list_publish_jobs(
         from app.services.publish_scheduler import scheduler_health
 
         worker_state = scheduler_health()
-    return [_normalize_job(row, accounts=accounts, worker_state=worker_state) for row in rows]
+    from app.services.production_review_service import readiness_batch
+    with readiness_batch():
+        return [_normalize_job(row, accounts=accounts, worker_state=worker_state) for row in rows]
 
 
 def _publish_history_anchor(job: dict) -> datetime | None:
@@ -4829,9 +4831,12 @@ def _get_provider(platform: str, config: dict):
     raise PublishProviderError("暂不支持这个发布平台。", "unsupported_platform")
 
 
-def get_publish_center_context(*, focus_task_id: str = "") -> dict:
-    # The preparation/schedule UI needs every active job, including older schedules.
-    # Historical records have their own paged API; never build hidden editors for them.
+def get_publish_center_context(*, focus_task_id: str = "", paged: bool = False) -> dict:
+    if paged:
+        from app.services.publish_center_reads import initial_context
+        return initial_context(focus_task_id)
+    # Compatibility for internal callers that explicitly need every active job.
+    # HTTP pages use the bounded context above; historical records remain paged.
     from app.services.publish_scheduler import scheduler_health
     from app.services.content_review_service import list_active_content_experiments_for_publish
 

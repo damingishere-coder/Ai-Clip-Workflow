@@ -15,7 +15,7 @@ def test_selection_bar_has_no_legacy_batch_send_but_keeps_scheduling() -> None:
     assert "data-apply-batch-target" in selection_bar
     assert "data-batch-ai" in selection_bar
     assert "AI 重写已选文案" in selection_bar
-    assert "data-publish-now" in template
+    assert "data-publish-now" in (PROJECT_ROOT / "app/templates/_publish_rows.html").read_text(encoding="utf-8")
 
 
 def test_publish_ai_and_maintenance_actions_are_scoped_to_content_preparation() -> None:
@@ -27,7 +27,7 @@ def test_publish_ai_and_maintenance_actions_are_scoped_to_content_preparation() 
     content_panel = template.split('data-center-panel="content"', 1)[1].split(
         'data-center-panel="schedule"', 1
     )[0]
-    content_row_macro = template.split("{% macro content_row(job) %}", 1)[1].split(
+    content_row_macro = (PROJECT_ROOT / "app/templates/_publish_rows.html").read_text(encoding="utf-8").split("{% macro content_row(job, expanded=false) %}", 1)[1].split(
         "{% endmacro %}", 1
     )[0]
 

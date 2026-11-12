@@ -44,7 +44,7 @@ def _sync_douyin_export(account_id_input: str) -> dict:
 
 
 @router.get("/accounts")
-async def list_accounts() -> dict:
+def list_accounts() -> dict:
     return {"accounts": content_review_service.list_douyin_accounts()}
 
 
@@ -217,7 +217,7 @@ async def export_sync_douyin_items(payload: DouyinAnalyticsExportSyncRequest) ->
 
 
 @router.get("/summary")
-async def summary(
+def summary(
     account_id: str = Query(default="", max_length=120),
     days: int = Query(default=28, ge=14, le=180),
 ) -> dict:
@@ -228,18 +228,26 @@ async def summary(
 
 
 @router.get("/works")
-async def works(
+def works(
     account_id: str = Query(default="", max_length=120),
     limit: int = Query(default=200, ge=1, le=200),
+    page: int | None = Query(default=None, ge=1),
 ) -> dict:
     try:
-        return {"works": content_review_service.list_content_review_works(account_id, limit)}
+        if page is None:
+            return {"works": content_review_service.list_content_review_works(account_id, limit)}
+        page_size = min(limit, 50)
+        total = content_review_service.count_content_review_works(account_id)
+        total_pages = max(1,(total+page_size-1)//page_size)
+        page = min(page,total_pages)
+        return {"works":content_review_service.list_content_review_works(account_id,page_size,offset=(page-1)*page_size),
+                "pagination":{"page":page,"page_size":page_size,"total":total,"total_pages":total_pages}}
     except content_review_service.ContentReviewError as exc:
         _raise_content_review_http(exc)
 
 
 @router.get("/prompt-comparison")
-async def prompt_comparison(account_id: str = Query(default="", max_length=120)) -> dict:
+def prompt_comparison(account_id: str = Query(default="", max_length=120)) -> dict:
     try:
         return content_review_service.get_prompt_comparison(account_id)
     except content_review_service.ContentReviewError as exc:
@@ -247,7 +255,7 @@ async def prompt_comparison(account_id: str = Query(default="", max_length=120))
 
 
 @router.get("/insights")
-async def insights(account_id: str = Query(default="", max_length=120)) -> dict:
+def insights(account_id: str = Query(default="", max_length=120)) -> dict:
     try:
         return content_review_service.get_content_review_insights(account_id)
     except content_review_service.ContentReviewError as exc:
@@ -255,7 +263,7 @@ async def insights(account_id: str = Query(default="", max_length=120)) -> dict:
 
 
 @router.get("/experiments")
-async def experiments(
+def experiments(
     account_id: str = Query(default="", max_length=120),
     include_closed: bool = Query(default=True),
 ) -> dict:
@@ -332,7 +340,7 @@ async def set_experiment_assignment(
 
 
 @router.get("/imports")
-async def imports(
+def imports(
     account_id: str = Query(default="", max_length=120),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> dict:
@@ -360,10 +368,10 @@ async def remove_item_match(snapshot_id: str) -> dict:
 
 # Sync endpoints use FastAPI's thread pool; Codex work only runs in the durable worker.
 @router.get("/weekly-reports")
-def weekly_reports(account_id: str = Query(default="", max_length=120)):
+def weekly_reports(account_id: str = Query(default="", max_length=120), compact: bool = False):
     from app.services import weekly_review_service as weekly
     try:
-        return weekly.list_reports(account_id)
+        return weekly.list_reports(account_id, compact=compact)
     except content_review_service.ContentReviewError as exc:
         _raise_content_review_http(exc)
 
@@ -400,5 +408,21 @@ def keep_weekly_rules(application_id: str):
     from app.services import weekly_review_service as weekly
     try:
         return weekly.keep_application(application_id)
+    except content_review_service.ContentReviewError as exc:
+        _raise_content_review_http(exc)
+
+
+@router.get("/weekly-reports/{report_id}")
+def weekly_report_detail(
+    report_id: str,
+    account_id: str = Query(default="", max_length=120),
+    include_evidence: bool = False,
+):
+    from app.services import weekly_review_service as weekly
+
+    try:
+        return weekly.get_report(
+            report_id, account_id=account_id, include_evidence=include_evidence
+        )
     except content_review_service.ContentReviewError as exc:
         _raise_content_review_http(exc)

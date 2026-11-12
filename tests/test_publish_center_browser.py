@@ -392,6 +392,7 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             cover_button = page.locator("[data-backfill-covers]")
             assert "抖音" in cover_button.inner_text()
             assert "10" in cover_button.inner_text()
+            newest_content.locator("[data-load-editor]").click()
             unsaved_title = newest_content.locator('[name="title"]')
             unsaved_title.fill("这段标题还没有保存")
             cover_button.click()
@@ -411,6 +412,8 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             second_content = page.locator(
                 f'[data-publish-row][data-section="content"][data-job-id="{douyin_jobs[1]}"]'
             )
+            first_content.locator("[data-load-editor]").click()
+            second_content.locator("[data-load-editor]").click()
             group_select = first_group.locator("[data-task-group-select]")
             group_select.check()
             assert first_content.locator("[data-publish-select]").is_checked()
@@ -493,7 +496,7 @@ def test_publish_center_schedule_preview_confirm_and_export(monkeypatch, tmp_pat
             assert len(job_requests) == 1
             requested_ids = set(parse_qs(urlsplit(job_requests[0]).query)["job_ids"][0].split(","))
             assert requested_ids == set(page.locator("[data-publish-row][data-job-id]").evaluate_all(
-                "rows => rows.map(row => row.dataset.jobId)"
+                "rows => rows.filter(row => !row.closest('[data-center-panel]').hidden || row.querySelector('[data-publish-editor][data-dirty=\"true\"]')).map(row => row.dataset.jobId)"
             ))
             assert sum(url.endswith("/api/publish/accounts") for url in poll_requests) == 1
             assert sum(url.endswith("/api/publish/scheduler/health") for url in poll_requests) == 1

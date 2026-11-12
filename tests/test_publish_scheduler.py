@@ -519,7 +519,7 @@ def test_schedule_preview_api_matches_save_api(tmp_path):
 def test_frontend_uses_one_selection_semantic_and_no_schedule_reload():
     template = (settings.project_root / "app" / "templates" / "publish.html").read_text(encoding="utf-8")
     script = (settings.project_root / "app" / "static" / "js" / "publish-center.js").read_text(encoding="utf-8")
-    assert "data-publish-select" in template
+    assert "data-publish-select" in (settings.project_root / "app/templates/_publish_rows.html").read_text(encoding="utf-8")
     assert "data-publish-schedule-checkbox" not in template
     assert "data-send-job-checkbox" not in template
     assert "window.location.reload" not in script

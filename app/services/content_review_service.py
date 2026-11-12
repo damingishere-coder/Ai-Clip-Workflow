@@ -1031,7 +1031,7 @@ def get_content_review_summary(account_id: str = "", days: int = 28) -> dict:
     }
 
 
-def list_content_review_works(account_id: str = "", limit: int = 100) -> list[dict]:
+def list_content_review_works(account_id: str = "", limit: int = 100, *, offset: int = 0) -> list[dict]:
     resolved = _resolve_douyin_account_id(account_id)
     safe_limit = max(1, min(200, int(limit)))
     with get_connection() as connection:
@@ -1077,10 +1077,10 @@ def list_content_review_works(account_id: str = "", limit: int = 100) -> list[di
             LEFT JOIN ai_analysis_runs ar ON ar.id = c.source_analysis_run_id
             LEFT JOIN ai_prompt_versions pv ON pv.id = ar.prompt_version_id
             WHERE i.item_rank = 1
-            ORDER BY COALESCE(i.published_at, i.captured_at) DESC
-            LIMIT ?
+            ORDER BY COALESCE(i.published_at, i.captured_at) DESC, i.id DESC
+            LIMIT ? OFFSET ?
             """,
-            (resolved, safe_limit),
+            (resolved, safe_limit, max(0, int(offset))),
         ).fetchall()
     works = []
     for row in rows:
@@ -2426,3 +2426,12 @@ def commit_douyin_item_export(
             f"未匹配 {stats['unmatched_count']} 条。"
         ),
     }
+
+
+def count_content_review_works(account_id=""):
+    resolved = _resolve_douyin_account_id(account_id)
+    with get_connection() as c:
+        return c.execute("""SELECT COUNT(DISTINCT CASE WHEN i.publish_job_id IS NOT NULL
+            THEN 'job:'||i.publish_job_id ELSE 'work:'||i.aweme_id END)
+            FROM douyin_item_metric_snapshots i JOIN content_metric_import_batches b ON b.id=i.batch_id
+            WHERE i.account_id=? AND b.status='committed'""",(resolved,)).fetchone()[0]

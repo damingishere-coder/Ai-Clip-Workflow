@@ -94,6 +94,9 @@
     } catch (error) { status.textContent = `${error.message}；再次点击将使用同一请求编号核对结果。`; }
     finally { create.disabled = false; account.disabled = !account.value; days.disabled = false; }
   });
-  account.addEventListener('change', () => { result.replaceChildren(); pending = null; refresh(); });
-  refresh();
+  account.addEventListener('change', () => { result.replaceChildren(); history.replaceChildren(); pending = null; historyLoaded=false; if(history.closest('details')?.open){historyLoaded=true;refresh();} });
+  let historyLoaded=false;
+  history.closest('details')?.addEventListener('toggle',async event=>{
+    if(event.target.open && !historyLoaded){historyLoaded=true;await refresh();}
+  });
 })();

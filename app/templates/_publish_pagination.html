@@ -1,0 +1,10 @@
+<div class="button-row center-list-controls" data-center-pagination="{{ center_section }}">
+  <label>搜索视频或任务<input type="search" data-center-search placeholder="输入关键词后按回车" maxlength="200"></label>
+  <label>任务<select data-center-task><option value="">全部任务</option></select></label>
+  <label>状态<select data-center-status><option value="">全部状态</option>{% if center_section == 'content' %}<option value="DRAFT">草稿</option>{% endif %}<option value="WAITING">待排期</option><option value="SCHEDULED">已排期</option></select></label>
+  <button type="button" class="secondary-button" data-center-select-page>选择本页</button>
+  <button type="button" class="secondary-button" data-center-select-all>选择全部筛选结果</button>
+  <button type="button" class="secondary-button" data-center-previous>上一页</button>
+  <span data-center-page-summary role="status">正在读取列表…</span>
+  <button type="button" class="secondary-button" data-center-next>下一页</button>
+</div>

@@ -152,6 +152,7 @@
       </table>
     </div>
   </details>
+  <div class="button-row"><button type="button" class="secondary-button" id="works-previous">上一页</button><span id="works-page-summary" role="status">每页 50 条</span><button type="button" class="secondary-button" id="works-next">下一页</button></div>
 </section>
 
 <section class="panel content-review-insights-panel">
@@ -202,5 +203,5 @@
 <script src="{{ url_for('static', path='js/human-review.js') }}?v=20260915-1"></script>
 <script src="{{ url_for('static', path='js/content-intelligence.js') }}?v=20260915-1"></script>
 <script src="{{ url_for('static', path='js/content-experiments.js') }}?v=20260915-1"></script>
-{% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20260915-copy-state"></script>{% endif %}
+{% if accounts %}<script src="{{ url_for('static', path='js/content-review.js') }}?v=20261112-lazy"></script>{% endif %}
 {% endblock %}
