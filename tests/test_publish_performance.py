@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from app.db.database import get_connection
 from app.main import app
 from app.routers import pages, publish
-from app.services import publish_scheduler as scheduler, publish_service as service
+from app.services import publish_scheduler as scheduler, publish_service as service, content_review_service
 from tests.test_publish_task_grouping import (
     _insert_clip_job, _insert_task, _time, clean_publish_group_data as _clean,
 )
@@ -49,7 +49,7 @@ def test_center_renders_all_active_jobs_without_historical_editors(archive_with_
     assert scheduled in response.text and waiting in response.text
     assert f'{waiting}-archive-' not in response.text
     assert 'preload="metadata"' not in response.text
-    assert 'preload="none"' in response.text
+    assert 'loading="lazy"' in response.text
 
 
 def test_history_normalizes_only_requested_page_and_keeps_secrets_private(archive_with_old_schedule, monkeypatch):
@@ -82,6 +82,10 @@ def test_polling_refreshes_old_rows_even_after_terminal_transition(archive_with_
 
 @pytest.mark.parametrize('path,target,name', [
     ('/publish', pages, 'get_publish_center_context'),
+    ('/api/content-review/summary', content_review_service, 'get_content_review_summary'),
+    ('/api/content-review/works', content_review_service, 'list_content_review_works'),
+    ('/api/content-review/imports', content_review_service, 'list_import_batches'),
+    ('/api/content-review/prompt-comparison', content_review_service, 'get_prompt_comparison'),
     ('/api/publish/scheduler/health', publish, 'scheduler_health'),
     ('/api/publish/history/calendar?month=2026-09', service, 'get_publish_history_calendar'),
 ])

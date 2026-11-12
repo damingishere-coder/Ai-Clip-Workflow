@@ -616,3 +616,113 @@ def _adaptive_options(payload):
         raise ValueError("动态排期仅使用抖音与北京时间")
     return {"daily_limit":payload.daily_limit,"min_gap_minutes":payload.min_gap_minutes,
             "daily_start_time":payload.daily_start_time,"daily_end_time":payload.daily_end_time}
+
+
+@router.get("/center/jobs")
+def center_jobs(
+    section: str = "content",
+    platform: str = "douyin",
+    task_id: str = "",
+    status: str = "",
+    q: str = Query(default="", max_length=200),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=50),
+):
+    from app.services import publish_center_reads as reads
+
+    try:
+        data = reads.query(
+            section=section,
+            platform=platform,
+            task_id=task_id,
+            status=status,
+            q=q,
+            page=page,
+            page_size=page_size,
+        )
+        data["html"] = reads.render_rows(data["jobs"], section)
+        return data
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/center/summary")
+def center_summary(
+    section: str = "content",
+    platform: str = "douyin",
+    task_id: str = "",
+    status: str = "",
+    q: str = Query(default="", max_length=200),
+):
+    from app.services import publish_center_reads as reads
+
+    try:
+        return reads.summary(
+            section=section, platform=platform, task_id=task_id, status=status, q=q
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/center/selection")
+def center_selection(
+    section: str = "content",
+    platform: str = "douyin",
+    task_id: str = "",
+    status: str = "",
+    q: str = Query(default="", max_length=200),
+):
+    from app.services import publish_center_reads as reads
+
+    try:
+        return {
+            "jobs": reads.selection(
+                section=section, platform=platform, task_id=task_id, status=status, q=q
+            )
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/center/calendar")
+def center_calendar(month: str = Query(pattern=r"^\d{4}-\d{2}$")):
+    from app.services.publish_center_reads import month_jobs
+
+    try:
+        return {"jobs": month_jobs(month)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/center/editor/{job_id}")
+def center_editor(job_id: str):
+    from app.services.publish_center_reads import render_rows
+
+    job = publish_service.get_publish_job(job_id)
+    if not job or job["platform"] != "douyin":
+        raise HTTPException(status_code=404, detail="发布任务不存在")
+    if job["status"] not in {"DRAFT", "WAITING", "SCHEDULED"}:
+        raise HTTPException(status_code=409, detail="当前任务已不可编辑，请刷新列表")
+    return {"job": job, "html": render_rows([job], "content", expanded=True)}
+
+
+@router.get("/center/locate/{job_id}")
+def center_locate(job_id: str):
+    from app.services.publish_center_reads import _filter, _FROM, ordering
+    from app.db.database import get_connection
+
+    where, params = _filter(section="schedule")
+    with get_connection() as c:
+        row = c.execute(
+            "SELECT position FROM (SELECT p.id,ROW_NUMBER() OVER (ORDER BY "
+            + ordering("schedule")
+            + ") position"
+            + _FROM
+            + "WHERE "
+            + where
+            + ") WHERE id=?",
+            [*params, job_id],
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="任务已不在排期清单中")
+    return {"page": (row["position"] - 1) // 50 + 1}

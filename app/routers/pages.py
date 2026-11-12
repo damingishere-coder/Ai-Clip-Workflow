@@ -319,7 +319,7 @@ def publish_center_page(request: Request):
             "focus_task_id": focus_task_id,
             "focus_platform": "douyin",
             "focus_tab": request.query_params.get("tab", ""),
-            **get_publish_center_context(focus_task_id=focus_task_id),
+            **get_publish_center_context(focus_task_id=focus_task_id, paged=True),
         },
     )
 

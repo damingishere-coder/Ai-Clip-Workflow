@@ -12,6 +12,11 @@ let previewBatchId = "";
 let contentReviewLoadSequence = 0;
 let contentReviewPreviewSequence = 0;
 let contentReviewPreviewController = null;
+let worksPage = 1;
+let worksTotalPages = 1;
+const reviewModules = new Map();
+const weeklyDetails = new Map();
+const weeklyDetailRequests = new Map();
 
 function currentAccountId() {
   return contentReviewAccount?.value || "";
@@ -219,7 +224,7 @@ async function updateItemMatch(snapshotId, publishJobId) {
     body: JSON.stringify({ publish_job_id: publishJobId }),
   });
   showContentReviewMessage("人工关联已保存。", "success");
-  await loadContentReviewData();
+  await loadContentReviewData(["summary","works","prompts","experiments"]);
 }
 
 async function removeItemMatch(snapshotId) {
@@ -227,7 +232,7 @@ async function removeItemMatch(snapshotId) {
     method: "DELETE",
   });
   showContentReviewMessage("错误关联已解除。", "success");
-  await loadContentReviewData();
+  await loadContentReviewData(["summary","works","prompts","experiments"]);
 }
 
 function renderWorks(works) {
@@ -538,7 +543,7 @@ async function weeklyAction(path, button, confirmText = "", payload = {}) {
     await contentReviewApi(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
     if (accountId !== currentAccountId()) return;
     showContentReviewMessage("复盘请求已记录，只生成报告和建议。", "success");
-    await loadContentReviewData();
+    await loadContentReviewData(["weekly"]);
   } catch (error) {
     showContentReviewMessage(error.message, "error");
   } finally { button.disabled = weeklyReports.some(item => ["queued", "running"].includes(item.status)); }
@@ -606,6 +611,10 @@ function showWeeklyCopyState(reportId, button, container) {
 }
 
 async function copyWeeklyReport(report, button, container) {
+  button.disabled=true; button.textContent='正在读取完整报告…';
+  try { report=await fetchWeeklyDetail(report.id,true); }
+  catch(error){button.disabled=false;button.textContent='重试复制完整报告';showContentReviewMessage(error.message,'error');return;}
+  if(report.account_id!==currentAccountId())return;
   const text = weeklyReportText(report);
   const state = {status:'pending',text};
   weeklyCopyStates.set(report.id,state);
@@ -653,6 +662,16 @@ function renderWeeklyReport(data) {
   list.replaceChildren();
   changesBox.replaceChildren();
   const report = weeklyReports.find(item => item.id === weeklySelectedId);
+  if (report && report.detail_loaded === false) {
+    status.textContent='正在读取所选报告…';
+    document.querySelector('#content-review-insight-count').textContent='正在读取报告…';
+    void fetchWeeklyDetail(report.id).then(detail=>{
+      if(currentAccountId()!==detail.account_id)return;
+      weeklyReports=weeklyReports.map(item=>item.id===detail.id?detail:item);
+      if(weeklySelectedId===detail.id)renderWeeklyReport({reports:weeklyReports});
+    }).catch(error=>{if(report.account_id===currentAccountId())status.textContent=`报告加载失败：${error.message}`;});
+    return;
+  }
   const busy = weeklyReports.some(item => ["queued","running"].includes(item.status));
   generate.disabled = busy;
   generate.setAttribute("aria-busy", String(busy));
@@ -660,7 +679,7 @@ function renderWeeklyReport(data) {
   document.querySelector("#weekly-review-summary").dataset.state = report?.status || "empty";
   generate.textContent = busy ? "正在生成周复盘…" : !report ? "生成首次全量复盘" : report.status === "failed" ? "重试生成周复盘" : "更新周复盘";
   clearTimeout(weeklyPollTimer);
-  if (busy) weeklyPollTimer = setTimeout(loadContentReviewData, 3000);
+  if (busy) weeklyPollTimer = setTimeout(()=>{if(!document.hidden)void loadContentReviewData(["weekly"]);}, 3000);
   if (!report) {
     status.textContent = "尚未生成。同步只更新数据；请手动点击生成首次全量复盘。";
     document.querySelector("#content-review-insight-note").textContent = "Codex 只生成报告和建议，修改需另行核对与验证。";
@@ -672,7 +691,7 @@ function renderWeeklyReport(data) {
   const labels = {queued:"排队中",running:"Codex 正在综合分析",ready:"复盘已生成",failed:"生成失败",cancelled:"旧版任务已取消"};
   status.textContent = `${labels[report.status]}${weeklyNewDataAvailable ? " · 有新数据，可手动更新复盘" : ""}`;
   const counts = evidence.counts || {};
-  document.querySelector("#content-review-insight-note").textContent = `${evidence.scope === "all" ? "首次全量分析" : `最近七天：${formatDateTime(evidence.period_start)} 起`} · 数据截至 ${formatDateTime(evidence.cutoff)} · ${(evidence.works || []).length} 条作品（较好 ${counts.good || 0}、较弱 ${counts.weak || 0}、普通 ${counts.ordinary || 0}、证据不足 ${counts.insufficient || 0}）。`;
+  document.querySelector("#content-review-insight-note").textContent = `${evidence.scope === "all" ? "首次全量分析" : `最近七天：${formatDateTime(evidence.period_start)} 起`} · 数据截至 ${formatDateTime(evidence.cutoff)} · ${evidence.work_count ?? (evidence.works || []).length} 条作品（较好 ${counts.good || 0}、较弱 ${counts.weak || 0}、普通 ${counts.ordinary || 0}、证据不足 ${counts.insufficient || 0}）。`;
   document.querySelector("#weekly-review-summary").textContent = report.error || report.result.summary || (busy ? "正在综合比较作品表现，请稍候。" : "尚无报告结果。");
   const suggestions = report.result.suggestions || [];
   document.querySelector("#content-review-insight-count").textContent = suggestions.length ? "3 条总结建议" : "等待结果";
@@ -682,7 +701,20 @@ function renderWeeklyReport(data) {
     card.append(textNode("p", suggestion.finding),textNode("p", `建议改进：${suggestion.action}`,"content-review-insight-action"),textNode("p", `预期效果：${suggestion.expected_effect}`));
     if (suggestion.hypothesis) card.append(textNode("p", `内容假设：${suggestion.hypothesis}`));
     if (suggestion.validation_needed) card.append(textNode("p", `落实前需验证：${suggestion.validation_needed}`));
-    card.append(weeklyEvidence(suggestion,evidence));
+    if (report.evidence_loaded !== false) card.append(weeklyEvidence(suggestion,evidence));
+    else {
+      const details=document.createElement('details');details.className='weekly-review-evidence';
+      details.append(textNode('summary','查看视频证据（按需加载）'));
+      let loaded=false;
+      details.addEventListener('toggle',async()=>{
+        if(!details.open || loaded)return;loaded=true;
+        try {
+          const full=await fetchWeeklyDetail(report.id,true);
+          if(!details.isConnected || full.account_id!==currentAccountId())return;
+          const rendered=weeklyEvidence(suggestion,full.evidence);rendered.open=true;details.replaceWith(rendered);
+        }catch(error){loaded=false;details.append(textNode('p',`加载失败，收起后展开重试：${error.message}`));}
+      });card.append(details);
+    }
     list.append(card);
   });
   if (report.status !== "ready") return;
@@ -731,27 +763,66 @@ document.querySelector("#weekly-review-generate")?.addEventListener("click",even
   weeklyAction("/api/content-review/weekly-reports",event.currentTarget,retryWarning,{account_id:currentAccountId()});
 });
 
-async function loadContentReviewData() {
-  const accountId = currentAccountId();
-  if (!accountId) return;
-  const loadSequence = ++contentReviewLoadSequence;
-  const query = `account_id=${encodeURIComponent(accountId)}`;
-  const modules = [
-    ["summary", `/api/content-review/summary?${query}&days=28`, renderSummary],
-    ["works", `/api/content-review/works?${query}&limit=200`, data=>renderWorks(data.works || [])],
-    ["prompts", `/api/content-review/prompt-comparison?${query}`, renderPromptComparison],
-    ["imports", `/api/content-review/imports?${query}&limit=20`, data=>renderImports(data.imports || [])],
-    ["experiments", `/api/content-review/experiments?${query}`, data=>renderExperiments(data.experiments || [])],
-    ["weekly", `/api/content-review/weekly-reports?${query}`, renderWeeklyReport],
-  ];
-  const results = await Promise.allSettled(modules.map(async ([name,url,render])=>{
-    const data = await contentReviewApi(url);
-    if (loadSequence === contentReviewLoadSequence && accountId === currentAccountId()) render(data);
-    return name;
-  }));
-  if (loadSequence !== contentReviewLoadSequence || accountId !== currentAccountId()) return;
-  const errors = results.flatMap((result,index)=>result.status === "rejected" ? [`${modules[index][0]}：${result.reason.message}`] : []);
-  if (errors.length) showContentReviewMessage(`部分复盘模块加载失败，可刷新重试。${errors.join("；")}`,"error");
+async function fetchWeeklyDetail(id, includeEvidence=false) {
+  const accountId=currentAccountId();const key=`${accountId}:${id}:${includeEvidence}`;
+  if(weeklyDetails.has(key))return weeklyDetails.get(key);
+  if(weeklyDetailRequests.has(key))return weeklyDetailRequests.get(key).promise;
+  const controller=new AbortController();
+  const promise=contentReviewApi(`/api/content-review/weekly-reports/${encodeURIComponent(id)}?account_id=${encodeURIComponent(accountId)}&include_evidence=${includeEvidence}`,{signal:controller.signal})
+    .then(data=>{if(currentAccountId()===accountId)weeklyDetails.set(key,data);return data;})
+    .finally(()=>{if(weeklyDetailRequests.get(key)?.controller===controller)weeklyDetailRequests.delete(key);});
+  weeklyDetailRequests.set(key,{controller,promise});return promise;
+}
+
+async function loadReviewModule(name, {force=false}={}) {
+  const accountId=currentAccountId();if(!accountId)return;
+  const query=`account_id=${encodeURIComponent(accountId)}`;
+  const modules={
+    summary:[`/api/content-review/summary?${query}&days=28`,renderSummary],
+    works:[`/api/content-review/works?${query}&limit=50&page=${worksPage}`,data=>{
+      renderWorks(data.works || []);const p=data.pagination;worksPage=p.page;worksTotalPages=p.total_pages;
+      document.querySelector('#works-page-summary').textContent=`第 ${p.page} / ${p.total_pages} 页 · 共 ${p.total} 条`;
+      document.querySelector('#works-previous').disabled=p.page<=1;document.querySelector('#works-next').disabled=p.page>=p.total_pages;
+    }],
+    prompts:[`/api/content-review/prompt-comparison?${query}`,renderPromptComparison],
+    imports:[`/api/content-review/imports?${query}&limit=20`,data=>renderImports(data.imports || [])],
+    experiments:[`/api/content-review/experiments?${query}`,data=>renderExperiments(data.experiments || [])],
+    weekly:[`/api/content-review/weekly-reports?${query}&compact=true`,renderWeeklyReport],
+  };
+  const labels={summary:'指标概览',works:'作品列表',prompts:'生成规则',imports:'同步记录',experiments:'历史实验',weekly:'周复盘'};
+  const hosts={summary:'.content-review-summary-panel',works:'.content-review-works-panel',prompts:'#content-review-prompts',imports:'#content-review-imports',experiments:'#content-review-experiments',weekly:'.content-review-insights-panel'};
+  const [url,render]=modules[name];const prior=reviewModules.get(name);
+  if(!force && prior?.url===url)return prior.promise;
+  prior?.controller.abort();
+  const controller=new AbortController();const state={url,controller,accountId};reviewModules.set(name,state);
+  state.promise=contentReviewApi(url,{signal:controller.signal}).then(data=>{
+    if(reviewModules.get(name)===state && currentAccountId()===accountId){state.loaded=true;document.querySelector(`[data-review-error="${name}"]`)?.remove();render(data);
+      if(!document.querySelector('[data-review-error]') && contentReviewMessage?.textContent.startsWith('部分复盘模块加载失败'))showContentReviewMessage('');}
+  }).catch(error=>{
+    if(error.name!=='AbortError' && reviewModules.get(name)===state){reviewModules.delete(name);showContentReviewMessage(`部分复盘模块加载失败，可单独重试：${labels[name]}：${error.message}`,'error');
+      document.querySelector(`[data-review-error="${name}"]`)?.remove();
+      const notice=textNode('div',`${labels[name]}加载失败：${error.message}`,'inline-alert tone-red');
+      notice.dataset.reviewError=name;notice.setAttribute('role','alert');
+      const retry=textNode('button','重试加载','secondary-button');retry.type='button';
+      retry.addEventListener('click',()=>{retry.disabled=true;void loadReviewModule(name,{force:true});});
+      notice.append(retry);document.querySelector(hosts[name])?.append(notice);}
+  });return state.promise;
+}
+
+async function loadContentReviewData(names=null) {
+  const targets=(names ? names.filter(name=>["summary","works","weekly"].includes(name) || reviewModules.get(name)?.loaded) : null) || ['summary','works','weekly',...Array.from(reviewModules).filter(([,v])=>v.loaded).map(([name])=>name)];
+  if(targets.includes('weekly')) {
+    weeklyDetails.clear();weeklyDetailRequests.forEach(request=>request.controller.abort());weeklyDetailRequests.clear();
+  }
+  await Promise.allSettled([...new Set(targets)].map(name=>loadReviewModule(name,{force:true})));
+}
+
+document.querySelector('#works-previous')?.addEventListener('click',()=>{if(worksPage>1){worksPage--;void loadReviewModule('works',{force:true});}});
+document.querySelector('#works-next')?.addEventListener('click',()=>{if(worksPage<worksTotalPages){worksPage++;void loadReviewModule('works',{force:true});}});
+document.querySelector('[data-content-review-disclosure="prompt-evidence"]')?.addEventListener('toggle',event=>{if(event.target.open)void loadReviewModule('prompts');});
+const reviewObserver=new IntersectionObserver(entries=>{entries.forEach(entry=>{if(entry.isIntersecting){void loadReviewModule(entry.target.dataset.lazyReviewModule);reviewObserver.unobserve(entry.target);}});},{rootMargin:'150px'});
+for (const [selector,name] of [['#content-review-experiments','experiments'],['#content-review-imports','imports']]) {
+  const node=document.querySelector(selector);if(node){node.dataset.lazyReviewModule=name;reviewObserver.observe(node);}
 }
 
 contentReviewFile?.addEventListener("change", () => {
@@ -864,6 +935,19 @@ contentReviewSync?.addEventListener("click", async () => {
 });
 
 contentReviewAccount?.addEventListener("change", () => {
+  reviewModules.forEach(state=>state.controller.abort());reviewModules.clear();
+  weeklyDetailRequests.forEach(state=>state.controller.abort());weeklyDetailRequests.clear();weeklyDetails.clear();
+  worksPage=1;weeklyReports=[];weeklySelectedId='';
+  renderSummary({});renderWorks([]);
+  for(const selector of ['#content-review-prompts','#content-review-imports','#content-review-experiments','#weekly-review-changes','#weekly-review-history'])document.querySelector(selector)?.replaceChildren();
+  document.querySelector('#weekly-review-status').textContent='正在加载…';
+  document.querySelector('#content-review-insight-count').textContent='正在加载…';
+  document.querySelector('#weekly-review-summary').textContent='';
+  for(const selector of ['#content-review-experiments','#content-review-imports']){const node=document.querySelector(selector);if(node)reviewObserver.observe(node);}
+  if(document.querySelector('[data-content-review-disclosure="prompt-evidence"]')?.open)void loadReviewModule('prompts');
+  document.querySelectorAll('[data-review-error]').forEach(node=>node.remove());
+  document.querySelector('#content-review-insights')?.replaceChildren();
+
   invalidateContentReviewPreview();
   const file = contentReviewFile?.files?.[0];
   const status = document.querySelector("#content-review-file-status");
@@ -873,4 +957,5 @@ contentReviewAccount?.addEventListener("change", () => {
 });
 
 initializeDisclosures();
+if(document.querySelector('[data-content-review-disclosure="prompt-evidence"]')?.open)void loadReviewModule('prompts');
 loadContentReviewData();

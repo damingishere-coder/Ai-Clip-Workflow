@@ -6526,3 +6526,12 @@ body.motion-enabled {
 @media (max-width: 900px) {
   .publish-selection-bar { width: calc(100% - 28px); }
 }
+
+/* Bounded publish lists: controls must also fit a narrow phone viewport. */
+.center-list-controls { align-items: end; flex-wrap: wrap; margin: 16px 0; }
+.center-list-controls label { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 100%; }
+.center-list-controls input, .center-list-controls select { width: 220px; max-width: 100%; }
+@media (max-width: 600px) {
+  .center-list-controls label { width: 100%; }
+  .center-list-controls input, .center-list-controls select { width: 100%; }
+}

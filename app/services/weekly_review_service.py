@@ -574,7 +574,9 @@ def revert_application(application_id):
     fail("网页回退规则已停用；历史规则保持现状，请交给 Codex 单独审核", 410)
 
 
-def list_reports(account_id=""):
+def list_reports(account_id="", *, compact=False):
+    if compact:
+        return _compact_reports(account_id)
     account_id = review._resolve_douyin_account_id(account_id)
     with get_connection() as connection:
         rows = connection.execute(
@@ -780,3 +782,73 @@ class WeeklyReviewRunner:
         self.stop_event.set()
         if self.thread:
             self.thread.join(timeout=1)
+
+
+def _compact_reports(account_id=""):
+    account_id = review._resolve_douyin_account_id(account_id)
+    with get_connection() as c:
+        rows = c.execute(
+            """SELECT id,account_id,week_key,revision,status,created_at,error,
+            json_extract(evidence_json,'$.scope') scope, json_extract(evidence_json,'$.cutoff') cutoff,
+            json_extract(evidence_json,'$.batch_id') batch_id,
+            json_extract(result_json,'$.summary') summary,
+            json_extract(result_json,'$.billing_uncertain') billing_uncertain
+            FROM weekly_content_reports WHERE account_id=? ORDER BY created_at DESC,id DESC LIMIT 30""",
+            (account_id,),
+        ).fetchall()
+        current = review._official_export_context(c, account_id).get(
+            "last_export_batch_id"
+        )
+    reports = []
+    for row in rows:
+        item = dict(row)
+        item["evidence"] = {
+            key: item.pop(key) for key in ["scope", "cutoff", "batch_id"]
+        }
+        item["result"] = {
+            "summary": item.pop("summary") or "",
+            "billing_uncertain": bool(item.pop("billing_uncertain")),
+        }
+        item["detail_loaded"] = False
+        reports.append(item)
+    return {
+        "reports": reports,
+        "new_data_available": bool(
+            reports and reports[0]["evidence"]["batch_id"] != current
+        ),
+    }
+
+
+def get_report(report_id, *, account_id="", include_evidence=False):
+    account_id = review._resolve_douyin_account_id(account_id)
+    with get_connection() as c:
+        row = c.execute(
+            "SELECT * FROM weekly_content_reports WHERE id=? AND account_id=?",
+            (report_id, account_id),
+        ).fetchone()
+        if not row:
+            fail("报告不存在", 404)
+        item = dict(row)
+        evidence = json.loads(item.pop("evidence_json"))
+        item["result"] = json.loads(item.pop("result_json"))
+        app = c.execute(
+            "SELECT * FROM content_rule_applications WHERE report_id=?", (report_id,)
+        ).fetchone()
+        item["application"] = dict(app) if app else None
+        if app:
+            item["application"]["progress"] = _progress(c, dict(app), evidence)
+            item["application"].pop("changes_json", None)
+    item["evidence"] = (
+        evidence
+        if include_evidence
+        else {
+            **{
+                key: evidence.get(key)
+                for key in ["scope", "cutoff", "batch_id", "period_start", "counts"]
+            },
+            "work_count": len(evidence.get("works", [])),
+        }
+    )
+    item["detail_loaded"] = True
+    item["evidence_loaded"] = include_evidence
+    return item

@@ -1,4 +1,7 @@
 """Explicit consent for configured output versions, independent of AI feedback."""
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -158,10 +161,18 @@ def _delivery(c, task_id, output_id, mode):
 
 
 def require_ready(c, task_id, output_id=None, mode=None, path=None):
-    review = require_cut_review(c, task_id)
+    review = _batch_review(c, task_id)
     if review is None:
         return None
-    value = json.loads(review["manifest_json"])
+    batch = _read_batch.get()
+    if batch is None:
+        value = json.loads(review["manifest_json"])
+    else:
+        cache = batch[1]
+        key = ("parsed_manifest", task_id)
+        if key not in cache:
+            cache[key] = json.loads(review["manifest_json"])
+        value = cache[key]
     outputs = [o for o in value["outputs"] if not output_id or o["id"] == output_id]
     if not outputs:
         _fail("发布切片不属于当前人工确认的成片")
@@ -183,8 +194,14 @@ def check_preparation(task_id, output_id=None, mode=None):
 
 def readiness_issue(job):
     try:
-        with get_connection() as c:
-            require_ready(c, job.get("task_id"), job.get("output_clip_id"), job.get("video_source") or "original", job.get("video_file_path"))
+        batch = _read_batch.get()
+        if batch is not None:
+            require_ready(batch[0], job.get("task_id"), job.get("output_clip_id"),
+                          job.get("video_source") or "original", job.get("video_file_path"))
+        else:
+            with get_connection() as c:
+                require_ready(c, job.get("task_id"), job.get("output_clip_id"),
+                              job.get("video_source") or "original", job.get("video_file_path"))
     except (ValueError, OSError) as exc:
         return str(exc)
     return None
@@ -317,3 +334,34 @@ def complete_subtitle_status(task_id, payload):
             c.execute("UPDATE tasks SET status='completed',updated_at=? WHERE id=? AND status='PENDING_SUBTITLE_REVIEW'",
                       (datetime.now(timezone.utc).isoformat(), task_id))
             c.commit()
+
+
+_read_batch = ContextVar("production_review_read_batch", default=None)
+
+
+@contextmanager
+def readiness_batch():
+    with get_connection() as connection:
+        connection.execute("BEGIN")
+        token = _read_batch.set((connection, {}))
+        try:
+            yield
+        finally:
+            _read_batch.reset(token)
+
+
+def _batch_review(connection, task_id):
+    batch = _read_batch.get()
+    if batch is None:
+        return require_cut_review(connection, task_id)
+    cache = batch[1]
+    if task_id not in cache:
+        try:
+            review = require_cut_review(connection, task_id)
+            cache[task_id] = (review, None)
+        except (ValueError, OSError) as exc:
+            cache[task_id] = (None, exc)
+    review, error = cache[task_id]
+    if error:
+        raise error
+    return review
